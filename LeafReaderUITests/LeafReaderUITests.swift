@@ -171,6 +171,9 @@ final class LeafReaderUITests: XCTestCase {
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeBook"])
         waitForExpectations(timeout: 5)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
+            .press(forDuration: 0.01, thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.47, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 0.15)
         showReaderControls(app)
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
@@ -178,9 +181,15 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         showReaderControls(app)
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Add bookmark")
+        app.buttons["toggleBookmark"].tap()
         surface.swipeLeft()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeBook"])
         waitForExpectations(timeout: 5)
         capture("Immersive page turn", app: app)
+        showReaderControls(app)
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Add bookmark")
+        surface.swipeRight()
+        showReaderControls(app)
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
     }
 }

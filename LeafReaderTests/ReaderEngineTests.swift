@@ -83,6 +83,96 @@ final class ReaderEngineTests: XCTestCase {
         let (book, url) = try prepare("A Short History of Stars.fb2", format: .fb2)
         try await assertOpened(show(book, url: url), contains: "light")
     }
+    func testPageTurnsAnimateAndCancelledSwipesKeepThePassage() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        _ = try await waitForLayout(model, preferences: preferences)
+        let web = try XCTUnwrap(model.webView)
+        let result = try await web.callAsyncJavaScript("""
+            const view = document.querySelector('foliate-view');
+            const renderer = view.renderer;
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+            // Use the real document touch handlers, including their time stamps.
+            const touch = (type, x) => {
+                const doc = renderer.getContents()[0].doc;
+                const event = new Event(type, { bubbles:true, cancelable:true });
+                const point = { screenX:x, screenY:250, clientX:x, clientY:250 };
+                Object.defineProperties(event, {
+                    changedTouches: { value:[point] },
+                    touches: { value:type === 'touchend' || type === 'touchcancel' ? [] : [point] }
+                });
+                doc.dispatchEvent(event);
+            };
+            const origin = renderer.start;
+            const locator = view.lastLocation.cfi;
+            const size = renderer.size;
+            touch('touchstart', 280);
+            await sleep(30);
+            touch('touchmove', 240);
+            await sleep(120); // Short drag held still: must return, not become a stale flick.
+            touch('touchend', 240);
+            await sleep(110);
+            const returning = renderer.start;
+            await sleep(400);
+            const returned = renderer.start;
+            const cancelledKeepsPassage = view.lastLocation.cfi === locator;
+            const began = performance.now();
+            const forward = view.next();
+            await sleep(110);
+            const advancing = renderer.start;
+            // A second command/gesture during settling must not skip another page.
+            view.next();
+            touch('touchstart', 280); touch('touchmove', 40); touch('touchend', 40);
+            await forward;
+            const forwardDuration = performance.now() - began;
+            const advanced = renderer.start;
+            const advancedLocator = view.lastLocation.cfi;
+            await view.prev();
+            const back = renderer.start;
+            const restored = view.lastLocation.cfi === locator;
+            touch('touchstart', 280);
+            await sleep(50);
+            touch('touchmove', 40);
+            touch('touchcancel', 40); // System interruption must return even after a long drag.
+            await sleep(500);
+            const interrupted = renderer.start;
+            const interruptedKeepsPassage = view.lastLocation.cfi === locator;
+            // A long, slow swipe commits even without flick velocity.
+            touch('touchstart', 280);
+            await sleep(100);
+            touch('touchmove', 40);
+            await sleep(120);
+            touch('touchend', 40);
+            await sleep(500);
+            const swiped = renderer.start;
+            return { origin, size, returning, returned, cancelledKeepsPassage, advancing,
+                advanced, forwardDuration, changed:view.lastLocation.cfi !== locator,
+                advancedLocator, back, restored, interrupted, interruptedKeepsPassage, swiped };
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let metrics = try XCTUnwrap(result as? [String: Any])
+        func number(_ key: String) throws -> Double { try XCTUnwrap(metrics[key] as? Double, key) }
+        let origin = try number("origin"), size = try number("size")
+        XCTAssertGreaterThan(try number("returning"), origin + 1)
+        XCTAssertLessThan(try number("returning"), origin + 40)
+        XCTAssertEqual(try number("returned"), origin, accuracy: 1)
+        XCTAssertEqual(metrics["cancelledKeepsPassage"] as? Bool, true)
+        XCTAssertGreaterThan(try number("advancing"), origin + 1)
+        XCTAssertLessThan(try number("advancing"), origin + size - 1)
+        XCTAssertEqual(try number("advanced"), origin + size, accuracy: 1)
+        XCTAssertGreaterThan(try number("forwardDuration"), 300)
+        XCTAssertLessThan(try number("forwardDuration"), 1000)
+        XCTAssertEqual(try number("back"), origin, accuracy: 1)
+        XCTAssertEqual(metrics["restored"] as? Bool, true)
+        XCTAssertEqual(try number("interrupted"), origin, accuracy: 1)
+        XCTAssertEqual(metrics["interruptedKeepsPassage"] as? Bool, true)
+        XCTAssertEqual(try number("swiped"), origin + size, accuracy: 1)
+        XCTAssertEqual(metrics["changed"] as? Bool, true)
+        XCTAssertNil(model.error)
+        let data = try JSONSerialization.data(withJSONObject: metrics, options: [.prettyPrinted, .sortedKeys])
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+        attachment.name = "Page turn timing and swipe outcomes"; attachment.lifetime = .keepAlways; add(attachment)
+    }
     func testPlainTextRenders() async throws {
         let (book, url) = try prepare("A Field Guide to Slow Days.txt", format: .txt)
         try await assertOpened(show(book, url: url), contains: "morning")

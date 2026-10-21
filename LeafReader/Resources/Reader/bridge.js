@@ -11,6 +11,8 @@ let preferences;
 let fixedIndex = 0;
 let lastLinkActivation = 0;
 const observedDocuments = new WeakSet();
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+reducedMotion.addEventListener('change', () => { if (preferences) applyPreferences(preferences); });
 
 function observeReadingTouches(doc) {
     if (observedDocuments.has(doc)) return;
@@ -101,6 +103,7 @@ function applyPreferences(value) {
     document.documentElement.style.background = value.background;
     document.body.style.background = value.background;
     if (!view?.renderer) return;
+    view.renderer.toggleAttribute('animated', !value.scrolling && !reducedMotion.matches);
     if (view.isFixedLayout) { view.renderer.setAttribute('zoom', 'fit-page'); return; }
     const font = value.font === 'System' ? '-apple-system, sans-serif' : `"${value.font}", serif`;
     const bounded = (value, fallback, min, max) => Number.isFinite(Number(value))

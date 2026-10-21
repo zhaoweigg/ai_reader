@@ -568,10 +568,12 @@ export class Paginator extends HTMLElement {
         this.addEventListener('touchstart', this.#onTouchStart.bind(this), opts)
         this.addEventListener('touchmove', this.#onTouchMove.bind(this), opts)
         this.addEventListener('touchend', this.#onTouchEnd.bind(this))
+        this.addEventListener('touchcancel', this.#onTouchCancel.bind(this))
         this.addEventListener('load', ({ detail: { doc } }) => {
             doc.addEventListener('touchstart', this.#onTouchStart.bind(this), opts)
             doc.addEventListener('touchmove', this.#onTouchMove.bind(this), opts)
             doc.addEventListener('touchend', this.#onTouchEnd.bind(this))
+            doc.addEventListener('touchcancel', this.#onTouchCancel.bind(this))
         })
 
         this.addEventListener('relocate', ({ detail }) => {
@@ -801,36 +803,42 @@ export class Paginator extends HTMLElement {
         element[scrollProp] = Math.max(min, Math.min(max,
             element[scrollProp] + delta))
     }
-    snap(vx, vy) {
-        const velocity = this.#vertical ? vy : vx
-        const [offset, a, b] = this.#scrollBounds
-        const { start, end, pages, size } = this
-        const min = Math.abs(offset) - a
-        const max = Math.abs(offset) + b
-        const d = velocity * (this.#rtl ? -size : size)
-        const page = Math.floor(
-            Math.max(min, Math.min(max, (start + end) / 2
-                + (isNaN(d) ? 0 : d))) / size)
+    async snap(vx, vy, cancelled = false) {
+        if (this.#locked || !this.#scrollBounds) return
+        this.#locked = true
+        try {
+            const velocity = this.#vertical ? vy : vx
+            const [offset, a, b] = this.#scrollBounds
+            const { start, end, pages, size } = this
+            const min = Math.abs(offset) - a
+            const max = Math.abs(offset) + b
+            const d = velocity * (this.#rtl ? -size : size)
+            const page = cancelled ? Math.round(Math.abs(offset) / size) : Math.floor(
+                Math.max(min, Math.min(max, (start + end) / 2
+                    + (isNaN(d) ? 0 : d))) / size)
 
-        this.#scrollToPage(page, 'snap').then(() => {
+            await this.#scrollToPage(page, 'snap')
             const dir = page <= 0 ? -1 : page >= pages - 1 ? 1 : null
-            if (dir) return this.#goTo({
+            if (dir && this.#adjacentIndex(dir) != null) await this.#goTo({
                 index: this.#adjacentIndex(dir),
                 anchor: dir < 0 ? () => 1 : () => 0,
             })
-        })
+        } finally { this.#locked = false }
     }
     #onTouchStart(e) {
+        // Ignore new gestures until the current page has visibly settled.
+        this.#touchState = null
+        if (this.#locked) return
         const touch = e.changedTouches[0]
         this.#touchState = {
             x: touch?.screenX, y: touch?.screenY,
             t: e.timeStamp,
-            vx: 0, xy: 0,
+            vx: 0, vy: 0,
         }
     }
     #onTouchMove(e) {
         const state = this.#touchState
-        if (state.pinched) return
+        if (!state || this.#locked || state.pinched) return
         state.pinched = globalThis.visualViewport.scale > 1
         if (this.scrolled || state.pinched) return
         if (e.touches.length > 1) {
@@ -841,7 +849,7 @@ export class Paginator extends HTMLElement {
         const touch = e.changedTouches[0]
         const x = touch.screenX, y = touch.screenY
         const dx = state.x - x, dy = state.y - y
-        const dt = e.timeStamp - state.t
+        const dt = Math.max(1, e.timeStamp - state.t)
         state.x = x
         state.y = y
         state.t = e.timeStamp
@@ -850,17 +858,28 @@ export class Paginator extends HTMLElement {
         this.#touchScrolled = true
         this.scrollBy(dx, dy)
     }
-    #onTouchEnd() {
+    #onTouchEnd(e) {
+        const moved = this.#touchScrolled
         this.#touchScrolled = false
-        if (this.scrolled) return
+        const state = this.#touchState
+        this.#touchState = null
+        if (this.scrolled || !moved || !state) return
 
         // XXX: Firefox seems to report scale as 1... sometimes...?
         // at this point I'm basically throwing `requestAnimationFrame` at
         // anything that doesn't work
         requestAnimationFrame(() => {
             if (globalThis.visualViewport.scale === 1)
-                this.snap(this.#touchState.vx, this.#touchState.vy)
+                // A pause before lifting means a deliberate release, not a flick.
+                this.snap(e.timeStamp - state.t < 80 ? state.vx : 0,
+                    e.timeStamp - state.t < 80 ? state.vy : 0)
         })
+    }
+    #onTouchCancel() {
+        const moved = this.#touchScrolled
+        this.#touchScrolled = false
+        this.#touchState = null
+        if (!this.scrolled && moved) this.snap(0, 0, true)
     }
     // allows one to process rects as if they were LTR and horizontal
     #getRectMapper() {
@@ -899,7 +918,8 @@ export class Paginator extends HTMLElement {
         // FIXME: vertical-rl only, not -lr
         if (this.scrolled && this.#vertical) offset = -offset
         if ((reason === 'snap' || smooth) && this.hasAttribute('animated')) return animate(
-            element[scrollProp], offset, 300, easeOutQuad,
+            // Leaf: give both completed turns and snap-backs a readable trajectory.
+            element[scrollProp], offset, 360, easeOutQuad,
             x => element[scrollProp] = x,
         ).then(() => {
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
@@ -1060,14 +1080,15 @@ export class Paginator extends HTMLElement {
     async #turnPage(dir, distance) {
         if (this.#locked) return
         this.#locked = true
-        const prev = dir === -1
-        const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
-        if (shouldGo) await this.#goTo({
-            index: this.#adjacentIndex(dir),
-            anchor: prev ? () => 1 : () => 0,
-        })
-        if (shouldGo || !this.hasAttribute('animated')) await wait(100)
-        this.#locked = false
+        try {
+            const prev = dir === -1
+            const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
+            if (shouldGo) await this.#goTo({
+                index: this.#adjacentIndex(dir),
+                anchor: prev ? () => 1 : () => 0,
+            })
+            if (shouldGo || !this.hasAttribute('animated')) await wait(100)
+        } finally { this.#locked = false }
     }
     prev(distance) {
         return this.#turnPage(-1, distance)

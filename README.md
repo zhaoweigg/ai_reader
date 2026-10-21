@@ -45,6 +45,8 @@ DRM removal, KFX, ACSM, CBR/RAR, DjVu, legacy DOC, and DOCX are not implemented.
 
 Books open with the title bar, bottom controls, and system status indicators hidden. Tap the center of the page to show or hide controls. In paginated mode, tap the left/right edges or swipe to turn pages; controls hide when reading resumes. Menus overlay the page without resizing it, preserving the current passage and bookmarks. Loading, error, password, and VoiceOver states keep controls available.
 
+Reflowable books follow your finger during a swipe and settle with a brief 0.36-second slide. Short swipes visibly return to the current page; page turns settle before accepting another turn. Holding still before lifting does not count as a flick, and interrupted drags return to the current passage. Reduce Motion disables settling animation; continuous scrolling keeps its normal behavior.
+
 Tap the center, then open **Appearance (Aa)** while reading. **Font** contains the typeface, text size (12–32 pt), A−/A+ buttons, and visual line-spacing choices. **Layout** contains visual margin choices and paginated/scrolling flow. **Themes** contains page colors and Compact, Standard, and Large reading presets. **Fine tuning** exposes precise sliders for line/paragraph spacing and side/top/bottom margins. The panel opens as a compact sheet so the page stays visible while adjusting it; drag upward for more room, or swipe down from the title bar to dismiss and resume reading.
 
 **Themes → Compact** fits more text in one tap: 17 pt text, 1.35 line spacing, 0.35 em paragraph spacing, 12 pt side margins, and 8 pt top/bottom margins. Changes apply immediately and are saved across books and app restarts. The same controls are available in Settings.
@@ -73,6 +75,8 @@ Version **1.0.5 build 6** passed **28 tests with zero failures or skips** (`buil
 
 Version **1.0.6 build 7** removes Done from Appearance. Both existing appearance UI tests passed, verifying swipe-down dismissal, hidden reading controls after dismissal, and saved preferences after relaunch (`build/LeafRemoveDone-20261020.xcresult`). Screenshots are in `build/remove-done-attachments/`.
 
+Version **1.0.7 build 8** passed **29 tests with zero failures or skips** (`build/LeafPageMotionFull-20261020.xcresult`). Page-turn animation is now enabled for paginated reflowable books, with a 360 ms settle (375 ms measured in the full run). WebKit tests sample intermediate movement and verify snap-back, paused releases, interrupted drags, overlapping input, and forward/backward position restoration. The immersive UI test verifies short-drag cancellation and real forward/backward swipes using saved bookmarks. Timing measurements and screenshots are in `build/page-motion-full-attachments/`; upstream engine modifications are described in `ThirdParty/LOCAL_CHANGES.md`.
+
 Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 
 The verified build bundles the reader engine, sample books, and test fixtures with their directory structure intact. WebKit's deferred ResizeObserver layout notification is no longer treated as a failed book import. The library toolbar and cover bounds were also checked in captured screenshots.
@@ -97,6 +101,8 @@ Version **1.0.3 build 4** was signed, verified, installed, and launched successf
 Version **1.0.4 build 5** was also signed, verified, installed, and launched successfully. A before/after comparison confirmed that the five-book library manifest was unchanged by the update. Diagnostics are `build/aa-controls-iphone-install-20261020.json`, `build/aa-controls-iphone-launch-20261020.json`, and `build/aa-final-phone-library-preservation.json`.
 
 Version **1.0.5 build 6** was signed, verified, installed, and launched successfully, with the five-book library manifest preserved. Diagnostics are `build/immersive-iphone-install-20261020.json`, `build/immersive-iphone-launch-20261020.json`, and `build/immersive-phone-library-preservation.json`.
+
+Version **1.0.7 build 8** was signed, verified, installed, and launched successfully. Diagnostics are `build/page-motion-iphone-install-20261020.json` and `build/page-motion-iphone-launch-20261020.json`.
 
 The unique app identifier and development team are saved in `project.yml` and the generated Xcode project. Installation artifacts are `build/iphone-signing-validation-20261020.json`, `build/iphone-install-20261020.json`, and `build/iphone-launch-20261020.json`; the signed build log is `build/leaf-iphone-signed-build-20261020.log`. This is a development-signed installation; its profile expiration is recorded in the signing-validation artifact.
 
