@@ -6,6 +6,7 @@ enum BookFormat: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String { rawValue.uppercased() }
     var isWebBook: Bool { self != .pdf }
+    var hasLibraryArtwork: Bool { ![BookFormat.txt, .md, .html, .rtf].contains(self) }
     static func detect(_ url: URL) -> BookFormat? {
         if url.lastPathComponent.lowercased().hasSuffix(".fb2.zip") { return .fbz }
         switch url.pathExtension.lowercased() {
@@ -37,6 +38,7 @@ struct Book: Identifiable, Codable, Equatable {
     var progress: Double = 0
     var locator: String = ""
     var coverFileName: String?
+    var metadataVersion: Int?
     var isFavorite = false
     var bookmarks: [BookBookmark] = []
     var isFinished: Bool { progress >= 0.995 }

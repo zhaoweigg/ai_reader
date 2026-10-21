@@ -17,6 +17,7 @@
 		716D839DBA091435CCFAF605 /* LibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */; };
 		78A529FF823C019A8445E417 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9567239B01E0D6638DA1D06 /* LibraryView.swift */; };
 		88921C02F99C02FBC5B4505E /* ReaderPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA375CCD5FE2A2A6CEEDDF5B /* ReaderPreferences.swift */; };
+		9110C50975F238750DA3ED00 /* BookMetadataLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8899A77310F180B812766D5D /* BookMetadataLoader.swift */; };
 		973AB757D5F2D3E1BA34EF5D /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782B9AF3266BE06B1B489337 /* ReaderView.swift */; };
 		9990D24CD222A8DE97366F3D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 95E3F1CC0A69A7431FDFC29B /* Assets.xcassets */; };
 		9FDFD316CCFF5922818A3F5A /* Reader in Resources */ = {isa = PBXBuildFile; fileRef = 6C58276EB1F4A939EEC2C0D2 /* Reader */; };
@@ -25,6 +26,7 @@
 		C323E799B40EC06789B081DA /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53EF7C81ECA87AA792CB61CD /* Book.swift */; };
 		C730CCBBA3FDEE0CF9BC2543 /* BookCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC483DB37697EED2DA2BC84 /* BookCover.swift */; };
 		D6DA98B648C58A402A3FF952 /* ReaderSurfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AE2D547BB82C9FCAEE6E8D7 /* ReaderSurfaces.swift */; };
+		E7140E31D841ADAE2EB508AF /* BookMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 988B12B05A25D8C389A2D249 /* BookMetadataTests.swift */; };
 		EFE98F950DFB6227CCCB254E /* ReaderAssetHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C5A29FFA6B5D43FE7AF65C /* ReaderAssetHandler.swift */; };
 		FD3C12EFA92B6645053C6669 /* LeafReaderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 276132151BB695DA489747FD /* LeafReaderUITests.swift */; };
 /* End PBXBuildFile section */
@@ -57,9 +59,11 @@
 		6C58276EB1F4A939EEC2C0D2 /* Reader */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Reader; path = LeafReader/Resources/Reader; sourceTree = SOURCE_ROOT; };
 		764F9B499BFF20AAAEF67FB2 /* LeafReader.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = LeafReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		782B9AF3266BE06B1B489337 /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
+		8899A77310F180B812766D5D /* BookMetadataLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookMetadataLoader.swift; sourceTree = "<group>"; };
 		8BEDAE49739E86E86ABC4D4D /* Fixtures */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Fixtures; path = LeafReaderTests/Fixtures; sourceTree = SOURCE_ROOT; };
 		8C08F80E36FE291CCF5E4C18 /* LeafReaderTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LeafReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		95E3F1CC0A69A7431FDFC29B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		988B12B05A25D8C389A2D249 /* BookMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookMetadataTests.swift; sourceTree = "<group>"; };
 		AA375CCD5FE2A2A6CEEDDF5B /* ReaderPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderPreferences.swift; sourceTree = "<group>"; };
 		B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTests.swift; sourceTree = "<group>"; };
 		B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderEngineTests.swift; sourceTree = "<group>"; };
@@ -107,6 +111,7 @@
 		800A63C83044A8AD1D6955C1 /* LeafReaderTests */ = {
 			isa = PBXGroup;
 			children = (
+				988B12B05A25D8C389A2D249 /* BookMetadataTests.swift */,
 				B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */,
 				B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */,
 			);
@@ -150,6 +155,7 @@
 		DCD99CCCE4A022ACC18B9F56 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				8899A77310F180B812766D5D /* BookMetadataLoader.swift */,
 				C62F03A2C012E7FD2C2F2AE2 /* LibraryDisk.swift */,
 				DB89A39521EB5C1CB63BFC12 /* LibraryStore.swift */,
 				34C5A29FFA6B5D43FE7AF65C /* ReaderAssetHandler.swift */,
@@ -297,6 +303,7 @@
 			files = (
 				C323E799B40EC06789B081DA /* Book.swift in Sources */,
 				C730CCBBA3FDEE0CF9BC2543 /* BookCover.swift in Sources */,
+				9110C50975F238750DA3ED00 /* BookMetadataLoader.swift in Sources */,
 				54061AFBEC9BA1100163F4BA /* BookmarksView.swift in Sources */,
 				BAE84B9CFB4A8A3492DA836A /* LeafReaderApp.swift in Sources */,
 				51E73A18348FB06EA3C85062 /* LibraryDisk.swift in Sources */,
@@ -315,6 +322,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E7140E31D841ADAE2EB508AF /* BookMetadataTests.swift in Sources */,
 				716D839DBA091435CCFAF605 /* LibraryTests.swift in Sources */,
 				528EB5F991F8175152420471 /* ReaderEngineTests.swift in Sources */,
 			);

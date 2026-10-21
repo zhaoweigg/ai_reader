@@ -10,8 +10,12 @@ final class LibraryStore: ObservableObject {
     private(set) var disk: LibraryDisk?
     private var canSave = false
     private var saveTask: Task<Void, Never>?
+    private let metadataLoader: (Book, URL) async throws -> BookMetadata
+    private var metadataTasks: [UUID: Task<Void, Never>] = [:]
 
-    init(root: URL? = nil, seedSamples: Bool = true) {
+    init(root: URL? = nil, seedSamples: Bool = true,
+         metadataLoader: @escaping (Book, URL) async throws -> BookMetadata = { book, url in try await BookMetadataLoader.load(book, from: url) }) {
+        self.metadataLoader = metadataLoader
         do {
             let storage = try LibraryDisk(root: root)
             disk = storage
@@ -47,6 +51,7 @@ final class LibraryStore: ObservableObject {
                 do {
                     try disk.save(books + [imported])
                     books.append(imported)
+                    await refreshMetadata(imported.id)
                     importCount += 1
                 } catch {
                     try? disk.removeFiles(imported)
@@ -58,6 +63,34 @@ final class LibraryStore: ObservableObject {
         if !failures.isEmpty {
             notice = LibraryNotice(title: importCount > 0 ? "Imported \(importCount) book\(importCount == 1 ? "" : "s")" : "Could not import", message: failures.joined(separator: "\n\n"))
         }
+    }
+
+    func refreshMissingMetadata() async {
+        guard canSave else { return }
+        for book in books where needsMetadata(book) { await refreshMetadata(book.id) }
+    }
+
+    private func needsMetadata(_ book: Book) -> Bool {
+        guard book.format.hasLibraryArtwork else { return false }
+        if let url = coverURL(book), FileManager.default.fileExists(atPath: url.path) { return false }
+        return book.metadataVersion != BookMetadataLoader.version || book.coverFileName != nil
+    }
+
+    private func refreshMetadata(_ id: UUID) async {
+        if let pending = metadataTasks[id] { await pending.value; return }
+        guard let book = book(id), needsMetadata(book), let url = fileURL(book) else { return }
+        let loader = metadataLoader
+        let task = Task { [weak self] in
+            do {
+                let metadata = try await loader(book, url)
+                guard !Task.isCancelled, let self, self.book(id)?.fingerprint == book.fingerprint else { return }
+                self.setMetadata(id, title: metadata.title, author: metadata.author, cover: metadata.cover)
+                self.update(id, { $0.metadataVersion = BookMetadataLoader.version }, immediately: true)
+            } catch { /* Keep the imported book and its placeholder if metadata is unavailable. */ }
+        }
+        metadataTasks[id] = task
+        await task.value
+        metadataTasks[id] = nil
     }
 
     private func installSamples(_ disk: LibraryDisk) throws {
@@ -118,6 +151,7 @@ final class LibraryStore: ObservableObject {
         do {
             try disk.save(remaining)
             books = remaining
+            metadataTasks.removeValue(forKey: id)?.cancel()
             try disk.removeFiles(book)
         } catch { notice = LibraryNotice(title: "Could not remove book", message: error.localizedDescription) }
     }

@@ -58,6 +58,7 @@ struct AppView: View {
             }
         }
         .onOpenURL { enqueue([$0]) }
+        .task { await library.refreshMissingMetadata() }
         .fullScreenCover(item: $destination, onDismiss: { library.flush() }) { target in
             ReaderView(bookID: target.id, initialLocator: target.locator).environmentObject(library)
         }

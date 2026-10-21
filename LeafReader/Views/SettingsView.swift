@@ -16,7 +16,7 @@ struct SettingsView: View {
                     Label("Books stay on this device", systemImage: "internaldrive")
                     Label("No account or connection needed", systemImage: "wifi.slash")
                     NavigationLink("Open-source acknowledgments") { AcknowledgmentsView() }
-                    HStack { Text("Leaf"); Spacer(); Text("1.0.0").foregroundStyle(.secondary) }
+                    HStack { Text("Leaf"); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0").foregroundStyle(.secondary) }
                 }
             }.navigationTitle("Settings")
         }

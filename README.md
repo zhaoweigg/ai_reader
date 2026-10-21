@@ -39,6 +39,7 @@ DRM removal, KFX, ACSM, CBR/RAR, DjVu, legacy DOC, and DOCX are not implemented.
 - Persistent reading positions and per-book bookmarks, including a library-wide bookmarks tab.
 - Day, paper, and night themes; three typefaces; adjustable font size and line spacing; paginated or vertical flow.
 - Original short sample books in EPUB, PDF, FB2, and TXT.
+- Cover thumbnails and embedded title/author metadata load during import; existing books with missing covers are checked automatically on launch.
 - Native accessibility labels, Dynamic Type in app controls, iPad layouts, and landscape support.
 
 ## Storage and privacy
@@ -51,7 +52,11 @@ The local `leaf-reader://` scheme exposes only bundled reader resources and the 
 
 `LeafReaderTests` covers format aliases, duplicate imports, source preservation, invalid files, manifest corruption, bookmark persistence, and actual WebKit rendering of EPUB, FB2, TXT, MOBI, HTML, CBZ, plus PDFKit rendering/navigation/search. EPUB tests also search rendered content, navigate, bookmark, and reopen at the saved location. UI tests exercise the library, appearance controls, bookmarks, and library search.
 
-Verified on October 20, 2026: **16 tests passed, zero failures or skips**, on iPhone 17 Pro Simulator running iOS 26.5 (13 unit/integration tests and 3 UI tests). The PDF UI test turns a page, closes the reader, and verifies that reopening restores that page. EPUB restoration checks that the start of the saved passage is visible; progress estimates can change with pagination. Debug UI tests use a separate temporary library and preferences suite for each test instead of changing the normal library or reading settings.
+The initial version was verified on October 20, 2026: **16 tests passed, zero failures or skips**, on iPhone 17 Pro Simulator running iOS 26.5 (13 unit/integration tests and 3 UI tests). The PDF UI test turns a page, closes the reader, and verifies that reopening restores that page. EPUB restoration checks that the start of the saved passage is visible; progress estimates can change with pagination. Debug UI tests use a separate temporary library and preferences suite for each test instead of changing the normal library or reading settings.
+
+Version **1.0.1 build 2** passed **25 tests with zero failures or skips** on the same Simulator. Nine new metadata tests verify covers and authors before the first read, EPUB 2/3 declarations, SVG rasterization, XHTML cover pages with relative image paths, PDF thumbnails, persistence, existing-library updates, retry after failure, and deletion during extraction. Results: `build/CoverFixFinal-20261020.xcresult` and `build/cover-fix-test-summary-20261020.json`.
+
+Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 
 The verified build bundles the reader engine, sample books, and test fixtures with their directory structure intact. WebKit's deferred ResizeObserver layout notification is no longer treated as a failed book import. The library toolbar and cover bounds were also checked in captured screenshots.
 
