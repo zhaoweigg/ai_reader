@@ -1,6 +1,6 @@
 # Leaf for iOS
 
-A native, offline ebook reader for iPhone and iPad, built with SwiftUI, WebKit, and PDFKit. Requires iOS 17+ and Xcode 16+.
+A native ebook reader for iPhone and iPad with offline reading and optional AI chat, built with SwiftUI, WebKit, and PDFKit. Requires iOS 17+ and Xcode 16+.
 
 ## Run
 
@@ -37,7 +37,8 @@ DRM removal, KFX, ACSM, CBR/RAR, DjVu, legacy DOC, and DOCX are not implemented.
 - Search and filter the library, sort books, favorites, recent reading, and finished books.
 - Table of contents, page turning/swiping, progress seeking, and full-book text search (up to 200 results).
 - Fullscreen reading with a center tap to reveal controls; page-edge taps and swipes return to uninterrupted reading.
-- Translucent floating Ask Leaf button and a compact chat UI with local sample conversations.
+- Translucent floating Ask Leaf chat with streaming AI replies, page/selection context, Stop, and Retry.
+- Swappable Anthropic and Chat Completions providers, editable model IDs/endpoints, and device-only Keychain credentials.
 - Persistent reading positions and per-book bookmarks, including a library-wide bookmarks tab.
 - Day, paper, and night themes; three typefaces; adjustable font size, line and paragraph spacing, and page margins; paginated or vertical flow.
 - Original short sample books in EPUB, PDF, FB2, and TXT.
@@ -56,13 +57,32 @@ Text size uses the selected 12–32 pt value in both Pages and Scroll, with brow
 
 **Ask Leaf** opens a frosted chat panel at about one third of the screen height. While typing, it becomes a compact composer above the keyboard, leaving the book visible without resizing its viewport. Swipe the exposed book to browse while keeping the keyboard and draft, or use Hide keyboard to see more of the page. Tap the book, close the panel, or swipe down on its header to return to reading without an accidental page turn. The launcher uses a translucent teal fill with solid fallbacks for increased contrast and Reduce Transparency.
 
-This first chat UI uses clearly labeled **sample replies**, with English and Chinese examples. Unsent drafts and messages stay in memory while the reader is open, including when the chat is closed and reopened. They reset when leaving the reader. Sending dismisses the keyboard to show the reply. There is no AI service connection or book analysis, and no book text or questions are transmitted.
+Unsent drafts and conversations stay in memory while the reader is open, including when chat is closed and reopened. They reset when leaving the reader. Sending dismisses the keyboard to show the streamed reply. Stop cancels an in-flight request; Retry replaces a failed or stopped answer while keeping the original question and passage snapshot. Clearing the conversation cancels an active response. There are no sample answers in normal use.
+
+## AI chat setup and provider architecture
+
+Open **Settings → AI settings** (also available in the chat’s options menu). Anthropic is initially selected with `claude-haiku-5-5`; a menu also offers `claude-haiku-4-5`, and any model ID can be entered directly. Add your own Anthropic API key, then tap **Save AI settings**. No credentials are bundled or read from developer environment files. API billing and model access belong to the selected provider account.
+
+To change models on the same provider, edit only the model ID. To use another service with Chat Completions streaming, select **Chat Completions compatible**, enter its full HTTPS endpoint (including the completion path), its model ID, and its key. This adapter sends `max_completion_tokens` by default; enable the legacy `max_tokens` option if required by that service. The app remembers a separate profile for each API format. Keys are scoped to the exact endpoint and API format, so changing destinations requires an appropriate saved or newly entered key. Use **Remove saved key** to delete a credential.
+
+**Include current passage** controls whether Leaf shares book details and text. On Send, the reader snapshots selected text, or the visible EPUB/text range/current PDF page if nothing is selected. Context is capped at 12,000 characters, and unusually escape-heavy text is further reduced. It never uses the diagnostic `visibleText()` method, which exposes a whole loaded chapter. Images, scans, and comics have no text analysis; Leaf explains when no readable passage is available. There is no OCR, whole-book retrieval, web browsing, or external tool execution. The system prompt asks for grounded explanations in the reader’s language and avoids spoilers beyond supplied text.
+
+Recent conversation input is capped at 12 turns and 48,000 characters, with each question tied to its own bounded passage snapshot. Opaque reading locators stay on device. Disabling passage sharing also removes attached passages and metadata from prior turns in subsequent requests; previously typed questions and replies remain conversational input. Provider retention policies apply to data already sent. Replies are limited to 2,048 output tokens by default, adjustable from 256–8,192. Interrupted or truncated replies are visibly marked and can be retried. Requests have no automatic retries, avoiding duplicate billable requests.
+
+Implementation boundaries:
+
+- `ChatProvider` streams provider-neutral `ChatEvent` values. The reader UI and `ReaderChatSession` do not depend on a vendor SDK or API response shape. Inject another implementation through `AISettingsStore.provider()` to add local inference, a backend proxy, or another API.
+- `HTTPChatProvider` translates Anthropic Messages and Chat Completions requests/events. `ChatTransport` separates networking from parsing and supports deterministic tests. SSE framing preserves blank lines, CRLF, multiline events, and UTF-8 across network chunks; thinking/usage metadata are not rendered as answer text.
+- `AISettingsStore` persists nonsecret configuration in UserDefaults. `KeychainChatCredentials` stores keys with `WhenUnlockedThisDeviceOnly`. HTTPS is required, redirects are refused, caching/cookies are disabled, and raw provider error bodies are never shown or logged by Leaf.
+- UI tests explicitly inject a debug-only fake streaming provider using both `--ui-testing` and `LEAF_UI_CHAT_MOCK=1`. Normal launches and Release builds never substitute a fake reply.
+
+The request formats were checked against [Anthropic streaming documentation](https://platform.claude.com/docs/en/build-with-claude/streaming), [Haiku model documentation](https://platform.claude.com/docs/en/models/haiku-5-5/overview), and the [official OpenAI Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create). Actual provider calls require a user-supplied API key; automated verification uses intercepted HTTP streams and injected providers without transmitting book text or incurring API charges.
 
 ## Storage and privacy
 
 Library files live in `Documents/Leaf/Books`, cover images in `Documents/Leaf/Covers`, and the atomic JSON manifest in `Documents/Leaf/library.json`. The manifest holds metadata, favorites, reading positions, and bookmarks. Imported originals are never modified. Removing a book removes only Leaf's copy and saved places. Files can be shared through the book's context menu or copied using Finder file sharing. iOS may include Documents in device/iCloud backups; Leaf implements no cross-device sync, account, analytics, or server.
 
-The local `leaf-reader://` scheme exposes only bundled reader resources and the currently opened book. Reader website data is nonpersistent. CSP blocks outbound network loads and embedded scripts; an additional sanitizer removes active markup. External book links are not opened automatically. A damaged manifest is preserved and reported rather than replaced.
+The local `leaf-reader://` scheme exposes only bundled reader resources and the currently opened book. Reader website data is nonpersistent. The reader WebView’s CSP blocks outbound network loads and embedded scripts; an additional sanitizer removes active markup. External book links are not opened automatically. A damaged manifest is preserved and reported rather than replaced. Optional AI requests originate from the native chat service after the reader sends a question; they do not relax the book WebView’s network restrictions.
 
 ## Tests
 
@@ -91,6 +111,10 @@ Version **1.0.9 build 10** dismisses Appearance when the exposed book page is ta
 Version **1.1.0 build 11** passed **32 tests with zero failures or skips** (`build/LeafChatFinal2-20261021.xcresult`). The new chat UI test verifies the compact panel height, unchanged book viewport with the keyboard, sample message submission, the latest reply visible after reopening, page-tap dismissal without navigation, and bookmark preservation. Reading, appearance, font-size sweeps, imports, and PDF checks also passed. Screenshots are in `build/chat-final2-attachments/`; the summary is `build/chat-final2-test-summary-20261021.json`.
 
 Version **1.1.1 build 12** passed **six targeted checks with zero failures or skips** (`build/LeafComposeFinal-20261021.xcresult`). Day and night chat checks verify a compact composer above the keyboard, visible book content, a stable book viewport, forward/backward swipes while retaining the keyboard and draft, draft restoration after closing chat, and keyboard dismissal when sending or choosing Hide keyboard. The text-size sweep, page-turn animation, immersive controls, and PDF navigation checks also passed. Screenshots are in `build/compose-final-attachments/`; the summary is `build/compose-final-test-summary-20261021.json`.
+
+Version **1.2.0 build 13** passed **24 final targeted tests with zero failures or skips** (`build/LeafAIChatVerified-20261021.xcresult`): 18 provider, transport, Keychain, and conversation lifecycle tests; two actual WebKit/PDF context tests; and four UI checks for settings persistence, missing-key draft preservation, Stop/Retry, and reading while typing in day/night themes. Tests include byte-fragmented Unicode SSE, cancellation of the underlying HTTP request, malformed/interrupted responses, HTTP errors, endpoint credential isolation, bounded history, disabled passage sharing, and retrying the original passage. Results and screenshots are `build/ai-chat-verified-test-summary-20261021.json` and `build/ai-chat-verified-attachments/`.
+
+The broader 53-test regression run (`build/LeafAIChatFinal-20261021.xcresult`) passed 52 tests, including all reading, import, metadata, font-size sweep, animation, and PDF checks. Its sole failure was a simulated tap missing the passage-sharing switch; the final targeted run uses a precise switch tap and verifies the changed value both immediately and after relaunch. UI tests isolate their Keychain service as well as their library and preferences. No test uses a live provider credential or incurs API charges.
 
 Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 
@@ -122,6 +146,8 @@ Version **1.0.7 build 8** was signed, verified, installed, and launched successf
 Version **1.1.0 build 11** was signed, verified, installed, and launched successfully on October 21, 2026. Diagnostics are `build/chat-iphone-install-20261021.json` and `build/chat-iphone-launch-20261021.json`.
 
 Version **1.1.1 build 12** was signed, verified, and installed successfully on October 21, 2026. The launch request was blocked because the iPhone was locked; opening Leaf manually completes launch. Diagnostics are `build/compose-iphone-install-20261021.json` and `build/compose-iphone-launch-20261021.json`.
+
+Version **1.2.0 build 13** was built in Release configuration, signed, verified, and installed successfully on October 21, 2026. Diagnostics are `build/ai-chat-iphone-verified-build-20261021.log` and `build/ai-chat-iphone-install-20261021.json`. Launch and live-provider verification are deferred; the owner can open Leaf and add an API key in AI settings.
 
 The unique app identifier and development team are saved in `project.yml` and the generated Xcode project. Installation artifacts are `build/iphone-signing-validation-20261020.json`, `build/iphone-install-20261020.json`, and `build/iphone-launch-20261020.json`; the signed build log is `build/leaf-iphone-signed-build-20261020.log`. This is a development-signed installation; its profile expiration is recorded in the signing-validation artifact.
 

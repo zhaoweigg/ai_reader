@@ -83,6 +83,54 @@ final class ReaderEngineTests: XCTestCase {
         let (book, url) = try prepare("A Short History of Stars.fb2", format: .fb2)
         try await assertOpened(show(book, url: url), contains: "light")
     }
+    func testChatContextUsesVisiblePassageOrSelectionWithoutMovingTheBook() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        _ = try await waitForLayout(model, preferences: preferences)
+        let web = try XCTUnwrap(model.webView)
+        let location = model.locator
+        let visible = try await web.evaluateJavaScript("document.querySelector('foliate-view').lastLocation.range.toString()") as? String
+        let whole = try await web.evaluateJavaScript("window.Leaf.visibleText()") as? String
+        let snapshot = try await model.readingChatContext()
+        let context = try XCTUnwrap(snapshot)
+        XCTAssertFalse(context.isEmpty)
+        XCTAssertEqual(context.text, String((visible ?? "").prefix(12000)))
+        XCTAssertLessThan(context.text.count, (whole ?? "").count)
+        XCTAssertEqual(context.locator, location)
+        XCTAssertEqual(context.source, "page")
+        let selected = try await web.evaluateJavaScript("""
+            (() => {
+                const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+                const range = doc.createRange(); range.selectNodeContents(doc.querySelector('p'));
+                const selection = doc.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+                return selection.toString();
+            })()
+            """) as? String
+        let selectedSnapshot = try await model.readingChatContext()
+        let selection = try XCTUnwrap(selectedSnapshot)
+        XCTAssertEqual(selection.source, "selection")
+        XCTAssertEqual(selection.text, selected)
+        XCTAssertEqual(model.locator, location)
+    }
+    func testPDFChatContextUsesCurrentPageAndSelection() async throws {
+        let (book, url) = try prepare("Notes from the Coast.pdf", format: .pdf)
+        let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil)
+        self.model = model
+        let view = PDFView(frame: CGRect(x: 0, y: 0, width: 390, height: 700))
+        model.configurePDF(view, url: url)
+        model.send("navigate", value: "pdf:2"); model.pdfPageChanged()
+        let page = try XCTUnwrap(view.currentPage)
+        let snapshot = try await model.readingChatContext()
+        let context = try XCTUnwrap(snapshot)
+        XCTAssertEqual(context.text, String((page.string ?? "").prefix(12000)))
+        XCTAssertEqual(context.locator, "pdf:2")
+        view.currentSelection = page.selection(for: page.bounds(for: .cropBox))
+        let selectedSnapshot = try await model.readingChatContext()
+        let selection = try XCTUnwrap(selectedSnapshot)
+        XCTAssertEqual(selection.source, "selection")
+        XCTAssertFalse(selection.isEmpty)
+    }
     func testPageTurnsAnimateAndCancelledSwipesKeepThePassage() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         let model = try show(book, url: url)

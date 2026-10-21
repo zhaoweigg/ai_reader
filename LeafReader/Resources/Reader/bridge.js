@@ -267,6 +267,17 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, command, applyPreferences, search, tap,
+    chatContext: () => {
+        const contents = view?.renderer?.getContents?.() ?? [];
+        for (const {doc} of contents) {
+            const selection = doc?.getSelection();
+            if (selection && !selection.isCollapsed && selection.toString().trim())
+                return {text: selection.toString().slice(0, 24000), source: 'selection'};
+        }
+        // visibleText() below is a diagnostic for the whole loaded document.
+        // Chat must use only the visible range, never the entire chapter.
+        return {text: view?.lastLocation?.range?.toString().slice(0, 24000) ?? '', source: 'page'};
+    },
     // Useful to test the actual rendered document, rather than only parser metadata.
     visibleText: () => view?.renderer?.getContents?.().map(({doc}) => doc?.body?.innerText || '').join('\n') || '',
     currentLocation: () => view?.lastLocation?.cfi,

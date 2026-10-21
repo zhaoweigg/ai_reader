@@ -32,6 +32,25 @@ final class ReaderModel: NSObject, ObservableObject {
     var book: Book? { library.book(bookID) }
     var isBookmarked: Bool { book?.bookmarks.contains { $0.locator == locator } ?? false }
     var positionLabel: String { "\(Int(fraction * 100))%" }
+    func readingChatContext() async throws -> ReadingChatContext? {
+        guard isReady, !isLocked, error == nil else { throw ChatError.configuration("Wait for the book to finish opening before asking about it.") }
+        let title = book?.title ?? ""
+        let author = book?.author ?? ""
+        let chapter = chapterTitle
+        let location = locator
+        var text = ""
+        var source = "page"
+        if let pdfView {
+            if let selection = pdfView.currentSelection?.string, !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                text = selection; source = "selection"
+            } else { text = pdfView.currentPage?.string ?? "" }
+        } else if let webView {
+            let result = try await webView.evaluateJavaScript("window.Leaf.chatContext()") as? [String: String]
+            text = result?["text"] ?? ""; source = result?["source"] ?? "page"
+        }
+        return ReadingChatContext(title: title, author: author, chapter: chapter, text: text,
+                                  source: source, locator: location).bounded()
+    }
     func toggleControls() {
         guard isReady, !isLocked, error == nil else { return }
         controlsVisible.toggle()

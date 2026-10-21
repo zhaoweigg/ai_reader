@@ -1,36 +1,5 @@
 import SwiftUI
 
-struct ReaderChatMessage: Identifiable {
-    let id = UUID()
-    let isUser: Bool
-    let text: String
-
-    static func usesChinese(_ text: String) -> Bool {
-        text.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) }
-    }
-
-    static func introduction(chinese: Bool) -> ReaderChatMessage {
-        ReaderChatMessage(isUser: false, text: chinese
-            ? "示例回答：先看这一页明确写出的条件，再区分人物的猜测。你可以继续问我解释文字或梳理人物关系。"
-            : "A useful clue can be what a rule leaves unsaid. Ask me to explain a passage or untangle a character’s motives.")
-    }
-
-    static func reply(to question: String, chinese: Bool) -> ReaderChatMessage {
-        let recap = question.localizedCaseInsensitiveContains("summar") || question.contains("总结")
-        let text: String
-        if chinese {
-            text = recap
-                ? "示例总结：这一页提出问题、梳理已知线索，再把明确的条件与人物的假设分开。可以接着关注哪些问题仍未得到解答。"
-                : "示例回答：可以先找出这段文字明确说了什么，再想一想人物为什么这样判断。留意他们掌握的信息，以及尚未证实的假设。"
-        } else {
-            text = recap
-                ? "Sample recap: the passage raises a question, weighs the available clues, and separates stated conditions from assumptions. Notice which questions remain open."
-                : "Sample reply: start with what the passage explicitly says, then consider why the character reaches that conclusion. Separate what they know from what they assume."
-        }
-        return ReaderChatMessage(isUser: false, text: text)
-    }
-}
-
 struct ReaderChatLauncher: View {
     let action: () -> Void
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -56,22 +25,24 @@ struct ReaderChatLauncher: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Ask Leaf")
-        .accessibilityHint("Opens a sample reading chat")
+        .accessibilityHint("Opens your reading companion")
         .accessibilityIdentifier("openReaderChat")
     }
 }
 
 struct ReaderChatPanel: View {
-    @Binding var messages: [ReaderChatMessage]
-    @Binding var draft: String
+    @ObservedObject var session: ReaderChatSession
+    @EnvironmentObject private var settings: AISettingsStore
     let bookTitle: String
     let isComposing: Bool
     let onClose: () -> Void
+    let onSettings: () -> Void
+    let onSend: () -> Void
     @FocusState private var inputFocused: Bool
 
     private var accent: Color { colorScheme == .dark ? Color(hex: "#93CABB") : LeafStyle.accent }
     @Environment(\.colorScheme) private var colorScheme
-    private var question: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -81,7 +52,17 @@ struct ReaderChatPanel: View {
                 Image(systemName: "leaf.fill").foregroundStyle(accent)
                 Text("Ask Leaf").font(.headline).foregroundStyle(accent)
                 Spacer(minLength: 4)
-                if !isComposing { Text("Sample chat").font(.caption).foregroundStyle(.secondary) }
+                if !isComposing {
+                    Text(settings.configuration.profile.model).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if !isComposing {
+                    Menu {
+                        Button("AI settings", systemImage: "gearshape", action: onSettings)
+                        Button("Clear conversation", systemImage: "trash", role: .destructive) { session.clear() }
+                    } label: {
+                        Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                    }.accessibilityLabel("Chat options")
+                }
                 if isComposing {
                     Button { inputFocused = false } label: {
                         Image(systemName: "keyboard.chevron.compact.down")
@@ -106,10 +87,10 @@ struct ReaderChatPanel: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(messages) { message in
+                            ForEach(session.messages) { message in
                                 HStack {
                                     if message.isUser { Spacer(minLength: 32) }
-                                    Text(message.text)
+                                    Text(message.text.isEmpty ? (message.state == .streaming ? "Thinking…" : "No response text") : message.text)
                                         .font(.subheadline).lineSpacing(3)
                                         .textSelection(.enabled)
                                         .padding(message.isUser ? 10 : 0)
@@ -119,31 +100,51 @@ struct ReaderChatPanel: View {
                                     if !message.isUser { Spacer(minLength: 0) }
                                 }.id(message.id)
                             }
+                            if session.messages.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
+                                        .font(.subheadline)
+                                    Text(settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    Button("AI settings", action: onSettings).font(.subheadline)
+                                }
+                            }
                         }.padding(.vertical, 2)
                     }
                     .defaultScrollAnchor(.bottom)
                     .scrollDismissesKeyboard(.interactively)
-                    .onChange(of: messages.count) { _, _ in
-                        if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    .onChange(of: session.messages.last?.text) { _, _ in
+                        if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }.frame(maxHeight: .infinity)
+                if let error = session.error {
+                    HStack(spacing: 8) {
+                        Text(error).font(.caption).foregroundStyle(.red).lineLimit(3).accessibilityIdentifier("readerChatError")
+                        if session.canRetry { Button("Retry") { session.retry(settings: settings) }.font(.caption.bold()) }
+                    }
+                } else if let notice = session.notice {
+                    HStack(spacing: 8) {
+                        Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        if session.canRetry { Button("Retry") { session.retry(settings: settings) }.font(.caption.bold()) }
+                    }
+                }
             }
 
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Ask about this page…", text: $draft, axis: .vertical)
+                TextField("Ask about this page…", text: $session.draft, axis: .vertical)
                     .font(.subheadline).lineLimit(1...3)
                     .focused($inputFocused).submitLabel(.send)
                     .onSubmit(send)
                     .padding(.leading, 14).padding(.vertical, 12)
                     .accessibilityIdentifier("readerChatInput")
-                Button(action: send) {
-                    Image(systemName: "arrow.up").font(.system(size: 19, weight: .medium))
-                        .foregroundStyle(question.isEmpty ? Color.secondary : Color.white)
+                Button(action: session.isSending ? session.stop : send) {
+                    Image(systemName: session.isSending ? "stop.fill" : "arrow.up").font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(question.isEmpty && !session.isSending ? Color.secondary : Color.white)
                         .frame(width: 44, height: 44)
-                        .background(question.isEmpty ? accent.opacity(0.1) : accent, in: Circle())
+                        .background(question.isEmpty && !session.isSending ? accent.opacity(0.1) : accent, in: Circle())
                 }
-                .buttonStyle(.plain).disabled(question.isEmpty)
-                .accessibilityLabel("Send message").accessibilityIdentifier("sendReaderChat")
+                .buttonStyle(.plain).disabled(question.isEmpty && !session.isSending)
+                .accessibilityLabel(session.isSending ? "Stop response" : "Send message").accessibilityIdentifier("sendReaderChat")
             }
             .padding(4)
             .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 28))
@@ -161,11 +162,8 @@ struct ReaderChatPanel: View {
     }
 
     private func send() {
-        guard !question.isEmpty else { return }
-        let text = question
-        messages.append(ReaderChatMessage(isUser: true, text: text))
-        messages.append(.reply(to: text, chinese: ReaderChatMessage.usesChinese(text + bookTitle)))
-        draft = ""
+        guard !question.isEmpty, !session.isSending else { return }
         inputFocused = false
+        onSend()
     }
 }

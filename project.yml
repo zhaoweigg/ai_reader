@@ -29,8 +29,8 @@ targets:
       path: LeafReader/Info.plist
       properties:
         CFBundleDisplayName: Leaf
-        CFBundleShortVersionString: "1.1.1"
-        CFBundleVersion: "12"
+        CFBundleShortVersionString: "1.2.0"
+        CFBundleVersion: "13"
         UILaunchScreen: {}
         UISupportsDocumentBrowser: false
         UIFileSharingEnabled: true
@@ -87,6 +87,9 @@ targets:
   LeafReaderTests:
     type: bundle.unit-test
     platform: iOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
     sources:
       - path: LeafReaderTests
         excludes: [Fixtures]
@@ -101,6 +104,9 @@ targets:
   LeafReaderUITests:
     type: bundle.ui-testing
     platform: iOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
     sources: [LeafReaderUITests]
     dependencies:
       - target: LeafReader

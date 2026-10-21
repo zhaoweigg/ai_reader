@@ -11,7 +11,7 @@ struct ReaderView: View {
     }
 }
 
-private enum ReaderPanel: String, Identifiable { case contents, appearance, search, bookmarks; var id: String { rawValue } }
+private enum ReaderPanel: String, Identifiable { case contents, appearance, search, bookmarks, aiSettings; var id: String { rawValue } }
 
 struct ReaderContent: View {
     let book: Book
@@ -32,8 +32,8 @@ struct ReaderContent: View {
     @AppStorage("reader.paragraphSpacing") private var paragraphSpacing = 0.65
     @State private var panel: ReaderPanel?
     @State private var chatIsPresented = false
-    @State private var chatMessages: [ReaderChatMessage] = []
-    @State private var chatDraft = ""
+    @StateObject private var chat = ReaderChatSession()
+    @EnvironmentObject private var aiSettings: AISettingsStore
     @State private var bookViewportHeight: CGFloat = 0
     @State private var password = ""
     @State private var seek = 0.0
@@ -104,9 +104,6 @@ struct ReaderContent: View {
                         Spacer(minLength: 0)
                         ReaderChatLauncher {
                             model.hideControls()
-                            if chatMessages.isEmpty {
-                                chatMessages = [.introduction(chinese: ReaderChatMessage.usesChinese(book.title))]
-                            }
                             chatIsPresented = true
                         }
                     }
@@ -129,11 +126,15 @@ struct ReaderContent: View {
                     let fullHeight = max(bookViewportHeight, geometry.size.height)
                     let composing = geometry.size.height < fullHeight - 80
                     let height = composing ? min(fullHeight / 3, max(176, geometry.size.height * 0.35)) : fullHeight / 3
-                    ReaderChatPanel(messages: $chatMessages, draft: $chatDraft, bookTitle: book.title,
-                                    isComposing: composing) {
+                    ReaderChatPanel(session: chat, bookTitle: book.title, isComposing: composing, onClose: {
                         chatIsPresented = false
                         model.hideControls()
-                    }
+                    }, onSettings: {
+                        chat.stop()
+                        panel = .aiSettings
+                    }, onSend: {
+                        chat.send(settings: aiSettings) { try await model.readingChatContext() }
+                    })
                     .frame(height: height)
                     .background {
                         if reduceTransparency { theme.background }
@@ -153,12 +154,13 @@ struct ReaderContent: View {
         .persistentSystemOverlays(showsControls ? .automatic : .hidden)
         .accessibilityAction(.escape) { library.flush(); dismiss() }
         .task { library.open(book.id) }
-        .onDisappear { library.flush() }
+        .onDisappear { chat.stop(); library.flush() }
         .sheet(item: $panel, onDismiss: { model.hideControls() }) { panel in
             NavigationStack {
                 Group {
                     switch panel {
                     case .appearance: ReaderAppearancePanel()
+                    case .aiSettings: AISettingsView()
                     case .contents:
                         List(model.chapters) { chapter in
                             Button { model.send("navigate", value: chapter.href); self.panel = nil } label: {

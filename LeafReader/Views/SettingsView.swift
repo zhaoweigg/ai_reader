@@ -5,6 +5,9 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 ReaderAppearanceControls()
+                Section("Reading companion") {
+                    NavigationLink("AI settings") { AISettingsView() }.accessibilityIdentifier("openAISettings")
+                }
                 Section("Bring your library") {
                     formatRow("Books", "EPUB, MOBI, AZW, AZW3, PRC, FB2, FBZ")
                     formatRow("Documents", "PDF, TXT, Markdown, HTML, RTF")
@@ -14,7 +17,7 @@ struct SettingsView: View {
                 }
                 Section("Made for unhurried reading") {
                     Label("Books stay on this device", systemImage: "internaldrive")
-                    Label("No account or connection needed", systemImage: "wifi.slash")
+                    Label("Offline reading; optional AI chat", systemImage: "wifi.slash")
                     NavigationLink("Open-source acknowledgments") { AcknowledgmentsView() }
                     HStack { Text("Leaf"); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0").foregroundStyle(.secondary) }
                 }

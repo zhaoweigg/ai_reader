@@ -1,10 +1,12 @@
 import XCTest
 
 final class LeafReaderUITests: XCTestCase {
-    @MainActor private func launchApp() -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
+        app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launch()
         return app
     }
@@ -248,7 +250,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
     }
 
-    @MainActor func testSampleChatKeepsTheBookVisibleAndPreservesItsPlace() {
+    @MainActor func testStreamingChatKeepsTheBookVisibleAndPreservesItsPlace() {
         let app = launchApp()
         app.tabBars.buttons["Settings"].tap()
         app.buttons["Paper theme"].tap()
@@ -307,7 +309,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "Summarize this page", "Keep the unsent question when returning to the book")
         input.tap()
         app.buttons["sendReaderChat"].tap()
-        let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Sample recap:")).firstMatch
+        let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Test reply:")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 5))
         XCTAssertEqual(surface.frame.height, height, accuracy: 1)
         app.buttons["closeReaderChat"].tap()
@@ -322,6 +324,69 @@ final class LeafReaderUITests: XCTestCase {
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         showReaderControls(app)
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Add bookmark")
+    }
+
+    @MainActor func testChatStopAndRetryKeepOneQuestion() {
+        let app = launchApp(slowChat: true)
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Explain this page")
+        app.buttons["sendReaderChat"].tap()
+        let action = app.buttons["sendReaderChat"]
+        expectation(for: NSPredicate(format: "label == %@", "Stop response"), evaluatedWith: action)
+        waitForExpectations(timeout: 5)
+        action.tap()
+        XCTAssertTrue(app.buttons["Retry"].waitForExistence(timeout: 5))
+        XCTAssertEqual(action.label, "Send message")
+        app.buttons["Retry"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Stop response"), evaluatedWith: action)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "chatQuestion").count, 1)
+        action.tap()
+        capture("AI stopped reply with retry", app: app)
+        app.buttons["closeReaderChat"].tap()
+        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor func testAISettingsPersistAndMissingKeyKeepsQuestion() {
+        let app = launchApp(mockChat: false)
+        app.tabBars.buttons["Settings"].tap()
+        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.buttons["openAISettings"].tap()
+        let model = app.textFields["aiModel"]
+        XCTAssertTrue(model.waitForExistence(timeout: 5))
+        XCTAssertEqual(model.value as? String, "claude-haiku-5-5")
+        app.buttons["Choose a Haiku model"].tap()
+        app.buttons["Haiku 4.5"].tap()
+        app.swipeUp()
+        let sharing = app.switches["aiSharePage"]
+        sharing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(sharing.value as? String, "0")
+        app.buttons["saveAISettings"].tap()
+        XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
+        app.terminate(); app.launch()
+        app.tabBars.buttons["Settings"].tap()
+        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.buttons["openAISettings"].tap()
+        XCTAssertEqual(model.value as? String, "claude-haiku-4-5")
+        XCTAssertEqual(app.switches["aiSharePage"].value as? String, "0")
+        capture("AI provider settings", app: app)
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap()
+        waitForBook(app)
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Explain this passage")
+        app.buttons["sendReaderChat"].tap()
+        let error = app.staticTexts["readerChatError"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+        XCTAssertTrue(error.label.contains("Add your API key"))
+        XCTAssertEqual(input.value as? String, "Explain this passage")
+        XCTAssertFalse(app.staticTexts["chatQuestion"].exists)
+        capture("AI missing key preserves draft", app: app)
+        app.buttons["closeReaderChat"].tap()
+        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
     }
 
     @MainActor func testNightChatKeepsBookVisibleWhileTyping() {

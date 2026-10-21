@@ -4,17 +4,24 @@ import UniformTypeIdentifiers
 @main
 struct LeafReaderApp: App {
     @StateObject private var library: LibraryStore
+    @StateObject private var aiSettings: AISettingsStore
     private let readingDefaults: UserDefaults
 
     init() {
         var root: URL?
         var seedSamples = true
         var defaults = UserDefaults.standard
+        var chatProvider: (any ChatProvider)?
+        var chatCredentials = KeychainChatCredentials()
         #if DEBUG
         let process = ProcessInfo.processInfo
         if process.arguments.contains("--ui-testing"),
            let value = process.environment["LEAF_UI_TEST_ID"], let id = UUID(uuidString: value) {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUITests/\(id.uuidString)", isDirectory: true)
+            chatCredentials.service = "com.leafreader.uitests.\(id.uuidString)"
+            if process.environment["LEAF_UI_CHAT_MOCK"] == "1" {
+                chatProvider = UITestChatProvider(slow: process.environment["LEAF_UI_CHAT_SLOW"] == "1")
+            }
             defaults = UserDefaults(suiteName: "com.leafreader.uitests.\(id.uuidString)") ?? .standard
         } else if NSClassFromString("XCTestCase") != nil {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUnitTests/\(UUID().uuidString)", isDirectory: true)
@@ -22,11 +29,12 @@ struct LeafReaderApp: App {
         }
         #endif
         _library = StateObject(wrappedValue: LibraryStore(root: root, seedSamples: seedSamples))
+        _aiSettings = StateObject(wrappedValue: AISettingsStore(defaults: defaults, credentials: chatCredentials, providerOverride: chatProvider))
         readingDefaults = defaults
     }
 
     var body: some Scene {
-        WindowGroup { AppView().environmentObject(library).defaultAppStorage(readingDefaults).tint(LeafStyle.accent) }
+        WindowGroup { AppView().environmentObject(library).environmentObject(aiSettings).defaultAppStorage(readingDefaults).tint(LeafStyle.accent) }
     }
 }
 
