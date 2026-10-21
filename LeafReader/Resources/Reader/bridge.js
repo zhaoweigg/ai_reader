@@ -103,6 +103,13 @@ function applyPreferences(value) {
     document.documentElement.style.background = value.background;
     document.body.style.background = value.background;
     if (!view?.renderer) return;
+    // Pin reflow to text rather than a section percentage, which can move to a
+    // different passage when font metrics or reading flow change.
+    const anchor = view.lastLocation?.range?.cloneRange();
+    if (anchor && !view.isFixedLayout) {
+        anchor.collapse(true);
+        view.renderer.scrollToAnchor(anchor);
+    }
     view.renderer.toggleAttribute('animated', !value.scrolling && !reducedMotion.matches);
     if (view.isFixedLayout) { view.renderer.setAttribute('zoom', 'fit-page'); return; }
     const font = value.font === 'System' ? '-apple-system, sans-serif' : `"${value.font}", serif`;
@@ -128,7 +135,8 @@ function applyPreferences(value) {
     attribute('gap', `${gap}%`);
     attribute('max-inline-size', '680px');
     view.renderer.setStyles?.(`
-        html { color-scheme: ${value.background === '#17232E' ? 'dark' : 'light'}; font-size:${size}px !important; }
+        html { color-scheme: ${value.background === '#17232E' ? 'dark' : 'light'}; font-size:${size}px !important;
+            -webkit-text-size-adjust:none !important; text-size-adjust:none !important; }
         html, body { background:${value.background} !important; color:${value.foreground} !important; }
         body { font-family:${font} !important; font-size:1rem !important; padding:0 !important; }
         p, li, blockquote, dd { font-family:${font} !important; font-size:1rem !important; line-height:${line} !important;

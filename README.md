@@ -51,6 +51,8 @@ Tap the center, then open **Appearance (Aa)** while reading. **Font** contains t
 
 **Themes → Compact** fits more text in one tap: 17 pt text, 1.35 line spacing, 0.35 em paragraph spacing, 12 pt side margins, and 8 pt top/bottom margins. Changes apply immediately and are saved across books and app restarts. The same controls are available in Settings.
 
+Text size uses the selected 12–32 pt value in both Pages and Scroll, with browser text autosizing disabled. Changing size or flow anchors reflow to the current passage rather than a percentage through the chapter.
+
 ## Storage and privacy
 
 Library files live in `Documents/Leaf/Books`, cover images in `Documents/Leaf/Covers`, and the atomic JSON manifest in `Documents/Leaf/library.json`. The manifest holds metadata, favorites, reading positions, and bookmarks. Imported originals are never modified. Removing a book removes only Leaf's copy and saved places. Files can be shared through the book's context menu or copied using Finder file sharing. iOS may include Documents in device/iCloud backups; Leaf implements no cross-device sync, account, analytics, or server.
@@ -76,6 +78,8 @@ Version **1.0.5 build 6** passed **28 tests with zero failures or skips** (`buil
 Version **1.0.6 build 7** removes Done from Appearance. Both existing appearance UI tests passed, verifying swipe-down dismissal, hidden reading controls after dismissal, and saved preferences after relaunch (`build/LeafRemoveDone-20261020.xcresult`). Screenshots are in `build/remove-done-attachments/`.
 
 Version **1.0.7 build 8** passed **29 tests with zero failures or skips** (`build/LeafPageMotionFull-20261020.xcresult`). Page-turn animation is now enabled for paginated reflowable books, with a 360 ms settle (375 ms measured in the full run). WebKit tests sample intermediate movement and verify snap-back, paused releases, interrupted drags, overlapping input, and forward/backward position restoration. The immersive UI test verifies short-drag cancellation and real forward/backward swipes using saved bookmarks. Timing measurements and screenshots are in `build/page-motion-full-attachments/`; upstream engine modifications are described in `ThirdParty/LOCAL_CHANGES.md`.
+
+Version **1.0.8 build 9** passed **31 tests with zero failures or skips** (`build/LeafFontFinal-20261020.xcresult`, completed October 21). WebKit text autosizing previously changed a requested 12 pt to 20 pt and could retain distorted sizing after returning to Pages. A new regression sweeps every integer size from 12–32 pt through Scroll → Pages → Scroll → Pages, checking actual font and glyph sizes, line height, text width, visible content, and passage preservation in all 84 cases. Reflow now pins to text, with an inset to avoid losing the anchored line at an exact pixel boundary. The UI test checks 12/32 pt scrolling previews, vertical swipes, and returning to Pages at 22 pt. Measurements and screenshots are in `build/font-final-attachments/`.
 
 Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 

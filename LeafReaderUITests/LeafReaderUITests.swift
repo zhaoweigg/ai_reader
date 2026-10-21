@@ -153,6 +153,52 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Page 2 of 4"].waitForExistence(timeout: 10))
     }
 
+    @MainActor func testTextSizePreviewAfterSwitchingScrollAndPages() {
+        let app = launchApp()
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        let tabs = app.segmentedControls["appearanceTabs"]
+        tabs.buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
+        tabs.buttons["Font"].tap()
+        app.sliders["fontSize"].adjust(toNormalizedSliderPosition: 1)
+        XCTAssertEqual(app.sliders["fontSize"].value as? String, "32 points")
+        capture("Scroll 32 pt preview", app: app)
+        dismissAppearance(app)
+        capture("Scroll 32 pt reading", app: app)
+        let surface = readingSurface(app)
+        let before = surface.staticTexts.allElementsBoundByIndex.map { ($0.label, $0.frame.minY) }
+        surface.swipeUp()
+        let after = surface.staticTexts.allElementsBoundByIndex.map { ($0.label, $0.frame.minY) }
+        XCTAssertTrue(before.contains { old in after.contains { $0.0 == old.0 && abs($0.1 - old.1) > 20 } },
+                      "Vertical swipes must move the scrolling text")
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.sliders["fontSize"].adjust(toNormalizedSliderPosition: 0)
+        XCTAssertEqual(app.sliders["fontSize"].value as? String, "12 points")
+        capture("Scroll 12 pt preview", app: app)
+        dismissAppearance(app)
+        capture("Scroll 12 pt reading", app: app)
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons["Pages"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Font"].tap()
+        app.sliders["fontSize"].adjust(toNormalizedSliderPosition: 0.5)
+        // XCTest's normalized slider drag is approximate; finish with exact steps.
+        for _ in 0..<20 {
+            let value = app.sliders["fontSize"].value as? String ?? ""
+            if value == "22 points" { break }
+            guard let size = Int(value.components(separatedBy: " ").first ?? "") else { break }
+            app.buttons[size > 22 ? "decreaseTextSize" : "increaseTextSize"].tap()
+        }
+        XCTAssertEqual(app.sliders["fontSize"].value as? String, "22 points")
+        capture("Pages 22 pt after scrolling preview", app: app)
+        dismissAppearance(app)
+        capture("Pages 22 pt after scrolling reading", app: app)
+    }
+
     @MainActor func testImmersiveReadingTogglesControlsWithoutMovingThePage() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()

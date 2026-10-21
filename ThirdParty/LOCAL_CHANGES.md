@@ -7,5 +7,6 @@ The foliate-js commit in `dependencies.json` identifies the upstream base. Leaf 
 - A release more than 80 ms after the last movement ignores stale flick velocity; the existing distance threshold remains unchanged.
 - System-canceled touches return to the original page. Taps without a drag do not start a settling animation.
 - Touch velocity handles equal timestamps, and snapping checks adjacent section bounds.
+- Scrolling anchors sit one pixel inside the viewport so reflow cannot exclude the saved line at an exact pixel boundary.
 
 `ReaderEngineTests.testPageTurnsAnimateAndCancelledSwipesKeepThePassage` measures intermediate positions, elapsed time, cancellation, forward/backward navigation, and overlapping input in WebKit. The immersive UI test also checks short drags and forward/backward swipes using real synthesized iOS gestures.

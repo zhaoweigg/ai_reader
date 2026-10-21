@@ -177,6 +177,67 @@ final class ReaderEngineTests: XCTestCase {
         let (book, url) = try prepare("A Field Guide to Slow Days.txt", format: .txt)
         try await assertOpened(show(book, url: url), contains: "morning")
     }
+    func testEveryTextSizeAcrossScrollAndPageLayout() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        _ = try await waitForLayout(model, preferences: preferences)
+        let web = try XCTUnwrap(model.webView)
+        let result = try await web.callAsyncJavaScript("""
+            const view = document.querySelector('foliate-view');
+            const renderer = view.renderer;
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+            const results = [];
+            await view.goToFraction(0.4);
+            await sleep(100);
+            for (const scrolling of [true, false, true, false]) {
+                const sizes = Array.from({length:21}, (_, i) => scrolling ? i + 12 : 32 - i);
+                for (const fontSize of sizes) {
+                    const saved = view.lastLocation.cfi;
+                    window.Leaf.applyPreferences({...base, scrolling, fontSize});
+                    await sleep(130);
+                    const doc = renderer.getContents()[0].doc;
+                    const p = doc.querySelector('p');
+                    const style = doc.defaultView.getComputedStyle(p);
+                    const root = doc.documentElement;
+                    const glyph = doc.createRange();
+                    glyph.setStart(p.firstChild, 0); glyph.setEnd(p.firstChild, 1);
+                    const rect = glyph.getBoundingClientRect();
+                    const savedRange = view.resolveCFI(saved).anchor(doc);
+                    savedRange.collapse(true);
+                    if (savedRange.startContainer.nodeType === 3 && savedRange.startOffset < savedRange.startContainer.length)
+                        savedRange.setEnd(savedRange.startContainer, savedRange.startOffset + 1);
+                    const savedRect = savedRange.getBoundingClientRect();
+                    results.push({scrolling, requested:fontSize, actual:parseFloat(style.fontSize),
+                        saved, current:view.lastLocation.cfi, savedTop:savedRect.top, savedBottom:savedRect.bottom,
+                        lineHeight:parseFloat(style.lineHeight), glyphWidth:rect.width, glyphHeight:rect.height,
+                        paragraphWidth:p.getBoundingClientRect().width, bodyWidth:doc.body.clientWidth,
+                        rootWidth:root.clientWidth, rootHeight:root.clientHeight, viewportWidth:view.clientWidth,
+                        viewportHeight:view.clientHeight, start:renderer.start, size:renderer.size,
+                        visibleCharacters:view.lastLocation.range.toString().replace(/\\s/g, '').length,
+                        keptPassage:window.Leaf.isLocationVisible(saved)});
+                }
+            }
+            return results;
+            """, arguments: ["base": preferences.payload], in: nil, contentWorld: .page)
+        let metrics = try XCTUnwrap(result as? [[String: Any]])
+        let data = try JSONSerialization.data(withJSONObject: metrics, options: [.prettyPrinted, .sortedKeys])
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+        attachment.name = "Every font size and flow geometry"; attachment.lifetime = .keepAlways; add(attachment)
+        for row in metrics {
+            let size = try XCTUnwrap(row["requested"] as? Double)
+            let scrolling = row["scrolling"] as? Bool == true
+            let label = "\(scrolling ? "Scroll" : "Pages") at \(size) pt"
+            XCTAssertEqual(try XCTUnwrap(row["actual"] as? Double), size, accuracy: 0.1, label)
+            XCTAssertEqual(try XCTUnwrap(row["glyphWidth"] as? Double), size, accuracy: 1, label)
+            XCTAssertEqual(try XCTUnwrap(row["lineHeight"] as? Double), size * preferences.lineHeight, accuracy: 0.2, label)
+            XCTAssertEqual(try XCTUnwrap(row["paragraphWidth"] as? Double),
+                           try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * preferences.horizontalMargin, accuracy: 2, label)
+            XCTAssertTrue(row["keptPassage"] as? Bool == true, label)
+            XCTAssertGreaterThan(try XCTUnwrap(row["visibleCharacters"] as? Double), 5, label)
+        }
+        XCTAssertNil(model.error)
+    }
     private func pageMetrics(_ model: ReaderModel) async throws -> [String: Double] {
         let result = try await model.webView?.evaluateJavaScript("""
             (() => {

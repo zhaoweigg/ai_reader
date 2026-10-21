@@ -901,7 +901,9 @@ export class Paginator extends HTMLElement {
     }
     async #scrollToRect(rect, reason) {
         if (this.scrolled) {
-            const offset = this.#getRectMapper()(rect).left - this.#margin
+            // Leaf: keep the anchored line just inside the viewport, including
+            // exact pixel boundaries where range bisection would skip that line.
+            const offset = Math.max(0, Math.floor(this.#getRectMapper()(rect).left - this.#margin) - 1)
             return this.#scrollTo(offset, reason)
         }
         const offset = this.#getRectMapper()(rect).left
