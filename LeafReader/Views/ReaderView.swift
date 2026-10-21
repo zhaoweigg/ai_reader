@@ -88,7 +88,7 @@ struct ReaderContent: View {
         .accessibilityAction(.escape) { library.flush(); dismiss() }
         .task { library.open(book.id) }
         .onDisappear { library.flush() }
-        .sheet(item: $panel) { panel in
+        .sheet(item: $panel, onDismiss: { model.hideControls() }) { panel in
             NavigationStack {
                 Group {
                     switch panel {
@@ -107,7 +107,13 @@ struct ReaderContent: View {
                         }.overlay { if (library.book(book.id)?.bookmarks ?? []).isEmpty { ContentUnavailableView("No saved places yet", systemImage: "bookmark", description: Text("Tap the bookmark at the top of the page to save your place.")) } }.navigationTitle("Saved places")
                     case .search: ReaderSearchView(model: model) { self.panel = nil; model.hideControls() }
                     }
-                }.navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.panel = nil; model.hideControls() } } }
+                }.navigationBarTitleDisplayMode(.inline).toolbar {
+                    if panel != .appearance {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { self.panel = nil; model.hideControls() }
+                        }
+                    }
+                }
             }
             .presentationDetents(panel == .appearance ? [.medium, .large] : [.large])
             .presentationDragIndicator(panel == .appearance ? .visible : .automatic)

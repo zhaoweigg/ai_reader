@@ -34,6 +34,15 @@ final class LeafReaderUITests: XCTestCase {
         }
         XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
     }
+    @MainActor private func dismissAppearance(_ app: XCUIApplication) {
+        XCTAssertFalse(app.buttons["Done"].exists)
+        let titleBar = app.navigationBars["Appearance"]
+        titleBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.segmentedControls["appearanceTabs"])
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.buttons["closeBook"].exists)
+    }
 
     @MainActor func testLibraryReaderBookmarksAndAppearance() throws {
         let app = launchApp()
@@ -62,7 +71,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Night theme"].waitForExistence(timeout: 5))
         app.buttons["Night theme"].tap()
         capture("Aa Night controls", app: app)
-        app.buttons["Done"].tap()
+        dismissAppearance(app)
         capture("EPUB night", app: app)
         showReaderControls(app)
         app.buttons["closeBook"].tap()
@@ -108,7 +117,7 @@ final class LeafReaderUITests: XCTestCase {
         compact.tap()
         XCTAssertTrue(compact.isSelected)
         capture("Aa Themes controls", app: app)
-        app.buttons["Done"].tap()
+        dismissAppearance(app)
         capture("Compact reading page", app: app)
         app.terminate()
         app.launch()
