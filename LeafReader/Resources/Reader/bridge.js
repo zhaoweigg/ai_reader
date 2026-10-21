@@ -68,19 +68,34 @@ function applyPreferences(value) {
     if (!view?.renderer) return;
     if (view.isFixedLayout) { view.renderer.setAttribute('zoom', 'fit-page'); return; }
     const font = value.font === 'System' ? '-apple-system, sans-serif' : `"${value.font}", serif`;
-    const size = Math.min(32, Math.max(14, Number(value.fontSize) || 19));
-    const line = Math.min(2.2, Math.max(1.2, Number(value.lineHeight) || 1.65));
-    view.renderer.setAttribute('flow', value.scrolling ? 'scrolled' : 'paginated');
-    view.renderer.setAttribute('margin', '16');
-    view.renderer.setAttribute('gap', '9%');
-    view.renderer.setAttribute('max-inline-size', '680');
+    const bounded = (value, fallback, min, max) => Number.isFinite(Number(value))
+        ? Math.min(max, Math.max(min, Number(value))) : fallback;
+    const size = bounded(value.fontSize, 19, 12, 32);
+    const line = bounded(value.lineHeight, 1.65, 1.1, 2.2);
+    const horizontal = bounded(value.horizontalMargin ?? 20, 20, 8, 48);
+    const vertical = bounded(value.verticalMargin ?? 12, 12, 0, 48);
+    const paragraph = bounded(value.paragraphSpacing ?? 0.65, 0.65, 0, 1.5);
+    const doc = view.renderer.getContents?.()[0]?.doc;
+    const verticalText = doc && /^(vertical|sideways)/.test(doc.defaultView.getComputedStyle(doc.body).writingMode);
+    const inlineSize = (verticalText ? view.clientHeight : view.clientWidth) || 390;
+    // Foliate's gap is a percentage of the inline viewport; its margin and size
+    // attributes are CSS lengths and must include units.
+    const inlineMargin = verticalText ? vertical : horizontal;
+    const gap = 100 * inlineMargin / (inlineSize + (value.scrolling ? inlineMargin : 0));
+    const attribute = (name, value) => {
+        if (view.renderer.getAttribute(name) !== value) view.renderer.setAttribute(name, value);
+    };
+    attribute('flow', value.scrolling ? 'scrolled' : 'paginated');
+    attribute('margin', `${verticalText ? horizontal : vertical}px`);
+    attribute('gap', `${gap}%`);
+    attribute('max-inline-size', '680px');
     view.renderer.setStyles?.(`
         html { color-scheme: ${value.background === '#17232E' ? 'dark' : 'light'}; font-size:${size}px !important; }
         html, body { background:${value.background} !important; color:${value.foreground} !important; }
-        body { font-family:${font} !important; font-size:1rem !important; }
+        body { font-family:${font} !important; font-size:1rem !important; padding:0 !important; }
         p, li, blockquote, dd { font-family:${font} !important; font-size:1rem !important; line-height:${line} !important;
             color:${value.foreground} !important; text-align:start; hyphens:auto; overflow-wrap:break-word; }
-        p { margin-block:0 0.85em; }
+        p { margin-block:0 ${paragraph}em !important; }
         h1,h2,h3 { font-family:${font} !important; line-height:1.2; color:${value.foreground} !important; }
         pre { white-space:pre-wrap; font-size:0.85em; }
         a { color:${value.background === '#17232E' ? '#93CABB' : '#24776A'} !important; }
@@ -123,6 +138,7 @@ async function open(config) {
         });
         view = document.createElement('foliate-view');
         document.body.append(view);
+        view.addEventListener('load', () => requestAnimationFrame(() => { if (preferences) applyPreferences(preferences); }));
         view.addEventListener('external-link', event => event.preventDefault());
         view.addEventListener('relocate', ({detail}) => {
             fixedIndex = detail.index ?? fixedIndex;
@@ -207,4 +223,5 @@ window.Leaf = { open, command, applyPreferences, search,
         } catch { return false; }
     },
     bookSectionCount: () => view?.book?.sections.length || 0 };
+window.addEventListener('resize', () => { if (preferences) applyPreferences(preferences); });
 post('bridgeReady');

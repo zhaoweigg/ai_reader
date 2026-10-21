@@ -24,13 +24,19 @@ struct ReaderContent: View {
     @AppStorage("reader.font") private var font = "Georgia"
     @AppStorage("reader.theme") private var themeName = ReadingTheme.day.rawValue
     @AppStorage("reader.scrolling") private var scrolling = false
+    @AppStorage("reader.horizontalMargin") private var horizontalMargin = 20.0
+    @AppStorage("reader.verticalMargin") private var verticalMargin = 12.0
+    @AppStorage("reader.paragraphSpacing") private var paragraphSpacing = 0.65
     @State private var panel: ReaderPanel?
     @State private var password = ""
     @State private var seek = 0.0
     @State private var seeking = false
     @State private var reloadID = UUID()
     private var theme: ReadingTheme { ReadingTheme(rawValue: themeName) ?? .day }
-    private var preferences: ReaderPreferences { ReaderPreferences(fontSize: fontSize, lineHeight: lineHeight, font: font, theme: theme, scrolling: scrolling) }
+    private var preferences: ReaderPreferences {
+        ReaderPreferences(fontSize: fontSize, lineHeight: lineHeight, font: font, theme: theme, scrolling: scrolling,
+                          horizontalMargin: horizontalMargin, verticalMargin: verticalMargin, paragraphSpacing: paragraphSpacing)
+    }
 
     init(book: Book, url: URL, library: LibraryStore, initialLocator: String?) {
         self.book = book; self.url = url
@@ -117,7 +123,7 @@ struct ReaderContent: View {
                     case .search: ReaderSearchView(model: model) { self.panel = nil }
                     }
                 }.navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.panel = nil } } }
-            }.presentationDetents(panel == .appearance ? [.medium, .large] : [.large])
+            }.presentationDetents([.large])
         }
     }
     private func panelButton(_ title: String, _ image: String, _ panel: ReaderPanel) -> some View {

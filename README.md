@@ -37,10 +37,12 @@ DRM removal, KFX, ACSM, CBR/RAR, DjVu, legacy DOC, and DOCX are not implemented.
 - Search and filter the library, sort books, favorites, recent reading, and finished books.
 - Table of contents, page turning/swiping, progress seeking, and full-book text search (up to 200 results).
 - Persistent reading positions and per-book bookmarks, including a library-wide bookmarks tab.
-- Day, paper, and night themes; three typefaces; adjustable font size and line spacing; paginated or vertical flow.
+- Day, paper, and night themes; three typefaces; adjustable font size, line and paragraph spacing, and page margins; paginated or vertical flow.
 - Original short sample books in EPUB, PDF, FB2, and TXT.
 - Cover thumbnails and embedded title/author metadata load during import; existing books with missing covers are checked automatically on launch.
 - Native accessibility labels, Dynamic Type in app controls, iPad layouts, and landscape support.
+
+Open **Appearance** while reading to adjust text size (12–32 pt), line spacing, paragraph spacing, side margins, and top/bottom margins. **Fit more text** sets a compact layout in one tap: 17 pt text, 1.35 line spacing, 0.35 em paragraph spacing, 12 pt side margins, and 8 pt top/bottom margins. Changes apply immediately and are saved across books and app restarts. The same controls are available in Settings.
 
 ## Storage and privacy
 
@@ -57,6 +59,8 @@ The initial version was verified on October 20, 2026: **16 tests passed, zero fa
 Version **1.0.1 build 2** passed **25 tests with zero failures or skips** on the same Simulator. Nine new metadata tests verify covers and authors before the first read, EPUB 2/3 declarations, SVG rasterization, XHTML cover pages with relative image paths, PDF thumbnails, persistence, existing-library updates, retry after failure, and deletion during extraction. Results: `build/CoverFixFinal-20261020.xcresult` and `build/cover-fix-test-summary-20261020.json`.
 
 Version **1.0.2 build 3** balances the Leaf toolbar logo's horizontal padding and centers its icon and title within a 44-point row. The existing library/reader/bookmarks/appearance UI test passed, and screenshots confirmed the logo spacing at the top of the library and after scrolling. Results: `build/LeafTitleAlignmentFinal-20261020.xcresult` and `build/title-alignment-final-attachments/`.
+
+Version **1.0.3 build 4** passed **27 tests with zero failures or skips**. Page layout now supplies valid CSS lengths to the paginator, preventing excessive blank space. New controls adjust page margins and paragraph spacing, with a compact preset and smaller minimum text size. A Chinese HTML regression fixture verifies actual page dimensions, increased visible text, and preservation of the saved passage when changing density or switching to scrolling. The UI test verifies that layout settings survive a restart. Results: `build/LeafDensityFinal-20261020.xcresult`; screenshots and density measurements are exported to `build/density-final-attachments/`.
 
 Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 
@@ -76,6 +80,8 @@ The fixtures establish rendering for the formats named above; they do not test e
 On October 20, 2026, version **1.0.0 build 1** was built and signed for the owner's iPhone 17 Pro running iOS 27.0, installed successfully, and launched. A subsequent device process query confirmed the app remained running. The signed bundle includes the reader engine and all four sample books; its signature and device provisioning were validated. This establishes installation and launch, rather than a complete on-device reading or iCloud import test.
 
 Version **1.0.2 build 3** was also signed, verified, and installed successfully. The phone was locked when launch was attempted, so this update's on-device appearance remains to be checked after unlocking and opening Leaf. Installation and launch diagnostics are recorded in `build/title-alignment-iphone-install-20261020.json` and `build/title-alignment-iphone-launch-20261020.json`.
+
+Version **1.0.3 build 4** was signed, verified, installed, and launched successfully on the same iPhone. Installation and launch diagnostics are saved in `build/density-iphone-install-20261020.json` and `build/density-iphone-launch-20261020.json`.
 
 The unique app identifier and development team are saved in `project.yml` and the generated Xcode project. Installation artifacts are `build/iphone-signing-validation-20261020.json`, `build/iphone-install-20261020.json`, and `build/iphone-launch-20261020.json`; the signed build log is `build/leaf-iphone-signed-build-20261020.log`. This is a development-signed installation; its profile expiration is recorded in the signing-validation artifact.
 

@@ -87,6 +87,94 @@ final class ReaderEngineTests: XCTestCase {
         let (book, url) = try prepare("A Field Guide to Slow Days.txt", format: .txt)
         try await assertOpened(show(book, url: url), contains: "morning")
     }
+    private func pageMetrics(_ model: ReaderModel) async throws -> [String: Double] {
+        let result = try await model.webView?.evaluateJavaScript("""
+            (() => {
+                const view = document.querySelector('foliate-view');
+                const doc = view.renderer.getContents()[0].doc;
+                const style = doc.defaultView.getComputedStyle(doc.querySelector('p'));
+                const rootStyle = doc.defaultView.getComputedStyle(doc.documentElement);
+                return { viewportHeight: view.clientHeight, contentHeight: doc.documentElement.clientHeight,
+                    viewportWidth: view.clientWidth, columnWidth: parseFloat(rootStyle.columnWidth) || 0,
+                    sidePadding: parseFloat(rootStyle.paddingLeft),
+                    scrolling: Number(view.renderer.getAttribute('flow') === 'scrolled'),
+                    fontSize: parseFloat(style.fontSize), lineHeight: parseFloat(style.lineHeight),
+                    paragraphSpacing: parseFloat(style.marginBottom),
+                    visibleCharacters: view.lastLocation.range.toString().replace(/\\s/g, '').length };
+            })()
+            """)
+        return try XCTUnwrap(result as? [String: Double])
+    }
+    private func waitForLayout(_ model: ReaderModel, preferences: ReaderPreferences) async throws -> [String: Double] {
+        let deadline = Date().addingTimeInterval(8)
+        var metrics: [String: Double] = [:]
+        var settled = 0
+        while Date() < deadline {
+            let next = try await pageMetrics(model)
+            let correct = abs((next["contentHeight"] ?? 0) - (next["viewportHeight"] ?? 0) + 2 * preferences.verticalMargin) < 2
+                && abs((next["columnWidth"] ?? 0) - (next["viewportWidth"] ?? 0) + 2 * preferences.horizontalMargin) < 2
+                && abs((next["fontSize"] ?? 0) - preferences.fontSize) < 0.1
+                && abs((next["paragraphSpacing"] ?? 0) - preferences.paragraphSpacing * preferences.fontSize) < 0.1
+            settled = correct && next == metrics ? settled + 1 : 0
+            metrics = next
+            if settled >= 3 { return metrics }
+            try await Task.sleep(for: .milliseconds(75))
+        }
+        XCTFail("Page layout did not settle: \(metrics)")
+        return metrics
+    }
+    func testPageDensityUsesFullHeightAndKeepsSavedPassage() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        let initial = try await waitForLayout(model, preferences: preferences)
+        XCTAssertGreaterThan(try XCTUnwrap(initial["contentHeight"]), try XCTUnwrap(initial["viewportHeight"]) * 0.9)
+        model.send("seek", value: 0.45)
+        try await waitUntil { model.fraction > 0.3 }
+        let locator = model.locator
+        let saved = String(decoding: try JSONEncoder().encode(locator), as: UTF8.self)
+        let spacious = ReaderPreferences(fontSize: 25, lineHeight: 2, font: "Georgia", theme: .day, scrolling: false,
+                                          horizontalMargin: 48, verticalMargin: 48, paragraphSpacing: 1.2)
+        let host = try XCTUnwrap(window?.rootViewController as? UIHostingController<WebBookSurface>)
+        host.rootView = WebBookSurface(model: model, url: url, preferences: spacious)
+        let fewer = try await waitForLayout(model, preferences: spacious)
+        let spaciousShowsSavedPassage = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(saved))") as? Bool
+        XCTAssertEqual(spaciousShowsSavedPassage, true)
+        let compact = ReaderPreferences(fontSize: 17, lineHeight: 1.35, font: "Georgia", theme: .day, scrolling: false,
+                                         horizontalMargin: 12, verticalMargin: 8, paragraphSpacing: 0.35)
+        host.rootView = WebBookSurface(model: model, url: url, preferences: compact)
+        let more = try await waitForLayout(model, preferences: compact)
+        XCTAssertGreaterThan(try XCTUnwrap(more["visibleCharacters"]), try XCTUnwrap(fewer["visibleCharacters"]) * 1.5)
+        let compactShowsSavedPassage = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(saved))") as? Bool
+        XCTAssertEqual(compactShowsSavedPassage, true)
+        XCTAssertNil(model.error)
+        let metrics = try JSONSerialization.data(withJSONObject: ["default": initial, "spacious": fewer, "compact": more], options: [.prettyPrinted, .sortedKeys])
+        let result = XCTAttachment(data: metrics, uniformTypeIdentifier: "public.json")
+        result.name = "Page density measurements"; result.lifetime = .keepAlways; add(result)
+        let webView = try XCTUnwrap(model.webView)
+        let image: UIImage? = await withCheckedContinuation { continuation in
+            webView.takeSnapshot(with: nil) { image, error in
+                XCTAssertNil(error)
+                continuation.resume(returning: image)
+            }
+        }
+        let screenshot = XCTAttachment(image: try XCTUnwrap(image))
+        screenshot.name = "Chinese compact page"; screenshot.lifetime = .keepAlways; add(screenshot)
+        var scrolling = compact
+        scrolling.scrolling = true
+        host.rootView = WebBookSurface(model: model, url: url, preferences: scrolling)
+        let deadline = Date().addingTimeInterval(5)
+        var scrolled: [String: Double] = [:]
+        while Date() < deadline {
+            scrolled = try await pageMetrics(model)
+            if scrolled["scrolling"] == 1, abs((scrolled["sidePadding"] ?? 0) - compact.horizontalMargin) < 1 { break }
+            try await Task.sleep(for: .milliseconds(75))
+        }
+        XCTAssertEqual(scrolled["scrolling"], 1)
+        XCTAssertEqual(try XCTUnwrap(scrolled["sidePadding"]), compact.horizontalMargin, accuracy: 1)
+        let scrollShowsSavedPassage = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(saved))") as? Bool
+        XCTAssertEqual(scrollShowsSavedPassage, true)
+    }
     func testMOBIWithPalmDOCCompressionRenders() async throws {
         let (book, url) = try prepare("Afternoon.mobi", format: .mobi, fixtures: true)
         try await assertOpened(show(book, url: url), contains: "afternoon")

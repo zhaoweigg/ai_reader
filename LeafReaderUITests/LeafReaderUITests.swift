@@ -57,6 +57,33 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["book-The Art of Noticing"].exists)
     }
 
+    @MainActor func testPageLayoutSettingsPersistAcrossRelaunch() {
+        let app = launchApp()
+        app.swipeUp()
+        app.buttons["book-The Art of Noticing"].tap()
+        XCTAssertTrue(app.buttons["Appearance"].waitForExistence(timeout: 15))
+        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: app.buttons["Appearance"])
+        waitForExpectations(timeout: 20)
+        app.buttons["Appearance"].tap()
+        let compact = app.buttons["compactLayout"]
+        XCTAssertTrue(compact.waitForExistence(timeout: 5))
+        if !compact.isHittable { app.swipeUp() }
+        compact.tap()
+        app.swipeUp()
+        XCTAssertTrue(app.staticTexts["12 pt"].exists)
+        XCTAssertTrue(app.staticTexts["8 pt"].exists)
+        capture("Page layout controls", app: app)
+        app.buttons["Done"].tap()
+        capture("Compact reading page", app: app)
+        app.terminate()
+        app.launch()
+        app.tabBars.buttons["Settings"].tap()
+        app.swipeUp()
+        XCTAssertTrue(app.staticTexts["12 pt"].exists)
+        XCTAssertTrue(app.staticTexts["8 pt"].exists)
+        XCTAssertTrue(app.sliders["paragraphSpacing"].exists)
+    }
+
     @MainActor func testPDFNavigationRestoresSavedPage() {
         let app = launchApp()
         let search = app.textFields["librarySearch"]

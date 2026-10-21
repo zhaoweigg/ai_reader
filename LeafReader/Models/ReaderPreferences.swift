@@ -20,9 +20,13 @@ struct ReaderPreferences: Equatable {
     var font: String
     var theme: ReadingTheme
     var scrolling: Bool
+    var horizontalMargin: Double = 20
+    var verticalMargin: Double = 12
+    var paragraphSpacing: Double = 0.65
     var payload: [String: Any] {
         ["fontSize": fontSize, "lineHeight": lineHeight, "font": font,
-         "background": theme.backgroundHex, "foreground": theme.foregroundHex, "scrolling": scrolling]
+         "background": theme.backgroundHex, "foreground": theme.foregroundHex, "scrolling": scrolling,
+         "horizontalMargin": horizontalMargin, "verticalMargin": verticalMargin, "paragraphSpacing": paragraphSpacing]
     }
 }
 
