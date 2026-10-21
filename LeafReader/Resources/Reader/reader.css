@@ -1,0 +1,3 @@
+html,body { margin:0; padding:0; height:100%; width:100%; overflow:hidden; background:transparent; }
+foliate-view { display:block; height:100%; width:100%; }
+foliate-view::part(head), foliate-view::part(foot) { display:none; }

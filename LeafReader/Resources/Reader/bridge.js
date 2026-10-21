@@ -1,0 +1,210 @@
+import { makeBook } from './foliate/view.js';
+
+const post = (type, detail = {}) => window.webkit?.messageHandlers.leaf.postMessage({ type, ...detail });
+const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const languageText = value => typeof value === 'string' ? value : value ? languageText(Object.values(value)[0]) : '';
+const contributor = value => Array.isArray(value) ? value.map(contributor).filter(Boolean).join(', ')
+    : typeof value === 'string' ? value : languageText(value?.name);
+let view;
+let searchGeneration;
+let preferences;
+let fixedIndex = 0;
+
+function sanitize(doc) {
+    doc.querySelectorAll('script,iframe,object,embed,form,base,meta[http-equiv],link[rel="import"]').forEach(el => el.remove());
+    for (const el of doc.querySelectorAll('*')) {
+        for (const attribute of [...el.attributes]) {
+            if (/^on/i.test(attribute.name) || /^(?:javascript|vbscript):/i.test(attribute.value.trim())) el.removeAttribute(attribute.name);
+        }
+    }
+    return doc;
+}
+
+function markdown(source) {
+    // A deliberately small, safe Markdown subset; HTML is always treated as text.
+    const lines = source.replace(/\r\n?/g, '\n').split('\n');
+    let code = false;
+    return lines.map(line => {
+        if (/^```/.test(line)) { code = !code; return code ? '<pre><code>' : '</code></pre>'; }
+        if (code) return escapeHTML(line) + '\n';
+        const safe = escapeHTML(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+        const heading = safe.match(/^(#{1,6})\s+(.+)/);
+        if (heading) return `<h${heading[1].length}>${heading[2]}</h${heading[1].length}>`;
+        if (/^&gt;\s?/.test(safe)) return `<blockquote>${safe.replace(/^&gt;\s?/, '')}</blockquote>`;
+        if (/^[-*]\s/.test(safe)) return `<p>• ${safe.slice(2)}</p>`;
+        return safe.trim() ? `<p>${safe}</p>` : '';
+    }).join('\n') + (code ? '</code></pre>' : '');
+}
+
+async function simpleBook(file, format) {
+    const text = await file.text();
+    const title = file.name.replace(/\.[^.]+$/, '');
+    const content = format === 'html' ? text : format === 'md' ? markdown(text)
+        : text.replace(/\r\n?/g, '\n').split(/\n\s*\n/).map(p => `<p>${escapeHTML(p).replace(/\n/g, '<br>')}</p>`).join('\n');
+    const doc = sanitize(new DOMParser().parseFromString(content, 'text/html'));
+    const toc = [...doc.querySelectorAll('h1,h2,h3')].map((heading, index) => {
+        heading.id ||= `heading-${index}`;
+        return { label: heading.textContent.trim(), href: `text#${heading.id}` };
+    });
+    const html = '<!doctype html>' + doc.documentElement.outerHTML;
+    let url;
+    return {
+        metadata: { title, language: 'en' },
+        sections: [{ id: 'text', size: html.length, load: () => url ||= URL.createObjectURL(new Blob([html], {type:'text/html'})),
+            unload: () => { if(url) URL.revokeObjectURL(url); url = null; },
+            createDocument: async () => new DOMParser().parseFromString(html, 'text/html'), resolveHref: href => href }],
+        toc: toc.length ? toc : [{ label: title, href: 'text' }],
+        resolveHref: href => ({ index:0, anchor: document => document.getElementById(href.split('#')[1]) || document.body }),
+        splitTOCHref: href => href.split('#'),
+        getTOCFragment: (document, id) => document.getElementById(id) || document.body,
+        destroy: () => { if(url) URL.revokeObjectURL(url); }
+    };
+}
+
+function applyPreferences(value) {
+    preferences = value;
+    document.documentElement.style.background = value.background;
+    document.body.style.background = value.background;
+    if (!view?.renderer) return;
+    if (view.isFixedLayout) { view.renderer.setAttribute('zoom', 'fit-page'); return; }
+    const font = value.font === 'System' ? '-apple-system, sans-serif' : `"${value.font}", serif`;
+    const size = Math.min(32, Math.max(14, Number(value.fontSize) || 19));
+    const line = Math.min(2.2, Math.max(1.2, Number(value.lineHeight) || 1.65));
+    view.renderer.setAttribute('flow', value.scrolling ? 'scrolled' : 'paginated');
+    view.renderer.setAttribute('margin', '16');
+    view.renderer.setAttribute('gap', '9%');
+    view.renderer.setAttribute('max-inline-size', '680');
+    view.renderer.setStyles?.(`
+        html { color-scheme: ${value.background === '#17232E' ? 'dark' : 'light'}; font-size:${size}px !important; }
+        html, body { background:${value.background} !important; color:${value.foreground} !important; }
+        body { font-family:${font} !important; font-size:1rem !important; }
+        p, li, blockquote, dd { font-family:${font} !important; font-size:1rem !important; line-height:${line} !important;
+            color:${value.foreground} !important; text-align:start; hyphens:auto; overflow-wrap:break-word; }
+        p { margin-block:0 0.85em; }
+        h1,h2,h3 { font-family:${font} !important; line-height:1.2; color:${value.foreground} !important; }
+        pre { white-space:pre-wrap; font-size:0.85em; }
+        a { color:${value.background === '#17232E' ? '#93CABB' : '#24776A'} !important; }
+        img,svg { max-width:100%; }`);
+}
+
+function flattenTOC(items = [], depth = 0) {
+    return items.flatMap(item => [
+        ...(item.href != null ? [{ label: languageText(item.label) || 'Untitled section', href:String(item.href), depth }] : []),
+        ...flattenTOC(item.subitems ?? item.children ?? [], depth + 1)
+    ]);
+}
+
+async function rejectEncryptedMOBI(file) {
+    const header = new DataView(await file.slice(0, 90).arrayBuffer());
+    if (header.byteLength < 86) return;
+    const record = header.getUint32(78);
+    const palmdoc = new DataView(await file.slice(record, record + 16).arrayBuffer());
+    if (palmdoc.byteLength >= 14 && palmdoc.getUint16(12) !== 0) throw new Error('This Kindle book is DRM-protected. Import a DRM-free copy.');
+}
+
+async function open(config) {
+    try {
+        view?.close(); view?.book?.destroy?.(); view?.remove();
+        const response = await fetch('leaf-reader://reader/book');
+        if (!response.ok) throw new Error('The book file could not be read.');
+        const file = new File([await response.blob()], config.name);
+        if (['mobi','azw','azw3','prc'].includes(config.format)) await rejectEncryptedMOBI(file);
+        const book = ['txt','md','html','rtf'].includes(config.format) ? await simpleBook(file, config.format) : await makeBook(file);
+        if (!book.sections?.length) throw new Error('This book has no readable sections. Try another copy.');
+        book.transformTarget?.addEventListener('data', ({ detail }) => {
+            if (/html|xml|svg/.test(detail.type || '')) {
+                const original = detail.data;
+                detail.data = Promise.resolve(original).then(data => {
+                    if (typeof data !== 'string') return data;
+                    const type = /xhtml/.test(detail.type) ? 'application/xhtml+xml' : /svg/.test(detail.type) ? 'image/svg+xml' : 'text/html';
+                    return new XMLSerializer().serializeToString(sanitize(new DOMParser().parseFromString(data, type)));
+                });
+            }
+        });
+        view = document.createElement('foliate-view');
+        document.body.append(view);
+        view.addEventListener('external-link', event => event.preventDefault());
+        view.addEventListener('relocate', ({detail}) => {
+            fixedIndex = detail.index ?? fixedIndex;
+            const count = view.book.sections.length;
+            const fraction = Number.isFinite(detail.fraction) ? detail.fraction : count > 1 ? fixedIndex / (count - 1) : 0;
+            post('relocate', { locator:detail.cfi || `section:${fixedIndex}`, fraction,
+                label:languageText(detail.tocItem?.label) || (view.isFixedLayout ? `Page ${fixedIndex + 1} of ${count}` : '') });
+        });
+        await view.open(book);
+        applyPreferences(config.preferences);
+        post('toc', { items:flattenTOC(book.toc) });
+        post('metadata', { title:languageText(book.metadata?.title), author:contributor(book.metadata?.author) });
+        const location = config.locator;
+        if (location?.startsWith('section:')) await view.goTo(Number(location.slice(8)));
+        else await view.init({ lastLocation: location || undefined, showTextStart:true });
+        post('ready');
+        // Cover extraction can fail independently of the text (for example an SVG cover).
+        Promise.resolve(book.getCover?.()).then(blob => {
+            if (!blob || blob.size > 8 * 1024 * 1024) return;
+            const reader = new FileReader();
+            reader.onload = () => post('metadata', { cover:reader.result.split(',')[1] });
+            reader.readAsDataURL(blob);
+        }).catch(() => {});
+    } catch(error) { post('error', { message:readableError(error) }); }
+}
+
+function readableError(error) {
+    const message = error?.message || String(error);
+    return /encrypt|drm|password/i.test(message) ? 'This book is protected. Import a DRM-free copy, or unlock a password-protected PDF in the PDF reader.'
+        : `${message} If this file is incomplete or unsupported, download a fresh DRM-free copy and import it again.`;
+}
+
+async function command({action, value}) {
+    try {
+        if (!view) return;
+        if (action === 'next') await view.goRight();
+        if (action === 'previous') await view.goLeft();
+        if (action === 'navigate') {
+            if (value.startsWith('section:')) await view.goTo(Number(value.slice(8)));
+            else await view.goTo(value);
+        }
+        if (action === 'seek') {
+            if (view.isFixedLayout) await view.goTo(Math.round(value * (view.book.sections.length - 1)));
+            else await view.goToFraction(Math.min(0.99999, Math.max(0, value)));
+        }
+        if (action === 'clearSearch') { searchGeneration = null; view.clearSearch(); }
+    } catch(error) { post('error', {message:readableError(error)}); }
+}
+
+async function search({query, generation}) {
+    searchGeneration = generation;
+    const items = [];
+    try {
+        if (view.isFixedLayout && !view.book.sections.some(section => section.createDocument)) {
+            post('searchResults', {generation, items}); return;
+        }
+        for await (const result of view.search({query, matchCase:false})) {
+            if (generation !== searchGeneration) return;
+            for (const item of result.subitems ?? (result.cfi ? [result] : [])) {
+                const excerpt = item.excerpt;
+                items.push({locator:item.cfi, label:languageText(result.label) || 'Matching passage',
+                    excerpt: typeof excerpt === 'string' ? excerpt : `${excerpt?.pre || ''}${excerpt?.match || ''}${excerpt?.post || ''}`});
+                if (items.length >= 200) break;
+            }
+            if (items.length >= 200) break;
+        }
+        if (generation === searchGeneration) post('searchResults', {generation, items});
+    } catch(error) { post('searchResults', {generation, items}); }
+}
+
+window.Leaf = { open, command, applyPreferences, search,
+    // Useful to test the actual rendered document, rather than only parser metadata.
+    visibleText: () => view?.renderer?.getContents?.().map(({doc}) => doc?.body?.innerText || '').join('\n') || '',
+    currentLocation: () => view?.lastLocation?.cfi,
+    isLocationVisible: locator => {
+        try {
+            const target = view.resolveCFI(locator);
+            const doc = view.renderer.getContents().find(item => item.index === target.index)?.doc;
+            const saved = doc && target.anchor(doc);
+            const visible = view.lastLocation?.range;
+            return Boolean(saved && visible && visible.comparePoint(saved.startContainer, saved.startOffset) === 0);
+        } catch { return false; }
+    },
+    bookSectionCount: () => view?.book?.sections.length || 0 };
+post('bridgeReady');

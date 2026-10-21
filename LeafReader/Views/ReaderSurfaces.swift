@@ -1,0 +1,83 @@
+import SwiftUI
+import WebKit
+import PDFKit
+
+struct WebBookSurface: UIViewRepresentable {
+    @ObservedObject var model: ReaderModel
+    let url: URL
+    let preferences: ReaderPreferences
+    func makeCoordinator() -> Coordinator { Coordinator(model) }
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController.add(context.coordinator, name: "leaf")
+        guard let assets = Bundle.main.url(forResource: "Reader", withExtension: nil), let format = model.book?.format else { return WKWebView() }
+        configuration.setURLSchemeHandler(ReaderAssetHandler(bookURL: url, format: format, assets: assets), forURLScheme: "leaf-reader")
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.isOpaque = false
+        view.backgroundColor = UIColor(preferences.theme.background)
+        view.scrollView.isScrollEnabled = false
+        view.navigationDelegate = context.coordinator
+        view.accessibilityIdentifier = "bookWebView"
+        view.isInspectable = true
+        model.webView = view
+        model.preferences = preferences
+        view.load(URLRequest(url: URL(string: "leaf-reader://reader/index.html")!))
+        return view
+    }
+    func updateUIView(_ view: WKWebView, context: Context) {
+        view.backgroundColor = UIColor(preferences.theme.background)
+        // Deferring avoids publishing into SwiftUI while it is rendering the representable.
+        if model.preferences != preferences { Task { @MainActor in model.applyPreferences(preferences) } }
+    }
+    static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "leaf")
+        view.stopLoading()
+    }
+    @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+        let model: ReaderModel
+        init(_ model: ReaderModel) { self.model = model }
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any] else { return }
+            model.receive(body)
+        }
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            let url = navigationAction.request.url
+            let allowed = url?.scheme == "leaf-reader" || url?.scheme == "blob" || url?.absoluteString == "about:blank"
+            decisionHandler(allowed ? .allow : .cancel)
+        }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { model.error = error.localizedDescription }
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { model.isReady = false; model.error = "The reader ran out of memory. Reopen the book, or try a smaller copy." }
+    }
+}
+
+struct PDFBookSurface: UIViewRepresentable {
+    @ObservedObject var model: ReaderModel
+    let url: URL
+    let theme: ReadingTheme
+    func makeCoordinator() -> Coordinator { Coordinator(model) }
+    func makeUIView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.displayDirection = .vertical
+        view.backgroundColor = UIColor(theme.background)
+        view.accessibilityIdentifier = "bookPDFView"
+        model.configurePDF(view, url: url)
+        context.coordinator.observe(view)
+        return view
+    }
+    func updateUIView(_ view: PDFView, context: Context) { view.backgroundColor = UIColor(theme.background) }
+    @MainActor final class Coordinator {
+        let model: ReaderModel
+        var token: NSObjectProtocol?
+        init(_ model: ReaderModel) { self.model = model }
+        func observe(_ view: PDFView) {
+            token = NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.model.pdfPageChanged() }
+            }
+        }
+        deinit { if let token { NotificationCenter.default.removeObserver(token) } }
+    }
+}

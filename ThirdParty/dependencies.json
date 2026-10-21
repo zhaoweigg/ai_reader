@@ -1,0 +1,16 @@
+{
+  "foliate-js": {
+    "commit": "78914aef4466eb960965702401634c2cb348e9b1",
+    "source": "https://github.com/johnfactotum/foliate-js"
+  },
+  "@zip.js/zip.js": {
+    "version": "2.7.52",
+    "source": "https://registry.npmjs.org/@zip.js/zip.js/-/zip.js-2.7.52.tgz",
+    "sha256": "ea27c67c17524c6de4968cdf78f2a754028354bc3e67e10c578f57218fd3f19a"
+  },
+  "fflate": {
+    "version": "0.8.2",
+    "source": "https://registry.npmjs.org/fflate/-/fflate-0.8.2.tgz",
+    "sha256": "61fd5061e2fc8e5e3e3129f7f2fec7bd78a313e1bf4becbf1cc1cc9998d141dc"
+  }
+}

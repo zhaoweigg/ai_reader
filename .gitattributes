@@ -1,0 +1,12 @@
+# Preserve vendored sources and their upstream formatting.
+LeafReader/Resources/Reader/foliate/** linguist-vendored -whitespace
+
+# Preserve binary book, font, and artwork bytes on every platform.
+*.pdf binary
+*.epub binary
+*.mobi binary
+*.cbz binary
+*.bcmap binary
+*.pfb binary
+*.ttf binary
+*.png binary
