@@ -19,8 +19,10 @@ struct WebBookSurface: UIViewRepresentable {
     @ObservedObject var model: ReaderModel
     let url: URL
     let preferences: ReaderPreferences
+    var onReaderTap: (() -> Bool)? = nil
     func makeCoordinator() -> Coordinator { Coordinator(model) }
     func makeUIView(context: Context) -> WKWebView {
+        context.coordinator.onReaderTap = onReaderTap
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.add(context.coordinator, name: "leaf")
@@ -44,6 +46,7 @@ struct WebBookSurface: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {
+        context.coordinator.onReaderTap = onReaderTap
         view.backgroundColor = UIColor(preferences.theme.background)
         // Deferring avoids publishing into SwiftUI while it is rendering the representable.
         if model.preferences != preferences { Task { @MainActor in model.applyPreferences(preferences) } }
@@ -54,10 +57,12 @@ struct WebBookSurface: UIViewRepresentable {
     }
     @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         let model: ReaderModel
+        var onReaderTap: (() -> Bool)?
         init(_ model: ReaderModel) { self.model = model }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
             guard let view = gesture.view, model.isReady else { return }
+            if onReaderTap?() == true { return }
             let point = gesture.location(in: view)
             model.evaluate("tap", ["x": point.x / max(1, view.bounds.width), "y": point.y / max(1, view.bounds.height)])
         }
@@ -87,8 +92,10 @@ struct PDFBookSurface: UIViewRepresentable {
     @ObservedObject var model: ReaderModel
     let url: URL
     let theme: ReadingTheme
+    var onReaderTap: (() -> Bool)? = nil
     func makeCoordinator() -> Coordinator { Coordinator(model) }
     func makeUIView(context: Context) -> PDFView {
+        context.coordinator.onReaderTap = onReaderTap
         let view = PDFView()
         view.autoScales = true
         view.displayMode = .singlePageContinuous
@@ -100,13 +107,18 @@ struct PDFBookSurface: UIViewRepresentable {
         installReaderGestures(on: view, target: context.coordinator, delegate: context.coordinator, tap: #selector(Coordinator.tapped(_:)), pan: #selector(Coordinator.panned(_:)))
         return view
     }
-    func updateUIView(_ view: PDFView, context: Context) { view.backgroundColor = UIColor(theme.background) }
+    func updateUIView(_ view: PDFView, context: Context) {
+        context.coordinator.onReaderTap = onReaderTap
+        view.backgroundColor = UIColor(theme.background)
+    }
     @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let model: ReaderModel
+        var onReaderTap: (() -> Bool)?
         var token: NSObjectProtocol?
         init(_ model: ReaderModel) { self.model = model; super.init() }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
+            if onReaderTap?() == true { return }
             guard let view = gesture.view as? PDFView, view.currentSelection?.string?.isEmpty != false else { return }
             let point = gesture.location(in: view)
             if let page = view.page(for: point, nearest: false), page.annotation(at: view.convert(point, to: page)) != nil { return }

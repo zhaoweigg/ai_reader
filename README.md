@@ -54,9 +54,9 @@ Tap the center, then open **Appearance (Aa)** while reading. **Font** contains t
 
 Text size uses the selected 12–32 pt value in both Pages and Scroll, with browser text autosizing disabled. Changing size or flow anchors reflow to the current passage rather than a percentage through the chapter.
 
-**Ask Leaf** opens a frosted chat sheet at one third of the screen height. It can expand for typing or a longer conversation. Tap the visible page, the close button, or swipe down to return to reading without turning the page. The book viewport stays the same size. The launcher uses a translucent teal fill with solid fallbacks for increased contrast and Reduce Transparency.
+**Ask Leaf** opens a frosted chat panel at about one third of the screen height. While typing, it becomes a compact composer above the keyboard, leaving the book visible without resizing its viewport. Swipe the exposed book to browse while keeping the keyboard and draft, or use Hide keyboard to see more of the page. Tap the book, close the panel, or swipe down on its header to return to reading without an accidental page turn. The launcher uses a translucent teal fill with solid fallbacks for increased contrast and Reduce Transparency.
 
-This first chat UI uses clearly labeled **sample replies**, with English and Chinese examples. Questions and messages stay in memory while the reader is open, including when the chat is closed and reopened. They reset when leaving the reader. There is no AI service connection or book analysis, and no book text or questions are transmitted.
+This first chat UI uses clearly labeled **sample replies**, with English and Chinese examples. Unsent drafts and messages stay in memory while the reader is open, including when the chat is closed and reopened. They reset when leaving the reader. Sending dismisses the keyboard to show the reply. There is no AI service connection or book analysis, and no book text or questions are transmitted.
 
 ## Storage and privacy
 
@@ -90,6 +90,8 @@ Version **1.0.9 build 10** dismisses Appearance when the exposed book page is ta
 
 Version **1.1.0 build 11** passed **32 tests with zero failures or skips** (`build/LeafChatFinal2-20261021.xcresult`). The new chat UI test verifies the compact panel height, unchanged book viewport with the keyboard, sample message submission, the latest reply visible after reopening, page-tap dismissal without navigation, and bookmark preservation. Reading, appearance, font-size sweeps, imports, and PDF checks also passed. Screenshots are in `build/chat-final2-attachments/`; the summary is `build/chat-final2-test-summary-20261021.json`.
 
+Version **1.1.1 build 12** passed **six targeted checks with zero failures or skips** (`build/LeafComposeFinal-20261021.xcresult`). Day and night chat checks verify a compact composer above the keyboard, visible book content, a stable book viewport, forward/backward swipes while retaining the keyboard and draft, draft restoration after closing chat, and keyboard dismissal when sending or choosing Hide keyboard. The text-size sweep, page-turn animation, immersive controls, and PDF navigation checks also passed. Screenshots are in `build/compose-final-attachments/`; the summary is `build/compose-final-test-summary-20261021.json`.
+
 Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 
 The verified build bundles the reader engine, sample books, and test fixtures with their directory structure intact. WebKit's deferred ResizeObserver layout notification is no longer treated as a failed book import. The library toolbar and cover bounds were also checked in captured screenshots.
@@ -118,6 +120,8 @@ Version **1.0.5 build 6** was signed, verified, installed, and launched successf
 Version **1.0.7 build 8** was signed, verified, installed, and launched successfully. Diagnostics are `build/page-motion-iphone-install-20261020.json` and `build/page-motion-iphone-launch-20261020.json`.
 
 Version **1.1.0 build 11** was signed, verified, installed, and launched successfully on October 21, 2026. Diagnostics are `build/chat-iphone-install-20261021.json` and `build/chat-iphone-launch-20261021.json`.
+
+Version **1.1.1 build 12** was signed, verified, and installed successfully on October 21, 2026. The launch request was blocked because the iPhone was locked; opening Leaf manually completes launch. Diagnostics are `build/compose-iphone-install-20261021.json` and `build/compose-iphone-launch-20261021.json`.
 
 The unique app identifier and development team are saved in `project.yml` and the generated Xcode project. Installation artifacts are `build/iphone-signing-validation-20261020.json`, `build/iphone-install-20261020.json`, and `build/iphone-launch-20261020.json`; the signed build log is `build/leaf-iphone-signed-build-20261020.log`. This is a development-signed installation; its profile expiration is recorded in the signing-validation artifact.
 

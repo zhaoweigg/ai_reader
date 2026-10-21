@@ -283,6 +283,29 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap()
         input.typeText("Summarize this page")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Hide keyboard"].exists)
+        XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
+        XCTAssertGreaterThan(panel.frame.minY - surface.frame.minY, app.frame.height * 0.25,
+                             "Keep a readable portion of the book visible while composing")
+        XCTAssertLessThan(panel.frame.height, app.frame.height * 0.25)
+        XCTAssertEqual(surface.frame.height, height, accuracy: 1)
+        let right = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: 0.18))
+        let left = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.18, dy: 0.18))
+        let firstText = surface.staticTexts.firstMatch
+        let textStart = firstText.frame.minX
+        right.press(forDuration: 0.01, thenDragTo: left, withVelocity: .slow, thenHoldForDuration: 0.12)
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "Keep typing focus while browsing the visible book")
+        XCTAssertEqual(input.value as? String, "Summarize this page")
+        left.press(forDuration: 0.01, thenDragTo: right, withVelocity: .slow, thenHoldForDuration: 0.12)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        expectation(for: NSPredicate { _, _ in abs(firstText.frame.minX - textStart) < 1 }, evaluatedWith: firstText)
+        waitForExpectations(timeout: 5)
+        capture("AI compose while reading the book", app: app)
+        app.buttons["closeReaderChat"].tap()
+        app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(input.value as? String, "Summarize this page", "Keep the unsent question when returning to the book")
+        input.tap()
         app.buttons["sendReaderChat"].tap()
         let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Sample recap:")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 5))
@@ -299,5 +322,33 @@ final class LeafReaderUITests: XCTestCase {
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         showReaderControls(app)
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Add bookmark")
+    }
+
+    @MainActor func testNightChatKeepsBookVisibleWhileTyping() {
+        let app = launchApp()
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["Night theme"].tap()
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap()
+        waitForBook(app)
+        let surface = readingSurface(app)
+        let height = surface.frame.height
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists
+            ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap()
+        input.typeText("Why does the character think this?")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let panel = app.otherElements["readerChatPanel"]
+        XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
+        XCTAssertGreaterThan(panel.frame.minY - surface.frame.minY, app.frame.height * 0.25)
+        XCTAssertEqual(surface.frame.height, height, accuracy: 1)
+        XCTAssertTrue(app.buttons["Hide keyboard"].exists)
+        capture("AI night compose with book visible", app: app)
+        app.buttons["Hide keyboard"].tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(input.value as? String, "Why does the character think this?")
+        capture("AI night draft after hiding keyboard", app: app)
     }
 }

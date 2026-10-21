@@ -33,6 +33,8 @@ struct ReaderContent: View {
     @State private var panel: ReaderPanel?
     @State private var chatIsPresented = false
     @State private var chatMessages: [ReaderChatMessage] = []
+    @State private var chatDraft = ""
+    @State private var bookViewportHeight: CGFloat = 0
     @State private var password = ""
     @State private var seek = 0.0
     @State private var seeking = false
@@ -53,8 +55,8 @@ struct ReaderContent: View {
     var body: some View {
         ZStack {
             ZStack {
-                if book.format == .pdf { PDFBookSurface(model: model, url: url, theme: theme).id(reloadID) }
-                else { WebBookSurface(model: model, url: url, preferences: preferences).id(reloadID) }
+                if book.format == .pdf { PDFBookSurface(model: model, url: url, theme: theme, onReaderTap: handleBookTap).id(reloadID) }
+                else { WebBookSurface(model: model, url: url, preferences: preferences, onReaderTap: handleBookTap).id(reloadID) }
                 if !model.isReady, model.error == nil, !model.isLocked {
                     VStack(spacing: 16) { ProgressView(); Text("Opening your book…").font(.subheadline) }.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background)
                 }
@@ -76,17 +78,16 @@ struct ReaderContent: View {
                 }
             }.frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity).clipped()
                 .overlay {
-                    if panel == .appearance || chatIsPresented {
+                    if panel == .appearance {
                         Button {
                             panel = nil
-                            chatIsPresented = false
                             model.hideControls()
                         } label: {
                             Color.clear.contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(chatIsPresented ? "Dismiss chat" : "Dismiss appearance")
-                        .accessibilityIdentifier(chatIsPresented ? "dismissReaderChat" : "dismissAppearance")
+                        .accessibilityLabel("Dismiss appearance")
+                        .accessibilityIdentifier("dismissAppearance")
                     }
                 }
             if showsControls {
@@ -113,7 +114,38 @@ struct ReaderContent: View {
                 .padding(.trailing, 10).padding(.bottom, showsControls ? 124 : 8)
             }
         }
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear { bookViewportHeight = geometry.size.height }
+                    .onChange(of: geometry.size.height) { _, height in bookViewportHeight = height }
+            }
+        }
+        // Keep only the book full-height; the overlay uses the keyboard safe area.
         .ignoresSafeArea(.keyboard)
+        .overlay {
+            GeometryReader { geometry in
+                if chatIsPresented {
+                    let fullHeight = max(bookViewportHeight, geometry.size.height)
+                    let composing = geometry.size.height < fullHeight - 80
+                    let height = composing ? min(fullHeight / 3, max(176, geometry.size.height * 0.35)) : fullHeight / 3
+                    ReaderChatPanel(messages: $chatMessages, draft: $chatDraft, bookTitle: book.title,
+                                    isComposing: composing) {
+                        chatIsPresented = false
+                        model.hideControls()
+                    }
+                    .frame(height: height)
+                    .background {
+                        if reduceTransparency { theme.background }
+                        else { Rectangle().fill(.ultraThinMaterial) }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                }
+            }
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showsControls)
         .background(theme.background.ignoresSafeArea()).foregroundStyle(theme.foreground).tint(theme == .night ? Color(hex: "#93CABB") : LeafStyle.accent)
         .preferredColorScheme(theme == .night ? .dark : .light)
@@ -122,20 +154,6 @@ struct ReaderContent: View {
         .accessibilityAction(.escape) { library.flush(); dismiss() }
         .task { library.open(book.id) }
         .onDisappear { library.flush() }
-        .sheet(isPresented: $chatIsPresented, onDismiss: { model.hideControls() }) {
-            ReaderChatPanel(messages: $chatMessages, bookTitle: book.title) {
-                chatIsPresented = false
-                model.hideControls()
-            }
-            .presentationDetents([.fraction(1.0 / 3.0), .large])
-            .presentationDragIndicator(.visible)
-            .presentationCornerRadius(28)
-            .presentationBackground {
-                if reduceTransparency { theme.background }
-                else { Rectangle().fill(.ultraThinMaterial).opacity(0.82) }
-            }
-            .presentationBackgroundInteraction(.enabled(upThrough: .fraction(1.0 / 3.0)))
-        }
         .sheet(item: $panel, onDismiss: { model.hideControls() }) { panel in
             NavigationStack {
                 Group {
@@ -167,6 +185,12 @@ struct ReaderContent: View {
             .presentationDragIndicator(panel == .appearance ? .visible : .automatic)
             .presentationBackgroundInteraction(panel == .appearance ? .enabled(upThrough: .medium) : .disabled)
         }
+    }
+    private func handleBookTap() -> Bool {
+        guard chatIsPresented else { return false }
+        chatIsPresented = false
+        model.hideControls()
+        return true
     }
     private var readerHeader: some View {
         VStack(spacing: 0) {

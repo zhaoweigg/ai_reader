@@ -63,9 +63,10 @@ struct ReaderChatLauncher: View {
 
 struct ReaderChatPanel: View {
     @Binding var messages: [ReaderChatMessage]
+    @Binding var draft: String
     let bookTitle: String
+    let isComposing: Bool
     let onClose: () -> Void
-    @State private var draft = ""
     @FocusState private var inputFocused: Bool
 
     private var accent: Color { colorScheme == .dark ? Color(hex: "#93CABB") : LeafStyle.accent }
@@ -74,12 +75,21 @@ struct ReaderChatPanel: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
+                .frame(maxWidth: .infinity).accessibilityHidden(true)
             HStack(spacing: 8) {
                 Image(systemName: "leaf.fill").foregroundStyle(accent)
                 Text("Ask Leaf").font(.headline).foregroundStyle(accent)
                 Spacer(minLength: 4)
-                Text("Sample chat").font(.caption).foregroundStyle(.secondary)
-                Button(action: onClose) {
+                if !isComposing { Text("Sample chat").font(.caption).foregroundStyle(.secondary) }
+                if isComposing {
+                    Button { inputFocused = false } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .frame(width: 44, height: 44).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Hide keyboard")
+                }
+                Button(action: close) {
                     Image(systemName: "xmark").font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(width: 44, height: 44)
@@ -87,31 +97,37 @@ struct ReaderChatPanel: View {
                 }
                 .buttonStyle(.plain).accessibilityLabel("Close chat").accessibilityIdentifier("closeReaderChat")
             }
+            .contentShape(Rectangle())
+            .simultaneousGesture(DragGesture(minimumDistance: 15).onEnded { gesture in
+                if gesture.translation.height > 40, abs(gesture.translation.width) < gesture.translation.height { close() }
+            })
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(messages) { message in
-                            HStack {
-                                if message.isUser { Spacer(minLength: 32) }
-                                Text(message.text)
-                                    .font(.subheadline).lineSpacing(3)
-                                    .textSelection(.enabled)
-                                    .padding(message.isUser ? 10 : 0)
-                                    .background(message.isUser ? accent.opacity(0.1) : .clear,
-                                                in: RoundedRectangle(cornerRadius: 16))
-                                    .accessibilityIdentifier(message.isUser ? "chatQuestion" : "chatReply")
-                                if !message.isUser { Spacer(minLength: 0) }
-                            }.id(message.id)
-                        }
-                    }.padding(.vertical, 2)
-                }
-                .defaultScrollAnchor(.bottom)
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: messages.count) { _, _ in
-                    if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                }
-            }.frame(maxHeight: .infinity)
+            if !isComposing {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(messages) { message in
+                                HStack {
+                                    if message.isUser { Spacer(minLength: 32) }
+                                    Text(message.text)
+                                        .font(.subheadline).lineSpacing(3)
+                                        .textSelection(.enabled)
+                                        .padding(message.isUser ? 10 : 0)
+                                        .background(message.isUser ? accent.opacity(0.1) : .clear,
+                                                    in: RoundedRectangle(cornerRadius: 16))
+                                        .accessibilityIdentifier(message.isUser ? "chatQuestion" : "chatReply")
+                                    if !message.isUser { Spacer(minLength: 0) }
+                                }.id(message.id)
+                            }
+                        }.padding(.vertical, 2)
+                    }
+                    .defaultScrollAnchor(.bottom)
+                    .scrollDismissesKeyboard(.interactively)
+                    .onChange(of: messages.count) { _, _ in
+                        if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }.frame(maxHeight: .infinity)
+            }
 
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Ask about this page…", text: $draft, axis: .vertical)
@@ -136,7 +152,12 @@ struct ReaderChatPanel: View {
         .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
         .foregroundStyle(.primary).tint(accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
-        .accessibilityAction(.escape, onClose)
+        .accessibilityAction(.escape, close)
+    }
+
+    private func close() {
+        inputFocused = false
+        onClose()
     }
 
     private func send() {
@@ -145,5 +166,6 @@ struct ReaderChatPanel: View {
         messages.append(ReaderChatMessage(isUser: true, text: text))
         messages.append(.reply(to: text, chinese: ReaderChatMessage.usesChinese(text + bookTitle)))
         draft = ""
+        inputFocused = false
     }
 }
