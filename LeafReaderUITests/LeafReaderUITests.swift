@@ -247,4 +247,57 @@ final class LeafReaderUITests: XCTestCase {
         showReaderControls(app)
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
     }
+
+    @MainActor func testSampleChatKeepsTheBookVisibleAndPreservesItsPlace() {
+        let app = launchApp()
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["Paper theme"].tap()
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app)
+        app.buttons["toggleBookmark"].tap()
+        readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let surface = readingSurface(app)
+        let height = surface.frame.height
+        let launcher = app.buttons["openReaderChat"]
+        XCTAssertTrue(launcher.waitForExistence(timeout: 5))
+        capture("AI floating button on paper", app: app)
+        launcher.tap()
+        let panel = app.otherElements["readerChatPanel"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertLessThan(panel.frame.height, app.frame.height * 0.4)
+        XCTAssertGreaterThan(panel.frame.height, app.frame.height * 0.2)
+        XCTAssertEqual(surface.frame.height, height, accuracy: 1)
+        XCTAssertFalse(app.buttons["closeBook"].exists)
+        XCTAssertEqual(app.keyboards.count, 0)
+        XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled)
+        capture("AI compact translucent chat", app: app)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.3)).tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeReaderChat"])
+        waitForExpectations(timeout: 5)
+        showReaderControls(app)
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists
+            ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("Summarize this page")
+        app.buttons["sendReaderChat"].tap()
+        let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Sample recap:")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 5))
+        XCTAssertEqual(surface.frame.height, height, accuracy: 1)
+        app.buttons["closeReaderChat"].tap()
+        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+        app.buttons["openReaderChat"].tap()
+        XCTAssertTrue(reply.waitForExistence(timeout: 5))
+        XCTAssertTrue(reply.isHittable, "Reopening chat should show the latest reply")
+        capture("AI sample reply retained", app: app)
+        app.buttons["closeReaderChat"].tap()
+        showReaderControls(app)
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        showReaderControls(app)
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Add bookmark")
+    }
 }

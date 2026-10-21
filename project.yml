@@ -29,8 +29,8 @@ targets:
       path: LeafReader/Info.plist
       properties:
         CFBundleDisplayName: Leaf
-        CFBundleShortVersionString: "1.0.9"
-        CFBundleVersion: "10"
+        CFBundleShortVersionString: "1.1.0"
+        CFBundleVersion: "11"
         UILaunchScreen: {}
         UISupportsDocumentBrowser: false
         UIFileSharingEnabled: true

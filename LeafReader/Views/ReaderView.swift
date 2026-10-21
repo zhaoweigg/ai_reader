@@ -19,6 +19,7 @@ struct ReaderContent: View {
     @StateObject private var model: ReaderModel
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var library: LibraryStore
     @AppStorage("reader.fontSize") private var fontSize = 19.0
@@ -30,6 +31,8 @@ struct ReaderContent: View {
     @AppStorage("reader.verticalMargin") private var verticalMargin = 12.0
     @AppStorage("reader.paragraphSpacing") private var paragraphSpacing = 0.65
     @State private var panel: ReaderPanel?
+    @State private var chatIsPresented = false
+    @State private var chatMessages: [ReaderChatMessage] = []
     @State private var password = ""
     @State private var seek = 0.0
     @State private var seeking = false
@@ -73,16 +76,17 @@ struct ReaderContent: View {
                 }
             }.frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity).clipped()
                 .overlay {
-                    if panel == .appearance {
+                    if panel == .appearance || chatIsPresented {
                         Button {
                             panel = nil
+                            chatIsPresented = false
                             model.hideControls()
                         } label: {
                             Color.clear.contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Dismiss appearance")
-                        .accessibilityIdentifier("dismissAppearance")
+                        .accessibilityLabel(chatIsPresented ? "Dismiss chat" : "Dismiss appearance")
+                        .accessibilityIdentifier(chatIsPresented ? "dismissReaderChat" : "dismissAppearance")
                     }
                 }
             if showsControls {
@@ -92,7 +96,24 @@ struct ReaderContent: View {
                     readerFooter
                 }.transition(.opacity)
             }
+            if model.isReady, !model.isLocked, model.error == nil, panel == nil, !chatIsPresented {
+                VStack {
+                    Spacer(minLength: 0)
+                    HStack {
+                        Spacer(minLength: 0)
+                        ReaderChatLauncher {
+                            model.hideControls()
+                            if chatMessages.isEmpty {
+                                chatMessages = [.introduction(chinese: ReaderChatMessage.usesChinese(book.title))]
+                            }
+                            chatIsPresented = true
+                        }
+                    }
+                }
+                .padding(.trailing, 10).padding(.bottom, showsControls ? 124 : 8)
+            }
         }
+        .ignoresSafeArea(.keyboard)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showsControls)
         .background(theme.background.ignoresSafeArea()).foregroundStyle(theme.foreground).tint(theme == .night ? Color(hex: "#93CABB") : LeafStyle.accent)
         .preferredColorScheme(theme == .night ? .dark : .light)
@@ -101,6 +122,20 @@ struct ReaderContent: View {
         .accessibilityAction(.escape) { library.flush(); dismiss() }
         .task { library.open(book.id) }
         .onDisappear { library.flush() }
+        .sheet(isPresented: $chatIsPresented, onDismiss: { model.hideControls() }) {
+            ReaderChatPanel(messages: $chatMessages, bookTitle: book.title) {
+                chatIsPresented = false
+                model.hideControls()
+            }
+            .presentationDetents([.fraction(1.0 / 3.0), .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
+            .presentationBackground {
+                if reduceTransparency { theme.background }
+                else { Rectangle().fill(.ultraThinMaterial).opacity(0.82) }
+            }
+            .presentationBackgroundInteraction(.enabled(upThrough: .fraction(1.0 / 3.0)))
+        }
         .sheet(item: $panel, onDismiss: { model.hideControls() }) { panel in
             NavigationStack {
                 Group {

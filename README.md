@@ -37,6 +37,7 @@ DRM removal, KFX, ACSM, CBR/RAR, DjVu, legacy DOC, and DOCX are not implemented.
 - Search and filter the library, sort books, favorites, recent reading, and finished books.
 - Table of contents, page turning/swiping, progress seeking, and full-book text search (up to 200 results).
 - Fullscreen reading with a center tap to reveal controls; page-edge taps and swipes return to uninterrupted reading.
+- Translucent floating Ask Leaf button and a compact chat UI with local sample conversations.
 - Persistent reading positions and per-book bookmarks, including a library-wide bookmarks tab.
 - Day, paper, and night themes; three typefaces; adjustable font size, line and paragraph spacing, and page margins; paginated or vertical flow.
 - Original short sample books in EPUB, PDF, FB2, and TXT.
@@ -52,6 +53,10 @@ Tap the center, then open **Appearance (Aa)** while reading. **Font** contains t
 **Themes → Compact** fits more text in one tap: 17 pt text, 1.35 line spacing, 0.35 em paragraph spacing, 12 pt side margins, and 8 pt top/bottom margins. Changes apply immediately and are saved across books and app restarts. The same controls are available in Settings.
 
 Text size uses the selected 12–32 pt value in both Pages and Scroll, with browser text autosizing disabled. Changing size or flow anchors reflow to the current passage rather than a percentage through the chapter.
+
+**Ask Leaf** opens a frosted chat sheet at one third of the screen height. It can expand for typing or a longer conversation. Tap the visible page, the close button, or swipe down to return to reading without turning the page. The book viewport stays the same size. The launcher uses a translucent teal fill with solid fallbacks for increased contrast and Reduce Transparency.
+
+This first chat UI uses clearly labeled **sample replies**, with English and Chinese examples. Questions and messages stay in memory while the reader is open, including when the chat is closed and reopened. They reset when leaving the reader. There is no AI service connection or book analysis, and no book text or questions are transmitted.
 
 ## Storage and privacy
 
@@ -83,6 +88,8 @@ Version **1.0.8 build 9** passed **31 tests with zero failures or skips** (`buil
 
 Version **1.0.9 build 10** dismisses Appearance when the exposed book page is tapped. A temporary tap target consumes the dismissal tap, preserving the current page even at its edges. Both targeted UI tests passed (`build/LeafTapDismiss-20261021.xcresult`): the immersive test checks dismissal and the unchanged bookmarked passage, and the appearance test checks controls, swipe dismissal, and preference persistence.
 
+Version **1.1.0 build 11** passed **32 tests with zero failures or skips** (`build/LeafChatFinal2-20261021.xcresult`). The new chat UI test verifies the compact panel height, unchanged book viewport with the keyboard, sample message submission, the latest reply visible after reopening, page-tap dismissal without navigation, and bookmark preservation. Reading, appearance, font-size sweeps, imports, and PDF checks also passed. Screenshots are in `build/chat-final2-attachments/`; the summary is `build/chat-final2-test-summary-20261021.json`.
+
 Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 
 The verified build bundles the reader engine, sample books, and test fixtures with their directory structure intact. WebKit's deferred ResizeObserver layout notification is no longer treated as a failed book import. The library toolbar and cover bounds were also checked in captured screenshots.
@@ -109,6 +116,8 @@ Version **1.0.4 build 5** was also signed, verified, installed, and launched suc
 Version **1.0.5 build 6** was signed, verified, installed, and launched successfully, with the five-book library manifest preserved. Diagnostics are `build/immersive-iphone-install-20261020.json`, `build/immersive-iphone-launch-20261020.json`, and `build/immersive-phone-library-preservation.json`.
 
 Version **1.0.7 build 8** was signed, verified, installed, and launched successfully. Diagnostics are `build/page-motion-iphone-install-20261020.json` and `build/page-motion-iphone-launch-20261020.json`.
+
+Version **1.1.0 build 11** was signed, verified, installed, and launched successfully on October 21, 2026. Diagnostics are `build/chat-iphone-install-20261021.json` and `build/chat-iphone-launch-20261021.json`.
 
 The unique app identifier and development team are saved in `project.yml` and the generated Xcode project. Installation artifacts are `build/iphone-signing-validation-20261020.json`, `build/iphone-install-20261020.json`, and `build/iphone-launch-20261020.json`; the signed build log is `build/leaf-iphone-signed-build-20261020.log`. This is a development-signed installation; its profile expiration is recorded in the signing-validation artifact.
 
