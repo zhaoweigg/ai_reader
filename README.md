@@ -56,6 +56,8 @@ The initial version was verified on October 20, 2026: **16 tests passed, zero fa
 
 Version **1.0.1 build 2** passed **25 tests with zero failures or skips** on the same Simulator. Nine new metadata tests verify covers and authors before the first read, EPUB 2/3 declarations, SVG rasterization, XHTML cover pages with relative image paths, PDF thumbnails, persistence, existing-library updates, retry after failure, and deletion during extraction. Results: `build/CoverFixFinal-20261020.xcresult` and `build/cover-fix-test-summary-20261020.json`.
 
+Version **1.0.2 build 3** balances the Leaf toolbar logo's horizontal padding and centers its icon and title within a 44-point row. The existing library/reader/bookmarks/appearance UI test passed, and screenshots confirmed the logo spacing at the top of the library and after scrolling. Results: `build/LeafTitleAlignmentFinal-20261020.xcresult` and `build/title-alignment-final-attachments/`.
+
 Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 
 The verified build bundles the reader engine, sample books, and test fixtures with their directory structure intact. WebKit's deferred ResizeObserver layout notification is no longer treated as a failed book import. The library toolbar and cover bounds were also checked in captured screenshots.
@@ -72,6 +74,8 @@ The fixtures establish rendering for the formats named above; they do not test e
 ## Physical iPhone installation
 
 On October 20, 2026, version **1.0.0 build 1** was built and signed for the owner's iPhone 17 Pro running iOS 27.0, installed successfully, and launched. A subsequent device process query confirmed the app remained running. The signed bundle includes the reader engine and all four sample books; its signature and device provisioning were validated. This establishes installation and launch, rather than a complete on-device reading or iCloud import test.
+
+Version **1.0.2 build 3** was also signed, verified, and installed successfully. The phone was locked when launch was attempted, so this update's on-device appearance remains to be checked after unlocking and opening Leaf. Installation and launch diagnostics are recorded in `build/title-alignment-iphone-install-20261020.json` and `build/title-alignment-iphone-launch-20261020.json`.
 
 The unique app identifier and development team are saved in `project.yml` and the generated Xcode project. Installation artifacts are `build/iphone-signing-validation-20261020.json`, `build/iphone-install-20261020.json`, and `build/iphone-launch-20261020.json`; the signed build log is `build/leaf-iphone-signed-build-20261020.log`. This is a development-signed installation; its profile expiration is recorded in the signing-validation artifact.
 

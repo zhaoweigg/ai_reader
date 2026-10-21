@@ -123,9 +123,16 @@ struct LibraryView: View {
             .background(LeafStyle.canvas)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing: 6) { Image(systemName: "leaf.fill").foregroundStyle(LeafStyle.accent); Text("leaf").font(.system(size: 25, weight: .semibold, design: .serif)) }
-                        .fixedSize(horizontal: true, vertical: false)
-                        .accessibilityElement(children: .combine).accessibilityLabel("Leaf reader")
+                    HStack(alignment: .center, spacing: 7) {
+                        Image(systemName: "leaf.fill")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(LeafStyle.accent)
+                        Text("leaf").font(.system(size: 25, weight: .semibold, design: .serif))
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 44)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityElement(children: .combine).accessibilityLabel("Leaf reader")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: onImport) { Label("Import", systemImage: "plus") }.buttonStyle(.borderedProminent).clipShape(Capsule())
