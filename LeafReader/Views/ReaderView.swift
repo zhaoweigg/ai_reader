@@ -17,6 +17,8 @@ struct ReaderContent: View {
     let book: Book
     let url: URL
     @StateObject private var model: ReaderModel
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var library: LibraryStore
     @AppStorage("reader.fontSize") private var fontSize = 19.0
@@ -32,6 +34,9 @@ struct ReaderContent: View {
     @State private var seek = 0.0
     @State private var seeking = false
     @State private var reloadID = UUID()
+    private var showsControls: Bool {
+        model.controlsVisible || panel != nil || !model.isReady || model.isLocked || model.error != nil || voiceOverEnabled
+    }
     private var theme: ReadingTheme { ReadingTheme(rawValue: themeName) ?? .day }
     private var preferences: ReaderPreferences {
         ReaderPreferences(fontSize: fontSize, lineHeight: lineHeight, font: font, theme: theme, scrolling: scrolling,
@@ -43,17 +48,7 @@ struct ReaderContent: View {
         _model = StateObject(wrappedValue: ReaderModel(bookID: book.id, library: library, initialLocator: initialLocator))
     }
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 16) {
-                Button { library.flush(); dismiss() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.accessibilityLabel("Close book").accessibilityIdentifier("closeBook")
-                VStack(spacing: 3) {
-                    Text(library.book(book.id)?.title ?? book.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text(model.chapterTitle.isEmpty ? book.author : model.chapterTitle).font(.caption).foregroundStyle(theme.foreground.opacity(0.65)).lineLimit(1)
-                }.frame(maxWidth: .infinity)
-                Button { model.toggleBookmark() } label: { Image(systemName: model.isBookmarked ? "bookmark.fill" : "bookmark").frame(width: 44, height: 44) }
-                    .disabled(!model.isReady).accessibilityLabel(model.isBookmarked ? "Remove bookmark" : "Add bookmark").accessibilityIdentifier("toggleBookmark")
-            }.padding(.horizontal, 8).padding(.top, 4)
-            Rectangle().fill(theme.foreground.opacity(0.08)).frame(height: 1)
+        ZStack {
             ZStack {
                 if book.format == .pdf { PDFBookSurface(model: model, url: url, theme: theme).id(reloadID) }
                 else { WebBookSurface(model: model, url: url, preferences: preferences).id(reloadID) }
@@ -77,6 +72,64 @@ struct ReaderContent: View {
                     }.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background).accessibilityIdentifier("readerError")
                 }
             }.frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity).clipped()
+            if showsControls {
+                VStack(spacing: 0) {
+                    readerHeader
+                    Spacer(minLength: 0)
+                    readerFooter
+                }.transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showsControls)
+        .background(theme.background.ignoresSafeArea()).foregroundStyle(theme.foreground).tint(theme == .night ? Color(hex: "#93CABB") : LeafStyle.accent)
+        .preferredColorScheme(theme == .night ? .dark : .light)
+        .statusBarHidden(!showsControls)
+        .persistentSystemOverlays(showsControls ? .automatic : .hidden)
+        .accessibilityAction(.escape) { library.flush(); dismiss() }
+        .task { library.open(book.id) }
+        .onDisappear { library.flush() }
+        .sheet(item: $panel) { panel in
+            NavigationStack {
+                Group {
+                    switch panel {
+                    case .appearance: ReaderAppearancePanel()
+                    case .contents:
+                        List(model.chapters) { chapter in
+                            Button { model.send("navigate", value: chapter.href); self.panel = nil } label: {
+                                Text(chapter.label).padding(.leading, CGFloat(chapter.depth) * 16).foregroundStyle(.primary)
+                            }
+                        }.overlay { if model.chapters.isEmpty { ContentUnavailableView("No table of contents", systemImage: "list.bullet", description: Text("Use the progress slider to move through this book.")) } }.navigationTitle("Contents")
+                    case .bookmarks:
+                        List(library.book(book.id)?.bookmarks ?? []) { bookmark in
+                            Button { model.send("navigate", value: bookmark.locator); self.panel = nil } label: {
+                                VStack(alignment: .leading, spacing: 4) { Text(bookmark.label); Text("\(Int(bookmark.fraction * 100))% through the book").font(.caption).foregroundStyle(.secondary) }
+                            }.swipeActions { Button("Delete", role: .destructive) { library.removeBookmark(book.id, bookmarkID: bookmark.id) } }
+                        }.overlay { if (library.book(book.id)?.bookmarks ?? []).isEmpty { ContentUnavailableView("No saved places yet", systemImage: "bookmark", description: Text("Tap the bookmark at the top of the page to save your place.")) } }.navigationTitle("Saved places")
+                    case .search: ReaderSearchView(model: model) { self.panel = nil; model.hideControls() }
+                    }
+                }.navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.panel = nil; model.hideControls() } } }
+            }
+            .presentationDetents(panel == .appearance ? [.medium, .large] : [.large])
+            .presentationDragIndicator(panel == .appearance ? .visible : .automatic)
+            .presentationBackgroundInteraction(panel == .appearance ? .enabled(upThrough: .medium) : .disabled)
+        }
+    }
+    private var readerHeader: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                Button { library.flush(); dismiss() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.accessibilityLabel("Close book").accessibilityIdentifier("closeBook")
+                VStack(spacing: 3) {
+                    Text(library.book(book.id)?.title ?? book.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(model.chapterTitle.isEmpty ? book.author : model.chapterTitle).font(.caption).foregroundStyle(theme.foreground.opacity(0.65)).lineLimit(1)
+                }.frame(maxWidth: .infinity)
+                Button { model.toggleBookmark() } label: { Image(systemName: model.isBookmarked ? "bookmark.fill" : "bookmark").frame(width: 44, height: 44) }
+                    .disabled(!model.isReady).accessibilityLabel(model.isBookmarked ? "Remove bookmark" : "Add bookmark").accessibilityIdentifier("toggleBookmark")
+            }.padding(.horizontal, 8).padding(.top, 4)
+            Rectangle().fill(theme.foreground.opacity(0.08)).frame(height: 1)
+        }.background(theme.background)
+    }
+    private var readerFooter: some View {
+        VStack(spacing: 0) {
             Rectangle().fill(theme.foreground.opacity(0.08)).frame(height: 1)
             VStack(spacing: 4) {
                 HStack(spacing: 12) {
@@ -99,35 +152,7 @@ struct ReaderContent: View {
                 }.padding(.horizontal, 16)
             }.padding(.horizontal, 12).padding(.bottom, 8).disabled(!model.isReady)
         }
-        .background(theme.background).foregroundStyle(theme.foreground).tint(theme == .night ? Color(hex: "#93CABB") : LeafStyle.accent)
-        .preferredColorScheme(theme == .night ? .dark : .light)
-        .task { library.open(book.id) }
-        .onDisappear { library.flush() }
-        .sheet(item: $panel) { panel in
-            NavigationStack {
-                Group {
-                    switch panel {
-                    case .appearance: ReaderAppearancePanel()
-                    case .contents:
-                        List(model.chapters) { chapter in
-                            Button { model.send("navigate", value: chapter.href); self.panel = nil } label: {
-                                Text(chapter.label).padding(.leading, CGFloat(chapter.depth) * 16).foregroundStyle(.primary)
-                            }
-                        }.overlay { if model.chapters.isEmpty { ContentUnavailableView("No table of contents", systemImage: "list.bullet", description: Text("Use the progress slider to move through this book.")) } }.navigationTitle("Contents")
-                    case .bookmarks:
-                        List(library.book(book.id)?.bookmarks ?? []) { bookmark in
-                            Button { model.send("navigate", value: bookmark.locator); self.panel = nil } label: {
-                                VStack(alignment: .leading, spacing: 4) { Text(bookmark.label); Text("\(Int(bookmark.fraction * 100))% through the book").font(.caption).foregroundStyle(.secondary) }
-                            }.swipeActions { Button("Delete", role: .destructive) { library.removeBookmark(book.id, bookmarkID: bookmark.id) } }
-                        }.overlay { if (library.book(book.id)?.bookmarks ?? []).isEmpty { ContentUnavailableView("No saved places yet", systemImage: "bookmark", description: Text("Tap the bookmark at the top of the page to save your place.")) } }.navigationTitle("Saved places")
-                    case .search: ReaderSearchView(model: model) { self.panel = nil }
-                    }
-                }.navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.panel = nil } } }
-            }
-            .presentationDetents(panel == .appearance ? [.medium, .large] : [.large])
-            .presentationDragIndicator(panel == .appearance ? .visible : .automatic)
-            .presentationBackgroundInteraction(panel == .appearance ? .enabled(upThrough: .medium) : .disabled)
-        }
+        .background(theme.background)
     }
     private func panelButton(_ title: String, _ image: String, _ panel: ReaderPanel) -> some View {
         Button { self.panel = panel } label: { VStack(spacing: 4) { Image(systemName: image).font(.system(size: 18)); Text(title).font(.system(size: 10)) }.frame(minWidth: 48, minHeight: 44) }.accessibilityLabel(title)

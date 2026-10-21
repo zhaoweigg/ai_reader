@@ -15,6 +15,25 @@ final class LeafReaderUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+    @MainActor private func readingSurface(_ app: XCUIApplication) -> XCUIElement {
+        let web = app.webViews["bookWebView"]
+        if web.waitForExistence(timeout: 2) { return web }
+        return app.descendants(matching: .any)["bookPDFView"].firstMatch
+    }
+    @MainActor private func waitForBook(_ app: XCUIApplication) {
+        XCTAssertTrue(readingSurface(app).waitForExistence(timeout: 10))
+        let loading = app.staticTexts["Opening your book…"]
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: loading)
+        waitForExpectations(timeout: 20)
+        XCTAssertFalse(app.otherElements["readerError"].exists)
+    }
+    @MainActor private func showReaderControls(_ app: XCUIApplication) {
+        waitForBook(app)
+        if !app.buttons["closeBook"].exists {
+            readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
+    }
 
     @MainActor func testLibraryReaderBookmarksAndAppearance() throws {
         let app = launchApp()
@@ -28,6 +47,7 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertLessThanOrEqual(card.frame.maxX, app.frame.maxX)
         }
         app.buttons["book-The Art of Noticing"].tap()
+        showReaderControls(app)
         let bookmark = app.buttons["toggleBookmark"]
         XCTAssertTrue(bookmark.waitForExistence(timeout: 15))
         let enabled = NSPredicate(format: "enabled == true")
@@ -44,6 +64,7 @@ final class LeafReaderUITests: XCTestCase {
         capture("Aa Night controls", app: app)
         app.buttons["Done"].tap()
         capture("EPUB night", app: app)
+        showReaderControls(app)
         app.buttons["closeBook"].tap()
         app.tabBars.buttons["Bookmarks"].tap()
         XCTAssertTrue(app.staticTexts["The Art of Noticing"].waitForExistence(timeout: 5))
@@ -63,6 +84,7 @@ final class LeafReaderUITests: XCTestCase {
         let app = launchApp()
         app.swipeUp()
         app.buttons["book-The Art of Noticing"].tap()
+        showReaderControls(app)
         XCTAssertTrue(app.buttons["Appearance"].waitForExistence(timeout: 15))
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: app.buttons["Appearance"])
         waitForExpectations(timeout: 20)
@@ -91,6 +113,7 @@ final class LeafReaderUITests: XCTestCase {
         app.terminate()
         app.launch()
         app.buttons["featuredBook"].tap()
+        showReaderControls(app)
         XCTAssertTrue(app.buttons["Appearance"].waitForExistence(timeout: 15))
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: app.buttons["Appearance"])
         waitForExpectations(timeout: 20)
@@ -105,16 +128,50 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(search.waitForExistence(timeout: 10))
         search.tap(); search.typeText("Coast")
         app.buttons["book-Notes from the Coast"].tap()
+        showReaderControls(app)
         let bookmark = app.buttons["toggleBookmark"]
         XCTAssertTrue(bookmark.waitForExistence(timeout: 10))
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: bookmark)
         waitForExpectations(timeout: 10)
         XCTAssertTrue(app.staticTexts["Page 1 of 4"].waitForExistence(timeout: 5))
         app.buttons["nextPage"].tap()
+        showReaderControls(app)
         XCTAssertTrue(app.staticTexts["Page 2 of 4"].waitForExistence(timeout: 5))
         capture("PDF", app: app)
         app.buttons["closeBook"].tap()
         app.buttons["book-Notes from the Coast"].tap()
+        showReaderControls(app)
         XCTAssertTrue(app.staticTexts["Page 2 of 4"].waitForExistence(timeout: 10))
+    }
+
+    @MainActor func testImmersiveReadingTogglesControlsWithoutMovingThePage() {
+        let app = launchApp()
+        app.buttons["featuredBook"].tap()
+        waitForBook(app)
+        let surface = readingSurface(app)
+        XCTAssertFalse(app.buttons["closeBook"].exists)
+        XCTAssertFalse(app.buttons["Appearance"].exists)
+        let fullHeight = surface.frame.height
+        XCTAssertGreaterThan(fullHeight, app.frame.height * 0.8)
+        capture("Immersive EPUB", app: app)
+        showReaderControls(app)
+        XCTAssertEqual(surface.frame.height, fullHeight, accuracy: 1)
+        app.buttons["toggleBookmark"].tap()
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
+        capture("Reading controls overlay", app: app)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeBook"])
+        waitForExpectations(timeout: 5)
+        showReaderControls(app)
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeBook"])
+        waitForExpectations(timeout: 5)
+        showReaderControls(app)
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Add bookmark")
+        surface.swipeLeft()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeBook"])
+        waitForExpectations(timeout: 5)
+        capture("Immersive page turn", app: app)
     }
 }

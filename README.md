@@ -36,13 +36,16 @@ DRM removal, KFX, ACSM, CBR/RAR, DjVu, legacy DOC, and DOCX are not implemented.
 - App-owned file copies, SHA-256 duplicate detection, atomic library manifests, and visible import errors.
 - Search and filter the library, sort books, favorites, recent reading, and finished books.
 - Table of contents, page turning/swiping, progress seeking, and full-book text search (up to 200 results).
+- Fullscreen reading with a center tap to reveal controls; page-edge taps and swipes return to uninterrupted reading.
 - Persistent reading positions and per-book bookmarks, including a library-wide bookmarks tab.
 - Day, paper, and night themes; three typefaces; adjustable font size, line and paragraph spacing, and page margins; paginated or vertical flow.
 - Original short sample books in EPUB, PDF, FB2, and TXT.
 - Cover thumbnails and embedded title/author metadata load during import; existing books with missing covers are checked automatically on launch.
 - Native accessibility labels, Dynamic Type in app controls, iPad layouts, and landscape support.
 
-Open **Appearance (Aa)** while reading. **Font** contains the typeface, text size (12–32 pt), A−/A+ buttons, and visual line-spacing choices. **Layout** contains visual margin choices and paginated/scrolling flow. **Themes** contains page colors and Compact, Standard, and Large reading presets. **Fine tuning** exposes precise sliders for line/paragraph spacing and side/top/bottom margins. The panel opens as a compact sheet so the page stays visible while adjusting it; drag upward for more room.
+Books open with the title bar, bottom controls, and system status indicators hidden. Tap the center of the page to show or hide controls. In paginated mode, tap the left/right edges or swipe to turn pages; controls hide when reading resumes. Menus overlay the page without resizing it, preserving the current passage and bookmarks. Loading, error, password, and VoiceOver states keep controls available.
+
+Tap the center, then open **Appearance (Aa)** while reading. **Font** contains the typeface, text size (12–32 pt), A−/A+ buttons, and visual line-spacing choices. **Layout** contains visual margin choices and paginated/scrolling flow. **Themes** contains page colors and Compact, Standard, and Large reading presets. **Fine tuning** exposes precise sliders for line/paragraph spacing and side/top/bottom margins. The panel opens as a compact sheet so the page stays visible while adjusting it; drag upward for more room.
 
 **Themes → Compact** fits more text in one tap: 17 pt text, 1.35 line spacing, 0.35 em paragraph spacing, 12 pt side margins, and 8 pt top/bottom margins. Changes apply immediately and are saved across books and app restarts. The same controls are available in Settings.
 
@@ -66,6 +69,8 @@ Version **1.0.3 build 4** passed **27 tests with zero failures or skips**. Page 
 
 Version **1.0.4 build 5** reorganizes Appearance into a compact Font/Layout/Themes panel with a visible reading page, visual margin and spacing choices, and reading presets. The full **27-test suite passed** (`build/LeafAaControls-20261020.xcresult`). Subsequent targeted checks verify night controls, text-size buttons, preset selection and persistence, page bounds, density, scrolling, PDF navigation, and EPUB search/position restoration after the final preview refinements. The web surface prevents outer scrolling during focus restoration after dismissing the sheet. Visual artifacts are in `build/aa-controls-attachments/`, `build/aa-visual-final-attachments/`, and `build/aa-focus-final-attachments/`.
 
+Version **1.0.5 build 6** passed **28 tests with zero failures or skips** (`build/LeafImmersiveFinal-20261020.xcresult`). Reading controls now overlay a stable, larger page viewport and hide automatically. A new UI test checks hidden controls on opening, a center tap to reveal/hide them, unchanged page height and bookmarked passage during toggling, edge-tap navigation, and hiding on swipes. Updated EPUB/PDF and appearance tests exercise the same tap-to-reveal interaction. Screenshots are exported to `build/immersive-final-attachments/`; the summary is `build/immersive-final-test-summary-20261020.json`.
+
 Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 
 The verified build bundles the reader engine, sample books, and test fixtures with their directory structure intact. WebKit's deferred ResizeObserver layout notification is no longer treated as a failed book import. The library toolbar and cover bounds were also checked in captured screenshots.
@@ -88,6 +93,8 @@ Version **1.0.2 build 3** was also signed, verified, and installed successfully.
 Version **1.0.3 build 4** was signed, verified, installed, and launched successfully on the same iPhone. Installation and launch diagnostics are saved in `build/density-iphone-install-20261020.json` and `build/density-iphone-launch-20261020.json`.
 
 Version **1.0.4 build 5** was also signed, verified, installed, and launched successfully. A before/after comparison confirmed that the five-book library manifest was unchanged by the update. Diagnostics are `build/aa-controls-iphone-install-20261020.json`, `build/aa-controls-iphone-launch-20261020.json`, and `build/aa-final-phone-library-preservation.json`.
+
+Version **1.0.5 build 6** was signed, verified, installed, and launched successfully, with the five-book library manifest preserved. Diagnostics are `build/immersive-iphone-install-20261020.json`, `build/immersive-iphone-launch-20261020.json`, and `build/immersive-phone-library-preservation.json`.
 
 The unique app identifier and development team are saved in `project.yml` and the generated Xcode project. Installation artifacts are `build/iphone-signing-validation-20261020.json`, `build/iphone-install-20261020.json`, and `build/iphone-launch-20261020.json`; the signed build log is `build/leaf-iphone-signed-build-20261020.log`. This is a development-signed installation; its profile expiration is recorded in the signing-validation artifact.
 

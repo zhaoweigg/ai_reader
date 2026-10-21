@@ -14,6 +14,7 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var searchResults: [BookSearchResult] = []
     @Published var isSearching = false
     @Published var hasSearched = false
+    @Published var controlsVisible = false
     let bookID: UUID
     let library: LibraryStore
     let initialLocator: String?
@@ -31,11 +32,17 @@ final class ReaderModel: NSObject, ObservableObject {
     var book: Book? { library.book(bookID) }
     var isBookmarked: Bool { book?.bookmarks.contains { $0.locator == locator } ?? false }
     var positionLabel: String { "\(Int(fraction * 100))%" }
+    func toggleControls() {
+        guard isReady, !isLocked, error == nil else { return }
+        controlsVisible.toggle()
+    }
+    func hideControls() { controlsVisible = false }
     func toggleBookmark() {
         library.toggleBookmark(bookID, locator: locator, fraction: fraction,
                                label: chapterTitle.isEmpty ? "Saved at \(positionLabel)" : chapterTitle)
     }
     func send(_ action: String, value: Any? = nil) {
+        if ["next", "previous", "navigate"].contains(action) { hideControls() }
         if let pdfView {
             switch action {
             case "next": if pdfView.canGoToNextPage { pdfView.goToNextPage(nil) }
@@ -71,6 +78,8 @@ final class ReaderModel: NSObject, ObservableObject {
     func receive(_ message: [String: Any]) {
         guard let type = message["type"] as? String else { return }
         switch type {
+        case "toggleControls": toggleControls()
+        case "readingActivity": hideControls()
         case "bridgeReady": openWebBook()
         case "ready": isReady = true; error = nil
         case "error": error = message["message"] as? String ?? "This book could not be opened. Try importing a fresh copy."; isSearching = false
@@ -143,6 +152,7 @@ final class ReaderModel: NSObject, ObservableObject {
         guard isReady, let view = pdfView, let doc = view.document, let page = view.currentPage else { return }
         let index = doc.index(for: page)
         guard index != NSNotFound else { return }
+        if locator != "pdf:\(index)" { hideControls() }
         locator = "pdf:\(index)"; fraction = doc.pageCount > 1 ? Double(index) / Double(doc.pageCount - 1) : 0
         chapterTitle = "Page \(index + 1) of \(doc.pageCount)"
         library.setPosition(bookID, locator: locator, fraction: fraction)

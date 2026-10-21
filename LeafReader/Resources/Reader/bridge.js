@@ -9,6 +9,41 @@ let view;
 let searchGeneration;
 let preferences;
 let fixedIndex = 0;
+let lastLinkActivation = 0;
+const observedDocuments = new WeakSet();
+
+function observeReadingTouches(doc) {
+    if (observedDocuments.has(doc)) return;
+    observedDocuments.add(doc);
+    let start;
+    doc.addEventListener('touchstart', event => {
+        const point = event.touches.length === 1 ? event.touches[0] : null;
+        start = point && { x:point.clientX, y:point.clientY };
+    }, { passive:true });
+    doc.addEventListener('touchmove', event => {
+        const point = event.touches[0];
+        if (!start || !point || Math.hypot(point.clientX - start.x, point.clientY - start.y) < 12) return;
+        start = null;
+        post('readingActivity');
+    }, { passive:true });
+}
+
+function tap({ x, y }) {
+    if (!view?.renderer || Date.now() - lastLinkActivation < 500) return;
+    const point = { x:x * innerWidth, y:y * innerHeight };
+    for (const { doc } of view.renderer.getContents?.() ?? []) {
+        if (doc.getSelection()?.isCollapsed === false) return;
+        const frame = doc.defaultView.frameElement?.getBoundingClientRect();
+        if (!frame?.width || !frame.height) continue;
+        const localX = (point.x - frame.left) * doc.defaultView.innerWidth / frame.width;
+        const localY = (point.y - frame.top) * doc.defaultView.innerHeight / frame.height;
+        if (doc.elementFromPoint(localX, localY)?.closest('a,button,input,select,textarea,audio,video,[role="button"]')) return;
+    }
+    if (!preferences.scrolling && (x < 0.3 || x > 0.7)) {
+        post('readingActivity');
+        command({ action:x < 0.3 ? 'previous' : 'next' });
+    } else post('toggleControls');
+}
 
 function sanitize(doc) {
     doc.querySelectorAll('script,iframe,object,embed,form,base,meta[http-equiv],link[rel="import"]').forEach(el => el.remove());
@@ -138,8 +173,12 @@ async function open(config) {
         });
         view = document.createElement('foliate-view');
         document.body.append(view);
-        view.addEventListener('load', () => requestAnimationFrame(() => { if (preferences) applyPreferences(preferences); }));
-        view.addEventListener('external-link', event => event.preventDefault());
+        view.addEventListener('load', ({ detail }) => {
+            observeReadingTouches(detail.doc);
+            requestAnimationFrame(() => { if (preferences) applyPreferences(preferences); });
+        });
+        view.addEventListener('link', () => { lastLinkActivation = Date.now(); });
+        view.addEventListener('external-link', event => { lastLinkActivation = Date.now(); event.preventDefault(); });
         view.addEventListener('relocate', ({detail}) => {
             fixedIndex = detail.index ?? fixedIndex;
             const count = view.book.sections.length;
@@ -148,6 +187,13 @@ async function open(config) {
                 label:languageText(detail.tocItem?.label) || (view.isFixedLayout ? `Page ${fixedIndex + 1} of ${count}` : '') });
         });
         await view.open(book);
+        let viewportStart;
+        view.renderer.addEventListener('relocate', ({ detail }) => {
+            const next = { index:detail.index, node:detail.range?.startContainer, offset:detail.range?.startOffset };
+            const changed = viewportStart && (next.index !== viewportStart.index || next.node !== viewportStart.node || next.offset !== viewportStart.offset);
+            viewportStart = next;
+            if (changed && ['snap', 'page', 'scroll'].includes(detail.reason)) post('readingActivity');
+        });
         applyPreferences(config.preferences);
         post('toc', { items:flattenTOC(book.toc) });
         post('metadata', { title:languageText(book.metadata?.title), author:contributor(book.metadata?.author) });
@@ -209,7 +255,7 @@ async function search({query, generation}) {
     } catch(error) { post('searchResults', {generation, items}); }
 }
 
-window.Leaf = { open, command, applyPreferences, search,
+window.Leaf = { open, command, applyPreferences, search, tap,
     // Useful to test the actual rendered document, rather than only parser metadata.
     visibleText: () => view?.renderer?.getContents?.().map(({doc}) => doc?.body?.innerText || '').join('\n') || '',
     currentLocation: () => view?.lastLocation?.cfi,

@@ -2,6 +2,19 @@ import SwiftUI
 import WebKit
 import PDFKit
 
+@MainActor private func installReaderGestures(on view: UIView, target: NSObject, delegate: UIGestureRecognizerDelegate, tap action: Selector, pan panAction: Selector) {
+    let tap = UITapGestureRecognizer(target: target, action: action)
+    let doubleTap = UITapGestureRecognizer()
+    doubleTap.numberOfTapsRequired = 2
+    tap.require(toFail: doubleTap)
+    let pan = UIPanGestureRecognizer(target: target, action: panAction)
+    for gesture: UIGestureRecognizer in [tap, doubleTap, pan] {
+        gesture.cancelsTouchesInView = false
+        gesture.delegate = delegate
+        view.addGestureRecognizer(gesture)
+    }
+}
+
 struct WebBookSurface: UIViewRepresentable {
     @ObservedObject var model: ReaderModel
     let url: URL
@@ -22,6 +35,7 @@ struct WebBookSurface: UIViewRepresentable {
         view.scrollView.isScrollEnabled = false
         view.scrollView.delegate = context.coordinator
         view.navigationDelegate = context.coordinator
+        installReaderGestures(on: view, target: context.coordinator, delegate: context.coordinator, tap: #selector(Coordinator.tapped(_:)), pan: #selector(Coordinator.panned(_:)))
         view.accessibilityIdentifier = "bookWebView"
         view.isInspectable = true
         model.webView = view
@@ -38,9 +52,18 @@ struct WebBookSurface: UIViewRepresentable {
         view.configuration.userContentController.removeScriptMessageHandler(forName: "leaf")
         view.stopLoading()
     }
-    @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, UIScrollViewDelegate {
+    @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         let model: ReaderModel
         init(_ model: ReaderModel) { self.model = model }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+        @objc func tapped(_ gesture: UITapGestureRecognizer) {
+            guard let view = gesture.view, model.isReady else { return }
+            let point = gesture.location(in: view)
+            model.evaluate("tap", ["x": point.x / max(1, view.bounds.width), "y": point.y / max(1, view.bounds.height)])
+        }
+        @objc func panned(_ gesture: UIPanGestureRecognizer) {
+            if gesture.state == .began { model.hideControls() }
+        }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             // Foliate scrolls its own document. WebKit's focus restoration after
             // dismissing a sheet must not scroll the outer reader surface.
@@ -74,13 +97,27 @@ struct PDFBookSurface: UIViewRepresentable {
         view.accessibilityIdentifier = "bookPDFView"
         model.configurePDF(view, url: url)
         context.coordinator.observe(view)
+        installReaderGestures(on: view, target: context.coordinator, delegate: context.coordinator, tap: #selector(Coordinator.tapped(_:)), pan: #selector(Coordinator.panned(_:)))
         return view
     }
     func updateUIView(_ view: PDFView, context: Context) { view.backgroundColor = UIColor(theme.background) }
-    @MainActor final class Coordinator {
+    @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let model: ReaderModel
         var token: NSObjectProtocol?
-        init(_ model: ReaderModel) { self.model = model }
+        init(_ model: ReaderModel) { self.model = model; super.init() }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+        @objc func tapped(_ gesture: UITapGestureRecognizer) {
+            guard let view = gesture.view as? PDFView, view.currentSelection?.string?.isEmpty != false else { return }
+            let point = gesture.location(in: view)
+            if let page = view.page(for: point, nearest: false), page.annotation(at: view.convert(point, to: page)) != nil { return }
+            let fraction = point.x / max(1, view.bounds.width)
+            if fraction < 0.3 { model.send("previous") }
+            else if fraction > 0.7 { model.send("next") }
+            else { model.toggleControls() }
+        }
+        @objc func panned(_ gesture: UIPanGestureRecognizer) {
+            if gesture.state == .began { model.hideControls() }
+        }
         func observe(_ view: PDFView) {
             token = NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.model.pdfPageChanged() }
