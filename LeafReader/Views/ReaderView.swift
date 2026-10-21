@@ -72,6 +72,19 @@ struct ReaderContent: View {
                     }.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background).accessibilityIdentifier("readerError")
                 }
             }.frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity).clipped()
+                .overlay {
+                    if panel == .appearance {
+                        Button {
+                            panel = nil
+                            model.hideControls()
+                        } label: {
+                            Color.clear.contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Dismiss appearance")
+                        .accessibilityIdentifier("dismissAppearance")
+                    }
+                }
             if showsControls {
                 VStack(spacing: 0) {
                     readerHeader
