@@ -42,7 +42,9 @@ DRM removal, KFX, ACSM, CBR/RAR, DjVu, legacy DOC, and DOCX are not implemented.
 - Cover thumbnails and embedded title/author metadata load during import; existing books with missing covers are checked automatically on launch.
 - Native accessibility labels, Dynamic Type in app controls, iPad layouts, and landscape support.
 
-Open **Appearance** while reading to adjust text size (12–32 pt), line spacing, paragraph spacing, side margins, and top/bottom margins. **Fit more text** sets a compact layout in one tap: 17 pt text, 1.35 line spacing, 0.35 em paragraph spacing, 12 pt side margins, and 8 pt top/bottom margins. Changes apply immediately and are saved across books and app restarts. The same controls are available in Settings.
+Open **Appearance (Aa)** while reading. **Font** contains the typeface, text size (12–32 pt), A−/A+ buttons, and visual line-spacing choices. **Layout** contains visual margin choices and paginated/scrolling flow. **Themes** contains page colors and Compact, Standard, and Large reading presets. **Fine tuning** exposes precise sliders for line/paragraph spacing and side/top/bottom margins. The panel opens as a compact sheet so the page stays visible while adjusting it; drag upward for more room.
+
+**Themes → Compact** fits more text in one tap: 17 pt text, 1.35 line spacing, 0.35 em paragraph spacing, 12 pt side margins, and 8 pt top/bottom margins. Changes apply immediately and are saved across books and app restarts. The same controls are available in Settings.
 
 ## Storage and privacy
 
@@ -61,6 +63,8 @@ Version **1.0.1 build 2** passed **25 tests with zero failures or skips** on the
 Version **1.0.2 build 3** balances the Leaf toolbar logo's horizontal padding and centers its icon and title within a 44-point row. The existing library/reader/bookmarks/appearance UI test passed, and screenshots confirmed the logo spacing at the top of the library and after scrolling. Results: `build/LeafTitleAlignmentFinal-20261020.xcresult` and `build/title-alignment-final-attachments/`.
 
 Version **1.0.3 build 4** passed **27 tests with zero failures or skips**. Page layout now supplies valid CSS lengths to the paginator, preventing excessive blank space. New controls adjust page margins and paragraph spacing, with a compact preset and smaller minimum text size. A Chinese HTML regression fixture verifies actual page dimensions, increased visible text, and preservation of the saved passage when changing density or switching to scrolling. The UI test verifies that layout settings survive a restart. Results: `build/LeafDensityFinal-20261020.xcresult`; screenshots and density measurements are exported to `build/density-final-attachments/`.
+
+Version **1.0.4 build 5** reorganizes Appearance into a compact Font/Layout/Themes panel with a visible reading page, visual margin and spacing choices, and reading presets. The full **27-test suite passed** (`build/LeafAaControls-20261020.xcresult`). Subsequent targeted checks verify night controls, text-size buttons, preset selection and persistence, page bounds, density, scrolling, PDF navigation, and EPUB search/position restoration after the final preview refinements. The web surface prevents outer scrolling during focus restoration after dismissing the sheet. Visual artifacts are in `build/aa-controls-attachments/`, `build/aa-visual-final-attachments/`, and `build/aa-focus-final-attachments/`.
 
 Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
 
@@ -82,6 +86,8 @@ On October 20, 2026, version **1.0.0 build 1** was built and signed for the owne
 Version **1.0.2 build 3** was also signed, verified, and installed successfully. The phone was locked when launch was attempted, so this update's on-device appearance remains to be checked after unlocking and opening Leaf. Installation and launch diagnostics are recorded in `build/title-alignment-iphone-install-20261020.json` and `build/title-alignment-iphone-launch-20261020.json`.
 
 Version **1.0.3 build 4** was signed, verified, installed, and launched successfully on the same iPhone. Installation and launch diagnostics are saved in `build/density-iphone-install-20261020.json` and `build/density-iphone-launch-20261020.json`.
+
+Version **1.0.4 build 5** was also signed, verified, installed, and launched successfully. A before/after comparison confirmed that the five-book library manifest was unchanged by the update. Diagnostics are `build/aa-controls-iphone-install-20261020.json`, `build/aa-controls-iphone-launch-20261020.json`, and `build/aa-final-phone-library-preservation.json`.
 
 The unique app identifier and development team are saved in `project.yml` and the generated Xcode project. Installation artifacts are `build/iphone-signing-validation-20261020.json`, `build/iphone-install-20261020.json`, and `build/iphone-launch-20261020.json`; the signed build log is `build/leaf-iphone-signed-build-20261020.log`. This is a development-signed installation; its profile expiration is recorded in the signing-validation artifact.
 

@@ -76,7 +76,7 @@ struct ReaderContent: View {
                         Button("Back to library") { dismiss() }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background).accessibilityIdentifier("readerError")
                 }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity).clipped()
             Rectangle().fill(theme.foreground.opacity(0.08)).frame(height: 1)
             VStack(spacing: 4) {
                 HStack(spacing: 12) {
@@ -107,7 +107,7 @@ struct ReaderContent: View {
             NavigationStack {
                 Group {
                     switch panel {
-                    case .appearance: Form { ReaderAppearanceControls() }.navigationTitle("Appearance")
+                    case .appearance: ReaderAppearancePanel()
                     case .contents:
                         List(model.chapters) { chapter in
                             Button { model.send("navigate", value: chapter.href); self.panel = nil } label: {
@@ -123,7 +123,10 @@ struct ReaderContent: View {
                     case .search: ReaderSearchView(model: model) { self.panel = nil }
                     }
                 }.navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.panel = nil } } }
-            }.presentationDetents([.large])
+            }
+            .presentationDetents(panel == .appearance ? [.medium, .large] : [.large])
+            .presentationDragIndicator(panel == .appearance ? .visible : .automatic)
+            .presentationBackgroundInteraction(panel == .appearance ? .enabled(upThrough: .medium) : .disabled)
         }
     }
     private func panelButton(_ title: String, _ image: String, _ panel: ReaderPanel) -> some View {

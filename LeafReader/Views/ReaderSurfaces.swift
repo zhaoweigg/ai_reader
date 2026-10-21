@@ -17,7 +17,10 @@ struct WebBookSurface: UIViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.isOpaque = false
         view.backgroundColor = UIColor(preferences.theme.background)
+        view.clipsToBounds = true
+        view.scrollView.contentInsetAdjustmentBehavior = .never
         view.scrollView.isScrollEnabled = false
+        view.scrollView.delegate = context.coordinator
         view.navigationDelegate = context.coordinator
         view.accessibilityIdentifier = "bookWebView"
         view.isInspectable = true
@@ -35,9 +38,14 @@ struct WebBookSurface: UIViewRepresentable {
         view.configuration.userContentController.removeScriptMessageHandler(forName: "leaf")
         view.stopLoading()
     }
-    @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, UIScrollViewDelegate {
         let model: ReaderModel
         init(_ model: ReaderModel) { self.model = model }
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            // Foliate scrolls its own document. WebKit's focus restoration after
+            // dismissing a sheet must not scroll the outer reader surface.
+            if scrollView.contentOffset != .zero { scrollView.setContentOffset(.zero, animated: false) }
+        }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any] else { return }
             model.receive(body)
