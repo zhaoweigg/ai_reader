@@ -360,6 +360,8 @@ final class ZLibraryUITests: XCTestCase {
         capture("Popular307 diagnostic after successful search portrait")
         XCUIDevice.shared.orientation = .landscapeLeft
         let window = app.windows.firstMatch
+        expectation(for: NSPredicate { _, _ in window.frame.width > window.frame.height }, evaluatedWith: window)
+        waitForExpectations(timeout: 10)
         for _ in 0..<3 {
             if details.isHittable && details.frame.minY >= 78 && details.frame.maxY <= window.frame.maxY { break }
             app.swipeUp()
