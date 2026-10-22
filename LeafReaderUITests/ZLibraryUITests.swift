@@ -95,10 +95,17 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(unrated.label.contains("No rating provided"))
         capture("Catalog metadata dark portrait")
         XCUIDevice.shared.orientation = .landscapeLeft
-        XCTAssertTrue(rated.waitForExistence(timeout:5))
-        app.swipeUp()
+        expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app)
+        waitForExpectations(timeout:5)
+        let scroll = app.scrollViews.firstMatch
+        let start = scroll.coordinate(withNormalizedOffset:CGVector(dx:0.25,dy:0.8))
+        let end = scroll.coordinate(withNormalizedOffset:CGVector(dx:0.25,dy:0.2))
+        start.press(forDuration:0.05,thenDragTo:end)
+        start.press(forDuration:0.05,thenDragTo:end)
         capture("Catalog metadata dark landscape")
         XCUIDevice.shared.orientation = .portrait
+        expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app)
+        waitForExpectations(timeout:5)
         app.swipeDown()
         search("The Art of Noticing",app:app)
         XCTAssertTrue(rated.waitForExistence(timeout:5));XCTAssertTrue(rated.label.contains("52 ratings"))
