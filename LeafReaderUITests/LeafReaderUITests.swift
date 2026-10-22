@@ -470,6 +470,138 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testSentQuotePersistsWithQuestionInScroll() { verifySentQuote(flow: "Scroll") }
     @MainActor func testSentQuotePersistsWithQuestionInPDF() { verifySentQuote(flow: "PDF") }
 
+    @MainActor func testChatEdgeResizesInPages() { verifyChatResize(flow: "Pages") }
+    @MainActor func testChatEdgeResizesInScroll() { verifyChatResize(flow: "Scroll") }
+    @MainActor func testChatEdgeResizesInPDF() { verifyChatResize(flow: "PDF") }
+
+    @MainActor func testChatStaysOpenWhileSelectingTextInBothFlows() {
+        let app = launchApp()
+        app.buttons["featuredBook"].tap()
+        for flow in ["Pages", "Scroll"] {
+            showReaderControls(app); app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            dismissAppearance(app)
+            app.buttons["openReaderChat"].tap()
+            let paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
+            XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
+            paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.1)).press(forDuration: 1.2)
+            let ask = app.menuItems["Ask Leaf"].exists ? app.menuItems["Ask Leaf"] : app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat")).firstMatch
+            XCTAssertTrue(ask.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Native selection must keep chat open")
+            ask.tap()
+            XCTAssertTrue(app.staticTexts["chatSelectedPassage"].waitForExistence(timeout: 5))
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.typeText("Keep this selection")
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.staticTexts["chatSelectedPassage"].exists)
+            capture(flow + " selection while chat remains open", app: app)
+            app.buttons["removeChatSelection"].tap()
+            app.buttons["closeReaderChat"].tap()
+        }
+    }
+
+    @MainActor private func verifyChatResize(flow: String) {
+        let app = launchApp()
+        defer { XCUIDevice.shared.orientation = .portrait }
+        func openBook() {
+            if flow == "PDF" {
+                let search = app.textFields["librarySearch"]
+                XCTAssertTrue(search.waitForExistence(timeout: 10))
+                if (search.value as? String) != "Coast" { search.tap(); search.typeText("Coast") }
+                app.buttons["book-Notes from the Coast"].tap()
+            } else { app.buttons["featuredBook"].tap() }
+            waitForBook(app)
+        }
+        openBook(); showReaderControls(app)
+        if flow == "PDF" { app.buttons["nextPage"].tap() }
+        else {
+            app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            for margin in ["Narrow", "Wide", "Standard"] { app.buttons[margin + " margins"].tap() }
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+            dismissAppearance(app); showReaderControls(app)
+        }
+        let surface = readingSurface(app), bookFrame = surface.frame
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", flow == "PDF" ? "Before the town" : "Attention is a way")).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
+        paragraph.coordinate(withNormalizedOffset: CGVector(dx: flow == "PDF" ? 0.15 : 0.3, dy: flow == "PDF" ? 0.25 : 0.1)).press(forDuration: 1.2)
+        let ask = app.menuItems["Ask Leaf"].exists ? app.menuItems["Ask Leaf"] : app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 5)); ask.tap()
+        XCTAssertTrue(app.staticTexts["chatSelectedPassage"].waitForExistence(timeout: 5))
+        let selected = app.staticTexts["chatSelectedPassage"].label
+        sendChatQuestion("Explain this quote", app: app)
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 5)
+        let panel = app.otherElements["readerChatPanel"]
+        func resize(_ delta: CGFloat) {
+            let edge = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+            let start = edge.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: delta)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Resizing must never dismiss chat")
+        }
+        let initial = panel.frame.height
+        resize(-180)
+        XCTAssertEqual(panel.frame.height, initial + 180, accuracy: 15)
+        XCTAssertEqual(surface.frame.height, bookFrame.height, accuracy: 2, "Keep the book viewport unchanged")
+        XCTAssertEqual(surface.frame.width, bookFrame.width, accuracy: 2)
+        XCTAssertEqual(app.buttons["toggleChatQuote"].value as? String, selected)
+        capture(flow + " expanded chat with sent quote", app: app)
+        resize(240)
+        XCTAssertLessThan(panel.frame.height, initial + 20)
+        // Accessibility reports the content bounds, excluding 8 pt of padding at each edge.
+        XCTAssertGreaterThanOrEqual(panel.frame.height, 183)
+        capture(flow + " minimum resized chat", app: app)
+        resize(-160)
+        let readingHeight = panel.frame.height
+        app.buttons["closeReaderChat"].tap(); app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Keep my resize draft")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let compactHeight = panel.frame.height
+        resize(-160)
+        XCTAssertGreaterThan(panel.frame.height, compactHeight + 70)
+        XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
+        XCTAssertEqual(input.value as? String, "Keep my resize draft")
+        XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists, "Expanded typing can show the conversation")
+        capture(flow + " expanded chat above keyboard", app: app)
+        let typingHeight = panel.frame.height
+        app.buttons["Hide keyboard"].tap()
+        XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
+        app.buttons["Hide keyboard"].tap()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        resize(-120)
+        XCTAssertGreaterThanOrEqual(panel.frame.height, 200)
+        XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists)
+        capture(flow + " landscape expanded chat history", app: app)
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        resize(-50)
+        XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
+        XCTAssertTrue(input.isHittable)
+        capture(flow + " landscape resize with keyboard", app: app)
+        app.buttons["Hide keyboard"].tap()
+        XCUIDevice.shared.orientation = .portrait
+        expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        let savedHeight = panel.frame.height
+        app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
+        app.terminate(); app.launch(); openBook(); app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(panel.frame.height, savedHeight, accuracy: 4)
+        XCTAssertEqual(input.value as? String, "Keep my resize draft")
+        XCTAssertEqual(app.buttons["toggleChatQuote"].value as? String, selected)
+        capture(flow + " resized chat restored after relaunch", app: app)
+    }
+
     @MainActor private func verifySentQuote(flow: String) {
         let app = launchApp()
         defer { XCUIDevice.shared.orientation = .portrait }
@@ -752,7 +884,7 @@ final class LeafReaderUITests: XCTestCase {
             let bodyStart = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: panel.frame.minX + 80, dy: panel.frame.minY + 100))
             bodyStart.press(forDuration: 0.01, thenDragTo: bodyStart.withOffset(CGVector(dx: 0, dy: 50)), withVelocity: .slow, thenHoldForDuration: 0.1)
             XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Scrolling chat content does not dismiss it")
-            let bar = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+            let bar = app.descendants(matching: .any)["readerChatHeader"].firstMatch
             XCTAssertTrue(bar.waitForExistence(timeout: 5))
             let start = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 20)), withVelocity: .slow, thenHoldForDuration: 0.1)
@@ -769,7 +901,7 @@ final class LeafReaderUITests: XCTestCase {
             surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
             XCTAssertTrue(app.buttons["closeReaderChat"].exists)
             capture(flow + " landscape chat retained", app: app)
-            let landscapeBar = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+            let landscapeBar = app.descendants(matching: .any)["readerChatHeader"].firstMatch
             XCTAssertTrue(landscapeBar.exists)
             let landscapeStart = landscapeBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             landscapeStart.press(forDuration: 0.01, thenDragTo: landscapeStart.withOffset(CGVector(dx: 0, dy: 70)), withVelocity: .slow, thenHoldForDuration: 0.1)
