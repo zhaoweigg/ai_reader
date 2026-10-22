@@ -102,6 +102,12 @@ final class ZLibraryUITests: XCTestCase {
         let end = scroll.coordinate(withNormalizedOffset:CGVector(dx:0.25,dy:0.2))
         start.press(forDuration:0.05,thenDragTo:end)
         start.press(forDuration:0.05,thenDragTo:end)
+        // The bottom of each card contains its metadata. Existence alone also
+        // passes when those lines are below the landscape viewport.
+        for card in [rated,unrated] {
+            XCTAssertGreaterThan(card.frame.maxY,scroll.frame.minY + 100)
+            XCTAssertLessThanOrEqual(card.frame.maxY,scroll.frame.maxY - 4)
+        }
         capture("Catalog metadata dark landscape")
         XCUIDevice.shared.orientation = .portrait
         expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app)
