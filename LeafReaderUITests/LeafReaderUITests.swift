@@ -125,6 +125,33 @@ final class LeafReaderUITests: XCTestCase {
         capture("Reader theme synchronizes back to Settings", app: app)
     }
 
+    @MainActor func testThemeSelectorFitsLandscapeAndKeepsItsChoiceAfterRotation() {
+        let app = launchApp()
+        defer { XCUIDevice.shared.orientation = .portrait }
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["Night theme"].tap()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.buttons["Sage theme"].tap()
+        XCTAssertTrue(app.buttons["Sage theme"].isSelected)
+        capture("Landscape app theme selector", app: app)
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(app.buttons["Sage theme"].isSelected)
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.buttons["Paper theme"].tap()
+        XCTAssertTrue(app.buttons["Paper theme"].isSelected)
+        capture("Landscape reader theme selector", app: app)
+        app.buttons["Dusk theme"].tap()
+        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        capture("Reader theme selector after rotation", app: app)
+    }
+
     @MainActor func testLibrarySearchFiltersTitles() {
         let app = launchApp()
         let search = app.textFields["librarySearch"]

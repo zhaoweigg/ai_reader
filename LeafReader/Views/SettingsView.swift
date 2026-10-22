@@ -49,7 +49,7 @@ struct AcknowledgmentsView: View {
                     }
                 }.listRowBackground(theme.surface)
             }
-            Section { Text("The bundled sample books are original short works created for Leaf. They are included for demonstrating the reader.").font(.footnote) }
+            Section { Text("The bundled sample books are original short works created for Leaf. They are included for demonstrating the reader.").font(.footnote) }.listRowBackground(theme.surface)
         }.leafFormStyle().navigationTitle("Acknowledgments").navigationBarTitleDisplayMode(.inline)
     }
 }

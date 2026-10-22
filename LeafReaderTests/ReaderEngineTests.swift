@@ -709,11 +709,12 @@ final class ReaderEngineTests: XCTestCase {
               const horizontalMargin = [12,20,36][fontIndex];
               const background = ['#FFFFFF','#F4EDDD','#17232E'][fontIndex];
               const foreground = ['#263440','#493F30','#D7DEE4'][fontIndex];
+              const colorScheme = fontIndex === 2 ? 'dark' : 'light';
               for (const scrolling of [true, false]) {
                 const sizes = Array.from({length:21}, (_, i) => scrolling ? i + 12 : 32 - i);
                 for (const fontSize of sizes) {
                     const saved = view.lastLocation.cfi;
-                    window.Leaf.applyPreferences({...base, scrolling, fontSize, font, horizontalMargin, background, foreground});
+                    window.Leaf.applyPreferences({...base, scrolling, fontSize, font, horizontalMargin, background, foreground, colorScheme});
                     await sleep(130);
                     const doc = renderer.getContents()[0].doc;
                     const p = doc.querySelector('p');
