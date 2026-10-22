@@ -16,7 +16,11 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var progress: Double?
     @Published private(set) var importedID: UUID?
     @Published private(set) var importError: String?
-    let websiteData = WKWebsiteDataStore.nonPersistent()
+    private var signInData: WKWebsiteDataStore?
+    var websiteData: WKWebsiteDataStore {
+        if let signInData { return signInData }
+        let data = WKWebsiteDataStore.nonPersistent(); signInData = data; return data
+    }
     private let defaults: UserDefaults
     private let credentials: any ChatCredentialStore
     private let client: any ZLibraryServing
@@ -49,7 +53,8 @@ final class ZLibraryStore: ObservableObject {
         await clearWebsite()
     }
     func clearWebsite() async {
-        await websiteData.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+        guard let signInData else { return }
+        await signInData.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
     }
     func disconnect() async throws {
         try credentials.write(nil, account: origin.url.absoluteString)

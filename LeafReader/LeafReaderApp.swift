@@ -87,10 +87,11 @@ struct AppView: View {
         }
         .alert(item: $library.notice) { Alert(title: Text($0.title), message: Text($0.message), dismissButton: .default(Text("OK"))) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { library.flush() } }
+        .onChange(of: library.isImporting) { _, busy in if !busy { processQueue() } }
     }
     private func enqueue(_ urls: [URL]) { pendingURLs.append(contentsOf: urls); processQueue() }
     private func processQueue() {
-        guard !drainingImports, !pendingURLs.isEmpty else { return }
+        guard !drainingImports, !library.isImporting, !pendingURLs.isEmpty else { return }
         drainingImports = true
         Task {
             while !pendingURLs.isEmpty {
