@@ -17,7 +17,8 @@ The user requests two simulator test slots running in parallel to reduce waiting
 
 # iPhone preview installation
 
-- Offer a feature for iPhone testing as soon as its required checks, review, and signed build are ready. Do not wait for all other pending features to finish.
+- Offer a feature for iPhone testing as soon as all applicable verification the agent can perform is complete and passing. Finish automated checks, affected-mode UI checks, screenshot review, integration checks, and signed-build verification before offering it; fix and retest failures first. Pending or failing checks mean the build is not ready. Clearly state any verification that cannot be performed; never report it as passed. Do not wait for unrelated pending features to finish.
+- Offer and install only builds produced from a clean checkout of merged `main`. Merge the feature PR first, record the exact `main` commit, then build and verify that source. A feature-branch artifact is not eligible even if its tree matches `main`.
 - Before every actual iPhone installation, ask the user to **Install now**, **Hold**, or **Skip** for the specific ready build, naming its version and changes. Wait for explicit approval; prior unattended-install authorization does not apply.
 - Prepare and verify the build before asking. Build preparation, simulator testing, PR creation, and merging may proceed without installation approval.
 - Record ready builds and the user's decision in the shared coordination registry. Hold keeps the build pending; Skip skips that installation. Neither authorizes a later installation.
