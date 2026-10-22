@@ -47,14 +47,16 @@ final class AISettingsStore: ObservableObject {
     private let defaults: UserDefaults
     private let credentials: any ChatCredentialStore
     let providerOverride: (any ChatProvider)?
+    let chatGPT: ChatGPTAccountStore
     init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(),
          providerOverride: (any ChatProvider)? = nil) {
         self.defaults = defaults; self.credentials = credentials; self.providerOverride = providerOverride
+        chatGPT = ChatGPTAccountStore(defaults: defaults, credentials: credentials)
         configuration = defaults.data(forKey: "ai.configuration").flatMap { try? JSONDecoder().decode(ChatConfiguration.self, from: $0) } ?? ChatConfiguration()
     }
     func key(for configuration: ChatConfiguration) throws -> String? { try credentials.read(account: configuration.credentialAccount) }
     func save(_ configuration: ChatConfiguration, replacementKey: String?) throws {
-        _ = try configuration.profile.validatedURL()
+        if configuration.provider != .chatGPT { _ = try configuration.profile.validatedURL() }
         let data = try JSONEncoder().encode(configuration)
         if let replacementKey {
             let key = replacementKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -67,6 +69,12 @@ final class AISettingsStore: ObservableObject {
     func removeKey(for configuration: ChatConfiguration) throws { try credentials.write(nil, account: configuration.credentialAccount); objectWillChange.send() }
     func provider() throws -> any ChatProvider {
         if let providerOverride { return providerOverride }
+        if configuration.provider == .chatGPT {
+            guard let account = chatGPT.selected, account.tokens != nil else { throw ChatGPTError.signInRequired }
+            guard account.canUsePlan else { throw ChatGPTError.permissionMissing }
+            guard !configuration.profile.model.isEmpty else { throw ChatGPTError.missingModel }
+            return ChatGPTSubscriptionProvider(accounts: chatGPT, accountID: account.id, model: configuration.profile.model)
+        }
         _ = try configuration.profile.validatedURL()
         guard let key = try key(for: configuration), !key.isEmpty else { throw ChatError.missingKey }
         return HTTPChatProvider(kind: configuration.provider, profile: configuration.profile, apiKey: key)

@@ -76,7 +76,7 @@ final class ReaderChatSession: ObservableObject {
                     completed = true
                     if truncated {
                         messages[index].state = .stopped
-                        notice = "The reply reached the output limit. Increase it in AI settings or ask a shorter question."
+                        notice = "The reply ended before completion. Retry or ask for a shorter answer."
                     } else { messages[index].state = .complete }
                 }
             }
@@ -90,6 +90,7 @@ final class ReaderChatSession: ObservableObject {
     }
     private func errorMessage(_ error: Error) -> String {
         if let error = error as? ChatError { return error.localizedDescription }
+        if let error = error as? ChatGPTError { return error.localizedDescription }
         if let error = error as? URLError {
             switch error.code {
             case .notConnectedToInternet, .networkConnectionLost: return "The connection was lost. Check your internet connection and retry."

@@ -1,12 +1,13 @@
 import XCTest
 
 final class LeafReaderUITests: XCTestCase {
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launch()
         return app
     }
@@ -324,6 +325,27 @@ final class LeafReaderUITests: XCTestCase {
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         showReaderControls(app)
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Add bookmark")
+    }
+
+    @MainActor func testChatGPTNativeBrowserReturnsToLeaf() {
+        let app = launchApp(mockChat: false, chatGPTBrowser: true)
+        app.tabBars.buttons["Settings"].tap()
+        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.buttons["openAISettings"].tap()
+        app.buttons["aiProvider"].tap()
+        app.buttons["ChatGPT subscription"].tap()
+        XCTAssertTrue(app.buttons["continueWithChatGPT"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.secureTextFields["aiAPIKey"].exists)
+        let check = app.buttons["testChatGPTBrowser"]
+        for _ in 0..<3 where !check.isHittable { app.swipeUp() }
+        check.tap()
+        if app.alerts.firstMatch.waitForExistence(timeout: 3), app.alerts.buttons["Continue"].exists { app.alerts.buttons["Continue"].tap() }
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        if springboard.alerts.firstMatch.exists, springboard.alerts.buttons["Continue"].exists { springboard.alerts.buttons["Continue"].tap() }
+        let notice = app.staticTexts["chatGPTConnectionNotice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertEqual(notice.label, "Native browser callback verified.")
+        capture("ChatGPT native browser callback", app: app)
     }
 
     @MainActor func testChatStopAndRetryKeepOneQuestion() {

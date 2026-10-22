@@ -1,13 +1,17 @@
 import Foundation
 
 enum ChatProviderKind: String, Codable, CaseIterable, Identifiable {
-    case anthropic, chatCompletions
+    case anthropic, chatCompletions, chatGPT
     var id: String { rawValue }
-    var title: String { self == .anthropic ? "Anthropic" : "Chat Completions compatible" }
+    var title: String {
+        switch self { case .anthropic: return "Anthropic"; case .chatCompletions: return "Chat Completions compatible"; case .chatGPT: return "ChatGPT subscription" }
+    }
     var defaultProfile: ChatProfile {
-        self == .anthropic
-            ? ChatProfile(endpoint: "https://api.anthropic.com/v1/messages", model: "claude-haiku-5-5")
-            : ChatProfile(endpoint: "https://api.openai.com/v1/chat/completions", model: "")
+        switch self {
+        case .anthropic: return ChatProfile(endpoint: "https://api.anthropic.com/v1/messages", model: "claude-haiku-5-5")
+        case .chatCompletions: return ChatProfile(endpoint: "https://api.openai.com/v1/chat/completions", model: "")
+        case .chatGPT: return ChatProfile(endpoint: "https://api.openai.com/v1/responses", model: "")
+        }
     }
 }
 

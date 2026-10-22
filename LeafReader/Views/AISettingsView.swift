@@ -14,32 +14,42 @@ struct AISettingsView: View {
                 Picker("Provider", selection: $configuration.provider) {
                     ForEach(ChatProviderKind.allCases) { kind in Text(kind.title).tag(kind) }
                 }.accessibilityIdentifier("aiProvider")
-                TextField("Model ID", text: $configuration.profile.model)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("aiModel")
-                if configuration.provider == .anthropic {
-                    Menu("Choose a Haiku model") {
-                        Button("Haiku 5.5") { configuration.profile.model = "claude-haiku-5-5" }
-                        Button("Haiku 4.5") { configuration.profile.model = "claude-haiku-4-5" }
+                if configuration.provider != .chatGPT {
+                    TextField("Model ID", text: $configuration.profile.model)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("aiModel")
+                    if configuration.provider == .anthropic {
+                        Menu("Choose a Haiku model") {
+                            Button("Haiku 5.5") { configuration.profile.model = "claude-haiku-5-5" }
+                            Button("Haiku 4.5") { configuration.profile.model = "claude-haiku-4-5" }
+                        }
                     }
+                    TextField("Full HTTPS endpoint", text: $configuration.profile.endpoint, axis: .vertical)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityIdentifier("aiEndpoint")
                 }
-                TextField("Full HTTPS endpoint", text: $configuration.profile.endpoint, axis: .vertical)
-                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .accessibilityIdentifier("aiEndpoint")
             } header: { Text("Model connection") } footer: {
-                Text("Change the model ID without changing the reader. For another service, choose its API format and full endpoint. Each destination has its own saved key.")
-            }
-            Section {
-                SecureField(hasKey ? "Replace saved key (optional)" : "Enter API key", text: $replacementKey)
-                    .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .accessibilityIdentifier("aiAPIKey")
-                if hasKey {
-                    Label("Key saved in Keychain", systemImage: "lock.fill").font(.footnote)
-                    Button("Remove saved key", role: .destructive) {
-                        do { try settings.removeKey(for: configuration); refreshKey() }
-                        catch { self.error = error.localizedDescription }
-                    }
+                if configuration.provider == .chatGPT {
+                    Text("Connect your ChatGPT account and choose a model available to your plan. No API key is needed.")
+                } else {
+                    Text("Change the model ID without changing the reader. For another service, choose its API format and full endpoint. Each destination has its own saved key.")
                 }
-            } header: { Text("API key") } footer: { Text("Your own provider key is stored on this device. API usage is billed by your provider. No key is bundled with Leaf.") }
+            }
+            if configuration.provider == .chatGPT {
+                ChatGPTConnectionView(accounts: settings.chatGPT, model: $configuration.profile.model)
+            } else {
+                Section {
+                    SecureField(hasKey ? "Replace saved key (optional)" : "Enter API key", text: $replacementKey)
+                        .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityIdentifier("aiAPIKey")
+                    if hasKey {
+                        Label("Key saved in Keychain", systemImage: "lock.fill").font(.footnote)
+                        Button("Remove saved key", role: .destructive) {
+                            do { try settings.removeKey(for: configuration); refreshKey() }
+                            catch { self.error = error.localizedDescription }
+                        }
+                    }
+                } header: { Text("API key") } footer: { Text("Your own provider key is stored on this device. API usage is billed by your provider. No key is bundled with Leaf.") }
+            }
             Section("Reading context") {
                 Toggle("Include current passage", isOn: $configuration.sharePage).accessibilityIdentifier("aiSharePage")
                 Text("Sending shares your question, up to 12,000 characters of selected text or the current page, book details, and recent chat with the chosen provider. Images and entire books are not uploaded. Disable this to send questions and chat text only.")
@@ -47,10 +57,12 @@ struct AISettingsView: View {
                 Text("Conversations stay in memory until you close the book. Provider retention follows that provider’s policy.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            Section("Response length") {
-                Stepper("Maximum output: \(configuration.profile.maxOutputTokens) tokens", value: $configuration.profile.maxOutputTokens, in: 256...8192, step: 256)
-                if configuration.provider == .chatCompletions {
-                    Toggle("Use legacy max_tokens field", isOn: $configuration.profile.legacyTokenLimit)
+            if configuration.provider != .chatGPT {
+                Section("Response length") {
+                    Stepper("Maximum output: \(configuration.profile.maxOutputTokens) tokens", value: $configuration.profile.maxOutputTokens, in: 256...8192, step: 256)
+                    if configuration.provider == .chatCompletions {
+                        Toggle("Use legacy max_tokens field", isOn: $configuration.profile.legacyTokenLimit)
+                    }
                 }
             }
             if let error { Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("aiSettingsError") } }
@@ -65,6 +77,7 @@ struct AISettingsView: View {
         .onChange(of: configuration.profile.endpoint) { _, _ in saved = false; refreshKey() }
     }
     private func refreshKey() {
+        guard configuration.provider != .chatGPT else { hasKey = false; return }
         do { hasKey = try settings.key(for: configuration) != nil }
         catch { hasKey = false; self.error = error.localizedDescription }
     }

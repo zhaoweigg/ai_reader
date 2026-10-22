@@ -107,6 +107,7 @@ struct HTTPChatProvider: ChatProvider {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             messages.insert(["role": "system", "content": conversation.system], at: 0)
             body[profile.legacyTokenLimit ? "max_tokens" : "max_completion_tokens"] = profile.maxOutputTokens
+        case .chatGPT: throw ChatGPTError.signInRequired
         }
         body["messages"] = messages
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
