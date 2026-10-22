@@ -47,6 +47,8 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.9.6</string>
 	<key>CFBundleVersion</key>
+	<string>1.9.7</string>
+	<key>CFBundleVersion</key>
 	<string>36</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
