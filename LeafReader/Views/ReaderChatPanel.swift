@@ -50,17 +50,30 @@ struct ReaderChatPanel: View {
     private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
-        VStack(spacing: 8) {
+        GeometryReader { geometry in
+            content(compact: geometry.size.height < 200)
+        }
+    }
+    private func content(compact: Bool) -> some View {
+        VStack(spacing: compact ? 4 : 8) {
             Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
-                .frame(maxWidth: .infinity).accessibilityHidden(true)
+                .frame(maxWidth: .infinity).frame(height: compact ? 6 : 16)
+                .contentShape(Rectangle()).gesture(dismissDrag)
+                .accessibilityElement().accessibilityLabel("Chat drag handle")
+                .accessibilityIdentifier("readerChatDragHandle")
+                .accessibilityAction(named: "Close chat", close)
             HStack(spacing: 8) {
                 Image(systemName: "leaf.fill").foregroundStyle(accent)
-                Text("Ask Leaf").font(.headline).foregroundStyle(accent)
+                if compact, let selection = session.selectedContext {
+                    Text(selection.text).font(.caption).lineLimit(1).accessibilityIdentifier("chatSelectedPassage")
+                    Button { session.removeSelection() } label: { Image(systemName: "xmark.circle").frame(width: 44, height: 44) }
+                        .accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
+                } else { Text("Ask Leaf").font(.headline).foregroundStyle(accent) }
                 Spacer(minLength: 4)
-                if !isComposing {
+                if !isComposing && !compact {
                     Text(settings.configuration.profile.model).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
-                if !isComposing {
+                if !isComposing && !compact {
                     Menu {
                         Button("AI settings", systemImage: "gearshape", action: onSettings)
                         Button("Clear conversation", systemImage: "trash", role: .destructive) { confirmsClear = true }
@@ -85,11 +98,10 @@ struct ReaderChatPanel: View {
                 .buttonStyle(.plain).accessibilityLabel("Close chat").accessibilityIdentifier("closeReaderChat")
             }
             .contentShape(Rectangle())
-            .simultaneousGesture(DragGesture(minimumDistance: 15).onEnded { gesture in
-                if gesture.translation.height > 40, abs(gesture.translation.width) < gesture.translation.height { close() }
-            })
+            .simultaneousGesture(dismissDrag)
 
-            if !isComposing {
+            if isComposing || compact { Spacer(minLength: 0) }
+            if !isComposing && !compact {
                 if session.hasEarlierMessages || session.hasNewerMessages {
                     HStack {
                         Button("Earlier") { session.loadEarlier() }
@@ -124,10 +136,14 @@ struct ReaderChatPanel: View {
                             }
                             if session.messages.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
+                                    Text(session.selectedContext != nil
+                                         ? (ReaderChatMessage.usesChinese(bookTitle) ? "针对选中的文字提问。" : "Ask a question about the selected text.")
+                                         : (ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page."))
                                         .font(.subheadline)
-                                    Text(settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off.")
-                                        .font(.caption).foregroundStyle(.secondary)
+                                    if session.selectedContext == nil {
+                                        Text(settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off.")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
                                     Button("AI settings", action: onSettings).font(.subheadline)
                                 }
                             }
@@ -161,9 +177,24 @@ struct ReaderChatPanel: View {
                 }
             }
 
+            if !compact, let selection = session.selectedContext {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "text.quote").foregroundStyle(accent).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(settings.configuration.sharePage ? "Selected text" : "Selected text · passage sharing is off")
+                            .font(.caption.weight(.medium))
+                        Text(selection.text).font(.caption).foregroundStyle(.secondary).lineLimit(isComposing ? 1 : 2)
+                            .accessibilityIdentifier("chatSelectedPassage")
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    Button { session.removeSelection() } label: {
+                        Image(systemName: "xmark").frame(width: 44, height: 44)
+                    }.accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
+                }.padding(.leading, 8)
+            }
+
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Ask about this page…", text: $session.draft, axis: .vertical)
-                    .font(.subheadline).lineLimit(1...3)
+                    .font(.subheadline).lineLimit(1...(compact ? 1 : 3))
                     .focused($inputFocused).submitLabel(.send)
                     .onSubmit(send)
                     .padding(.leading, 14).padding(.vertical, 12)
@@ -181,7 +212,7 @@ struct ReaderChatPanel: View {
             .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 28))
             .overlay(RoundedRectangle(cornerRadius: 28).stroke(.secondary.opacity(0.3), lineWidth: 0.75))
         }
-        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
+        .padding(.horizontal, 16).padding(.vertical, compact ? 4 : 8)
         .foregroundStyle(.primary).tint(accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
         .accessibilityAction(.escape, close)
@@ -190,6 +221,12 @@ struct ReaderChatPanel: View {
                 .accessibilityIdentifier("confirmClearConversation")
             Button("Cancel", role: .cancel) {}
         } message: { Text("This deletes this book’s saved messages and draft from this device.") }
+    }
+
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 15).onEnded { gesture in
+            if gesture.translation.height > 40, abs(gesture.translation.width) < gesture.translation.height { close() }
+        }
     }
 
     private func close() {

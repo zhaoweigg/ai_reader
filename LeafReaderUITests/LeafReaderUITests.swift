@@ -157,6 +157,32 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Page 2 of 4"].waitForExistence(timeout: 10))
     }
 
+    @MainActor func testPDFSelectionOffersAskLeaf() {
+        let app = launchApp()
+        let search = app.textFields["librarySearch"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
+        app.buttons["book-Notes from the Coast"].tap()
+        showReaderControls(app); app.buttons["nextPage"].tap()
+        let surface = readingSurface(app)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        capture("PDF before selecting text", app: app)
+        let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Before the town")).firstMatch
+        if paragraph.exists { paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.25)).press(forDuration: 1.2) }
+        else { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.25)).press(forDuration: 1.2) }
+        capture("PDF selection menu", app: app)
+        let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.name = "PDF selection hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
+        let menu = app.menuItems["Ask Leaf"].exists ? app.menuItems["Ask Leaf"] : app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat")).firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 5)); menu.tap()
+        let ask = app.menuItems["Ask a question"].exists ? app.menuItems["Ask a question"] : app.buttons["Ask a question"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 5)); ask.tap()
+        XCTAssertTrue(app.staticTexts["chatSelectedPassage"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "PDF content taps keep chat open")
+        XCTAssertTrue(app.staticTexts["chatSelectedPassage"].exists)
+        capture("PDF selection attached", app: app)
+    }
+
     @MainActor func testTextSizePreviewAfterSwitchingScrollAndPages() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()
@@ -252,6 +278,82 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
     }
 
+    @MainActor func testSelectionMenuOpensChatWithAttachedPassageInBothFlows() {
+        let app = launchApp()
+        defer { XCUIDevice.shared.orientation = .portrait }
+        app.buttons["featuredBook"].tap()
+        for flow in ["Pages", "Scroll"] {
+            showReaderControls(app)
+            app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+            dismissAppearance(app)
+            let actions = flow == "Pages" ? [("Explain selection", "Explain this passage.")] : [("Summarize selection", "Summarize this passage.")]
+            for (action, prompt) in actions {
+                let surface = readingSurface(app)
+                let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
+                XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
+                let point = paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.1))
+                for _ in 0..<2 {
+                    point.press(forDuration: 1.2)
+                    // Retry a missed native long press, but never mask a missing Ask Leaf action when Copy is present.
+                    if app.menuItems["Copy"].waitForExistence(timeout: 2) || app.menuItems["Ask Leaf"].exists { break }
+                    point.tap()
+                }
+                capture(flow + " native selection menu", app: app)
+                let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.name = flow + " selection menu hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
+                let menuItem = app.menuItems["Ask Leaf"]
+                if menuItem.waitForExistence(timeout: 2) { menuItem.tap() }
+                else {
+                    let candidates = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat"))
+                    XCTAssertTrue(candidates.firstMatch.waitForExistence(timeout: 3)); candidates.firstMatch.tap()
+                }
+                for title in ["Ask a question", "Explain selection", "Summarize selection"] {
+                    let option = app.menuItems[title].exists ? app.menuItems[title] : app.buttons[title]
+                    XCTAssertTrue(option.waitForExistence(timeout: 5))
+                }
+                let option = app.menuItems[action].exists ? app.menuItems[action] : app.buttons[action]
+                option.tap()
+                let passage = app.staticTexts["chatSelectedPassage"]
+                XCTAssertTrue(passage.waitForExistence(timeout: 5)); XCTAssertFalse(passage.label.isEmpty)
+                let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+                if !prompt.isEmpty { XCTAssertEqual(input.value as? String, prompt) }
+                else { XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled) }
+                XCTAssertFalse(app.staticTexts["chatQuestion"].exists, "Preparing a selection must not send a request")
+                capture(flow + " selected text attached to chat", app: app)
+                input.tap(); input.typeText(" In context")
+                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+                XCTAssertTrue(passage.exists, "Keep the selected passage attached when the keyboard replaces the selection")
+                XCTAssertLessThanOrEqual(app.otherElements["readerChatPanel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
+                XCTAssertTrue(app.buttons["removeChatSelection"].isHittable)
+                capture(flow + " attached passage while typing", app: app)
+                if action == "Summarize selection" {
+                    XCUIDevice.shared.orientation = .landscapeLeft
+                    expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+                    waitForExpectations(timeout: 5)
+                    XCTAssertTrue(passage.waitForExistence(timeout: 5))
+                    XCTAssertTrue(app.buttons["removeChatSelection"].isHittable)
+                    XCTAssertTrue(input.isHittable)
+                    XCTAssertLessThanOrEqual(app.otherElements["readerChatPanel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
+                    capture(flow + " selected passage landscape keyboard", app: app)
+                    XCUIDevice.shared.orientation = .portrait
+                    expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+                    waitForExpectations(timeout: 5)
+                }
+                app.buttons["removeChatSelection"].tap()
+                XCTAssertFalse(passage.exists)
+                app.buttons["Hide keyboard"].tap()
+                app.buttons["chatOptions"].tap()
+                app.buttons["requestClearConversation"].tap()
+                app.buttons["confirmClearConversation"].firstMatch.tap()
+                app.buttons["closeReaderChat"].tap()
+            }
+        }
+    }
+
+
     @MainActor func testRaisedChatLauncherInBothFlowsThemesAndRotation() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()
@@ -341,6 +443,79 @@ final class LeafReaderUITests: XCTestCase {
         capture("Scroll returns to previous chapter", app: app)
     }
 
+    @MainActor func testChatDismissesOnlyWithCloseOrTopBarSwipeInBothFlows() {
+        let app = launchApp()
+        defer { XCUIDevice.shared.orientation = .portrait }
+        app.buttons["featuredBook"].tap()
+        waitForBook(app)
+        for flow in ["Pages", "Scroll"] {
+            showReaderControls(app)
+            app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            dismissAppearance(app)
+            let surface = readingSurface(app)
+            app.buttons["openReaderChat"].tap()
+            let panel = app.otherElements["readerChatPanel"]
+            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            for x in [0.12, 0.5, 0.88] {
+                surface.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.3)).tap()
+                XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+                XCTAssertFalse(app.buttons["openReaderChat"].exists)
+            }
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.typeText("Keep my question")
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.16)).tap()
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+            XCTAssertEqual(input.value as? String, "Keep my question")
+            let a = surface.coordinate(withNormalizedOffset: CGVector(dx: flow == "Pages" ? 0.8 : 0.5, dy: 0.28))
+            let b = surface.coordinate(withNormalizedOffset: CGVector(dx: flow == "Pages" ? 0.2 : 0.5, dy: flow == "Pages" ? 0.28 : 0.12))
+            a.press(forDuration: 0.01, thenDragTo: b, withVelocity: .slow, thenHoldForDuration: 0.1)
+            b.press(forDuration: 0.01, thenDragTo: a, withVelocity: .slow, thenHoldForDuration: 0.1)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Browsing the book keeps chat open")
+            XCTAssertEqual(input.value as? String, "Keep my question")
+            if app.buttons["Hide keyboard"].isHittable { app.buttons["Hide keyboard"].tap() }
+            let bodyStart = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: panel.frame.minX + 80, dy: panel.frame.minY + 100))
+            bodyStart.press(forDuration: 0.01, thenDragTo: bodyStart.withOffset(CGVector(dx: 0, dy: 50)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Scrolling chat content does not dismiss it")
+            let bar = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+            XCTAssertTrue(bar.waitForExistence(timeout: 5))
+            let start = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 20)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists, "A short drag does not dismiss chat")
+            capture(flow + " chat stays open after reading taps", app: app)
+            start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 85)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeReaderChat"])
+            waitForExpectations(timeout: 5)
+            app.buttons["openReaderChat"].tap()
+            XCTAssertEqual(input.value as? String, "Keep my question")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+            waitForExpectations(timeout: 5)
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+            capture(flow + " landscape chat retained", app: app)
+            let landscapeBar = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+            XCTAssertTrue(landscapeBar.exists)
+            let landscapeStart = landscapeBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            landscapeStart.press(forDuration: 0.01, thenDragTo: landscapeStart.withOffset(CGVector(dx: 0, dy: 70)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+            app.buttons["openReaderChat"].tap()
+            app.buttons["closeReaderChat"].tap()
+            XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+            XCUIDevice.shared.orientation = .portrait
+            expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+            waitForExpectations(timeout: 5)
+            // The next flow uses the same persisted draft.
+            if flow == "Pages" {
+                app.buttons["openReaderChat"].tap()
+                app.buttons["chatOptions"].tap(); app.buttons["requestClearConversation"].tap()
+                app.buttons["confirmClearConversation"].firstMatch.tap()
+                app.buttons["closeReaderChat"].tap()
+            }
+        }
+    }
+
     @MainActor func testStreamingChatKeepsTheBookVisibleAndPreservesItsPlace() {
         let app = launchApp()
         app.tabBars.buttons["Settings"].tap()
@@ -372,8 +547,8 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled)
         capture("AI compact translucent chat", app: app)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.3)).tap()
-        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeReaderChat"])
-        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Tapping the book keeps chat open")
+        app.buttons["closeReaderChat"].tap()
         showReaderControls(app)
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
         app.buttons["openReaderChat"].tap()

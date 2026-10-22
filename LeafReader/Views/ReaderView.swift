@@ -126,7 +126,7 @@ struct ReaderContent: View {
                 if chatIsPresented {
                     let fullHeight = max(bookViewportHeight, geometry.size.height)
                     let composing = geometry.size.height < fullHeight - 80
-                    let height = composing ? min(fullHeight / 3, max(176, geometry.size.height * 0.35)) : fullHeight / 3
+                    let height = composing ? min(fullHeight / 3, max(chat.selectedContext == nil ? 176 : 216, geometry.size.height * 0.35)) : fullHeight / 3
                     ReaderChatPanel(session: chat, bookTitle: book.title, isComposing: composing, onClose: {
                         chatIsPresented = false
                         model.hideControls()
@@ -156,6 +156,12 @@ struct ReaderContent: View {
         .accessibilityAction(.escape) { library.flush(); dismiss() }
         .task { library.open(book.id) }
         .onDisappear { chat.close(); library.flush() }
+        .onChange(of: model.selectionRequest) { _, request in
+            guard let request else { return }
+            chat.attachSelection(request.context, prompt: request.intent.prompt(for: request.context.text))
+            model.hideControls()
+            chatIsPresented = true
+        }
         .onChange(of: scenePhase) { _, phase in if phase != .active { chat.flush() } }
         .sheet(item: $panel, onDismiss: { model.hideControls() }) { panel in
             NavigationStack {
@@ -196,7 +202,6 @@ struct ReaderContent: View {
     }
     private func handleBookTap() -> Bool {
         guard chatIsPresented else { return false }
-        chatIsPresented = false
         model.hideControls()
         return true
     }

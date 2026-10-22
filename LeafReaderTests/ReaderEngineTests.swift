@@ -213,6 +213,15 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertTrue(model.error?.contains("renderer stopped") == true)
         XCTAssertFalse(model.error?.contains("memory") == true)
     }
+    func testSelectionCleanupStillClosesBookAfterNativeBridgeIsDetached() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        let web = try XCTUnwrap(model.webView)
+        web.configuration.userContentController.removeScriptMessageHandler(forName: "leaf")
+        let closed = try await web.evaluateJavaScript("window.Leaf.close(); document.querySelector('foliate-view') === null") as? Bool
+        XCTAssertEqual(closed, true, "Selection notifications must not interrupt releasing a book after its message handler is removed")
+    }
     func testClosingReaderReleasesNativeWebView() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         let model = try show(book, url: url)
@@ -251,6 +260,11 @@ final class ReaderEngineTests: XCTestCase {
         let selection = try XCTUnwrap(selectedSnapshot)
         XCTAssertEqual(selection.source, "selection")
         XCTAssertEqual(selection.text, selected)
+        try await waitUntil { model.selectedReadingContext()?.text == selected }
+        model.askAboutSelection(.explain, context: try XCTUnwrap(model.selectedReadingContext()))
+        _ = try await web.evaluateJavaScript("document.querySelector('foliate-view').renderer.getContents()[0].doc.getSelection().removeAllRanges()")
+        try await waitUntil { model.selectedReadingContext() == nil }
+        XCTAssertEqual(model.selectionRequest?.context.text, selected, "The menu action keeps a stable selection snapshot")
         XCTAssertEqual(model.locator, location)
     }
     func testPDFChatContextUsesCurrentPageAndSelection() async throws {
@@ -270,6 +284,9 @@ final class ReaderEngineTests: XCTestCase {
         let selection = try XCTUnwrap(selectedSnapshot)
         XCTAssertEqual(selection.source, "selection")
         XCTAssertFalse(selection.isEmpty)
+        XCTAssertEqual(model.selectedReadingContext()?.text, selection.text)
+        view.clearSelection()
+        XCTAssertNil(model.selectedReadingContext())
     }
     func testPageTurnsAnimateAndCancelledSwipesKeepThePassage() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)

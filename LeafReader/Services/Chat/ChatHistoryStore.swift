@@ -9,13 +9,20 @@ struct ChatHistoryPage {
     var hasNewer = false
 }
 
+enum ChatDraftSelectionUpdate { case unchanged, set(ReadingChatContext?) }
+
 @MainActor
 protocol ChatHistoryStorage {
     func page(before: Int64?, after: Int64?, limit: Int) throws -> ChatHistoryPage
-    func save(_ messages: [ReaderChatMessage], draft: String?) throws
+    func save(_ messages: [ReaderChatMessage], draft: String?, selection: ChatDraftSelectionUpdate) throws
     func loadDraft() throws -> String
+    func loadSelectedContext() throws -> ReadingChatContext?
     func remove(_ messageID: UUID) throws
     func clear() throws
+}
+
+extension ChatHistoryStorage {
+    func save(_ messages: [ReaderChatMessage], draft: String?) throws { try save(messages, draft: draft, selection: .unchanged) }
 }
 
 enum ChatHistoryError: LocalizedError {
@@ -55,6 +62,7 @@ final class ChatHistoryStore: ChatHistoryStorage {
                     UNIQUE(conversation, id));
                 CREATE INDEX IF NOT EXISTS conversation_sequence ON messages(conversation, sequence);
                 CREATE TABLE IF NOT EXISTS drafts (conversation TEXT PRIMARY KEY NOT NULL, payload BLOB NOT NULL);
+                CREATE TABLE IF NOT EXISTS selected_drafts (conversation TEXT PRIMARY KEY NOT NULL, payload BLOB NOT NULL);
                 """)
         } catch {
             sqlite3_close(database); database = nil
@@ -101,8 +109,26 @@ final class ChatHistoryStore: ChatHistoryStorage {
               let value = String(data: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0))), encoding: .utf8) else { throw ChatHistoryError.unreadable }
         return value
     }
-    func save(_ messages: [ReaderChatMessage], draft: String?) throws {
+    func loadSelectedContext() throws -> ReadingChatContext? {
+        let statement = try prepare("SELECT payload FROM selected_drafts WHERE conversation = ?")
+        defer { sqlite3_finalize(statement) }
+        bind(conversation, to: statement, at: 1)
+        let result = sqlite3_step(statement)
+        if result == SQLITE_DONE { return nil }
+        guard result == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0),
+              let context = try? JSONDecoder().decode(ReadingChatContext.self,
+                from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))) else { throw ChatHistoryError.unreadable }
+        return context.bounded()
+    }
+    func save(_ messages: [ReaderChatMessage], draft: String?, selection: ChatDraftSelectionUpdate = .unchanged) throws {
         try transaction {
+            if case .set(let context) = selection {
+                let statement = try prepare(context == nil ? "DELETE FROM selected_drafts WHERE conversation = ?" : "INSERT INTO selected_drafts(conversation, payload) VALUES(?, ?) ON CONFLICT(conversation) DO UPDATE SET payload=excluded.payload")
+                defer { sqlite3_finalize(statement) }
+                bind(conversation, to: statement, at: 1)
+                if let context { try bind(JSONEncoder().encode(context.bounded()), to: statement, at: 2) }
+                guard sqlite3_step(statement) == SQLITE_DONE else { throw ChatHistoryError.write }
+            }
             for message in messages {
                 let statement = try prepare("INSERT INTO messages(conversation, id, payload) VALUES(?, ?, ?) ON CONFLICT(conversation, id) DO UPDATE SET payload=excluded.payload")
                 defer { sqlite3_finalize(statement) }
@@ -127,7 +153,7 @@ final class ChatHistoryStore: ChatHistoryStorage {
     }
     func clear() throws {
         try transaction {
-            for table in ["messages", "drafts"] {
+            for table in ["messages", "drafts", "selected_drafts"] {
                 let statement = try prepare("DELETE FROM \(table) WHERE conversation = ?")
                 defer { sqlite3_finalize(statement) }
                 bind(conversation, to: statement, at: 1)
