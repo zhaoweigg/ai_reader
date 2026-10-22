@@ -14,10 +14,10 @@ struct AddBooksView: View {
                 Group {
                     Button(action: openFiles) {
                         source("From Files", subtitle:"On your iPhone, iCloud Drive & more", icon:"folder")
-                    }.accessibilityIdentifier("addFromFiles")
-                    NavigationLink(value:"zlibrary") {
+                    }.buttonStyle(.plain).accessibilityIdentifier("addFromFiles")
+                    Button { path.append("zlibrary") } label: {
                         source("Z-Library",subtitle:"Search books or browse the most popular",icon:"book")
-                    }.accessibilityIdentifier("addFromZLibrary")
+                    }.buttonStyle(.plain).accessibilityIdentifier("addFromZLibrary")
                     Section { Text("Books you add are saved on this device for offline reading.").font(.footnote).foregroundStyle(.secondary) }
                 }.listRowBackground(theme.surface)
             }.leafFormStyle()
@@ -33,7 +33,9 @@ struct AddBooksView: View {
             Image(systemName:icon).font(.title2).foregroundStyle(theme.accent).frame(width:46,height:46)
                 .background(theme.accent.opacity(0.1),in:.rect(cornerRadius:13))
             VStack(alignment:.leading,spacing:4) { Text(title).font(.headline).foregroundStyle(.primary);Text(subtitle).font(.caption).foregroundStyle(.secondary) }
-        }.padding(.vertical,8)
+            Spacer(minLength:8)
+            Image(systemName:"chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary).accessibilityHidden(true)
+        }.padding(.vertical,8).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
     }
 }
 
