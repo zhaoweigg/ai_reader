@@ -448,6 +448,9 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertTrue(store.searchLimitReached);XCTAssertFalse(store.canLoadMore)
         await store.search(" \n")
         XCTAssertEqual(store.activeQuery,"");XCTAssertFalse(store.searchLimitReached);XCTAssertFalse(store.canLoadMore)
+        await store.search("broad query")
+        XCTAssertEqual(store.books.count, 300); XCTAssertTrue(store.searchLimitReached)
+        XCTAssertFalse(store.canLoadMore); XCTAssertEqual(client.searchCalls.count, 10)
     }
     func testSearchRefreshReconnectAndFailureKeepTheSubmittedQuery() async throws {
         let client = CatalogService(), (store,_,_) = store(client)
@@ -656,6 +659,17 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertNil(store.error); XCTAssertTrue(store.showingSavedResults)
         client.popularError = nil; await store.reload()
         XCTAssertEqual(client.popularSessions.count, 3); XCTAssertFalse(store.showingSavedResults)
+    }
+    func testResolvedDetailsSurviveReturningToSavedSearch() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let sparse = ZLibraryBook(remoteID: book.remoteID, hash: book.hash, title: book.title, author: "", fileExtension: "", size: "", language: "", year: "", coverURL: nil)
+        client.searchHandler = { _, _ in ZLibrarySearchPage(books: [sparse], hasMore: false) }
+        client.detailHandler = { [self] _ in book }
+        await store.search("sparse")
+        let resolved = try await store.details(sparse); XCTAssertEqual(resolved, book)
+        await store.loadPopular(); await store.search("sparse")
+        XCTAssertEqual(store.books, [book]); XCTAssertEqual(client.detailCalls, 1)
+        XCTAssertEqual(client.searchCalls.count, 1)
     }
     func testLiveShapedPOSTAccessCheckMakesOnlyOneRequestAndPreservesAccount() async throws {
         let transport = CatalogTransport { [self] request, _ in
@@ -964,7 +978,7 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertEqual(refreshed.websiteCookies?.first?.value,"fresh")
         let expired = ZLibraryRequestFailure(issue:.signInRequired,diagnostic:"GET /eapi/book/most-popular · HTTP 401 · JSON/API response")
         client.popularError = expired
-        await store.loadPopular()
+        await store.reload() // Explicit refresh, rather than restoring navigation state.
         XCTAssertFalse(store.connected);XCTAssertFalse(store.websiteAccessNeeded)
     }
     func testAnonymousFeedFailureCannotUndoACompletedSignIn() async throws {

@@ -337,6 +337,7 @@ final class ZLibraryUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
     @MainActor func testRepeatedSearchPopularNavigationReusesResultsAndRefreshShowsAccessCheck() {
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_REPEAT_GUARD": "1"]
@@ -348,7 +349,9 @@ final class ZLibraryUITests: XCTestCase {
                 waitForExpectations(timeout: 10)
             }
             app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
-            XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout: 10))
+            let loaded = app.buttons["catalogBook-sample2"].waitForExistence(timeout: 10)
+            if !loaded { capture("Initial catalog failure"); print(app.debugDescription) }
+            XCTAssertTrue(loaded)
             for _ in 0..<5 {
                 search("books", app: app)
                 XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 5))
