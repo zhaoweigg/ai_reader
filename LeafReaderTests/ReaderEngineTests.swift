@@ -119,6 +119,29 @@ final class ReaderEngineTests: XCTestCase {
             reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
         }
     }
+    func testHeadingRangeCFIRestoresInBothFlows() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        // The first visible range starts at an element boundary, not a text offset.
+        let locator = "epubcfi(/6/2!/4,/2,/8/1:243)"
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, locator: locator, readerPreferences: prefs)
+            try await waitUntil { model.isReady || model.error != nil }
+            let state = try await model.webView?.evaluateJavaScript("""
+                JSON.stringify({ready:document.readyState,leaf:!!window.Leaf,
+                  view:!!document.querySelector('foliate-view'),
+                  contents:document.querySelector('foliate-view')?.renderer?.getContents()?.map(c=>({index:c.index,text:c.doc.body?.textContent.slice(0,100)})),
+                  visible:window.Leaf?.isLocationVisible('epubcfi(/6/2!/4,/2,/8/1:243)')})
+                """) as? String
+            let attachment = XCTAttachment(string: state ?? "No JavaScript state")
+            attachment.name = "Heading CFI restore scrolling=\(scrolling)"; attachment.lifetime = .keepAlways; add(attachment)
+            XCTAssertTrue(model.isReady, state ?? "")
+            XCTAssertNil(model.error)
+            let visible = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible('epubcfi(/6/2!/4,/2,/8/1:243)')") as? Bool
+            XCTAssertEqual(visible, true, state ?? "")
+            model.webView?.stopLoading(); window?.isHidden = true; window = nil
+        }
+    }
     func testFictionBookRenders() async throws {
         let (book, url) = try prepare("A Short History of Stars.fb2", format: .fb2)
         try await assertOpened(show(book, url: url), contains: "light")
@@ -528,6 +551,18 @@ final class ReaderEngineTests: XCTestCase {
             window.Leaf.applyPreferences({...base, scrolling:true}); await sleep(150);
             await view.goTo(1); await sleep(100);
             const renderer = view.renderer;
+            const waitForChapter = async index => {
+                const deadline = performance.now() + 8000;
+                while (performance.now() < deadline) {
+                    const content = renderer.getContents()[0];
+                    if (content?.index === index && content.doc?.readyState === 'complete'
+                        && view.lastLocation?.range?.startContainer.ownerDocument === content.doc) {
+                        await sleep(80); return;
+                    }
+                    await sleep(25);
+                }
+                throw new Error(`Chapter ${index} did not finish rendering`);
+            };
             const touch = (type,y) => {
                 const doc = renderer.getContents()[0].doc;
                 const event = new Event(type, {bubbles:true,cancelable:true});
@@ -541,14 +576,14 @@ final class ReaderEngineTests: XCTestCase {
                 container.scrollTop = end ? container.scrollHeight : 0;
             };
             edge(true); await sleep(100);
-            touch('touchstart',350); touch('touchmove',200); touch('touchend',200); await sleep(300);
+            touch('touchstart',350); touch('touchmove',200); touch('touchend',200); await waitForChapter(2);
             const next = renderer.getContents()[0].index;
             edge(false); await sleep(80);
-            touch('touchstart',200); touch('touchmove',350); touch('touchend',350); await sleep(300);
+            touch('touchstart',200); touch('touchmove',350); touch('touchend',350); await waitForChapter(1);
             const previous = renderer.getContents()[0].index;
             await view.goTo(1); edge(false); await sleep(100);
             touch('touchstart',350); touch('touchmove',200); touch('touchend',200);
-            edge(true); await sleep(300); // A flick reaches the edge after the finger lifts.
+            edge(true); await waitForChapter(2); // A flick reaches the edge after the finger lifts.
             const momentumNext = renderer.getContents()[0].index;
             await view.goTo(0); edge(false); await sleep(100);
             touch('touchstart',200); touch('touchmove',350); touch('touchend',350); await sleep(100);
