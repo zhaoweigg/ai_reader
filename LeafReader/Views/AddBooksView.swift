@@ -64,7 +64,7 @@ struct ZLibraryView: View {
                     Button("Search", action: submitSearch)
                         .font(.subheadline.weight(.semibold)).disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("zlibrarySubmitSearch")
-                }.padding(14).frame(minHeight: 48).background(.background, in: .rect(cornerRadius: 14))
+                }.padding(14).frame(minHeight: 48).background(theme.surface, in: .rect(cornerRadius: 14))
                 HStack(alignment:.firstTextBaseline) {
                     Text(catalog.activeQuery.isEmpty ? "Most popular" : "Search results").font(.system(size:32,weight:.regular,design:.serif))
                     Spacer()

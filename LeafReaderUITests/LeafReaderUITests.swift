@@ -37,8 +37,8 @@ final class LeafReaderUITests: XCTestCase {
         if !app.buttons["closeBook"].exists {
             let surface = readingSurface(app)
             surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-            // WebKit can consume a setup tap while clearing selection/focus after rotation.
-            // Keep a snapshot of that state; direct immersive-tap assertions remain single taps.
+            // Native setup taps can be consumed after rotation. Record the state before
+            // one bounded retry; direct immersive-tap assertions remain single taps.
             if !app.buttons["closeBook"].waitForExistence(timeout: 2) {
                 capture("Reader controls setup tap retry", app: app)
                 surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
