@@ -4,6 +4,7 @@ import Foundation
 final class ReaderChatSession: ObservableObject {
     @Published private(set) var messages: [ReaderChatMessage] = []
     @Published var draft = "" { didSet { if !restoring { draftDirty = true; scheduleCheckpoint() } } }
+    @Published private(set) var selectedContext: ReadingChatContext?
     @Published private(set) var isSending = false
     @Published private(set) var error: String?
     @Published private(set) var notice: String?
@@ -17,6 +18,7 @@ final class ReaderChatSession: ObservableObject {
     private var newest: Int64?
     private var restoring = false
     private var draftDirty = false
+    private var selectionDirty = false
     private var pendingMessageIDs = Set<UUID>()
     private var checkpoint: Task<Void, Never>?
     private var generation = UUID()
@@ -27,7 +29,7 @@ final class ReaderChatSession: ObservableObject {
     init(history: (any ChatHistoryStorage)? = nil) {
         self.history = history; historyRequired = history != nil
         if let history {
-            do { draft = try history.loadDraft(); apply(try history.page(before: nil, after: nil, limit: 24)); restoredNotice() }
+            do { draft = try history.loadDraft(); selectedContext = try history.loadSelectedContext(); apply(try history.page(before: nil, after: nil, limit: 24)); restoredNotice() }
             catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription }
         }
     }
@@ -57,20 +59,20 @@ final class ReaderChatSession: ObservableObject {
     private func setSavedDraft(_ value: String) {
         restoring = true; draft = value; restoring = false; draftDirty = false
     }
-    private func save(_ values: [ReaderChatMessage], draft: String? = nil) -> Bool {
+    private func save(_ values: [ReaderChatMessage], draft: String? = nil, selection: ChatDraftSelectionUpdate = .unchanged) -> Bool {
         guard historyReadable else { return false }
         guard let history else { return !historyRequired }
-        do { try history.save(values, draft: draft); historyError = nil; return true }
+        do { try history.save(values, draft: draft, selection: selection); historyError = nil; return true }
         catch { historyError = ChatHistoryError.write.localizedDescription; return false }
     }
     @discardableResult func flush() -> Bool {
         checkpoint?.cancel(); checkpoint = nil
         guard historyReadable, history != nil || !historyRequired else { return false }
-        guard !pendingMessageIDs.isEmpty || draftDirty else {
+        guard !pendingMessageIDs.isEmpty || draftDirty || selectionDirty else {
             return historyError == nil || save([], draft: draft)
         }
-        guard save(messages.filter { pendingMessageIDs.contains($0.id) }, draft: draftDirty ? draft : nil) else { return false }
-        pendingMessageIDs = []; draftDirty = false
+        guard save(messages.filter { pendingMessageIDs.contains($0.id) }, draft: draftDirty ? draft : nil, selection: selectionDirty ? .set(selectedContext) : .unchanged) else { return false }
+        pendingMessageIDs = []; draftDirty = false; selectionDirty = false
         return true
     }
     private func changed(_ message: ReaderChatMessage) {
@@ -92,6 +94,14 @@ final class ReaderChatSession: ObservableObject {
         catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription }
     }
 
+    func attachSelection(_ context: ReadingChatContext, prompt: String = "") {
+        guard !context.isEmpty else { return }
+        selectedContext = context.bounded(); selectionDirty = true
+        if !prompt.isEmpty { draft = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? prompt : draft + "\n\n" + prompt }
+        flush()
+    }
+    func removeSelection() { selectedContext = nil; selectionDirty = true; flush() }
+
     func send(settings: AISettingsStore, context: @escaping @MainActor () async throws -> ReadingChatContext?) {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isSending, !question.isEmpty else { return }
@@ -101,18 +111,26 @@ final class ReaderChatSession: ObservableObject {
         do { provider = try settings.provider() }
         catch { self.error = error.localizedDescription; return }
         let sharePage = settings.configuration.sharePage
+        let selected = selectedContext
         if hasNewerMessages { loadLatest(); guard historyError == nil else { return } }
         start { [weak self] token in
             guard let self else { return }
             do {
-                let snapshot = sharePage ? try await context()?.bounded() : nil
+                var snapshot: ReadingChatContext?
+                if sharePage {
+                    if let selected { snapshot = selected }
+                    else { snapshot = try await context()?.bounded() }
+                }
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
                 let message = ReaderChatMessage(isUser: true, text: question, context: snapshot)
                 let nextDraft = self.draft.trimmingCharacters(in: .whitespacesAndNewlines) == question ? "" : self.draft
-                guard self.save([message], draft: nextDraft) else { self.isSending = false; self.task = nil; return }
+                let nextSelection = self.selectedContext == selected ? nil : self.selectedContext
+                guard self.save([message], draft: nextDraft, selection: .set(nextSelection)) else { self.isSending = false; self.task = nil; return }
                 self.messages.append(message)
                 self.setSavedDraft(nextDraft)
+                self.selectedContext = nextSelection; self.selectionDirty = false
+                if !sharePage && selected != nil { self.notice = "Selected text was not sent because passage sharing is off." }
                 if sharePage && (snapshot?.isEmpty ?? true) { self.notice = "No readable page text was found. This question is sent without a passage; you can paste one yourself." }
                 await self.respond(provider: provider, token: token, sharePage: sharePage)
             } catch {
@@ -145,7 +163,7 @@ final class ReaderChatSession: ObservableObject {
         guard history != nil || !historyRequired else { return }
         do {
             try history?.clear()
-            pendingMessageIDs = []; setSavedDraft("")
+            pendingMessageIDs = []; setSavedDraft(""); selectedContext = nil; selectionDirty = false
             messages = []; error = nil; notice = nil; historyReadable = true; historyError = nil
             oldest = nil; newest = nil; hasEarlierMessages = false; hasNewerMessages = false
         } catch { historyError = "The saved conversation could not be cleared. Your history has been kept. Try again." }

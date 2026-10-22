@@ -16,6 +16,8 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var isSearching = false
     @Published var hasSearched = false
     @Published var controlsVisible = false
+    @Published var selectionRequest: ReaderSelectionRequest?
+    private var selectedWebText = ""
     @Published private(set) var reloadID = UUID()
     let bookID: UUID
     let library: LibraryStore
@@ -50,7 +52,7 @@ final class ReaderModel: NSObject, ObservableObject {
     var positionLabel: String { "\(Int(fraction * 100))%" }
     func reload() {
         library.flush()
-        error = nil; isReady = false; isSearching = false
+        error = nil; isReady = false; isSearching = false; selectedWebText = ""
         searchGeneration = UUID().uuidString
         searchResults = []; hasSearched = false
         reloadID = UUID()
@@ -87,6 +89,21 @@ final class ReaderModel: NSObject, ObservableObject {
         }
         return ReadingChatContext(title: title, author: author, chapter: chapter, text: text,
                                   source: source, locator: location).bounded()
+    }
+    func selectedReadingContext() -> ReadingChatContext? {
+        let text = pdfView?.currentSelection?.string ?? selectedWebText
+        guard isReady, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return ReadingChatContext(title: book?.title ?? "", author: book?.author ?? "", chapter: chapterTitle,
+                                  text: text, source: "selection", locator: locator).bounded()
+    }
+    func askAboutSelection(_ intent: ReaderSelectionIntent, context: ReadingChatContext) {
+        guard !context.isEmpty else { return }
+        selectionRequest = ReaderSelectionRequest(intent: intent, context: context.bounded())
+        pdfView?.clearSelection()
+        pdfView?.endEditing(true)
+        if let webView {
+            webView.evaluateJavaScript("window.Leaf.clearSelection()") { [weak webView] _, _ in webView?.endEditing(true) }
+        }
     }
     func toggleControls() {
         guard isReady, !isLocked, error == nil else { return }
@@ -145,6 +162,7 @@ final class ReaderModel: NSObject, ObservableObject {
     func receive(_ message: [String: Any]) {
         guard let type = message["type"] as? String else { return }
         switch type {
+        case "selection": selectedWebText = String((message["text"] as? String ?? "").prefix(12000))
         case "toggleControls": toggleControls()
         case "readingActivity": hideControls()
         case "bridgeReady": openWebBook()

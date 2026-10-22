@@ -29,7 +29,9 @@ struct WebBookSurface: UIViewRepresentable {
         guard let assets = Bundle.main.url(forResource: "Reader", withExtension: nil), let format = model.book?.format else { return WKWebView() }
         configuration.setURLSchemeHandler(ReaderAssetHandler(bookURL: url, format: format, assets: assets), forURLScheme: "leaf-reader")
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = ReaderWebView(frame: .zero, configuration: configuration)
+        view.selectionContext = { [weak model] in model?.selectedReadingContext() }
+        view.onSelectionAction = { [weak model] intent, snapshot in model?.askAboutSelection(intent, context: snapshot) }
         view.isOpaque = false
         view.backgroundColor = UIColor(preferences.theme.background)
         view.clipsToBounds = true
@@ -56,6 +58,8 @@ struct WebBookSurface: UIViewRepresentable {
         view.navigationDelegate = nil
         view.scrollView.delegate = nil
         coordinator.onReaderTap = nil
+        (view as? ReaderWebView)?.selectionContext = nil
+        (view as? ReaderWebView)?.onSelectionAction = nil
         if coordinator.model.webView === view { coordinator.model.webView = nil }
         view.stopLoading()
         view.evaluateJavaScript("window.Leaf?.close()") { [weak view] _, _ in
@@ -105,7 +109,9 @@ struct PDFBookSurface: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(model) }
     func makeUIView(context: Context) -> PDFView {
         context.coordinator.onReaderTap = onReaderTap
-        let view = PDFView()
+        let view = ReaderPDFView()
+        view.selectionContext = { [weak model] in model?.selectedReadingContext() }
+        view.onSelectionAction = { [weak model] intent, snapshot in model?.askAboutSelection(intent, context: snapshot) }
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
@@ -122,6 +128,8 @@ struct PDFBookSurface: UIViewRepresentable {
     }
     static func dismantleUIView(_ view: PDFView, coordinator: Coordinator) {
         coordinator.onReaderTap = nil
+        (view as? ReaderPDFView)?.selectionContext = nil
+        (view as? ReaderPDFView)?.onSelectionAction = nil
         view.document = nil
         if coordinator.model.pdfView === view { coordinator.model.pdfView = nil }
     }

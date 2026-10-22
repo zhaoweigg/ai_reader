@@ -40,6 +40,7 @@ WebKit can terminate its separate renderer for reasons it does not disclose to L
 - Table of contents, page turning/swiping, progress seeking, and full-book text search (up to 200 results).
 - Fullscreen reading with a center tap to reveal controls; page-edge taps and swipes return to uninterrupted reading.
 - Translucent floating Ask Leaf chat with streaming AI replies, page/selection context, Stop, and Retry.
+- Select text and choose **Ask Leaf → Ask a question / Explain selection / Summarize selection** in the native edit menu. A removable quote is attached before the keyboard opens; actions prepare an editable draft and send only when you choose Send. Unsent quotes and drafts persist per book, and passage sharing settings still apply.
 - Swappable Anthropic and Chat Completions providers, editable model IDs/endpoints, and device-only Keychain credentials.
 - Persistent reading positions and per-book bookmarks, including a library-wide bookmarks tab.
 - Day, paper, and night themes; three typefaces; adjustable font size, line and paragraph spacing, and page margins; paginated or vertical flow.
