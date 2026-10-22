@@ -185,4 +185,29 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout:5))
         XCTAssertFalse(app.staticTexts["Could not search books"].exists)
     }
+    @MainActor func testCatalogAndConnectionUseTheSelectedAppTheme() {
+        let app = launch()
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["Dusk theme"].tap()
+        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["importBooks"].tap()
+        app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+        capture("Dusk catalog")
+        let search = app.textFields["zlibrarySearchField"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap(); search.typeText("stars")
+        app.buttons["zlibrarySubmitSearch"].tap()
+        XCTAssertTrue(app.staticTexts["Search results"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 5))
+        capture("Dusk catalog search results")
+        app.buttons["catalogBook-sample"].tap()
+        XCTAssertTrue(app.buttons["catalogAddBook"].waitForExistence(timeout: 5))
+        capture("Dusk book details and filled action")
+        app.buttons["catalogAddBook"].tap()
+        XCTAssertTrue(app.textFields["zlibraryAddress"].waitForExistence(timeout: 5))
+        capture("Dusk catalog connection")
+    }
+
 }

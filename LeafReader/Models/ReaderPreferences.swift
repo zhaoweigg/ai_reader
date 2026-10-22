@@ -1,17 +1,98 @@
 import SwiftUI
 
+/// Stable raw values keep existing reading preferences compatible with app-wide themes.
 enum ReadingTheme: String, CaseIterable, Identifiable {
-    case day, paper, night
+    case day, paper, night, sepia, sage, dusk
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
+    var detail: String {
+        switch self {
+        case .day: return "Crisp white, clear ink."
+        case .paper: return "A warm page for unhurried reading."
+        case .night: return "Soft ink on deep blue."
+        case .sepia: return "Warm brown ink on a mellow page."
+        case .sage: return "A quiet green with a gentle contrast."
+        case .dusk: return "Cool gray for the end of the day."
+        }
+    }
+    var isDark: Bool { self == .night || self == .dusk }
+    var colorScheme: ColorScheme { isDark ? .dark : .light }
     var backgroundHex: String {
-        switch self { case .day: return "#FFFFFF"; case .paper: return "#F4EDDD"; case .night: return "#17232E" }
+        switch self {
+        case .day: return "#FFFFFF"
+        case .paper: return "#F4EDDD"
+        case .night: return "#17232E"
+        case .sepia: return "#EBD9BB"
+        case .sage: return "#E5EEE7"
+        case .dusk: return "#242633"
+        }
     }
     var foregroundHex: String {
-        switch self { case .day: return "#263440"; case .paper: return "#493F30"; case .night: return "#D7DEE4" }
+        switch self {
+        case .day: return "#263440"
+        case .paper: return "#493F30"
+        case .night: return "#D7DEE4"
+        case .sepia: return "#493522"
+        case .sage: return "#283E33"
+        case .dusk: return "#E0DFEC"
+        }
+    }
+    var canvasHex: String {
+        switch self {
+        case .day: return "#F2F4F5"
+        case .paper: return "#EDE5D5"
+        case .night: return "#111B24"
+        case .sepia: return "#E2CDAA"
+        case .sage: return "#D8E4DC"
+        case .dusk: return "#1B1D28"
+        }
+    }
+    var accentHex: String {
+        switch self {
+        case .day, .paper: return "#24776A"
+        case .night: return "#93CABB"
+        case .sepia: return "#785033"
+        case .sage: return "#326C57"
+        case .dusk: return "#B2BCEB"
+        }
+    }
+    var featuredHex: String {
+        switch self {
+        case .day: return "#203C4D"
+        case .paper: return "#414D43"
+        case .night: return "#283F4C"
+        case .sepia: return "#59432F"
+        case .sage: return "#2D4D3D"
+        case .dusk: return "#3B3F60"
+        }
     }
     var background: Color { Color(hex: backgroundHex) }
     var foreground: Color { Color(hex: foregroundHex) }
+    var canvas: Color { Color(hex: canvasHex) }
+    var surface: Color { background }
+    var accent: Color { Color(hex: accentHex) }
+    var onAccent: Color { isDark ? canvas : .white }
+    var featured: Color { Color(hex: featuredHex) }
+}
+
+private struct LeafThemeKey: EnvironmentKey {
+    static let defaultValue = ReadingTheme.day
+}
+extension EnvironmentValues {
+    var leafTheme: ReadingTheme {
+        get { self[LeafThemeKey.self] }
+        set { self[LeafThemeKey.self] = newValue }
+    }
+}
+
+private struct LeafFormStyle: ViewModifier {
+    @Environment(\.leafTheme) private var theme
+    func body(content: Content) -> some View {
+        content.scrollContentBackground(.hidden).background(theme.canvas)
+    }
+}
+extension View {
+    func leafFormStyle() -> some View { modifier(LeafFormStyle()) }
 }
 
 struct ReaderPreferences: Equatable {
@@ -26,6 +107,7 @@ struct ReaderPreferences: Equatable {
     var payload: [String: Any] {
         ["fontSize": fontSize, "lineHeight": lineHeight, "font": font,
          "background": theme.backgroundHex, "foreground": theme.foregroundHex, "scrolling": scrolling,
+         "colorScheme": theme.isDark ? "dark" : "light", "accent": theme.accentHex,
          "horizontalMargin": horizontalMargin, "verticalMargin": verticalMargin, "paragraphSpacing": paragraphSpacing]
     }
 }

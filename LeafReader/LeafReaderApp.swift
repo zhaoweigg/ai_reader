@@ -54,6 +54,8 @@ struct ReadingDestination: Identifiable {
 }
 
 struct AppView: View {
+    @AppStorage("reader.theme") private var themeName = ReadingTheme.day.rawValue
+    private var theme: ReadingTheme { ReadingTheme(rawValue: themeName) ?? .day }
     @EnvironmentObject private var library: LibraryStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
@@ -73,7 +75,7 @@ struct AppView: View {
         }
         .sheet(isPresented: $addingBooks, onDismiss: {
             if pickFilesAfterDismiss { pickFilesAfterDismiss = false; importing = true }
-        }) { AddBooksView(openFiles: { pickFilesAfterDismiss = true; addingBooks = false }) }
+        }) { AddBooksView(openFiles: { pickFilesAfterDismiss = true; addingBooks = false }).environment(\.leafTheme, theme).tint(theme.accent) }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): enqueue(urls)
@@ -83,11 +85,15 @@ struct AppView: View {
         .onOpenURL { enqueue([$0]) }
         .task { await library.refreshMissingMetadata() }
         .fullScreenCover(item: $destination, onDismiss: { library.flush() }) { target in
-            ReaderView(bookID: target.id, initialLocator: target.locator).environmentObject(library)
+            ReaderView(bookID: target.id, initialLocator: target.locator).environmentObject(library).environment(\.leafTheme, theme)
         }
         .alert(item: $library.notice) { Alert(title: Text($0.title), message: Text($0.message), dismissButton: .default(Text("OK"))) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { library.flush() } }
         .onChange(of: library.isImporting) { _, busy in if !busy { processQueue() } }
+        .environment(\.leafTheme, theme)
+        .preferredColorScheme(theme.colorScheme)
+        .tint(theme.accent)
+        .toolbarBackground(theme.canvas, for: .tabBar)
     }
     private func enqueue(_ urls: [URL]) { pendingURLs.append(contentsOf: urls); processQueue() }
     private func processQueue() {
