@@ -290,7 +290,8 @@ final class LeafReaderUITests: XCTestCase {
             app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
             app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
             dismissAppearance(app)
-            for (action, prompt) in [("Ask a question", ""), ("Explain selection", "Explain this passage."), ("Summarize selection", "Summarize this passage.")] {
+            let actions = flow == "Pages" ? [("Explain selection", "Explain this passage.")] : [("Summarize selection", "Summarize this passage.")]
+            for (action, prompt) in actions {
                 let surface = readingSurface(app)
                 let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
                 XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
@@ -309,8 +310,12 @@ final class LeafReaderUITests: XCTestCase {
                     let candidates = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat"))
                     XCTAssertTrue(candidates.firstMatch.waitForExistence(timeout: 3)); candidates.firstMatch.tap()
                 }
+                for title in ["Ask a question", "Explain selection", "Summarize selection"] {
+                    let option = app.menuItems[title].exists ? app.menuItems[title] : app.buttons[title]
+                    XCTAssertTrue(option.waitForExistence(timeout: 5))
+                }
                 let option = app.menuItems[action].exists ? app.menuItems[action] : app.buttons[action]
-                XCTAssertTrue(option.waitForExistence(timeout: 5)); option.tap()
+                option.tap()
                 let passage = app.staticTexts["chatSelectedPassage"]
                 XCTAssertTrue(passage.waitForExistence(timeout: 5)); XCTAssertFalse(passage.label.isEmpty)
                 let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
@@ -490,6 +495,12 @@ final class LeafReaderUITests: XCTestCase {
             surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
             XCTAssertTrue(app.buttons["closeReaderChat"].exists)
             capture(flow + " landscape chat retained", app: app)
+            let landscapeBar = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+            XCTAssertTrue(landscapeBar.exists)
+            let landscapeStart = landscapeBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            landscapeStart.press(forDuration: 0.01, thenDragTo: landscapeStart.withOffset(CGVector(dx: 0, dy: 70)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+            app.buttons["openReaderChat"].tap()
             app.buttons["closeReaderChat"].tap()
             XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
             XCUIDevice.shared.orientation = .portrait

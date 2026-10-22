@@ -56,14 +56,12 @@ struct ReaderChatPanel: View {
     }
     private func content(compact: Bool) -> some View {
         VStack(spacing: compact ? 4 : 8) {
-            if !compact {
-                Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
-                    .frame(maxWidth: .infinity).frame(height: 16)
-                    .contentShape(Rectangle()).gesture(dismissDrag)
-                    .accessibilityElement().accessibilityLabel("Chat drag handle")
-                    .accessibilityIdentifier("readerChatDragHandle")
-                    .accessibilityAction(named: "Close chat", close)
-            }
+            Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
+                .frame(maxWidth: .infinity).frame(height: compact ? 6 : 16)
+                .contentShape(Rectangle()).gesture(dismissDrag)
+                .accessibilityElement().accessibilityLabel("Chat drag handle")
+                .accessibilityIdentifier("readerChatDragHandle")
+                .accessibilityAction(named: "Close chat", close)
             HStack(spacing: 8) {
                 Image(systemName: "leaf.fill").foregroundStyle(accent)
                 if compact, let selection = session.selectedContext {
@@ -214,7 +212,7 @@ struct ReaderChatPanel: View {
             .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 28))
             .overlay(RoundedRectangle(cornerRadius: 28).stroke(.secondary.opacity(0.3), lineWidth: 0.75))
         }
-        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
+        .padding(.horizontal, 16).padding(.vertical, compact ? 4 : 8)
         .foregroundStyle(.primary).tint(accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
         .accessibilityAction(.escape, close)
