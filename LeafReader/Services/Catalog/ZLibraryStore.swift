@@ -335,6 +335,13 @@ struct UITestZLibraryClient: ZLibraryServing {
         if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_FEED_FAILURE"] == "1", session != nil {
             throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
         }
+        if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_POPULAR_REDIRECT"] == "1", session != nil {
+            let transport = UITestPopularRedirectTransport()
+            return try await ZLibraryClient(transport: transport).popular(origin: origin, session: session)
+        }
+        return sampleBooks()
+    }
+    private func sampleBooks() -> [ZLibraryBook] {
         let sparse = ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_DETAILS"] != nil
         return [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:sparse ? "" : "epub",size:sparse ? "" : "1.8 MB",language:sparse ? "" : "English",year:sparse ? "" : "2026",coverURL:nil,rating:4.6,ratingCount:52,qualityScore:4.2),
          ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"2.4 MB",language:"English",year:"2026",coverURL:nil)]
@@ -343,7 +350,7 @@ struct UITestZLibraryClient: ZLibraryServing {
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
         if query.lowercased() == "unavailable" { throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "POST /eapi/book/search · HTTP 200 · HTML instead of JSON") }
         if query.lowercased() == "no matches" { return ZLibrarySearchPage(books: [], hasMore: false) }
-        var sample = try await popular(origin: origin, session: session)
+        var sample = sampleBooks()
         if [.titleAscending, .recentlyAdded, .fileSizeDescending].contains(order) { sample.reverse() }
         if page == 1 { return ZLibrarySearchPage(books: [sample[0]], hasMore: true) }
         return ZLibrarySearchPage(books: sample, hasMore: false)
@@ -355,4 +362,12 @@ struct UITestZLibraryClient: ZLibraryServing {
         try FileManager.default.copyItem(at:source,to:destination);progress(1);return destination
     }
 }
+private struct UITestPopularRedirectTransport: ZLibraryTransport {
+    func send(_ request: URLRequest, toFile: Bool, progress: @escaping @Sendable (Double?) -> Void) async throws -> ZLibraryPayload {
+        ZLibraryPayload(data: Data("<html>Fixture access check</html>".utf8), file: nil,
+            response: HTTPURLResponse(url: request.url!, statusCode: 307, httpVersion: nil,
+                headerFields: ["Location": request.url!.absoluteString, "Set-Cookie": "__diamwall=fixture-only; Path=/; Secure"])!)
+    }
+}
+
 #endif
