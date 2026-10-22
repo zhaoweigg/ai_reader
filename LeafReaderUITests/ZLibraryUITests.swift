@@ -95,8 +95,11 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(unrated.label.contains("No rating provided"))
         capture("Catalog metadata dark portrait")
         XCUIDevice.shared.orientation = .landscapeLeft
-        XCTAssertTrue(rated.waitForExistence(timeout:5));capture("Catalog metadata dark landscape")
+        XCTAssertTrue(rated.waitForExistence(timeout:5))
+        app.swipeUp()
+        capture("Catalog metadata dark landscape")
         XCUIDevice.shared.orientation = .portrait
+        app.swipeDown()
         search("The Art of Noticing",app:app)
         XCTAssertTrue(rated.waitForExistence(timeout:5));XCTAssertTrue(rated.label.contains("52 ratings"))
         capture("Search metadata dark portrait")

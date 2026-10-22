@@ -184,7 +184,7 @@ struct ZLibraryBookView: View {
                     Text("Ratings & reviews").font(.headline)
                     Label(book.ratingSummary,systemImage:book.rating == nil ? "star" : "star.fill").foregroundStyle(theme.accent)
                     if let quality = book.qualityScore {
-                        Label("File quality \(quality.formatted(.number.precision(.fractionLength(0...1))))",systemImage:"doc.badge.checkmark").font(.subheadline)
+                        Label("File quality \(quality.formatted(.number.precision(.fractionLength(0...1))))",systemImage:"checkmark.seal").font(.subheadline)
                     }
                     Text("Scores are supplied by Z-Library. Written reviews are not available through this connection.").font(.caption).foregroundStyle(.secondary)
                 }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(theme.surface,in:.rect(cornerRadius:18))
