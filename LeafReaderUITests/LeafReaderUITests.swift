@@ -466,6 +466,86 @@ final class LeafReaderUITests: XCTestCase {
     }
 
 
+    @MainActor func testSentQuotePersistsWithQuestionInPages() { verifySentQuote(flow: "Pages") }
+    @MainActor func testSentQuotePersistsWithQuestionInScroll() { verifySentQuote(flow: "Scroll") }
+    @MainActor func testSentQuotePersistsWithQuestionInPDF() { verifySentQuote(flow: "PDF") }
+
+    @MainActor private func verifySentQuote(flow: String) {
+        let app = launchApp()
+        defer { XCUIDevice.shared.orientation = .portrait }
+        func openBook() {
+            if flow == "PDF" {
+                let search = app.textFields["librarySearch"]
+                XCTAssertTrue(search.waitForExistence(timeout: 10))
+                if (search.value as? String) != "Coast" { search.tap(); search.typeText("Coast") }
+                app.buttons["book-Notes from the Coast"].tap()
+            } else { app.buttons["featuredBook"].tap() }
+            waitForBook(app)
+        }
+        openBook(); showReaderControls(app)
+        if flow == "PDF" { app.buttons["nextPage"].tap() }
+        else {
+            app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+            dismissAppearance(app); showReaderControls(app)
+        }
+        let surface = readingSurface(app)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", flow == "PDF" ? "Before the town" : "Attention is a way")).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
+        let point = paragraph.coordinate(withNormalizedOffset: CGVector(dx: flow == "PDF" ? 0.15 : 0.3, dy: flow == "PDF" ? 0.25 : 0.1))
+        for _ in 0..<2 {
+            point.press(forDuration: 1.2)
+            if app.menuItems["Copy"].waitForExistence(timeout: 2) || app.menuItems["Ask Leaf"].exists { break }
+            point.tap()
+        }
+        let ask = app.menuItems["Ask Leaf"].exists ? app.menuItems["Ask Leaf"] : app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 5)); ask.tap()
+        let draftQuote = app.staticTexts["chatSelectedPassage"]
+        XCTAssertTrue(draftQuote.waitForExistence(timeout: 5))
+        let selectedText = draftQuote.label
+        XCTAssertFalse(selectedText.isEmpty)
+        sendChatQuestion("What does this mean?", app: app)
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(draftQuote.exists, "Sending consumes the draft attachment")
+        let quote = app.buttons["toggleChatQuote"]
+        func revealQuote() {
+            let history = app.scrollViews["chatMessageHistory"].firstMatch
+            XCTAssertTrue(history.waitForExistence(timeout: 5))
+            for _ in 0..<4 where !quote.isHittable || quote.frame.minY < history.frame.minY { history.swipeDown() }
+            XCTAssertTrue(quote.isHittable)
+            XCTAssertGreaterThanOrEqual(quote.frame.minY, history.frame.minY - 1)
+            XCTAssertEqual(quote.value as? String, selectedText, "The sent message keeps the exact selected text")
+        }
+        revealQuote()
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+        XCTAssertEqual(quote.label, "Expand quoted text")
+        capture(flow + " sent question keeps quoted text", app: app)
+        quote.tap(); XCTAssertEqual(quote.label, "Collapse quoted text")
+        quote.tap(); XCTAssertEqual(quote.label, "Expand quoted text")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+        capture(flow + " landscape sent quote conversation retained", app: app)
+        XCUIDevice.shared.orientation = .portrait
+        expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
+        openBook(); app.buttons["openReaderChat"].tap(); revealQuote()
+        app.terminate(); app.launch()
+        openBook(); app.buttons["openReaderChat"].tap(); revealQuote()
+        capture(flow + " quoted text restored after relaunch", app: app)
+        app.buttons["chatOptions"].tap(); app.buttons["requestClearConversation"].tap()
+        app.buttons["confirmClearConversation"].firstMatch.tap()
+        XCTAssertFalse(quote.exists)
+    }
+
     @MainActor func testTranslucentChatLauncherInBothFlowsThemesAndRotation() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()
@@ -858,6 +938,7 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testChatHistoryAndDraftSurviveClosingBookAndRelaunch() {
         let app = launchApp(); openFeaturedChat(app)
         sendChatQuestion("Remember this question", app: app)
+        XCTAssertFalse(app.buttons["toggleChatQuote"].exists, "Automatic page context must not appear as a user-selected quote")
         expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
         waitForExpectations(timeout: 5)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
