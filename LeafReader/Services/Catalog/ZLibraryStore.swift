@@ -121,7 +121,7 @@ final class ZLibraryStore: ObservableObject {
         let context = trusted.filter { !["remix_userid", "remix_userkey"].contains($0.name) }.map {
             ZLibraryWebsiteCookie(name: $0.name, value: $0.value, path: $0.path, expires: $0.expiresDate)
         }.filter(\.valid)
-        let candidate = ZLibrarySession(userID: user.value, userKey: key.value, websiteCookies: context.sorted { ($0.name, $0.path) < ($1.name, $1.path) }, userAgent: websiteUserAgent ?? session?.userAgent)
+        let candidate = ZLibrarySession(userID: user.value, userKey: key.value, websiteCookies: context.isEmpty ? nil : context.sorted { ($0.name, $0.path) < ($1.name, $1.path) }, userAgent: websiteUserAgent ?? session?.userAgent)
         return candidate.valid ? candidate : nil
     }
     func captureWebsiteUserAgent(_ text: String) {
@@ -130,9 +130,9 @@ final class ZLibraryStore: ObservableObject {
     // Never adopt a different browser account without explicit Check connection.
     // Capture refreshed cookies even when the user simply closes the website.
     func saveWebsiteContext() async throws {
-        guard !seedingWebsite, let existing = session else { return }
+        guard !seedingWebsite, let existing = session, let data = signInData else { return }
         let token = generation, source = origin
-        let cookies = await websiteData.httpCookieStore.allCookies()
+        let cookies = await data.httpCookieStore.allCookies()
         try Task.checkCancellation()
         guard !seedingWebsite, token == generation, source == origin,
               let candidate = cookieCandidate(cookies),
@@ -147,7 +147,7 @@ final class ZLibraryStore: ObservableObject {
         seedingWebsite = true
         defer { seedingWebsite = false }
         let source = origin, data = websiteData, token = generation
-        websiteUserAgent = session.userAgent
+        websiteUserAgent = websiteUserAgent ?? session.userAgent
         let cookies = await data.httpCookieStore.allCookies()
         guard token == generation else { return }
         let browser = cookieCandidate(cookies)

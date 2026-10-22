@@ -693,6 +693,14 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertTrue(restored.connected); XCTAssertNil(restored.connectionError)
         XCTAssertEqual(client.popularSessions.last!, session)
     }
+    func testNewBrowserIdentityIsNotOverwrittenByOlderSavedSnapshotDuringReload() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let saved = ZLibrarySession(userID: "42", userKey: "key", userAgent: "Older browser")
+        _ = await store.connect(saved)
+        store.captureWebsiteUserAgent("Current browser")
+        await store.loadPopular()
+        XCTAssertEqual((client.popularSessions.last ?? nil)?.userAgent, "Current browser")
+    }
     func testFailedBrowserSnapshotPreservesSavedSessionForNextAttempt() async throws {
         let client = CatalogService(), (store, credentials, _) = store(client)
         _ = await store.connect(session)
