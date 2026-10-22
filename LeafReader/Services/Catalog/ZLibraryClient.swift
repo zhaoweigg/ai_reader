@@ -185,6 +185,7 @@ struct ZLibraryClient: ZLibraryServing {
             request.httpBody = Data(form.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: allowed)!)" }.joined(separator: "&").utf8)
         }
         let method = request.httpMethod ?? "GET"
+        let original = request.url
         var visited = Set([request.url!]), count = 0
         while true {
             try Task.checkCancellation()
@@ -201,10 +202,44 @@ struct ZLibraryClient: ZLibraryServing {
                     continue
                 }
             }
-            return try Self.decode(payload, path: path, method: method)
+            let redirect = (300...399).contains(payload.response.statusCode)
+                ? Self.redirectDiagnostic(payload, request: request, original: original, visited: visited, count: count)
+                : nil
+            return try Self.decode(payload, path: path, method: method, redirect: redirect)
         }
     }
-    private static func decode(_ payload: ZLibraryPayload, path: String, method: String) throws -> [String: Any] {
+    // Only fixed categories leave this function. Location, queries, cookie values,
+    // arbitrary server headers, and body text must never enter the diagnostic.
+    private static func redirectDiagnostic(_ payload: ZLibraryPayload, request: URLRequest, original: URL?, visited: Set<URL>, count: Int) -> String {
+        let location = payload.response.value(forHTTPHeaderField: "Location")
+        let target = location.flatMap { URL(string: $0, relativeTo: request.url)?.absoluteURL }
+        let reason: String
+        let destination: String
+        if location == nil {
+            reason = "missing Location"; destination = "missing"
+        } else if let target {
+            var next = request; next.url = target
+            if request.httpMethod != "GET", ![307, 308].contains(payload.response.statusCode) {
+                reason = "method change refused"
+            } else {
+                reason = ZLibraryHTTPTransport.redirectRejection(next, original: original, toFile: false, visited: visited, count: count)?.rawValue ?? "unresolved"
+            }
+            if target == request.url { destination = "same URL" }
+            else if target.scheme != "https" { destination = "non-HTTPS" }
+            else if target.host == original?.host && target.port == original?.port {
+                destination = target.path.hasPrefix("/eapi/") ? "same-origin API" : "same-origin website"
+            } else { destination = "different origin" }
+        } else {
+            reason = "invalid Location"; destination = "invalid"
+        }
+        let update = payload.response.value(forHTTPHeaderField: "Set-Cookie") == nil ? "absent" : "present"
+        let body = String(decoding: payload.data.prefix(4096), as: UTF8.self).lowercased()
+        let cookie = payload.response.value(forHTTPHeaderField: "Set-Cookie")?.lowercased() ?? ""
+        let marker = body.contains("diamwall") || cookie.contains("__diamwall=") ? "DiamWall" :
+            (body.contains("/cdn-cgi/challenge") || body.contains("__cf_chl") ? "Cloudflare" : "not identified")
+        return "Redirect target: \(destination) · reason: \(reason)\nRedirects followed: \(count)/3 · response cookie update: \(update) · access-check marker: \(marker)"
+    }
+    private static func decode(_ payload: ZLibraryPayload, path: String, method: String, redirect: String? = nil) throws -> [String: Any] {
         do { return try Self.decode(payload) }
         catch let issue as ZLibraryError {
             let status = payload.response.statusCode
@@ -212,7 +247,8 @@ struct ZLibraryClient: ZLibraryServing {
             if (300...399).contains(status) { kind = "redirect not followed" }
             else if payload.response.mimeType == "text/html" || String(decoding: payload.data.prefix(128), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") { kind = "HTML instead of JSON" }
             else { kind = "JSON/API response" }
-            throw ZLibraryRequestFailure(issue: issue, diagnostic: "\(method) /eapi/\(path) · HTTP \(status) · \(kind)")
+            let summary = "\(method) /eapi/\(path) · HTTP \(status) · \(kind)"
+            throw ZLibraryRequestFailure(issue: issue, diagnostic: summary + (redirect.map { "\n" + $0 } ?? ""))
         }
     }
     static func decode(_ payload: ZLibraryPayload) throws -> [String: Any] {
@@ -361,23 +397,46 @@ struct ZLibraryClient: ZLibraryServing {
 }
 
 struct ZLibraryHTTPTransport: ZLibraryTransport {
+    enum RedirectRejection: String {
+        case hopLimit = "redirect limit reached"
+        case invalidURL = "invalid URL"
+        case insecure = "HTTPS required"
+        case credentials = "credentials in target"
+        case port = "explicit port refused"
+        case sameURL = "same URL refused"
+        case loop = "redirect loop"
+        case differentOrigin = "different API origin refused"
+        case outsideAPI = "outside API refused"
+    }
     var configuration: URLSessionConfiguration = .ephemeral
     func send(_ request: URLRequest, toFile: Bool, progress: @escaping @Sendable (Double?) -> Void) async throws -> ZLibraryPayload {
         try await ZLibraryTransfer(configuration: configuration).run(request, toFile: toFile, progress: progress)
     }
     static func redirect(_ request: URLRequest, original: URL?, toFile: Bool, visited: Set<URL> = [], count: Int = 0) -> URLRequest? {
-        guard count < 3, let url = request.url, url.scheme == "https", url.host != nil,
-              url.user == nil, url.password == nil, url.port == nil else { return nil }
-        guard url != original, !visited.contains(url) else { return nil }
+        guard redirectRejection(request, original: original, toFile: toFile, visited: visited, count: count) == nil,
+              let url = request.url else { return nil }
         var result = request
         let sameOrigin = original?.scheme == url.scheme && original?.host == url.host && original?.port == url.port
-        // Normal API canonicalization is allowed, but never follow a website challenge or
-        // move account headers to another API host. Challenges remain an explicit failure.
-        if !toFile && (!sameOrigin || original?.path.hasPrefix("/eapi/") != true || !url.path.hasPrefix("/eapi/")) { return nil }
         if !sameOrigin {
             for name in ["Cookie", "Authorization", "remix-userid", "remix-userkey"] { result.setValue(nil, forHTTPHeaderField:name) }
         }
         return result
+    }
+    static func redirectRejection(_ request: URLRequest, original: URL?, toFile: Bool, visited: Set<URL> = [], count: Int = 0) -> RedirectRejection? {
+        guard count < 3 else { return .hopLimit }
+        guard let url = request.url, url.host != nil else { return .invalidURL }
+        guard url.scheme == "https" else { return .insecure }
+        guard url.user == nil, url.password == nil else { return .credentials }
+        guard url.port == nil else { return .port }
+        guard url != original else { return .sameURL }
+        guard !visited.contains(url) else { return .loop }
+        let sameOrigin = original?.scheme == url.scheme && original?.host == url.host && original?.port == url.port
+        // Keep the existing policy unchanged while explaining each rejected case.
+        if !toFile {
+            guard sameOrigin else { return .differentOrigin }
+            guard original?.path.hasPrefix("/eapi/") == true, url.path.hasPrefix("/eapi/") else { return .outsideAPI }
+        }
+        return nil
     }
 }
 
