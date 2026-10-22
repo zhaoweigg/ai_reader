@@ -10,6 +10,7 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var books: [ZLibraryBook] = []
     @Published private(set) var loading = false
     @Published private(set) var activeQuery = ""
+    @Published private(set) var searchOrder: ZLibrarySearchOrder
     @Published private(set) var canLoadMore = false
     @Published private(set) var searchLimitReached = false
     @Published private(set) var verifying = false
@@ -51,6 +52,7 @@ final class ZLibraryStore: ObservableObject {
     #endif
     init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(service: "com.weizhao.leafreader.zlibrary"), client: any ZLibraryServing = ZLibraryClient()) {
         self.defaults = defaults; self.credentials = credentials; self.client = client
+        searchOrder = ZLibrarySearchOrder(rawValue: defaults.string(forKey: "zlibrary.searchOrder") ?? "") ?? .popular
         origin = (try? ZLibraryOrigin(defaults.string(forKey: "zlibrary.origin") ?? "https://z-library.sk")) ?? (try! ZLibraryOrigin("https://z-library.sk"))
         #if DEBUG
         isPreview = client is UITestZLibraryClient
@@ -177,6 +179,13 @@ final class ZLibraryStore: ObservableObject {
     }
     func loadPopular() async { await loadCatalog(query: "") }
     func search(_ query: String) async { await loadCatalog(query: query.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    func setSearchOrder(_ order: ZLibrarySearchOrder) async {
+        guard order != searchOrder else { return }
+        searchOrder = order; defaults.set(order.rawValue, forKey: "zlibrary.searchOrder")
+        // A new order is a new result set. Cancel even when the submitted query is
+        // identical, and restart at page one so differently ordered pages never mix.
+        if !activeQuery.isEmpty { cancelCatalogLoad(); await reload() }
+    }
     func reload() async { await loadCatalog(query: activeQuery) }
     func retry() async {
         if retryNextPage { await loadMore() } else { await reload() }
@@ -191,20 +200,20 @@ final class ZLibraryStore: ObservableObject {
     private func loadCatalog(query: String, append: Bool = false) async {
         if loading && query == activeQuery { return }
         cancelCatalogLoad()
-        let request = catalogRequest, token = generation, source = origin
+        let request = catalogRequest, token = generation, source = origin, order = searchOrder
         activeQuery = query; retryNextPage = append
         if !append { books = []; searchPage = 0; canLoadMore = false; searchLimitReached = false }
         loading = true; error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
         let page = append ? searchPage + 1 : 1
         let task = Task<Void, Never> { [weak self] in
             guard let self else { return }
-            await self.performLoad(query: query, page: page, append: append, request: request, token: token, source: source)
+            await self.performLoad(query: query, page: page, order: order, append: append, request: request, token: token, source: source)
         }
         // Hold a cancellable task: a query change cancels network work as well as rejecting stale results.
         catalogTask = task
         await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
     }
-    private func performLoad(query: String, page: Int, append: Bool, request: UUID, token: UUID, source: ZLibraryOrigin) async {
+    private func performLoad(query: String, page: Int, order: ZLibrarySearchOrder, append: Bool, request: UUID, token: UUID, source: ZLibraryOrigin) async {
         defer { if token == generation && request == catalogRequest { loading = false; catalogTask = nil } }
         do {
             try Task.checkCancellation()
@@ -232,7 +241,7 @@ final class ZLibraryStore: ObservableObject {
             let result: [ZLibraryBook], more: Bool
             if query.isEmpty { result = try await client.popular(origin: source, session: saved); more = false }
             else {
-                let response = try await client.search(query, page: page, origin: source, session: saved)
+                let response = try await client.search(query, page: page, order: order, origin: source, session: saved)
                 result = response.books; more = response.hasMore
             }
             try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
@@ -330,11 +339,12 @@ struct UITestZLibraryClient: ZLibraryServing {
         return [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:sparse ? "" : "epub",size:sparse ? "" : "1.8 MB",language:sparse ? "" : "English",year:sparse ? "" : "2026",coverURL:nil,rating:4.6,ratingCount:52,qualityScore:4.2),
          ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"2.4 MB",language:"English",year:"2026",coverURL:nil)]
     }
-    func search(_ query: String, page: Int, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
+    func search(_ query: String, page: Int, order: ZLibrarySearchOrder, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
         if query.lowercased() == "unavailable" { throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "POST /eapi/book/search · HTTP 200 · HTML instead of JSON") }
         if query.lowercased() == "no matches" { return ZLibrarySearchPage(books: [], hasMore: false) }
-        let sample = try await popular(origin: origin, session: session)
+        var sample = try await popular(origin: origin, session: session)
+        if [.titleAscending, .recentlyAdded, .fileSizeDescending].contains(order) { sample.reverse() }
         if page == 1 { return ZLibrarySearchPage(books: [sample[0]], hasMore: true) }
         return ZLibrarySearchPage(books: sample, hasMore: false)
     }
