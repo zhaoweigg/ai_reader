@@ -347,7 +347,7 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertEqual(client.popularSessions.count,calls);XCTAssertTrue(client.searchCalls.isEmpty)
         let restored = ZLibraryStore(defaults:defaults,credentials:credentials,client:client)
         XCTAssertEqual(restored.searchOrder,.titleAscending);XCTAssertTrue(restored.activeQuery.isEmpty)
-        await restored.disconnect();XCTAssertEqual(restored.searchOrder,.titleAscending)
+        try await restored.disconnect();XCTAssertEqual(restored.searchOrder,.titleAscending)
         defaults.set("invalid-sort",forKey:"zlibrary.searchOrder")
         XCTAssertEqual(ZLibraryStore(defaults:defaults,credentials:credentials,client:client).searchOrder,.popular)
     }
