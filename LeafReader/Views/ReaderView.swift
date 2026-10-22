@@ -33,6 +33,7 @@ struct ReaderContent: View {
     @AppStorage("reader.paragraphSpacing") private var paragraphSpacing = 0.65
     @State private var panel: ReaderPanel?
     @State private var chatIsPresented = false
+    @State private var chatButtonIsMoving = false
     @StateObject private var chat: ReaderChatSession
     @EnvironmentObject private var aiSettings: AISettingsStore
     @State private var bookViewportHeight: CGFloat = 0
@@ -56,7 +57,7 @@ struct ReaderContent: View {
     var body: some View {
         ZStack {
             ZStack {
-                if book.format == .pdf { PDFBookSurface(model: model, url: url, theme: theme, onReaderTap: handleBookTap).padding(.trailing, 76).id(model.reloadID) }
+                if book.format == .pdf { PDFBookSurface(model: model, url: url, theme: theme, onReaderTap: handleBookTap).id(model.reloadID) }
                 else { WebBookSurface(model: model, url: url, preferences: preferences, onReaderTap: handleBookTap).id(model.reloadID) }
                 if !model.isReady, model.error == nil, !model.isLocked {
                     VStack(spacing: 16) { ProgressView(); Text("Opening your book…").font(.subheadline) }.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background)
@@ -99,17 +100,20 @@ struct ReaderContent: View {
                 }.transition(.opacity)
             }
             if model.isReady, !model.isLocked, model.error == nil, panel == nil, !chatIsPresented {
-                VStack {
-                    Spacer(minLength: 0)
-                    HStack {
-                        Spacer(minLength: 0)
-                        ReaderChatLauncher {
-                            model.hideControls()
-                            chatIsPresented = true
-                        }
-                    }
+                if chatButtonIsMoving {
+                    // Consume the finishing tap, including taps over the reader controls.
+                    // It must not also turn a page, open a menu, or change the passage.
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture { chatButtonIsMoving = false }
+                        .accessibilityLabel("Finish moving Ask Leaf")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityIdentifier("finishMovingChatButton")
+                        .accessibilityAction { chatButtonIsMoving = false }
                 }
-                .padding(.trailing, ReaderChatPlacement.trailing).padding(.bottom, ReaderChatPlacement.bottom)
+                ReaderChatLauncher(isMoving: $chatButtonIsMoving) {
+                    model.hideControls()
+                    chatIsPresented = true
+                }
             }
         }
         .background {
@@ -158,11 +162,12 @@ struct ReaderContent: View {
         .onDisappear { chat.close(); library.flush() }
         .onChange(of: model.selectionRequest) { _, request in
             guard let request else { return }
+            chatButtonIsMoving = false
             chat.attachSelection(request.context, prompt: request.intent.prompt(for: request.context.text))
             model.hideControls()
             chatIsPresented = true
         }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { chat.flush() } }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { chatButtonIsMoving = false; chat.flush() } }
         .sheet(item: $panel, onDismiss: { model.hideControls() }) { panel in
             NavigationStack {
                 Group {
@@ -198,7 +203,6 @@ struct ReaderContent: View {
     }
     private func updateViewport(_ size: CGSize) {
         bookViewportHeight = size.height
-        model.setReadingExclusion(ReaderChatPlacement.exclusion(in: size))
     }
     private func handleBookTap() -> Bool {
         guard chatIsPresented else { return false }

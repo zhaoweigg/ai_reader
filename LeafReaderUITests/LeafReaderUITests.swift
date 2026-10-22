@@ -5,6 +5,7 @@ final class LeafReaderUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
+        app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
@@ -150,7 +151,20 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["nextPage"].tap()
         showReaderControls(app)
         XCTAssertTrue(app.staticTexts["Page 2 of 4"].waitForExistence(timeout: 5))
-        capture("PDF", app: app)
+        let surface = readingSurface(app)
+        XCTAssertEqual(surface.frame.width, app.frame.width, accuracy: 2, "PDF must use the full viewport without a button rail")
+        let launcher = app.buttons["openReaderChat"]
+        launcher.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.65,
+            thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.3)))
+        XCTAssertEqual(launcher.value as? String, "Move mode")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(launcher.value as? String, "Stationary")
+        launcher.tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+        app.buttons["closeReaderChat"].tap()
+        showReaderControls(app)
+        XCTAssertTrue(app.staticTexts["Page 2 of 4"].exists)
+        capture("PDF translucent movable button", app: app)
         app.buttons["closeBook"].tap()
         app.buttons["book-Notes from the Coast"].tap()
         showReaderControls(app)
@@ -354,7 +368,7 @@ final class LeafReaderUITests: XCTestCase {
     }
 
 
-    @MainActor func testRaisedChatLauncherInBothFlowsThemesAndRotation() {
+    @MainActor func testTranslucentChatLauncherInBothFlowsThemesAndRotation() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()
         waitForBook(app)
@@ -372,7 +386,7 @@ final class LeafReaderUITests: XCTestCase {
                 let launcher = app.buttons["openReaderChat"]
                 XCTAssertTrue(launcher.waitForExistence(timeout: 5))
                 XCTAssertEqual(launcher.frame.width, 52, accuracy: 1)
-                capture(flow + " circular wrap " + theme, app: app)
+                capture(flow + " translucent button " + theme, app: app)
                 launcher.tap()
                 let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
                 input.tap(); input.typeText("Explain")
@@ -386,12 +400,94 @@ final class LeafReaderUITests: XCTestCase {
                 launcher.tap()
                 XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
                 app.buttons["closeReaderChat"].tap()
-                capture(flow + " landscape circular wrap " + theme, app: app)
+                capture(flow + " landscape translucent button " + theme, app: app)
                 XCUIDevice.shared.orientation = .portrait
                 expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
                 waitForExpectations(timeout: 5)
             }
         }
+    }
+
+    @MainActor func testLongPressMoveAndTapAwayInPages() { verifyMovableButton(in: "Pages") }
+    @MainActor func testLongPressMoveAndTapAwayInScroll() { verifyMovableButton(in: "Scroll") }
+
+    @MainActor private func verifyMovableButton(in flow: String) {
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launchApp()
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons[flow].tap()
+        dismissAppearance(app)
+        showReaderControls(app)
+        let bookmark = app.buttons["toggleBookmark"]
+        if bookmark.label == "Add bookmark" { bookmark.tap() }
+        let surface = readingSurface(app)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let launcher = app.buttons["openReaderChat"]
+        XCTAssertEqual(launcher.value as? String, "Stationary")
+        let original = launcher.frame
+        // A short drag must not move the button or open chat.
+        launcher.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.05, thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
+        XCTAssertEqual(launcher.frame.minX, original.minX, accuracy: 1)
+        XCTAssertEqual(launcher.frame.minY, original.minY, accuracy: 1)
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists)
+        launcher.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.65, thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.4)))
+        XCTAssertEqual(launcher.value as? String, "Move mode")
+        XCTAssertEqual(launcher.frame.midX, surface.frame.minX + surface.frame.width * 0.25, accuracy: 6)
+        XCTAssertEqual(launcher.frame.midY, surface.frame.minY + surface.frame.height * 0.4, accuracy: 6)
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists)
+        capture(flow + " translucent button move mode over text", app: app)
+        // Move mode remains active after lifting, with no second long press.
+        launcher.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.05, thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.3)))
+        XCTAssertEqual(launcher.value as? String, "Move mode")
+        let moved = launcher.frame
+        XCTAssertEqual(moved.midX, surface.frame.minX + surface.frame.width * 0.75, accuracy: 6)
+        XCTAssertEqual(moved.midY, surface.frame.minY + surface.frame.height * 0.3, accuracy: 6)
+        // An edge tap used to finish must not also turn a page or reveal controls.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        XCTAssertEqual(launcher.value as? String, "Stationary")
+        XCTAssertFalse(app.buttons["closeBook"].exists)
+        showReaderControls(app)
+        XCTAssertEqual(bookmark.label, "Remove bookmark", "Finishing move mode must preserve the saved passage")
+        XCTAssertEqual(launcher.frame.minX, moved.minX, accuracy: 1)
+        XCTAssertEqual(launcher.frame.minY, moved.minY, accuracy: 1)
+        capture(flow + " translucent button saved position", app: app)
+        launcher.tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.buttons["closeReaderChat"].tap()
+        XCTAssertEqual(launcher.frame.minY, moved.minY, accuracy: 1)
+        showReaderControls(app)
+        app.buttons["closeBook"].tap()
+        app.terminate(); app.launch()
+        app.buttons["featuredBook"].tap()
+        waitForBook(app)
+        XCTAssertEqual(launcher.frame.minX, moved.minX, accuracy: 1)
+        XCTAssertEqual(launcher.frame.minY, moved.minY, accuracy: 1)
+        showReaderControls(app)
+        XCTAssertEqual(bookmark.label, "Remove bookmark")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        XCTAssertGreaterThanOrEqual(launcher.frame.minX, readingSurface(app).frame.minX)
+        XCTAssertLessThanOrEqual(launcher.frame.maxX, readingSurface(app).frame.maxX)
+        XCTAssertGreaterThanOrEqual(launcher.frame.minY, readingSurface(app).frame.minY)
+        XCTAssertLessThanOrEqual(launcher.frame.maxY, readingSurface(app).frame.maxY)
+        capture(flow + " moved translucent button landscape", app: app)
+        XCUIDevice.shared.orientation = .portrait
+        expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(launcher.frame.minY, moved.minY, accuracy: 1)
+        // Clamp a drag past the leading edge and keep the whole tap target reachable.
+        launcher.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.65, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.4)))
+        XCTAssertGreaterThanOrEqual(launcher.frame.minX, surface.frame.minX + 7)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(launcher.value as? String, "Stationary")
     }
 
     @MainActor func testBothFlowsFillLandscapeViewportAndKeepLauncherInsideIt() {
@@ -533,9 +629,9 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertGreaterThan(surface.frame.maxY - launcher.frame.maxY, 100)
         let raisedFrame = launcher.frame
         showReaderControls(app)
-        XCTAssertEqual(launcher.frame.minY, raisedFrame.minY, accuracy: 1, "Keep the icon and its wrap in place when controls appear")
+        XCTAssertEqual(launcher.frame.minY, raisedFrame.minY, accuracy: 1, "Keep the icon in place when controls appear")
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        capture("Raised AI icon with text wrapping on paper", app: app)
+        capture("Translucent AI icon over full-width paper text", app: app)
         launcher.tap()
         let panel = app.otherElements["readerChatPanel"]
         XCTAssertTrue(panel.waitForExistence(timeout: 5))
