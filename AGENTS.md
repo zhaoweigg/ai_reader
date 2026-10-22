@@ -1,3 +1,9 @@
+# Git workflow
+
+- For every change, work on a feature branch and create a pull request targeting `main`.
+- Never push directly to remote `main`.
+- Agents may merge their pull requests after the required checks pass; no additional user confirmation is needed.
+
 # Leaf reader verification
 
 The user explicitly requires all reading modes to be tested for future reader changes.

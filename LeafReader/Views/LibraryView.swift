@@ -135,7 +135,7 @@ struct LibraryView: View {
                     .accessibilityElement(children: .combine).accessibilityLabel("Leaf reader")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: onImport) { Label("Import", systemImage: "plus") }.buttonStyle(.borderedProminent).clipShape(Capsule())
+                    Button(action: onImport) { Label("Add books", systemImage: "plus") }.buttonStyle(.borderedProminent).clipShape(Capsule())
                         .disabled(library.isImporting).accessibilityIdentifier("importBooks")
                 }
             }
