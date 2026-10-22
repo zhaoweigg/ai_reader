@@ -1,11 +1,12 @@
 import XCTest
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch() -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1";app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = "1"
+        if feedFailure { app.launchEnvironment["LEAF_UI_ZLIB_FEED_FAILURE"] = "1" }
         app.launch();return app
     }
     @MainActor private func capture(_ name:String) {
@@ -68,5 +69,30 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["Close connection"].tap()
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["catalogBook-sample"].exists)
+    }
+    @MainActor func testVerifiedAccountWithUnavailableFeedShowsWebsiteAccessWithoutSigningOut() {
+        let app = launch(feedFailure:true)
+        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout:10))
+        app.buttons["Z-Library connection"].tap()
+        XCTAssertTrue(app.buttons["zlibraryPreviewConnect"].waitForExistence(timeout:5))
+        app.buttons["zlibraryPreviewConnect"].tap()
+        XCTAssertTrue(app.staticTexts["Your account is connected, but the website did not return popular-book data. Open the website to check access, then try again."].waitForExistence(timeout:10))
+        XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].exists)
+        XCTAssertFalse(app.buttons["connectZLibrary"].exists)
+        app.buttons["Request details"].tap()
+        XCTAssertTrue(app.staticTexts["zlibraryRequestDiagnostic"].waitForExistence(timeout:5))
+        capture("Verified account with feed unavailable portrait")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        capture("Verified account with feed unavailable landscape")
+        XCUIDevice.shared.orientation = .portrait
+        app.buttons["Z-Library connection"].tap()
+        XCTAssertTrue(app.staticTexts["Account connected"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["Preview account"].exists)
+        app.buttons["Close connection"].tap()
+        app.terminate();app.launch()
+        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout:10))
+        XCTAssertFalse(app.buttons["connectZLibrary"].exists)
     }
 }
