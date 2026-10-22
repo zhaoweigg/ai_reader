@@ -12,6 +12,17 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor private func capture(_ name:String) {
         let attachment = XCTAttachment(screenshot:XCUIScreen.main.screenshot());attachment.name = name;attachment.lifetime = .keepAlways;add(attachment)
     }
+    @MainActor private func search(_ query: String, app: XCUIApplication) {
+        let field = app.textFields["zlibrarySearchField"]
+        XCTAssertTrue(field.waitForExistence(timeout:5))
+        // Tapping a long query places the caret in its middle. Use the product's clear
+        // control instead of assuming repeated backspace starts at the end of the text.
+        if app.buttons["zlibraryClearSearch"].exists { app.buttons["zlibraryClearSearch"].tap() }
+        field.tap()
+        field.typeText(query)
+        XCTAssertEqual(field.value as? String,query)
+        app.buttons["zlibrarySubmitSearch"].tap()
+    }
     @MainActor func testPopularCatalogConnectsImportsAndPreservesExistingBook() {
         let app = launch()
         XCTAssertTrue(app.buttons["importBooks"].waitForExistence(timeout:10));app.buttons["importBooks"].tap()
@@ -19,12 +30,15 @@ final class ZLibraryUITests: XCTestCase {
         capture("Add books sources")
         app.buttons["addFromZLibrary"].tap()
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
-        XCTAssertFalse(app.searchFields.firstMatch.exists)
+        XCTAssertTrue(app.textFields["zlibrarySearchField"].exists)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:10))
         capture("Most popular portrait")
         XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:5));capture("Most popular landscape")
         XCUIDevice.shared.orientation = .portrait
+        search("The Art of Noticing",app:app)
+        XCTAssertTrue(app.staticTexts["Search results"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:5))
         app.buttons["catalogBook-sample"].tap()
         XCTAssertTrue(app.buttons["catalogAddBook"].waitForExistence(timeout:5));app.buttons["catalogAddBook"].tap()
         XCTAssertTrue(app.buttons["zlibraryPreviewConnect"].waitForExistence(timeout:5));app.buttons["zlibraryPreviewConnect"].tap()
@@ -94,5 +108,48 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
         XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout:10))
         XCTAssertFalse(app.buttons["connectZLibrary"].exists)
+    }
+    @MainActor func testSearchPaginationEmptyStateRetryAndReturnToPopular() {
+        let app = launch()
+        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:10))
+        let field = app.textFields["zlibrarySearchField"]
+        field.tap();field.typeText("9781234567890 + C++")
+        capture("Catalog search composing")
+        app.buttons["zlibrarySubmitSearch"].tap()
+        XCTAssertTrue(app.staticTexts["Search results"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["catalogBook-sample2"].exists)
+        capture("Catalog search results portrait")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:5))
+        capture("Catalog search results landscape")
+        XCUIDevice.shared.orientation = .portrait
+        app.buttons["catalogBook-sample"].tap()
+        XCTAssertTrue(app.navigationBars["Book details"].waitForExistence(timeout:5))
+        app.navigationBars.buttons["Z-Library"].tap()
+        XCTAssertTrue(app.staticTexts["Search results"].waitForExistence(timeout:5))
+        XCTAssertEqual(field.value as? String,"9781234567890 + C++")
+        XCTAssertTrue(app.buttons["zlibraryLoadMore"].waitForExistence(timeout:5))
+        app.buttons["zlibraryLoadMore"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.buttons.matching(identifier:"catalogBook-sample").count,1)
+        XCTAssertFalse(app.buttons["zlibraryLoadMore"].exists)
+        search("no matches",app:app)
+        XCTAssertTrue(app.staticTexts["No books found"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["catalogBook-sample"].exists)
+        capture("Catalog search no results")
+        search("unavailable",app:app)
+        XCTAssertTrue(app.staticTexts["Could not search books"].waitForExistence(timeout:5))
+        app.buttons["Request details"].tap()
+        XCTAssertTrue(app.staticTexts["zlibraryRequestDiagnostic"].label.hasPrefix("POST /eapi/book/search"))
+        app.buttons["Try again"].tap()
+        XCTAssertTrue(app.staticTexts["Could not search books"].waitForExistence(timeout:5))
+        XCTAssertEqual(field.value as? String,"unavailable")
+        capture("Catalog search failure")
+        app.buttons["zlibraryClearSearch"].tap()
+        XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["Could not search books"].exists)
     }
 }

@@ -16,7 +16,7 @@ private final class CatalogTransport: ZLibraryTransport {
         requests.append(request);return try handler(request,toFile)
     }
 }
-private final class CatalogService: ZLibraryServing {
+@MainActor private final class CatalogService: ZLibraryServing {
     var profileError: Error?
     var downloadError: Error?
     var profiles = 0
@@ -29,6 +29,8 @@ private final class CatalogService: ZLibraryServing {
     var popularError: Error?
     var popularSessions: [ZLibrarySession?] = []
     var popularContinuation: CheckedContinuation<[ZLibraryBook],Error>?
+    var searchCalls: [(String, Int, ZLibrarySession?)] = []
+    var searchHandler: ((String, Int) async throws -> ZLibrarySearchPage)?
     func profile(origin:ZLibraryOrigin,session:ZLibrarySession) async throws -> ZLibraryProfile {
         profiles += 1
         if suspendProfile { return try await withCheckedThrowingContinuation { continuation = $0 } }
@@ -43,6 +45,10 @@ private final class CatalogService: ZLibraryServing {
     }
     func download(_ book:ZLibraryBook,origin:ZLibraryOrigin,session:ZLibrarySession,progress:@escaping @Sendable (Double?)->Void) async throws -> URL {
         downloads += 1;if let downloadError { throw downloadError };guard let file else { throw ZLibraryError.file };return file
+    }
+    func search(_ query: String, page: Int, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
+        searchCalls.append((query, page, session))
+        return try await searchHandler?(query, page) ?? ZLibrarySearchPage(books: [], hasMore: false)
     }
 }
 private final class CatalogURLProtocol: URLProtocol {
@@ -76,11 +82,11 @@ private final class CatalogURLProtocol: URLProtocol {
         try FileManager.default.createDirectory(at:url,withIntermediateDirectories:true)
         addTeardownBlock { try? FileManager.default.removeItem(at:url) };return url
     }
-    private func store(_ client:CatalogService = CatalogService()) -> (ZLibraryStore,CatalogCredentials,UserDefaults) {
+    private func store(_ client:CatalogService? = nil) -> (ZLibraryStore,CatalogCredentials,UserDefaults) {
         let name = "LeafZLibraryTests.\(UUID())", defaults = UserDefaults(suiteName:name)!, credentials = CatalogCredentials()
         addTeardownBlock { defaults.removePersistentDomain(forName:name) }
         defaults.set(origin.url.absoluteString,forKey:"zlibrary.origin")
-        return (ZLibraryStore(defaults:defaults,credentials:credentials,client:client),credentials,defaults)
+        return (ZLibraryStore(defaults:defaults,credentials:credentials,client:client ?? CatalogService()),credentials,defaults)
     }
     private func wait(_ predicate:()->Bool) async throws {
         let deadline = Date().addingTimeInterval(3)
@@ -107,6 +113,163 @@ private final class CatalogURLProtocol: URLProtocol {
         let books = try await ZLibraryClient(transport:transport).popular(origin:origin,session:session)
         XCTAssertEqual(books.count,1);XCTAssertEqual(books[0].format,.epub);XCTAssertEqual(books[0].size,"1 MB")
         XCTAssertEqual(books[0].coverURL?.host,"images.example")
+    }
+    func testSearchPOSTEncodesUnicodeReservedCharactersAndKeepsSessionOutOfURL() async throws {
+        let query = "十日终焉 + C++ & author=王 #978"
+        let browser = ZLibrarySession(userID:"42",userKey:"private-key",websiteCookies:[ZLibraryWebsiteCookie(name:"site_access",value:"opaque",path:"/",expires:nil)],userAgent:"Signed-in browser")
+        let transport = CatalogTransport { [self] request,toFile in
+            XCTAssertFalse(toFile);XCTAssertEqual(request.httpMethod,"POST")
+            XCTAssertEqual(request.url?.absoluteString,"https://catalog.example/eapi/book/search")
+            XCTAssertEqual(request.value(forHTTPHeaderField:"Content-Type"),"application/x-www-form-urlencoded; charset=utf-8")
+            XCTAssertEqual(request.value(forHTTPHeaderField:"User-Agent"),browser.userAgent)
+            XCTAssertTrue(request.value(forHTTPHeaderField:"Cookie")?.contains("site_access=opaque") == true)
+            let body = try XCTUnwrap(String(data:try XCTUnwrap(request.httpBody),encoding:.utf8))
+            let fields = URLComponents(string:"https://example.test/?\(body)")!.queryItems!
+            XCTAssertEqual(Dictionary(uniqueKeysWithValues:fields.map { ($0.name,$0.value ?? "") }),["message":query,"page":"2","limit":"30"])
+            XCTAssertFalse(body.contains("private-key"));XCTAssertFalse(body.contains("site_access"))
+            return try response(["success":1,"books":[["id":12,"hash":"ab","title":"A matching edition","extension":"epub"]]])
+        }
+        let page = try await ZLibraryClient(transport:transport).search(" \(query)\n",page:2,origin:origin,session:browser)
+        XCTAssertEqual(page.books.count,1);XCTAssertFalse(page.hasMore)
+    }
+    func testSearchValidatesQueryAndPageBeforeNetworkAndDetectsMoreResults() async throws {
+        let rows = (1...30).map { ["id":String($0),"hash":"ab","title":"Edition \($0)","extension":"epub"] }
+        let transport = CatalogTransport { [self] _,_ in try response(["success":1,"books":rows]) }
+        let client = ZLibraryClient(transport:transport)
+        for query in [" \n",String(repeating:"字",count:501)] {
+            do { _ = try await client.search(query,page:1,origin:origin,session:nil);XCTFail("Invalid query sent") }
+            catch { XCTAssertEqual(error as? ZLibraryError,.query) }
+        }
+        for page in [0,11] {
+            do { _ = try await client.search("ISBN",page:page,origin:origin,session:nil);XCTFail("Invalid page sent") }
+            catch { XCTAssertEqual(error as? ZLibraryError,.query) }
+        }
+        XCTAssertTrue(transport.requests.isEmpty)
+        let page = try await client.search("9780000000000",page:1,origin:origin,session:nil)
+        XCTAssertEqual(page.books.count,30);XCTAssertTrue(page.hasMore)
+    }
+    func testSearchRedirectPreservesPOSTBodyOnlyFor307And308AndDiagnosticsRedactQuery() async throws {
+        for status in [302,307,308] {
+            var calls = 0, originalBody: Data?
+            let transport = CatalogTransport { [self] request,_ in
+                calls += 1
+                if calls == 1 {
+                    originalBody = request.httpBody
+                    return ZLibraryPayload(data:Data(),file:nil,response:HTTPURLResponse(url:request.url!,statusCode:status,httpVersion:nil,headerFields:["Location":"/eapi/book/search/?language=en"])!)
+                }
+                XCTAssertEqual(request.httpMethod,"POST");XCTAssertEqual(request.httpBody,originalBody)
+                return try response(["success":1,"books":[]])
+            }
+            do {
+                _ = try await ZLibraryClient(transport:transport).search("private search",page:1,origin:origin,session:session)
+                XCTAssertNotEqual(status,302)
+            } catch {
+                XCTAssertEqual(status,302)
+                let failure = try XCTUnwrap(error as? ZLibraryRequestFailure)
+                XCTAssertTrue(failure.diagnostic.hasPrefix("POST /eapi/book/search"))
+                XCTAssertFalse(failure.diagnostic.contains("private search"));XCTAssertFalse(failure.diagnostic.contains("language"))
+            }
+            XCTAssertEqual(calls,status == 302 ? 1 : 2)
+        }
+    }
+    func testSearchSupersedesSlowQueryAndCancelsPreviousNetworkTask() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        var started = false, cancelled = false
+        client.searchHandler = { [self] query,_ in
+            if query == "old" {
+                started = true
+                do { try await Task.sleep(for:.seconds(30)) }
+                catch { cancelled = true;throw error }
+            }
+            return ZLibrarySearchPage(books:[book],hasMore:false)
+        }
+        let old = Task { await store.search("old") }
+        try await wait { started }
+        await store.search("latest")
+        await old.value
+        XCTAssertTrue(cancelled);XCTAssertEqual(store.activeQuery,"latest")
+        XCTAssertEqual(store.books,[book]);XCTAssertNil(store.error);XCTAssertFalse(store.loading)
+    }
+    func testLateUncooperativeSearchCannotReplacePopularListOrNewQuery() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        var continuation: CheckedContinuation<ZLibrarySearchPage,Error>?
+        client.searchHandler = { _,_ in try await withCheckedThrowingContinuation { continuation = $0 } }
+        let pending = Task { await store.search("old") }
+        try await wait { continuation != nil }
+        await store.loadPopular()
+        continuation?.resume(returning:ZLibrarySearchPage(books:[book],hasMore:true))
+        await pending.value
+        XCTAssertEqual(store.activeQuery,"");XCTAssertTrue(store.books.isEmpty)
+        XCTAssertFalse(store.canLoadMore);XCTAssertNil(store.error);XCTAssertFalse(store.loading)
+    }
+    func testSearchPaginationDeduplicatesAndRetryRetainsQueryAndPriorResults() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        _ = await store.connect(session)
+        var failSecond = true
+        let second = ZLibraryBook(remoteID:"13",hash:"next",title:"Second",author:"Author",fileExtension:"pdf",size:"1 MB",language:"English",year:"2000",coverURL:nil)
+        client.searchHandler = { [self] _,page in
+            if page == 2 && failSecond { throw ZLibraryError.service("Temporary search failure") }
+            return ZLibrarySearchPage(books:page == 1 ? [book] : [book,second],hasMore:page == 1)
+        }
+        await store.search("  author name  ")
+        XCTAssertEqual(store.activeQuery,"author name");XCTAssertEqual(store.books,[book]);XCTAssertTrue(store.canLoadMore)
+        await store.loadMore()
+        XCTAssertEqual(store.books,[book]);XCTAssertTrue(store.connected);XCTAssertNotNil(store.error)
+        failSecond = false;await store.retry()
+        XCTAssertEqual(store.books,[book,second]);XCTAssertFalse(store.canLoadMore);XCTAssertNil(store.error)
+        XCTAssertEqual(client.searchCalls.map { $0.1 },[1,2,2])
+        XCTAssertTrue(client.searchCalls.allSatisfy { $0.0 == "author name" && $0.2 == session })
+        await store.loadMore();XCTAssertEqual(client.searchCalls.count,3)
+    }
+    func testSearchStopsAtResultBoundAndDoesNotRequestRepeatedPages() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        client.searchHandler = { query,page in
+            let books = (1...30).map { ZLibraryBook(remoteID:"\(page)-\($0)",hash:"ab",title:query,author:"A",fileExtension:"epub",size:"",language:"",year:"",coverURL:nil) }
+            return ZLibrarySearchPage(books:books,hasMore:true)
+        }
+        await store.search("broad query")
+        for _ in 1...12 { await store.loadMore() }
+        XCTAssertEqual(store.books.count,300);XCTAssertEqual(client.searchCalls.count,10)
+        XCTAssertTrue(store.searchLimitReached);XCTAssertFalse(store.canLoadMore)
+        await store.search(" \n")
+        XCTAssertEqual(store.activeQuery,"");XCTAssertFalse(store.searchLimitReached);XCTAssertFalse(store.canLoadMore)
+    }
+    func testSearchRefreshReconnectAndFailureKeepTheSubmittedQuery() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        _ = await store.connect(session)
+        client.searchHandler = { [self] _,_ in ZLibrarySearchPage(books:[book],hasMore:false) }
+        await store.search("author query");await store.reload()
+        let replacement = ZLibrarySession(userID:"42",userKey:"replacement-key")
+        _ = await store.connect(replacement);await store.reload()
+        XCTAssertEqual(client.searchCalls.count,3);XCTAssertTrue(client.popularSessions.isEmpty)
+        XCTAssertEqual(client.searchCalls.last?.2,replacement);XCTAssertEqual(store.activeQuery,"author query")
+        client.searchHandler = { _,_ in throw ZLibraryRequestFailure(issue:.challenge,diagnostic:"POST /eapi/book/search · HTTP 403 · HTML instead of JSON") }
+        await store.reload()
+        XCTAssertTrue(store.connected);XCTAssertTrue(store.websiteAccessNeeded)
+        XCTAssertTrue(store.error?.contains("search results") == true)
+        XCTAssertEqual(store.activeQuery,"author query");XCTAssertTrue(store.books.isEmpty)
+        client.searchHandler = { _,_ in throw ZLibraryRequestFailure(issue:.signInRequired,diagnostic:"POST /eapi/book/search · HTTP 401 · JSON/API response") }
+        await store.retry()
+        XCTAssertFalse(store.connected);XCTAssertEqual(store.activeQuery,"author query")
+    }
+    func testDisconnectDuringSearchCannotRestoreAccountOrResults() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        _ = await store.connect(session)
+        var continuation: CheckedContinuation<ZLibrarySearchPage,Error>?
+        client.searchHandler = { _,_ in try await withCheckedThrowingContinuation { continuation = $0 } }
+        let task = Task { await store.search("pending") }
+        try await wait { continuation != nil }
+        try await store.disconnect()
+        continuation?.resume(returning:ZLibrarySearchPage(books:[book],hasMore:true));await task.value
+        XCTAssertFalse(store.connected);XCTAssertTrue(store.books.isEmpty);XCTAssertEqual(store.activeQuery,"")
+        XCTAssertFalse(store.loading);XCTAssertFalse(store.canLoadMore);XCTAssertNil(store.error)
+    }
+    func testSearchStopsPagingIfServiceRepeatsTheSameBooks() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        client.searchHandler = { [self] _,_ in ZLibrarySearchPage(books:[book],hasMore:true) }
+        await store.search("repeated results");await store.loadMore();await store.loadMore()
+        XCTAssertEqual(store.books,[book]);XCTAssertFalse(store.canLoadMore)
+        XCTAssertEqual(client.searchCalls.map { $0.1 },[1,2])
     }
     func testWebsiteSessionIsBackwardCompatibleAndCookiesRespectPathExpiryAndHeaderSafety() throws {
         let legacy = try JSONDecoder().decode(ZLibrarySession.self, from: Data("{\"userID\":\"42\",\"userKey\":\"old-key\"}".utf8))
