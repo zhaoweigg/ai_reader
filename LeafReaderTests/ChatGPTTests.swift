@@ -24,10 +24,29 @@ private final class ChatGPTTestHTTP: ChatGPTHTTPClient {
 private struct ChatGPTTestStream: ChatTransport {
     let status: Int
     let lines: [String]
+    var contentType: String? = "text/event-stream"
     func open(_ request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<String, Error>) {
-        (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"])!,
+        (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: contentType.map { ["Content-Type": $0] } ?? [:])!,
          AsyncThrowingStream { continuation in lines.forEach { continuation.yield($0) }; continuation.finish() })
     }
+}
+
+// Reproduces the on-device Responses reply: HTTP 200 without Content-Type.
+private final class HeaderlessResponsesURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/2", headerFields: [:])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let body = [
+            ": keepalive", "", "event: response.output_text.delta",
+            #"data: {"type":"response.output_text.delta","delta":"你好"}"#, "",
+            "event: response.completed", #"data: {"type":"response.completed"}"#, "", ""
+        ].joined(separator: "\r\n")
+        for byte in body.utf8 { client?.urlProtocol(self, didLoad: Data([byte])) }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { }
 }
 
 @MainActor private final class ChatGPTTestBrowser: ChatGPTAuthorizing {
@@ -386,6 +405,40 @@ final class ChatGPTTests: XCTestCase {
             for try await _ in stream([text, #"{"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}"#]).stream(question) { }
             XCTFail("Must report plan limit")
         } catch { XCTAssertTrue(error.localizedDescription.contains("allowance")) }
+    }
+    func testHeaderlessResponsesThroughRealTransportCompleteWithUnicodeText() async throws {
+        let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)
+        try store.accept(account())
+        http.handler = { _ in (200, try self.json(["models": [["slug": "test-model", "display_name": "Test", "visibility": "list"]]])) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HeaderlessResponsesURLProtocol.self]
+        let provider = ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: "test-model",
+            transport: URLSessionChatTransport(configuration: configuration))
+        var events: [ChatEvent] = []
+        for try await event in provider.stream(ChatRequest(system: "", turns: [ChatTurn(role: "user", content: "Hello")])) { events.append(event) }
+        XCTAssertEqual(events, [.text("你好"), .finished(truncated: false)])
+    }
+    func testMissingHeaderDoesNotTurnMalformedOrInterruptedResponsesIntoSuccess() async throws {
+        let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)
+        try store.accept(account())
+        http.handler = { _ in (200, try self.json(["models": [["slug": "test-model", "display_name": "Test", "visibility": "list"]]])) }
+        let question = ChatRequest(system: "", turns: [ChatTurn(role: "user", content: "Hello")])
+        let cases: [(String?, [String])] = [
+            (nil, ["<html>not a stream</html>"]),
+            (nil, ["data: not JSON", ""]),
+            (nil, [#"data: {"type":"response.output_text.delta","delta":"Partial"}"#, ""]),
+            ("application/json", [#"data: {"type":"response.completed"}"#, ""]),
+            (nil, [#"data: {"type":"response.completed"}"#, ""])
+        ]
+        for (contentType, lines) in cases {
+            let provider = ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: "test-model",
+                transport: ChatGPTTestStream(status: 200, lines: lines, contentType: contentType))
+            var completed = false
+            do {
+                for try await event in provider.stream(question) { if case .finished = event { completed = true } }
+                XCTFail("Malformed, empty or unterminated response must fail")
+            } catch { XCTAssertFalse(completed) }
+        }
     }
     func testHTTPSubscriptionEligibilityErrorDoesNotUseAnotherBillingPath() async throws {
         let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)

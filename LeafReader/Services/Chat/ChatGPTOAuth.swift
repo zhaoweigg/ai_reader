@@ -17,7 +17,7 @@ enum ChatGPTEndpoints {
 
 enum ChatGPTError: LocalizedError {
     case signInRequired, cancelled, timedOut, invalidCallback, invalidIdentity, permissionMissing, invalidRefresh
-    case network, unavailable, rejected, unsupported, ineligible, usageLimit, missingModel, storage, browser
+    case network, unavailable, rejected, unsupported, ineligible, usageLimit, missingModel, storage, browser, invalidResponse
     var errorDescription: String? {
         switch self {
         case .signInRequired: return "Continue with ChatGPT in AI settings to connect your subscription."
@@ -27,6 +27,7 @@ enum ChatGPTError: LocalizedError {
         case .invalidIdentity: return "OpenAI’s account identity could not be verified. Your connection was not changed."
         case .permissionMissing: return "Signed in, but permission to use your ChatGPT plan was not granted. Enable plan access in AI settings."
         case .invalidRefresh: return "Your ChatGPT session has expired or was revoked. Sign in again."
+        case .invalidResponse: return "OpenAI returned a chat response Leaf could not read. Retry, or choose another available model in AI settings."
         case .network: return "Could not reach OpenAI. Your saved connection has been kept; try again when online."
         case .unavailable: return "ChatGPT plan access is temporarily unavailable. Try again later."
         case .rejected: return "OpenAI did not accept this sign-in or app registration. Check account eligibility and try again."

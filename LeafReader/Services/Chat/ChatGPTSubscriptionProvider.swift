@@ -44,7 +44,14 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                         }
                         throw ChatGPTOAuthClient.error(errorData, status: response.statusCode)
                     }
-                    guard response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true else { throw ChatError.invalidResponse }
+                    // Some successful Responses replies arrive without Content-Type on iOS.
+                    // A missing header must not discard a valid SSE body. We still
+                    // require JSON events, answer text, and a terminal Responses event.
+                    if let contentType = response.value(forHTTPHeaderField: "Content-Type") {
+                        let mediaType = contentType.split(separator: ";", maxSplits: 1).first?
+                            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        guard mediaType == "text/event-stream" else { throw ChatGPTError.invalidResponse }
+                    }
                     var decoder = ServerSentEventDecoder()
                     var textLength = 0
                     for try await line in lines {
@@ -69,10 +76,10 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
         }
     }
     static func decode(_ data: String) throws -> [ChatEvent] {
-        guard let object = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any] else { throw ChatError.invalidResponse }
+        guard let object = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any] else { throw ChatGPTError.invalidResponse }
         switch object["type"] as? String {
         case "response.output_text.delta", "response.refusal.delta":
-            guard let delta = object["delta"] as? String else { throw ChatError.invalidResponse }
+            guard let delta = object["delta"] as? String else { throw ChatGPTError.invalidResponse }
             return [.text(delta)]
         case "response.completed": return [.finished(truncated: false)]
         case "response.incomplete": return [.finished(truncated: true)]
