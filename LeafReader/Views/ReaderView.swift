@@ -34,6 +34,10 @@ struct ReaderContent: View {
     @State private var panel: ReaderPanel?
     @State private var chatIsPresented = false
     @State private var chatButtonIsMoving = false
+    @AppStorage("reader.chatHeightFraction") private var chatHeightFraction = 1.0 / 3
+    @AppStorage("reader.chatComposingHeightFraction") private var chatComposingHeightFraction = -1.0
+    @State private var chatResizeOrigin: CGFloat?
+    @State private var chatResizedHeight: CGFloat?
     @StateObject private var chat: ReaderChatSession
     @EnvironmentObject private var aiSettings: AISettingsStore
     @State private var bookViewportHeight: CGFloat = 0
@@ -130,7 +134,10 @@ struct ReaderContent: View {
                 if chatIsPresented {
                     let fullHeight = max(bookViewportHeight, geometry.size.height)
                     let composing = geometry.size.height < fullHeight - 80
-                    let height = composing ? min(fullHeight / 3, max(chat.selectedContext == nil ? 176 : 216, geometry.size.height * 0.35)) : fullHeight / 3
+                    let limits = ReaderChatSizing.bounds(fullHeight: fullHeight, availableHeight: geometry.size.height, composing: composing, hasSelection: chat.selectedContext != nil)
+                    let preferred = ReaderChatSizing.height(fraction: composing ? chatComposingHeightFraction : chatHeightFraction,
+                        fullHeight: fullHeight, availableHeight: geometry.size.height, composing: composing, hasSelection: chat.selectedContext != nil)
+                    let height = min(limits.upperBound, max(limits.lowerBound, chatResizedHeight ?? preferred))
                     ReaderChatPanel(session: chat, bookTitle: book.title, isComposing: composing, onClose: {
                         chatIsPresented = false
                         model.hideControls()
@@ -139,6 +146,16 @@ struct ReaderContent: View {
                         panel = .aiSettings
                     }, onSend: {
                         chat.send(settings: aiSettings) { try await model.readingChatContext() }
+                    }, onResize: { translation, ended in
+                        if chatResizeOrigin == nil { chatResizeOrigin = height }
+                        let resized = min(limits.upperBound, max(limits.lowerBound, (chatResizeOrigin ?? height) - translation))
+                        chatResizedHeight = resized
+                        if ended { saveChatHeight(resized, fullHeight: fullHeight, composing: composing) }
+                    }, onResizeStep: { step in
+                        saveChatHeight(min(limits.upperBound, max(limits.lowerBound, height + step)), fullHeight: fullHeight, composing: composing)
+                    }, onResetSize: {
+                        if composing { chatComposingHeightFraction = -1 } else { chatHeightFraction = 1.0 / 3 }
+                        chatResizeOrigin = nil; chatResizedHeight = nil
                     })
                     .frame(height: height)
                     .background {
@@ -149,6 +166,8 @@ struct ReaderContent: View {
                     .padding(.horizontal, 8)
                     .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .onChange(of: geometry.size) { _, _ in chatResizeOrigin = nil; chatResizedHeight = nil }
+                    .onDisappear { chatResizeOrigin = nil; chatResizedHeight = nil }
                 }
             }
         }
@@ -206,6 +225,12 @@ struct ReaderContent: View {
     }
     private func updateViewport(_ size: CGSize) {
         bookViewportHeight = size.height
+    }
+    private func saveChatHeight(_ height: CGFloat, fullHeight: CGFloat, composing: Bool) {
+        guard fullHeight > 0 else { return }
+        if composing { chatComposingHeightFraction = Double(height / fullHeight) }
+        else { chatHeightFraction = Double(height / fullHeight) }
+        chatResizeOrigin = nil; chatResizedHeight = nil
     }
     private func handleBookTap() -> Bool {
         guard chatIsPresented else { return false }
