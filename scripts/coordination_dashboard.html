@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Leaf · Simulator slots</title>
+<style>
+  :root{color-scheme:light dark;--paper:light-dark(#f6faf7,#13241d);--surface:light-dark(#ffffff,#1c3027);--ink:light-dark(#193d30,#e2eee7);--secondary:light-dark(#567164,#adc5b7);--leaf:light-dark(#2b7860,#8cd0b4);--wash:light-dark(#e4f0e8,#29483a);--line:light-dark(#d4e4da,#385346);--warn:light-dark(#975b15,#f2ca8f)}
+  *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 ui-rounded,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  main{max-width:880px;margin:auto;padding:30px 24px 22px}header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:27px}
+  .brand{display:flex;align-items:center;gap:7px;color:var(--leaf);font-weight:600;font-size:16px}svg{width:19px;height:19px;fill:currentColor}h1{font:500 30px/1.2 Georgia,serif;letter-spacing:-.5px;margin:10px 0 6px}h2{font-size:16px;font-weight:600;margin:0}p{margin:0}.muted{color:var(--secondary)}.small{font-size:12px}
+  #connection{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--leaf);white-space:nowrap;padding-top:6px}#connection::before{content:"";width:7px;height:7px;background:currentColor;border-radius:50%}#connection.disconnected{color:var(--warn)}
+  .slots{display:grid;gap:13px}.slot{display:grid;grid-template-columns:54px 1fr;overflow:hidden;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+  .slot-letter{display:flex;justify-content:center;padding-top:22px;background:var(--wash);color:var(--leaf);font-size:24px;font-weight:500}.slot-body{padding:18px 21px}.slot-top{display:flex;align-items:center;justify-content:space-between;gap:10px}.status{color:var(--leaf);font-size:12px}.purpose{font-size:18px;font-weight:500;line-height:1.4;margin:9px 0 14px;max-width:54ch}.details{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--secondary)}.device{margin-top:9px;overflow-wrap:anywhere;font-size:11px;color:var(--secondary)}
+  .queue{margin-top:28px}.queue-heading{display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid var(--line)}#queue-count{color:var(--secondary);font-size:12px}ol{margin:0;padding:0;list-style:none}li{display:grid;grid-template-columns:26px 1fr;gap:10px;padding:15px 0;border-bottom:1px solid var(--line)}.queue-position{color:var(--leaf)}.queue-purpose{font-weight:500}.empty{padding:17px 0;color:var(--secondary)}footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:13px;border-top:1px solid var(--line);color:var(--secondary);font-size:11px}#error{display:none;color:var(--warn);font-size:13px;margin-bottom:16px}
+  @media(max-width:480px){main{padding:22px 16px}.slot-body{padding:16px}.slot{grid-template-columns:42px 1fr}.purpose{font-size:17px}h1{font-size:27px}header{gap:10px}#connection{padding-top:4px}}
+</style>
+<main>
+  <header><div><div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3c2 3 5 1 9 2 6 1 9 5 9 11-3-4-7-6-12-6 6 2 10 5 12 10l-2 1c-1-4-3-5-5-5C7 17 2 12 3 3Z"/></svg>Leaf</div><h1>Simulator slots</h1><p class="muted small">Two devices, one owner per device.</p></div><div id="connection" role="status">Connecting</div></header>
+  <p id="error" role="alert"></p>
+  <section id="slots" class="slots" aria-label="Simulator assignments" aria-live="polite"></section>
+  <section class="queue"><div class="queue-heading"><h2>Waiting queue</h2><span id="queue-count"></span></div><ol id="queue" aria-live="polite"></ol></section>
+  <footer><span id="updated">Waiting for the assignment record</span><span>Refreshes every 2 seconds</span></footer>
+</main>
+<script>
+  const byId=id=>document.getElementById(id);
+  let lastPayload=null;
+  function node(tag,text,className){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;}
+  function worker(id,agents){return !id?'Unassigned':agents[id]?.label||'Worker '+id.slice(-6);}
+  function render(state){
+    const agents=state.agents||{},slots=state.slots||{};
+    byId('slots').replaceChildren();
+    Object.entries(slots).sort(([a],[b])=>a.localeCompare(b)).forEach(([name,slot])=>{
+      const article=node('article',undefined,'slot'),body=node('div',undefined,'slot-body'),top=node('div',undefined,'slot-top');
+      article.append(node('div',name,'slot-letter'),body);top.append(node('h2','Slot '+name),node('span',({assigned:'Reserved',testing:'Testing',available:'Available'})[slot.state]||slot.state||'Unknown','status'));
+      const details=node('div',undefined,'details');details.append(node('span',worker(slot.owner_thread,agents)),node('span','iPhone 17 Pro · iOS 26.5'));
+      body.append(top,node('p',slot.purpose||'Available for the next worker','purpose'),details,node('p',slot.device_uuid||'','device'));byId('slots').append(article);
+    });
+    const queue=state.slot_requests||[];byId('queue-count').textContent=queue.length?queue.length+' waiting':'Empty';byId('queue').replaceChildren();
+    if(!queue.length){const li=node('li','No workers waiting.','empty');li.style.display='block';byId('queue').append(li);}
+    queue.forEach((item,i)=>{const li=node('li'),content=node('div');content.append(node('p',item.purpose||'Waiting for a simulator','queue-purpose'),node('p',worker(item.requester,agents)+' · '+(item.slot||'Next available slot'),'muted small'));li.append(node('span',String(i+1),'queue-position'),content);byId('queue').append(li);});
+    const date=new Date(state.updated_at);byId('updated').textContent=Number.isNaN(date.getTime())?'Assignment time unavailable':'Assignments updated '+date.toLocaleString('en-US',{timeZone:'America/Los_Angeles',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',second:'2-digit',timeZoneName:'short'});
+  }
+  async function refresh(){
+    try{const response=await fetch('/api/status',{cache:'no-store'});if(!response.ok)throw Error();const state=await response.json(),payload=JSON.stringify(state);if(payload!==lastPayload){render(state);lastPayload=payload;}byId('connection').textContent='Live';byId('connection').classList.remove('disconnected');byId('error').style.display='none';}
+    catch{byId('connection').textContent='Disconnected';byId('connection').classList.add('disconnected');byId('error').textContent=lastPayload?'Updates paused. Showing the last received assignments.':'The assignment record is unavailable. Retrying automatically.';byId('error').style.display='block';}
+    finally{setTimeout(refresh,2000);}
+  }
+  refresh();
+</script>
+</html>

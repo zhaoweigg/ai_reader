@@ -9,6 +9,9 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var remaining: Int?
     @Published private(set) var books: [ZLibraryBook] = []
     @Published private(set) var loading = false
+    @Published private(set) var activeQuery = ""
+    @Published private(set) var canLoadMore = false
+    @Published private(set) var searchLimitReached = false
     @Published private(set) var verifying = false
     @Published private(set) var error: String?
     @Published private(set) var requestDiagnostic: String?
@@ -30,6 +33,10 @@ final class ZLibraryStore: ObservableObject {
     private var session: ZLibrarySession?
     private var generation = UUID()
     private var downloadTask: Task<Void, Never>?
+    private var catalogTask: Task<Void, Never>?
+    private var catalogRequest = UUID()
+    private var searchPage = 0
+    private var retryNextPage = false
     #if DEBUG
     let isPreview: Bool
     #else
@@ -63,6 +70,7 @@ final class ZLibraryStore: ObservableObject {
     func disconnect() async throws {
         try credentials.write(nil, account: origin.url.absoluteString)
         generation = UUID(); downloadTask?.cancel(); downloadTask = nil
+        cancelCatalogLoad(); activeQuery = ""; searchPage = 0; canLoadMore = false; searchLimitReached = false
         session = nil; connected = false; accountName = ""; remaining = nil; books = []; error = nil; connectionError = nil
         requestDiagnostic = nil; websiteAccessNeeded = false
         loading = false; verifying = false; downloadingID = nil; progress = nil
@@ -82,6 +90,7 @@ final class ZLibraryStore: ObservableObject {
             catch { throw ZLibraryError.service("Leaf could not save the Z-Library session in Keychain. Your existing connection was kept.") }
             // Discard responses started with the old account (including anonymous feed loads).
             generation = UUID(); downloadTask?.cancel(); downloadTask = nil
+            cancelCatalogLoad(); searchPage = 0; canLoadMore = false; searchLimitReached = false
             loading = false; verifying = false; downloadingID = nil; progress = nil; books = []
             error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
             session = candidate; connected = true; accountName = profile.name; remaining = profile.remaining
@@ -125,18 +134,45 @@ final class ZLibraryStore: ObservableObject {
             if let cookie = HTTPCookie(properties: properties) { await data.httpCookieStore.setCookie(cookie) }
         }
     }
-    func loadPopular() async {
-        guard !loading else { return }
+    func loadPopular() async { await loadCatalog(query: "") }
+    func search(_ query: String) async { await loadCatalog(query: query.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    func reload() async { await loadCatalog(query: activeQuery) }
+    func retry() async {
+        if retryNextPage { await loadMore() } else { await reload() }
+    }
+    func loadMore() async {
+        guard !activeQuery.isEmpty, canLoadMore, !loading else { return }
+        await loadCatalog(query: activeQuery, append: true)
+    }
+    func cancelCatalogLoad() {
+        catalogTask?.cancel(); catalogTask = nil; catalogRequest = UUID(); loading = false
+    }
+    private func loadCatalog(query: String, append: Bool = false) async {
+        if loading && query == activeQuery { return }
+        cancelCatalogLoad()
+        let request = catalogRequest, token = generation, source = origin
+        activeQuery = query; retryNextPage = append
+        if !append { books = []; searchPage = 0; canLoadMore = false; searchLimitReached = false }
         loading = true; error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
-        let token = generation, source = origin
+        let page = append ? searchPage + 1 : 1
+        let task = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.performLoad(query: query, page: page, append: append, request: request, token: token, source: source)
+        }
+        // Hold a cancellable task: a query change cancels network work as well as rejecting stale results.
+        catalogTask = task
+        await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
+    }
+    private func performLoad(query: String, page: Int, append: Bool, request: UUID, token: UUID, source: ZLibraryOrigin) async {
         var saved = session
-        defer { if token == generation { loading = false } }
+        defer { if token == generation && request == catalogRequest { loading = false; catalogTask = nil } }
         do {
+            try Task.checkCancellation()
             // Reuse only this origin's browser context and only for the same verified account.
             // Opening/closing the website can refresh access without another account sign-in.
             if let existing = saved, let signInData {
                 let cookies = await signInData.httpCookieStore.allCookies()
-                guard token == generation else { return }
+                try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
                 if let candidate = cookieCandidate(cookies), candidate.userID == existing.userID, candidate.userKey == existing.userKey, candidate != existing {
                     let encoded = try JSONEncoder().encode(candidate)
                     try credentials.write(String(decoding: encoded, as: UTF8.self), account: source.url.absoluteString)
@@ -145,20 +181,30 @@ final class ZLibraryStore: ObservableObject {
             }
             if let saved, !connected {
                 let profile = try await client.profile(origin: source, session: saved)
-                guard token == generation else { return }
+                try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
                 connected = true; accountName = profile.name; remaining = profile.remaining
             }
-            let result = try await client.popular(origin: source, session: saved)
-            try Task.checkCancellation(); guard token == generation else { return }
-            books = result
+            let result: [ZLibraryBook], more: Bool
+            if query.isEmpty { result = try await client.popular(origin: source, session: saved); more = false }
+            else {
+                let response = try await client.search(query, page: page, origin: source, session: saved)
+                result = response.books; more = response.hasMore
+            }
+            try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
+            let existing = append ? Set(books.map(\.id)) : []
+            let added = result.filter { !existing.contains($0.id) }
+            books = append ? books + added : result
+            searchPage = query.isEmpty ? 0 : page
+            searchLimitReached = !query.isEmpty && more && page >= ZLibrarySearchPage.maximumPages
+            canLoadMore = !query.isEmpty && more && !added.isEmpty && !searchLimitReached
         } catch {
-            if token == generation && !Task.isCancelled && !Self.isCancellation(error) {
+            if token == generation && request == catalogRequest && !Task.isCancelled && !Self.isCancellation(error) {
                 let issue = ZLibraryRequestFailure.issue(error)
                 if issue == .signInRequired { connected = false }
                 websiteAccessNeeded = issue == .challenge
                 requestDiagnostic = (error as? ZLibraryRequestFailure)?.diagnostic
                 self.error = connected && websiteAccessNeeded
-                    ? "Your account is connected, but the website did not return popular-book data. Open the website to check access, then try again."
+                    ? (query.isEmpty ? "Your account is connected, but the website did not return popular-book data. Open the website to check access, then try again." : "Your account is connected, but the website did not return search results. Open the website to check access, then try again.")
                     : error.localizedDescription
             }
         }
@@ -210,6 +256,14 @@ struct UITestZLibraryClient: ZLibraryServing {
         }
         return [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:"epub",size:"Sample",language:"English",year:"2026",coverURL:nil),
          ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"Sample",language:"English",year:"2026",coverURL:nil)]
+    }
+    func search(_ query: String, page: Int, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
+        try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
+        if query.lowercased() == "unavailable" { throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "POST /eapi/book/search · HTTP 200 · HTML instead of JSON") }
+        if query.lowercased() == "no matches" { return ZLibrarySearchPage(books: [], hasMore: false) }
+        let sample = try await popular(origin: origin, session: session)
+        if page == 1 { return ZLibrarySearchPage(books: [sample[0]], hasMore: true) }
+        return ZLibrarySearchPage(books: sample, hasMore: false)
     }
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL {
         progress(0.3); try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()

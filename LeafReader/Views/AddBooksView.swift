@@ -16,7 +16,7 @@ struct AddBooksView: View {
                         source("From Files", subtitle:"On your iPhone, iCloud Drive & more", icon:"folder")
                     }.accessibilityIdentifier("addFromFiles")
                     NavigationLink(value:"zlibrary") {
-                        source("Z-Library",subtitle:"Browse the most popular books",icon:"book")
+                        source("Z-Library",subtitle:"Search books or browse the most popular",icon:"book")
                     }.accessibilityIdentifier("addFromZLibrary")
                     Section { Text("Books you add are saved on this device for offline reading.").font(.footnote).foregroundStyle(.secondary) }
                 }.listRowBackground(theme.surface)
@@ -44,31 +44,52 @@ struct ZLibraryView: View {
     @EnvironmentObject private var library: LibraryStore
     private enum Sheet: String, Identifiable { case connection, website; var id: String { rawValue } }
     @State private var sheet: Sheet?
+    @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
     var body: some View {
         ScrollView {
             VStack(alignment:.leading,spacing:20) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Title, author, or ISBN", text: $searchText)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
+                        .focused($searchFocused).onSubmit { submitSearch() }
+                        .accessibilityIdentifier("zlibrarySearchField")
+                    if !searchText.isEmpty {
+                        Button("Clear search", systemImage: "xmark.circle.fill") {
+                            searchText = ""; searchFocused = false
+                            Task { await catalog.loadPopular() }
+                        }.labelStyle(.iconOnly).foregroundStyle(.secondary).accessibilityIdentifier("zlibraryClearSearch")
+                    }
+                    Button("Search", action: submitSearch)
+                        .font(.subheadline.weight(.semibold)).disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("zlibrarySubmitSearch")
+                }.padding(14).frame(minHeight: 48).background(.background, in: .rect(cornerRadius: 14))
                 HStack(alignment:.firstTextBaseline) {
-                    Text("Most popular").font(.system(size:32,weight:.regular,design:.serif))
+                    Text(catalog.activeQuery.isEmpty ? "Most popular" : "Search results").font(.system(size:32,weight:.regular,design:.serif))
                     Spacer()
                     if catalog.isPreview { Text("Preview").font(.caption).foregroundStyle(.secondary) }
+                }
+                if !catalog.activeQuery.isEmpty {
+                    Text("Results for “\(catalog.activeQuery)”").font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                 }
                 if !catalog.connected {
                     Button { sheet = .connection } label: { Label("Connect Z-Library",systemImage:"person.crop.circle") }
                         .buttonStyle(.bordered).accessibilityIdentifier("connectZLibrary")
                 }
                 if catalog.loading && catalog.books.isEmpty {
-                    ProgressView("Loading popular books…").frame(maxWidth:.infinity).padding(.vertical,70)
+                    ProgressView(catalog.activeQuery.isEmpty ? "Loading popular books…" : "Searching books…").frame(maxWidth:.infinity).padding(.vertical,70)
                 }
                 if let error = catalog.error {
                     VStack(alignment:.leading,spacing:12) {
-                        Label("Could not load popular books",systemImage:"exclamationmark.circle").font(.headline)
+                        Label(catalog.activeQuery.isEmpty ? "Could not load popular books" : "Could not search books",systemImage:"exclamationmark.circle").font(.headline)
                         Text(error).font(.subheadline).foregroundStyle(.secondary)
                         HStack {
                             if catalog.websiteAccessNeeded {
                                 Button("Open website") { Task { await catalog.seedWebsite(); sheet = .website } }
                                     .accessibilityIdentifier("zlibraryCheckWebsite")
                             } else { Button("Connection") { sheet = .connection } }
-                            Button("Try again") { Task { await catalog.loadPopular() } }.disabled(catalog.loading)
+                            Button("Try again") { Task { await catalog.retry() } }.disabled(catalog.loading)
                         }.buttonStyle(.bordered)
                         if let diagnostic = catalog.requestDiagnostic {
                             DisclosureGroup("Request details") {
@@ -80,7 +101,11 @@ struct ZLibraryView: View {
                         Text("You can also download a book using your browser and add it from Files.").font(.caption).foregroundStyle(.secondary)
                     }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(theme.surface,in:.rect(cornerRadius:18))
                 } else if !catalog.loading && catalog.books.isEmpty {
-                    ContentUnavailableView("No books available",systemImage:"books.vertical",description:Text("Pull down to refresh the popular books list."))
+                    if catalog.activeQuery.isEmpty {
+                        ContentUnavailableView("No books available",systemImage:"books.vertical",description:Text("Pull down to refresh the popular books list."))
+                    } else {
+                        ContentUnavailableView("No books found",systemImage:"magnifyingglass",description:Text("Try another title, author, or ISBN."))
+                    }
                 }
                 LazyVGrid(columns:[GridItem(.adaptive(minimum:135,maximum:190),spacing:24,alignment:.top)],alignment:.leading,spacing:25) {
                     ForEach(catalog.books) { book in
@@ -98,16 +123,35 @@ struct ZLibraryView: View {
                         }.buttonStyle(.plain).accessibilityIdentifier("catalogBook-\(book.remoteID)")
                     }
                 }
+                if catalog.loading && !catalog.books.isEmpty { ProgressView("Loading more books…").frame(maxWidth: .infinity) }
+                else if catalog.canLoadMore {
+                    Button("Load more books") { searchFocused = false; Task { await catalog.loadMore() } }
+                        .buttonStyle(.bordered).frame(maxWidth: .infinity).accessibilityIdentifier("zlibraryLoadMore")
+                }
+                if catalog.searchLimitReached {
+                    Text("Showing the first 300 results. Refine your search to find more books.").font(.footnote).foregroundStyle(.secondary)
+                }
             }.padding(24).frame(maxWidth:900,alignment:.leading).frame(maxWidth:.infinity)
         }
         .background(theme.canvas).toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle("Z-Library").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement:.topBarTrailing) { Button { sheet = .connection } label: { Image(systemName:"person.crop.circle") }.accessibilityLabel("Z-Library connection") } }
-        .task { if catalog.books.isEmpty { await catalog.loadPopular() } }
-        .refreshable { await catalog.loadPopular() }
-        .sheet(item:$sheet,onDismiss: { Task { await catalog.loadPopular() } }) { sheet in
+        .onAppear { searchText = catalog.activeQuery }
+        .onChange(of: searchText) { _, value in
+            if value.isEmpty && !catalog.activeQuery.isEmpty { Task { await catalog.loadPopular() } }
+        }
+        .onDisappear { catalog.cancelCatalogLoad() }
+        .task { if catalog.books.isEmpty { await catalog.reload() } }
+        .refreshable { await catalog.reload() }
+        .scrollDismissesKeyboard(.interactively)
+        .sheet(item:$sheet,onDismiss: { Task { await catalog.reload() } }) { sheet in
             if sheet == .website { ZLibraryWebsiteSignIn() } else { ZLibraryConnectionView() }
         }
         .presentationDetents([.large])
+    }
+    private func submitSearch() {
+        searchFocused = false
+        let query = searchText
+        Task { await catalog.search(query) }
     }
 }
 
