@@ -162,20 +162,26 @@ struct ZLibraryBookView: View {
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var library: LibraryStore
     @State private var connection = false
+    @State private var resolved: ZLibraryBook?
+    @State private var detailsError: String?
+    @State private var loadingDetails = false
+    @State private var detailsAttempt = 0
+    @State private var detailsRequest = UUID()
+    private var edition: ZLibraryBook { resolved ?? book }
     private var existing: Book? { library.books.first { $0.catalogSource == book.sourceID } }
     var body: some View {
         ScrollView {
             VStack(spacing:18) {
-                ZLibraryCover(book:book).frame(width:150)
-                Text(book.title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
-                Text(book.author).foregroundStyle(.secondary)
+                ZLibraryCover(book:edition).frame(width:150)
+                Text(edition.title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
+                Text(edition.author).foregroundStyle(.secondary)
                 VStack(alignment:.leading,spacing:14) {
                     Text("This edition").font(.caption).foregroundStyle(.secondary)
                     HStack { Image(systemName:"doc").font(.title2).foregroundStyle(theme.accent); VStack(alignment:.leading,spacing:4) {
-                        Text([book.fileExtension.uppercased(),book.size].filter { !$0.isEmpty }.joined(separator:" · ")).font(.headline)
-                        Text([book.language,book.year].filter { !$0.isEmpty }.joined(separator:" · ")).font(.subheadline).foregroundStyle(.secondary)
+                        Text([edition.fileExtension.uppercased(),edition.size].filter { !$0.isEmpty }.joined(separator:" · ")).font(.headline)
+                        Text([edition.language,edition.year].filter { !$0.isEmpty }.joined(separator:" · ")).font(.subheadline).foregroundStyle(.secondary)
                     };Spacer() }
-                    Text(book.format == .pdf ? "Original page layout" : "Reading appearance can be adjusted in Leaf").font(.caption).foregroundStyle(.secondary)
+                    Text(edition.fileExtension.isEmpty ? "Loading edition information…" : edition.format == .pdf ? "Original page layout" : "Reading appearance can be adjusted in Leaf").font(.caption).foregroundStyle(.secondary)
                 }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(theme.surface,in:.rect(cornerRadius:18))
                 if let error = catalog.importError { Text(error).font(.subheadline).foregroundStyle(.red).accessibilityIdentifier("catalogImportError") }
                 if catalog.downloadingID == book.id {
@@ -190,10 +196,20 @@ struct ZLibraryBookView: View {
                 if existing != nil {
                     Label("Added to your library",systemImage:"checkmark.circle.fill").font(.subheadline).foregroundStyle(theme.accent).accessibilityIdentifier("catalogAdded")
                     Button("View in library",action:close).buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).accessibilityIdentifier("catalogViewLibrary")
-                } else if book.format == nil {
+                } else if edition.fileExtension.isEmpty {
+                    if let detailsError {
+                        Text(detailsError).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("catalogDetailsError")
+                        HStack {
+                            Button("Try again") { detailsAttempt += 1 }.accessibilityIdentifier("retryCatalogDetails")
+                            if !catalog.connected { Button("Connect Z-Library") { connection = true } }
+                        }.buttonStyle(.bordered).disabled(loadingDetails)
+                    } else {
+                        ProgressView("Loading book details…").accessibilityIdentifier("catalogDetailsLoading")
+                    }
+                } else if edition.format == nil {
                     Text("Leaf does not support this edition’s format. Choose another book or edition.").font(.footnote).foregroundStyle(.secondary)
                 } else {
-                    Button { if catalog.connected { catalog.add(book,library:library) } else { connection = true } } label: {
+                    Button { if catalog.connected { catalog.add(edition,library:library) } else { connection = true } } label: {
                         Label(catalog.downloadingID == book.id ? "Adding to library…" : catalog.connected ? "Add to library" : "Connect to add book",systemImage:"plus").frame(maxWidth:.infinity)
                     }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large).disabled(catalog.downloadingID != nil || library.isImporting).accessibilityIdentifier("catalogAddBook")
                     Text("Saved on this device for offline reading").font(.caption).foregroundStyle(.secondary)
@@ -202,7 +218,21 @@ struct ZLibraryBookView: View {
         }
         .sheet(isPresented:$connection) { ZLibraryConnectionView() }
         .onAppear { catalog.resetImportResult() }
+        .task(id: "\(catalog.connected):\(detailsAttempt)") { await loadDetails() }
         .onDisappear { if catalog.downloadingID == book.id { catalog.cancelDownload() } }
+    }
+    private func loadDetails() async {
+        guard edition.fileExtension.isEmpty else { return }
+        let request = UUID(); detailsRequest = request; loadingDetails = true; detailsError = nil
+        defer { if request == detailsRequest { loadingDetails = false } }
+        do {
+            let details = try await catalog.details(book)
+            try Task.checkCancellation()
+            guard request == detailsRequest else { return }
+            resolved = details
+        } catch {
+            if request == detailsRequest && !Task.isCancelled && !ZLibraryStore.isCancellation(error) { detailsError = error.localizedDescription }
+        }
     }
 }
 
