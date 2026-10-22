@@ -200,6 +200,55 @@ final class ZLibraryUITests: XCTestCase {
             app.terminate()
         }
     }
+    @MainActor func testWebsiteDismissalCapturesContextWithoutCheckConnectionAndSurvivesRelaunch() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_WEBSITE_FIXTURE": "1"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout: 10))
+        app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
+        app.buttons["zlibraryCheckWebsite"].tap()
+        XCTAssertTrue(app.webViews.staticTexts["Offline connection fixture"].waitForExistence(timeout: 10))
+        let check = app.buttons["Check connection"]
+        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: check); waitForExpectations(timeout: 10)
+        capture("Website identity ready before connection check")
+        app.buttons["Cancel"].tap() // Refresh an already verified account without Check connection.
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
+        capture("Catalog recovered by closing website")
+        app.terminate(); app.launch()
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
+        XCTAssertFalse(app.buttons["connectZLibrary"].exists)
+        capture("Refreshed website session restored after relaunch")
+    }
+    @MainActor func testSavedConnectionLoadsWithoutWebsiteAfterRepeatedRelaunch() {
+        let app = launch()
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout: 10))
+        app.buttons["Z-Library connection"].tap()
+        app.buttons["zlibraryPreviewConnect"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["connectZLibrary"].exists)
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            app.terminate(); XCUIDevice.shared.orientation = orientation; app.launch()
+            XCTAssertTrue(app.buttons["importBooks"].waitForExistence(timeout: 10))
+            app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+            XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+            XCTAssertFalse(app.buttons["connectZLibrary"].exists)
+            XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
+            app.buttons["Z-Library connection"].tap()
+            XCTAssertTrue(app.staticTexts["Account connected"].waitForExistence(timeout: 5))
+            capture("Restored catalog account \(orientation.rawValue)")
+            app.buttons["Close connection"].tap()
+            capture("Restored popular catalog \(orientation.rawValue)")
+        }
+        XCUIDevice.shared.orientation = .portrait
+    }
     @MainActor func testVerifiedAccountWithUnavailableFeedShowsWebsiteAccessWithoutSigningOut() {
         let app = launch(feedFailure:true)
         app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()

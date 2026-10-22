@@ -5,7 +5,8 @@ import WebKit
 private final class CatalogCredentials: ChatCredentialStore {
     var values: [String:String] = [:]
     var failWrites = false
-    func read(account:String) throws -> String? { values[account] }
+    var failReads = false
+    func read(account:String) throws -> String? { if failReads { throw ZLibraryError.file }; return values[account] }
     func write(_ key:String?,account:String) throws { if failWrites { throw ZLibraryError.file }; values[account] = key }
 }
 private final class CatalogTransport: ZLibraryTransport {
@@ -91,7 +92,18 @@ private final class CatalogURLProtocol: URLProtocol {
     }
     private func store(_ client:CatalogService? = nil) -> (ZLibraryStore,CatalogCredentials,UserDefaults) {
         let name = "LeafZLibraryTests.\(UUID())", defaults = UserDefaults(suiteName:name)!, credentials = CatalogCredentials()
-        addTeardownBlock { defaults.removePersistentDomain(forName:name) }
+        addTeardownBlock {
+            for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix("zlibrary.websiteData.") {
+                if let raw = value as? String, let id = UUID(uuidString: raw) {
+                    await Task { @MainActor in
+                        await withCheckedContinuation { continuation in
+                            WKWebsiteDataStore.remove(forIdentifier: id) { _ in continuation.resume() }
+                        }
+                    }.value
+                }
+            }
+            defaults.removePersistentDomain(forName:name)
+        }
         defaults.set(origin.url.absoluteString,forKey:"zlibrary.origin")
         return (ZLibraryStore(defaults:defaults,credentials:credentials,client:client ?? CatalogService()),credentials,defaults)
     }
@@ -610,6 +622,90 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertEqual(seeded.first { $0.name == "site_access" }?.value,"opaque")
         XCTAssertTrue(seeded.allSatisfy { $0.domain.trimmingCharacters(in:CharacterSet(charactersIn:".")) == "catalog.example" })
     }
+    func testNewStoreRestoresNewerBrowserCookiesWithoutOpeningWebsiteOrCheckingConnection() async throws {
+        let client = CatalogService(), (first, credentials, defaults) = store(client)
+        let old = ZLibrarySession(userID: "42", userKey: "key", websiteCookies: [
+            ZLibraryWebsiteCookie(name: "site_access", value: "old", path: "/", expires: nil)
+        ], userAgent: "Browser identity/1.0")
+        let connected = await first.connect(old); XCTAssertTrue(connected)
+        await first.seedWebsite()
+        let fresh = try XCTUnwrap(HTTPCookie(properties: [.domain: "catalog.example", .path: "/", .name: "site_access", .value: "refreshed", .secure: "TRUE"]))
+        await first.websiteData.httpCookieStore.setCookie(fresh)
+        // Restore an independently-created Store without opening the website.
+        let restored = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        XCTAssertTrue(restored.websiteData.isPersistent)
+        await restored.seedWebsite() // Opening the website must not clobber fresher cookies either.
+        let browserCookies = await restored.websiteData.httpCookieStore.allCookies()
+        XCTAssertEqual(browserCookies.first { $0.name == "site_access" }?.value, "refreshed")
+        await restored.loadPopular()
+        let request = try XCTUnwrap(client.popularSessions.last ?? nil)
+        XCTAssertEqual(request.websiteCookies?.first?.value, "refreshed")
+        XCTAssertEqual(request.userAgent, "Browser identity/1.0")
+        XCTAssertTrue(restored.connected); XCTAssertNil(restored.error)
+        let third = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        await third.loadPopular()
+        XCTAssertEqual(client.popularSessions.last!, request)
+        try await third.disconnect()
+        let remaining = await third.websiteData.httpCookieStore.allCookies()
+        XCTAssertTrue(remaining.isEmpty)
+        XCTAssertNil(credentials.values[origin.url.absoluteString])
+    }
+    func testRestorationNeverAdoptsDifferentBrowserAccountAndKeepsOriginIsolation() async throws {
+        let client = CatalogService(), (first, credentials, defaults) = store(client)
+        _ = await first.connect(session)
+        await first.seedWebsite()
+        for (name, value) in [("remix_userid", "different"), ("remix_userkey", "other-key")] {
+            await first.websiteData.httpCookieStore.setCookie(try XCTUnwrap(HTTPCookie(properties: [.domain: "catalog.example", .path: "/", .name: name, .value: value])))
+        }
+        let restored = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        await restored.loadPopular()
+        XCTAssertEqual(client.popularSessions.last!, session)
+        await restored.seedWebsite()
+        let cookies = await restored.websiteData.httpCookieStore.allCookies()
+        XCTAssertEqual(cookies.first { $0.name == "remix_userid" }?.value, "42")
+        let firstID = defaults.string(forKey: "zlibrary.websiteData.https://catalog.example")
+        try await restored.changeAddress("https://other.example")
+        let otherCookies = await restored.websiteData.httpCookieStore.allCookies()
+        XCTAssertTrue(otherCookies.isEmpty)
+        XCTAssertNotEqual(firstID, defaults.string(forKey: "zlibrary.websiteData.https://other.example"))
+    }
+    func testDisconnectClearsPersistedWebsiteEvenBeforeItIsOpenedOnThisLaunch() async throws {
+        let client = CatalogService(), (first, credentials, defaults) = store(client)
+        _ = await first.connect(session)
+        await first.seedWebsite()
+        let restored = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        try await restored.disconnect()
+        let cookies = await restored.websiteData.httpCookieStore.allCookies()
+        XCTAssertTrue(cookies.isEmpty)
+        let relaunched = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        await relaunched.loadPopular()
+        XCTAssertFalse(relaunched.connected)
+        XCTAssertNil(client.popularSessions.last!)
+    }
+    func testLockedKeychainAtLaunchRetriesSavedConnectionOnUse() async throws {
+        let client = CatalogService(), (_, credentials, defaults) = store(client)
+        credentials.values[origin.url.absoluteString] = String(decoding: try JSONEncoder().encode(session), as: UTF8.self)
+        credentials.failReads = true
+        let restored = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        XCTAssertNotNil(restored.connectionError)
+        credentials.failReads = false
+        await restored.loadPopular()
+        XCTAssertTrue(restored.connected); XCTAssertNil(restored.connectionError)
+        XCTAssertEqual(client.popularSessions.last!, session)
+    }
+    func testFailedBrowserSnapshotPreservesSavedSessionForNextAttempt() async throws {
+        let client = CatalogService(), (store, credentials, _) = store(client)
+        _ = await store.connect(session)
+        await store.seedWebsite()
+        let saved = credentials.values
+        credentials.failWrites = true
+        await store.websiteData.httpCookieStore.setCookie(try XCTUnwrap(HTTPCookie(properties: [.domain: "catalog.example", .path: "/", .name: "site_access", .value: "new"])))
+        do { try await store.saveWebsiteContext(); XCTFail("Snapshot write should fail") } catch {}
+        XCTAssertEqual(credentials.values, saved)
+        credentials.failWrites = false
+        await store.loadPopular()
+        XCTAssertEqual((client.popularSessions.last ?? nil)?.websiteCookies?.first?.value, "new")
+    }
     func testConnectedFeedFailureKeepsAccountAndWebsiteRefreshDoesNotRequireAnotherLogin() async throws {
         let client = CatalogService(), (store,_,_) = store(client)
         _ = await store.connect(session)
@@ -678,5 +774,53 @@ private final class CatalogURLProtocol: URLProtocol {
         store.add(book,library:library)
         try await wait { store.downloadingID == nil }
         XCTAssertEqual(client.downloads,0);XCTAssertNotNil(store.importError);XCTAssertTrue(library.books.isEmpty)
+    }
+}
+
+/// These two phases can also be run in separate xcodebuild invocations with an
+/// in-place simctl install between them, exercising a real app-container upgrade.
+@MainActor final class ZLibrarySessionUpgradeTests: XCTestCase {
+    private let suite = "com.leafreader.tests.catalogUpgrade"
+    private let credentials = KeychainChatCredentials(service: "com.leafreader.tests.catalogUpgrade")
+    private let source = try! ZLibraryOrigin("https://upgrade.example")
+    func test01PrepareSavedConnectionAndLifecycleSnapshot() async throws {
+        let defaults = UserDefaults(suiteName: suite)!
+        let oldStore = ZLibraryStore(defaults: defaults, credentials: credentials, client: CatalogService())
+        try await oldStore.disconnect()
+        defaults.removePersistentDomain(forName: suite)
+        defaults.set(source.url.absoluteString, forKey: "zlibrary.origin")
+        let store = ZLibraryStore(defaults: defaults, credentials: credentials, client: CatalogService())
+        let session = ZLibrarySession(userID: "42", userKey: "upgrade-fixture", websiteCookies: [
+            ZLibraryWebsiteCookie(name: "site_access", value: "older-snapshot", path: "/", expires: nil)
+        ], userAgent: "Upgrade fixture browser/1.0")
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        await store.seedWebsite()
+        await store.websiteData.httpCookieStore.setCookie(try XCTUnwrap(HTTPCookie(properties: [
+            .domain: "upgrade.example", .path: "/", .name: "site_access", .value: "latest-browser-context", .secure: "TRUE"
+        ])))
+        // The same hook runs on website finish, dismissal, and scene backgrounding.
+        // It must persist session-only cookies without an explicit Check connection.
+        try await store.saveWebsiteContext()
+        await store.websiteData.httpCookieStore.setCookie(try XCTUnwrap(HTTPCookie(properties: [
+            .domain: "upgrade.example", .path: "/", .name: "persistent_only", .value: "website-storage", .secure: "TRUE", .expires: Date().addingTimeInterval(3600)
+        ])))
+        defaults.synchronize()
+        let saved = try XCTUnwrap(credentials.read(account: source.url.absoluteString))
+        XCTAssertTrue(saved.contains("latest-browser-context"), "Lifecycle snapshot must save refreshed cookies without Check connection")
+        XCTAssertFalse(saved.contains("persistent_only"), "This cookie must be recovered from WebKit, not Keychain")
+    }
+    func test02RestoreAfterAppReplacementWithoutWebsiteOrCheckConnection() async throws {
+        let defaults = UserDefaults(suiteName: suite)!, client = CatalogService()
+        XCTAssertEqual(defaults.string(forKey: "zlibrary.origin"), source.url.absoluteString)
+        let store = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        await store.loadPopular()
+        let restored = try XCTUnwrap(client.popularSessions.last ?? nil)
+        XCTAssertEqual(restored.websiteCookies?.first { $0.name == "site_access" }?.value, "latest-browser-context")
+        XCTAssertEqual(restored.websiteCookies?.first { $0.name == "persistent_only" }?.value, "website-storage")
+        XCTAssertEqual(restored.userAgent, "Upgrade fixture browser/1.0")
+        XCTAssertTrue(store.connected); XCTAssertNil(store.error)
+        try await store.disconnect()
+        let empty = await store.websiteData.httpCookieStore.allCookies()
+        XCTAssertTrue(empty.isEmpty)
     }
 }
