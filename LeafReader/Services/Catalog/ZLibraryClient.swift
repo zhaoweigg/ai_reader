@@ -7,13 +7,23 @@ enum ZLibraryError: LocalizedError, Equatable {
         switch self {
         case .address: return "Enter an HTTPS website address without a path, port, or sign-in details."
         case .signInRequired: return "Connect your Z-Library account to continue."
-        case .challenge: return "The website needs your attention. Open Connection to sign in or complete its verification, then try again."
+        case .challenge: return "The website returned a page or redirect instead of book data. Open the website to check access, then try again."
         case .response: return "Z-Library returned an unexpected response. Try again later."
         case .service(let message): return message
         case .size: return "This download exceeds Leaf’s 100 MB book limit. Choose a smaller edition."
         case .file: return "The download is not a complete supported book. Try another edition."
         case .busy: return "Another book is being imported. Try again when it finishes."
         }
+    }
+}
+
+// Safe to show/copy: never include response bodies, cookies, account details or URL queries.
+struct ZLibraryRequestFailure: LocalizedError {
+    let issue: ZLibraryError
+    let diagnostic: String
+    var errorDescription: String? { issue.errorDescription }
+    static func issue(_ error: Error) -> ZLibraryError? {
+        (error as? Self)?.issue ?? error as? ZLibraryError
     }
 }
 
@@ -41,10 +51,45 @@ struct ZLibraryOrigin: Codable, Equatable {
     }
 }
 
+struct ZLibraryWebsiteCookie: Codable, Equatable {
+    let name: String
+    let value: String
+    let path: String
+    let expires: Date?
+    var valid: Bool {
+        !name.isEmpty && name.count <= 256 && name.utf8.allSatisfy { (33...126).contains($0) && !"()<>@,;:\\\"/[]?={} ".utf8.contains($0) }
+        && !["remix_userid", "remix_userkey"].contains(name)
+        && value.count <= 4096 && value.utf8.allSatisfy { (33...126).contains($0) && !",;\"\\".utf8.contains($0) }
+        && path.hasPrefix("/") && path.count <= 1024 && !path.contains("\r") && !path.contains("\n")
+        && (expires.map { $0.timeIntervalSince1970.isFinite } ?? true)
+    }
+    func applies(to url: URL, now: Date = Date()) -> Bool {
+        guard valid, expires.map({ $0 > now }) ?? true else { return false }
+        let requestPath = url.path.isEmpty ? "/" : url.path
+        return requestPath == path || (requestPath.hasPrefix(path) && (path.hasSuffix("/") || requestPath.dropFirst(path.count).hasPrefix("/")))
+    }
+}
+
 struct ZLibrarySession: Codable, Equatable {
     let userID: String
     let userKey: String
-    var valid: Bool { !userID.isEmpty && !userKey.isEmpty && userID.count < 256 && userKey.count < 4096 && "\(userID)\(userKey)".unicodeScalars.allSatisfy { (33...126).contains(Int($0.value)) && !";,\"\\".unicodeScalars.contains($0) } }
+    let websiteCookies: [ZLibraryWebsiteCookie]?
+    let userAgent: String?
+    init(userID: String, userKey: String, websiteCookies: [ZLibraryWebsiteCookie]? = nil, userAgent: String? = nil) {
+        self.userID = userID; self.userKey = userKey; self.websiteCookies = websiteCookies; self.userAgent = userAgent
+    }
+    static func validUserAgent(_ text: String) -> Bool { !text.isEmpty && text.utf8.count <= 1024 && text.utf8.allSatisfy { (32...126).contains($0) } }
+    var valid: Bool {
+        !userID.isEmpty && !userKey.isEmpty && userID.count < 256 && userKey.count < 4096
+        && "\(userID)\(userKey)".unicodeScalars.allSatisfy { (33...126).contains(Int($0.value)) && !";,\"\\".unicodeScalars.contains($0) }
+        && (websiteCookies?.count ?? 0) <= 64 && (websiteCookies?.allSatisfy(\.valid) ?? true)
+        && (websiteCookies?.reduce(0, { $0 + $1.name.utf8.count + $1.value.utf8.count }) ?? 0) <= 16384
+        && (userAgent.map(Self.validUserAgent) ?? true)
+    }
+    func cookieHeader(for url: URL) -> String {
+        let context = (websiteCookies ?? []).filter { $0.applies(to: url) }.sorted { $0.path.count > $1.path.count }
+        return (["remix_userid=\(userID)", "remix_userkey=\(userKey)"] + context.map { "\($0.name)=\($0.value)" }).joined(separator: "; ")
+    }
 }
 struct ZLibraryProfile: Equatable {
     let name: String
@@ -84,18 +129,45 @@ struct ZLibraryClient: ZLibraryServing {
     var transport: any ZLibraryTransport = ZLibraryHTTPTransport()
     func request(_ path: String, origin: ZLibraryOrigin, session: ZLibrarySession?) -> URLRequest {
         var request = URLRequest(url: origin.url.appendingPathComponent("eapi").appendingPathComponent(path))
-        request.setValue("Leaf/1.6 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(session?.valid == true ? session?.userAgent ?? "Leaf (iOS)" : "Leaf (iOS)", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let session, session.valid {
             request.setValue(session.userID, forHTTPHeaderField: "remix-userid")
             request.setValue(session.userKey, forHTTPHeaderField: "remix-userkey")
-            request.setValue("remix_userid=\(session.userID); remix_userkey=\(session.userKey)", forHTTPHeaderField: "Cookie")
+            request.setValue(session.cookieHeader(for: request.url!), forHTTPHeaderField: "Cookie")
         }
         return request
     }
     func object(_ path: String, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [String: Any] {
-        let payload = try await transport.send(request(path, origin: origin, session: session), toFile: false, progress: { _ in })
-        return try Self.decode(payload)
+        var request = request(path, origin: origin, session: session)
+        var visited = Set([request.url!]), count = 0
+        while true {
+            try Task.checkCancellation()
+            let payload = try await transport.send(request, toFile: false, progress: { _ in })
+            if (300...399).contains(payload.response.statusCode),
+               let location = payload.response.value(forHTTPHeaderField: "Location"),
+               let url = URL(string: location, relativeTo: request.url)?.absoluteURL {
+                var next = request; next.url = url
+                if let redirected = ZLibraryHTTPTransport.redirect(next, original: origin.url.appendingPathComponent("eapi/\(path)"), toFile: false, visited: visited, count: count) {
+                    request = redirected
+                    if let session, session.valid { request.setValue(session.cookieHeader(for: url), forHTTPHeaderField: "Cookie") }
+                    visited.insert(url); count += 1
+                    continue
+                }
+            }
+            return try Self.decode(payload, path: path)
+        }
+    }
+    private static func decode(_ payload: ZLibraryPayload, path: String) throws -> [String: Any] {
+        do { return try Self.decode(payload) }
+        catch let issue as ZLibraryError {
+            let status = payload.response.statusCode
+            let kind: String
+            if (300...399).contains(status) { kind = "redirect not followed" }
+            else if payload.response.mimeType == "text/html" || String(decoding: payload.data.prefix(128), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") { kind = "HTML instead of JSON" }
+            else { kind = "JSON/API response" }
+            throw ZLibraryRequestFailure(issue: issue, diagnostic: "GET /eapi/\(path) · HTTP \(status) · \(kind)")
+        }
     }
     static func decode(_ payload: ZLibraryPayload) throws -> [String: Any] {
         let response = payload.response
@@ -149,10 +221,11 @@ struct ZLibraryClient: ZLibraryServing {
         let url = try ZLibraryOrigin.fileURL(link, relativeTo: origin)
         // Signed CDN links receive no reusable account credential.
         var request = URLRequest(url: url)
-        request.setValue("Leaf/1.6 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue("Leaf (iOS)", forHTTPHeaderField: "User-Agent")
         if origin.contains(url) {
             let headers = self.request("", origin: origin, session: session).allHTTPHeaderFields ?? [:]
             for (key, value) in headers where key.lowercased() != "accept" { request.setValue(value, forHTTPHeaderField: key) }
+            request.setValue(session.cookieHeader(for: url), forHTTPHeaderField: "Cookie")
         }
         let payload = try await transport.send(request, toFile: true, progress: progress)
         guard let temp = payload.file else { throw ZLibraryError.file }
@@ -183,11 +256,16 @@ struct ZLibraryHTTPTransport: ZLibraryTransport {
     func send(_ request: URLRequest, toFile: Bool, progress: @escaping @Sendable (Double?) -> Void) async throws -> ZLibraryPayload {
         try await ZLibraryTransfer(configuration: configuration).run(request, toFile: toFile, progress: progress)
     }
-    static func redirect(_ request: URLRequest, original: URL?, toFile: Bool) -> URLRequest? {
-        guard toFile, let url = request.url, url.scheme == "https", url.host != nil,
+    static func redirect(_ request: URLRequest, original: URL?, toFile: Bool, visited: Set<URL> = [], count: Int = 0) -> URLRequest? {
+        guard count < 3, let url = request.url, url.scheme == "https", url.host != nil,
               url.user == nil, url.password == nil, url.port == nil else { return nil }
+        guard url != original, !visited.contains(url) else { return nil }
         var result = request
-        if original?.scheme != url.scheme || original?.host != url.host || original?.port != url.port {
+        let sameOrigin = original?.scheme == url.scheme && original?.host == url.host && original?.port == url.port
+        // Normal API canonicalization is allowed, but never follow a website challenge or
+        // move account headers to another API host. Challenges remain an explicit failure.
+        if !toFile && (!sameOrigin || original?.path.hasPrefix("/eapi/") != true || !url.path.hasPrefix("/eapi/")) { return nil }
+        if !sameOrigin {
             for name in ["Cookie", "Authorization", "remix-userid", "remix-userkey"] { result.setValue(nil, forHTTPHeaderField:name) }
         }
         return result
@@ -209,6 +287,8 @@ private final class ZLibraryTransfer: NSObject, URLSessionDataDelegate, @uncheck
     private var bytes: Int64 = 0
     private var limit: Int64 = 2 * 1024 * 1024
     private var originalURL: URL?
+    private var visited = Set<URL>()
+    private var redirectCount = 0
     private var toFile = false
     private var progress: (@Sendable (Double?) -> Void)?
     init(configuration: URLSessionConfiguration) { self.configuration = configuration; super.init() }
@@ -218,6 +298,7 @@ private final class ZLibraryTransfer: NSObject, URLSessionDataDelegate, @uncheck
                 lock.lock()
                 if cancelled { lock.unlock(); continuation.resume(throwing: CancellationError()); return }
                 self.continuation = continuation; self.toFile = toFile; self.originalURL = request.url; self.progress = progress
+                if let url = request.url { visited.insert(url) }
                 limit = toFile ? 100 * 1024 * 1024 : 2 * 1024 * 1024
                 do {
                     if toFile {
@@ -239,7 +320,11 @@ private final class ZLibraryTransfer: NSObject, URLSessionDataDelegate, @uncheck
         })
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(ZLibraryHTTPTransport.redirect(request,original:originalURL,toFile:toFile))
+        // JSON redirects are handled by the client so path-scoped cookies are rebuilt
+        // for each URL. The transport never silently changes an API request's target.
+        let next = toFile ? ZLibraryHTTPTransport.redirect(request,original:originalURL,toFile:true,visited:visited,count:redirectCount) : nil
+        if let url = next?.url { visited.insert(url); redirectCount += 1 }
+        completionHandler(next)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         guard let response = response as? HTTPURLResponse else { completionHandler(.cancel); finish(.failure(ZLibraryError.response)); return }

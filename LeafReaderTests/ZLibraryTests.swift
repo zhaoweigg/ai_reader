@@ -26,6 +26,8 @@ private final class CatalogService: ZLibraryServing {
     var remaining: Int? = 3
     var file: URL?
     var suspendPopular = false
+    var popularError: Error?
+    var popularSessions: [ZLibrarySession?] = []
     var popularContinuation: CheckedContinuation<[ZLibraryBook],Error>?
     func profile(origin:ZLibraryOrigin,session:ZLibrarySession) async throws -> ZLibraryProfile {
         profiles += 1
@@ -34,7 +36,9 @@ private final class CatalogService: ZLibraryServing {
         return ZLibraryProfile(name:"Test reader",remaining:remaining)
     }
     func popular(origin:ZLibraryOrigin,session:ZLibrarySession?) async throws -> [ZLibraryBook] {
+        popularSessions.append(session)
         if suspendPopular { return try await withCheckedThrowingContinuation { popularContinuation = $0 } }
+        if let popularError { throw popularError }
         return []
     }
     func download(_ book:ZLibraryBook,origin:ZLibraryOrigin,session:ZLibrarySession,progress:@escaping @Sendable (Double?)->Void) async throws -> URL {
@@ -103,6 +107,74 @@ private final class CatalogURLProtocol: URLProtocol {
         let books = try await ZLibraryClient(transport:transport).popular(origin:origin,session:session)
         XCTAssertEqual(books.count,1);XCTAssertEqual(books[0].format,.epub);XCTAssertEqual(books[0].size,"1 MB")
         XCTAssertEqual(books[0].coverURL?.host,"images.example")
+    }
+    func testWebsiteSessionIsBackwardCompatibleAndCookiesRespectPathExpiryAndHeaderSafety() throws {
+        let legacy = try JSONDecoder().decode(ZLibrarySession.self, from: Data("{\"userID\":\"42\",\"userKey\":\"old-key\"}".utf8))
+        XCTAssertTrue(legacy.valid); XCTAssertNil(legacy.websiteCookies); XCTAssertNil(legacy.userAgent)
+        let cookies = [
+            ZLibraryWebsiteCookie(name:"site_access",value:"opaque",path:"/",expires:Date().addingTimeInterval(60)),
+            ZLibraryWebsiteCookie(name:"catalog_mode",value:"books",path:"/eapi/book",expires:nil),
+            ZLibraryWebsiteCookie(name:"login_only",value:"private",path:"/login",expires:nil),
+            ZLibraryWebsiteCookie(name:"old_access",value:"expired",path:"/",expires:Date().addingTimeInterval(-60))
+        ]
+        let saved = ZLibrarySession(userID:"42",userKey:"test-only-session",websiteCookies:cookies,userAgent:"Browser session test/1.0")
+        XCTAssertTrue(saved.valid)
+        let request = ZLibraryClient().request("book/most-popular",origin:origin,session:saved)
+        XCTAssertEqual(request.value(forHTTPHeaderField:"User-Agent"),saved.userAgent)
+        let header = try XCTUnwrap(request.value(forHTTPHeaderField:"Cookie"))
+        XCTAssertTrue(header.contains("site_access=opaque"));XCTAssertTrue(header.contains("catalog_mode=books"))
+        XCTAssertFalse(header.contains("login_only"));XCTAssertFalse(header.contains("old_access"))
+        XCTAssertFalse(saved.cookieHeader(for:origin.url.appendingPathComponent("eapi/bookmark")).contains("catalog_mode"))
+        XCTAssertEqual(try JSONDecoder().decode(ZLibrarySession.self,from:JSONEncoder().encode(saved)),saved)
+        XCTAssertFalse(ZLibrarySession(userID:"42",userKey:"key",userAgent:"x\r\nCookie: injected").valid)
+        XCTAssertFalse(ZLibraryWebsiteCookie(name:"site_access",value:"x; stolen=key",path:"/",expires:nil).valid)
+        XCTAssertFalse(ZLibraryWebsiteCookie(name:"bad\r\nheader",value:"x",path:"/",expires:nil).valid)
+    }
+    func testAPIRedirectCanonicalizationPreservesSessionWithoutFollowingWebsiteOrCrossOrigin() async throws {
+        let browser = ZLibrarySession(userID:"42",userKey:"key",websiteCookies:[ZLibraryWebsiteCookie(name:"site_access",value:"opaque",path:"/",expires:nil)],userAgent:"Browser identity")
+        var count = 0
+        let transport = CatalogTransport { [self] request,_ in
+            count += 1
+            XCTAssertEqual(request.value(forHTTPHeaderField:"Cookie"),"remix_userid=42; remix_userkey=key; site_access=opaque")
+            XCTAssertEqual(request.value(forHTTPHeaderField:"User-Agent"),"Browser identity")
+            if count == 1 { return ZLibraryPayload(data:Data(),file:nil,response:HTTPURLResponse(url:request.url!,statusCode:302,httpVersion:nil,headerFields:["Location":"/eapi/book/most-popular/?language=en"])!) }
+            XCTAssertEqual(request.url?.absoluteString,"https://catalog.example/eapi/book/most-popular/?language=en")
+            return try response(["success":1,"books":[]])
+        }
+        _ = try await ZLibraryClient(transport:transport).popular(origin:origin,session:browser)
+        XCTAssertEqual(count,2)
+        for location in ["https://other.example/eapi/book/most-popular", "/verification?secret=not-for-diagnostics", "http://catalog.example/eapi/book/most-popular", "/eapi/book/most-popular"] {
+            let rejected = CatalogTransport { request,_ in
+                ZLibraryPayload(data:Data(),file:nil,response:HTTPURLResponse(url:request.url!,statusCode:307,httpVersion:nil,headerFields:["Location":location])!)
+            }
+            do { _ = try await ZLibraryClient(transport:rejected).popular(origin:origin,session:browser);XCTFail("Unsafe or looping redirect followed") }
+            catch { XCTAssertEqual(ZLibraryRequestFailure.issue(error),.challenge) }
+            XCTAssertEqual(rejected.requests.count,1)
+        }
+    }
+    func testRedirectsAreBoundedAndRebuildPathScopedCookieHeaders() async throws {
+        let browser = ZLibrarySession(userID:"42",userKey:"key",websiteCookies:[ZLibraryWebsiteCookie(name:"popular_only",value:"private",path:"/eapi/book/most-popular",expires:nil)])
+        var count = 0
+        let transport = CatalogTransport { request,_ in
+            count += 1
+            if count > 1 { XCTAssertFalse(request.value(forHTTPHeaderField:"Cookie")?.contains("popular_only") ?? true) }
+            return ZLibraryPayload(data:Data(),file:nil,response:HTTPURLResponse(url:request.url!,statusCode:302,httpVersion:nil,headerFields:["Location":"/eapi/other/\(count)"])!)
+        }
+        do { _ = try await ZLibraryClient(transport:transport).popular(origin:origin,session:browser);XCTFail("Unbounded redirects") }
+        catch { XCTAssertEqual(ZLibraryRequestFailure.issue(error),.challenge) }
+        XCTAssertEqual(count,4)
+    }
+    func testFailureDiagnosticsExcludeBodiesCookiesQueriesAndAccountDetails() async throws {
+        let transport = CatalogTransport { request,_ in
+            ZLibraryPayload(data:Data("<html>reader@example.test account-secret</html>".utf8),file:nil,response:HTTPURLResponse(url:request.url!,statusCode:200,httpVersion:nil,headerFields:["Content-Type":"text/html","Set-Cookie":"private=secret"])!)
+        }
+        do { _ = try await ZLibraryClient(transport:transport).popular(origin:origin,session:session);XCTFail("HTML accepted") }
+        catch {
+            let failure = try XCTUnwrap(error as? ZLibraryRequestFailure)
+            XCTAssertEqual(failure.issue,.challenge)
+            XCTAssertEqual(failure.diagnostic,"GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
+            for value in ["reader@", "account-secret", "private", "test-only-session"] { XCTAssertFalse(failure.diagnostic.contains(value)) }
+        }
     }
     func testHTMLAndRedirectsAreChallengesAndExpiredSessionIsDistinct() throws {
         let html = ZLibraryPayload(data:Data("<!DOCTYPE html><html>Verification</html>".utf8),file:nil,response:HTTPURLResponse(url:origin.url,statusCode:200,httpVersion:nil,headerFields:[:])!)
@@ -218,6 +290,49 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertNotNil(store.cookieCandidate([cookie("remix_userid","catalog.example"),cookie("remix_userkey",".catalog.example")]))
         XCTAssertNil(store.cookieCandidate([cookie("remix_userid","evil.example"),cookie("remix_userkey","evil.example")]))
         XCTAssertNotNil(store.cookieCandidate([cookie("remix_userid","catalog.example"),cookie("remix_userkey","catalog.example",false)]))
+    }
+    func testVerifiedWebsiteContextIsCapturedForOnlyConfiguredHostAndSurvivesRelaunch() async throws {
+        let client = CatalogService(), (store,credentials,defaults) = store(client)
+        func cookie(_ name: String,_ value: String,_ domain: String = "catalog.example",_ path: String = "/") -> HTTPCookie {
+            HTTPCookie(properties:[.domain:domain,.path:path,.name:name,.value:value,.secure:"TRUE"])!
+        }
+        store.captureWebsiteUserAgent("Browser identity/1.0")
+        let candidate = try XCTUnwrap(store.cookieCandidate([
+            cookie("remix_userid","42"),cookie("remix_userkey","key"),cookie("site_access","opaque"),cookie("other_account","private","other.example")
+        ]))
+        XCTAssertEqual(candidate.websiteCookies?.map(\.name),["site_access"])
+        XCTAssertEqual(candidate.userAgent,"Browser identity/1.0")
+        let connected = await store.connect(candidate);XCTAssertTrue(connected)
+        let restored = ZLibraryStore(defaults:defaults,credentials:credentials,client:client)
+        await restored.loadPopular()
+        XCTAssertTrue(restored.connected)
+        XCTAssertEqual(client.popularSessions.last!,candidate)
+        await restored.seedWebsite()
+        let seeded = await restored.websiteData.httpCookieStore.allCookies()
+        XCTAssertEqual(seeded.first { $0.name == "site_access" }?.value,"opaque")
+        XCTAssertTrue(seeded.allSatisfy { $0.domain.trimmingCharacters(in:CharacterSet(charactersIn:".")) == "catalog.example" })
+    }
+    func testConnectedFeedFailureKeepsAccountAndWebsiteRefreshDoesNotRequireAnotherLogin() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        _ = await store.connect(session)
+        client.popularError = ZLibraryRequestFailure(issue:.challenge,diagnostic:"GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
+        await store.loadPopular()
+        XCTAssertTrue(store.connected);XCTAssertTrue(store.websiteAccessNeeded)
+        XCTAssertTrue(store.error?.hasPrefix("Your account is connected") == true)
+        XCTAssertNotNil(store.requestDiagnostic)
+        await store.seedWebsite()
+        await store.websiteData.httpCookieStore.setCookie(HTTPCookie(properties:[.domain:"catalog.example",.path:"/",.name:"site_access",.value:"fresh",.secure:"TRUE"])!)
+        store.captureWebsiteUserAgent("Browser identity")
+        client.popularError = nil
+        await store.loadPopular()
+        XCTAssertTrue(store.connected);XCTAssertNil(store.error);XCTAssertNil(store.requestDiagnostic);XCTAssertFalse(store.websiteAccessNeeded)
+        XCTAssertEqual(client.profiles,1,"Refreshing browser context must not make the user sign in again")
+        let refreshed = try XCTUnwrap(client.popularSessions.last ?? nil)
+        XCTAssertEqual(refreshed.websiteCookies?.first?.value,"fresh")
+        let expired = ZLibraryRequestFailure(issue:.signInRequired,diagnostic:"GET /eapi/book/most-popular · HTTP 401 · JSON/API response")
+        client.popularError = expired
+        await store.loadPopular()
+        XCTAssertFalse(store.connected);XCTAssertFalse(store.websiteAccessNeeded)
     }
     func testAnonymousFeedFailureCannotUndoACompletedSignIn() async throws {
         let client = CatalogService(), (store,_,_) = store(client)
