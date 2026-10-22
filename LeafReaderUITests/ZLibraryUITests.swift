@@ -364,12 +364,20 @@ final class ZLibraryUITests: XCTestCase {
             }
             capture("Saved lists after ten view switches \(landscape ? "landscape" : "portrait")")
             // A deliberate refresh still performs a request and presents the real failure.
-            let scroll = app.scrollViews.firstMatch
-            scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).press(forDuration: 0.1, thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)))
+            app.buttons["zlibraryRefresh"].tap()
             XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
             XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "browser access check")).firstMatch.exists)
-            XCTAssertTrue(app.buttons["catalogBook-sample2"].exists)
+            let message = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "browser access check")).firstMatch
+            let catalogScroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
+            for _ in 0..<3 {
+                if message.isHittable && message.frame.maxY < app.windows.firstMatch.frame.maxY { break }
+                catalogScroll.swipeUp()
+            }
+            XCTAssertTrue(message.isHittable)
             capture("Explicit refresh access check retains loaded books \(landscape ? "landscape" : "portrait")")
+            catalogScroll.swipeUp()
+            XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout: 5))
+            capture("Loaded books retained after explicit refresh failure \(landscape ? "landscape" : "portrait")")
             app.terminate()
         }
         XCUIDevice.shared.orientation = .portrait

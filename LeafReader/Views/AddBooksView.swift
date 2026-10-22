@@ -88,6 +88,9 @@ struct ZLibraryView: View {
                     Text(catalog.activeQuery.isEmpty ? "Most popular" : "Search results").font(.system(size:32,weight:.regular,design:.serif))
                     Spacer()
                     if catalog.isPreview { Text("Preview").font(.caption).foregroundStyle(.secondary) }
+                    Button("Refresh books", systemImage: "arrow.clockwise") { Task { await catalog.reload() } }
+                        .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(catalog.loading)
+                        .accessibilityIdentifier("zlibraryRefresh")
                 }
                 if !catalog.activeQuery.isEmpty {
                     Text("Results for “\(catalog.activeQuery)”").font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
@@ -168,6 +171,7 @@ struct ZLibraryView: View {
         .onDisappear { catalog.cancelCatalogLoad() }
         .task { await catalog.search(catalog.activeQuery) }
         .refreshable { await catalog.reload() }
+        .scrollBounceBehavior(.always, axes: .vertical)
         .scrollDismissesKeyboard(.interactively)
         .sheet(item:$sheet,onDismiss: { Task { await catalog.reload() } }) { sheet in
             if sheet == .website { ZLibraryWebsiteSignIn() } else { ZLibraryConnectionView() }
