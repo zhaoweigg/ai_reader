@@ -81,6 +81,40 @@ private final class HistoryProvider: ChatProvider {
         let cleared = ReaderChatSession(directory: directory, conversation: "book-a")
         XCTAssertNil(cleared.selectedContext); XCTAssertTrue(cleared.messages.isEmpty)
     }
+    func testSelectionShortcutsPrepareSavedDraftWithoutSending() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        let session = ReaderChatSession(directory: directory, conversation: "shortcuts")
+        session.attachSelection(context)
+        session.prepareSelectionPrompt(.explain)
+        XCTAssertEqual(session.draft, "Explain this passage.")
+        session.prepareSelectionPrompt(.summarize)
+        XCTAssertEqual(session.draft, "Summarize this passage.")
+        XCTAssertEqual(session.selectedContext, context)
+        XCTAssertTrue(session.messages.isEmpty); XCTAssertTrue(provider.requests.isEmpty)
+        session.close()
+        let restored = ReaderChatSession(directory: directory, conversation: "shortcuts")
+        XCTAssertEqual(restored.draft, "Summarize this passage."); XCTAssertEqual(restored.selectedContext, context)
+        restored.send(settings: settings) { XCTFail("Use the saved selection"); return nil }
+        try await wait { provider.requests.count == 1 }
+        XCTAssertEqual(restored.messages.first?.text, "Summarize this passage.")
+        XCTAssertEqual(restored.messages.first?.context, context)
+        complete(provider); try await wait { !restored.isSending }
+    }
+    func testSelectionShortcutsPreserveCustomQuestionWithoutAccumulatingPrompts() throws {
+        let session = ReaderChatSession(directory: try directory(), conversation: "custom")
+        session.draft = "Why did they leave?\nI think this is a clue."
+        let question = session.draft
+        session.prepareSelectionPrompt(.explain)
+        XCTAssertEqual(session.draft, question, "No selection means no shortcut")
+        session.attachSelection(context)
+        session.prepareSelectionPrompt(.explain); session.prepareSelectionPrompt(.explain)
+        XCTAssertEqual(session.draft, question + "\n\nExplain this passage.")
+        session.prepareSelectionPrompt(.summarize)
+        XCTAssertEqual(session.draft, question + "\n\nSummarize this passage.")
+        session.prepareSelectionPrompt(.ask)
+        XCTAssertEqual(session.draft, question + "\n\nSummarize this passage.")
+        XCTAssertTrue(session.messages.isEmpty)
+    }
     func testFailedSelectionSaveKeepsAttachmentAndCannotSend() async throws {
         let directory = try directory(), backing = try ChatHistoryStore(directory: directory, conversation: "book-a")
         let history = FailingHistory(backing), provider = HistoryProvider(), session = ReaderChatSession(history: history)

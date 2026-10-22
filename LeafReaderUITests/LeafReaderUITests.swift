@@ -187,9 +187,10 @@ final class LeafReaderUITests: XCTestCase {
         let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.name = "PDF selection hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
         let menu = app.menuItems["Ask Leaf"].exists ? app.menuItems["Ask Leaf"] : app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat")).firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5)); menu.tap()
-        let ask = app.menuItems["Ask a question"].exists ? app.menuItems["Ask a question"] : app.buttons["Ask a question"]
-        XCTAssertTrue(ask.waitForExistence(timeout: 5)); ask.tap()
         XCTAssertTrue(app.staticTexts["chatSelectedPassage"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["explainChatSelection"].exists)
+        XCTAssertTrue(app.buttons["summarizeChatSelection"].exists)
+        XCTAssertFalse(app.menuItems["Ask a question"].exists)
         XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled)
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
         XCTAssertTrue(app.buttons["closeReaderChat"].exists, "PDF content taps keep chat open")
@@ -304,7 +305,7 @@ final class LeafReaderUITests: XCTestCase {
             app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
             app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
             dismissAppearance(app)
-            let actions = flow == "Pages" ? [("Explain selection", "Explain this passage.")] : [("Summarize selection", "Summarize this passage.")]
+            let actions = flow == "Pages" ? [("explainChatSelection", "Explain this passage.")] : [("summarizeChatSelection", "Summarize this passage.")]
             for (action, prompt) in actions {
                 let surface = readingSurface(app)
                 let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
@@ -324,26 +325,38 @@ final class LeafReaderUITests: XCTestCase {
                     let candidates = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat"))
                     XCTAssertTrue(candidates.firstMatch.waitForExistence(timeout: 3)); candidates.firstMatch.tap()
                 }
-                for title in ["Ask a question", "Explain selection", "Summarize selection"] {
-                    let option = app.menuItems[title].exists ? app.menuItems[title] : app.buttons[title]
-                    XCTAssertTrue(option.waitForExistence(timeout: 5))
-                }
-                let option = app.menuItems[action].exists ? app.menuItems[action] : app.buttons[action]
-                option.tap()
                 let passage = app.staticTexts["chatSelectedPassage"]
                 XCTAssertTrue(passage.waitForExistence(timeout: 5)); XCTAssertFalse(passage.label.isEmpty)
                 let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
-                if !prompt.isEmpty { XCTAssertEqual(input.value as? String, prompt) }
-                else { XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled) }
-                XCTAssertFalse(app.staticTexts["chatQuestion"].exists, "Preparing a selection must not send a request")
-                capture(flow + " selected text attached to chat", app: app)
+                XCTAssertFalse(app.menuItems["Ask a question"].exists, "Ask Leaf must open chat directly")
+                XCTAssertFalse(app.buttons["Ask a question"].exists)
+                XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled)
+                for shortcut in ["explainChatSelection", "summarizeChatSelection"] {
+                    XCTAssertTrue(app.buttons[shortcut].isHittable)
+                }
+                capture(flow + " direct chat with selection shortcuts", app: app)
+                let other = action == "explainChatSelection" ? "summarizeChatSelection" : "explainChatSelection"
+                app.buttons[other].tap(); app.buttons[action].tap()
+                XCTAssertEqual(input.value as? String, prompt, "Switching shortcuts replaces the prior preset")
+                XCTAssertFalse(app.staticTexts["chatQuestion"].exists, "A shortcut prepares an editable draft")
+                if flow == "Scroll" {
+                    XCUIDevice.shared.orientation = .landscapeLeft
+                    expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+                    waitForExpectations(timeout: 5)
+                    XCTAssertTrue(app.buttons["explainChatSelection"].isHittable)
+                    XCTAssertTrue(app.buttons["summarizeChatSelection"].isHittable)
+                    capture("Landscape selection shortcuts", app: app)
+                    XCUIDevice.shared.orientation = .portrait
+                    expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+                    waitForExpectations(timeout: 5)
+                }
                 input.tap(); input.typeText(" In context")
                 XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
                 XCTAssertTrue(passage.exists, "Keep the selected passage attached when the keyboard replaces the selection")
                 XCTAssertLessThanOrEqual(app.otherElements["readerChatPanel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
                 XCTAssertTrue(app.buttons["removeChatSelection"].isHittable)
                 capture(flow + " attached passage while typing", app: app)
-                if action == "Summarize selection" {
+                if flow == "Scroll" {
                     XCUIDevice.shared.orientation = .landscapeLeft
                     expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)

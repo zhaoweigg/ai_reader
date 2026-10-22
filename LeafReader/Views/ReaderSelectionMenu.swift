@@ -27,11 +27,8 @@ struct ReaderSelectionRequest: Identifiable, Equatable {
     guard let context, !context.isEmpty, let action else { return }
     let group = UIMenu.Identifier("com.leafreader.selection")
     builder.remove(menu: group)
-    let options = ReaderSelectionIntent.allCases.map { intent in
-        UIAction(title: intent.title) { _ in action(intent, context) }
-    }
-    let menu = UIMenu(title: "Ask Leaf", image: UIImage(systemName: "leaf"), children: options)
-    builder.insertChild(UIMenu(title: "", identifier: group, options: .displayInline, children: [menu]), atStartOfMenu: .root)
+    let ask = UIAction(title: "Ask Leaf", image: UIImage(systemName: "leaf")) { _ in action(.ask, context) }
+    builder.insertChild(UIMenu(title: "", identifier: group, options: .displayInline, children: [ask]), atStartOfMenu: .root)
 }
 
 final class ReaderWebView: WKWebView {
