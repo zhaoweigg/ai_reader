@@ -103,7 +103,11 @@ The local `leaf-reader://` scheme exposes only bundled reader resources and the 
 
 ### Z-Library popular books
 
-Choose **Add books → Z-Library** to browse **Most popular** without a search step. Each card represents an edition returned by the service, including its actual format, language, and size. Unsupported editions cannot be downloaded into Leaf. Pull down to refresh.
+Popular results may contain only ID, hash, title, author, and cover. Opening a book with no format loads that selected edition through `GET /eapi/book/{id}/{hash}` before showing **Add to library**. The feed does not fan out into per-book requests. Resolved metadata updates the current feed and is reused when reopening the same entry. A lookup failure or still-missing format offers **Try again**; only a known unsupported format shows the unsupported-edition message. Full details retain the same edition identity, summary cover/title, and available rating metadata. The download client also resolves sparse inputs and preserves its existing supported-format, file-byte, size, session, quota, and credential checks.
+
+The sparse-record contract and detail endpoint were checked against this [primary implementation investigation](https://github.com/heartleo/zlib/blob/main/docs/android-eapi-deep-dive.md#数据模型与调用行为). Provider availability and a real account download still require manual verification; these changes do not automate access to a blocked website.
+
+Choose **Add books → Z-Library** to browse **Most popular** without a search step. Each card represents an edition returned by the service and displays the available metadata. Pull down to refresh.
 
 Each popular/search card now keeps **format and file size**, **language and publication year**, and the available **Z-Library rating and rating count** visible, including after the edition is added to the library. A missing size or rating says **Size unavailable** or **No rating provided**; a missing rating count is omitted. `filesizeString` is preferred, with a positive numeric `filesize` byte count as fallback. Book scores use `rating` or `interestScore`; `qualityScore` is shown separately as **File quality** on the edition details page. Scores retain the provider's numeric value without assuming a five-star denominator. Rating counts are labelled ratings, never written reviews. Written reviews are unavailable through this connection; the details page says so. Metadata uses the existing bounded popular/search payload, with no detail request for each card.
 

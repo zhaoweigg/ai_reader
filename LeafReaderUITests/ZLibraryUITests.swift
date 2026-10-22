@@ -1,12 +1,13 @@
 import XCTest
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1";app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = "1"
         if feedFailure { app.launchEnvironment["LEAF_UI_ZLIB_FEED_FAILURE"] = "1" }
+        if let details { app.launchEnvironment["LEAF_UI_ZLIB_DETAILS"] = details }
         app.launch();return app
     }
     @MainActor private func capture(_ name:String) {
@@ -135,6 +136,69 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["Close connection"].tap()
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["catalogBook-sample"].exists)
+    }
+    @MainActor func testSparsePopularEntryResolvesDetailsThenImportsWithoutSearch() {
+        let app = launch(details: "success")
+        app.tabBars.buttons["Settings"].tap(); app.buttons["Sage theme"].tap()
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:10))
+        app.buttons["catalogBook-sample"].tap()
+        XCTAssertTrue(app.buttons["catalogAddBook"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.staticTexts["EPUB · 1 MB"].exists)
+        XCTAssertFalse(app.staticTexts["Leaf does not support this edition’s format. Choose another book or edition."].exists)
+        capture("Sparse popular book resolved Sage portrait")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.buttons["catalogAddBook"].waitForExistence(timeout:5))
+        capture("Sparse popular download action landscape")
+        XCUIDevice.shared.orientation = .portrait
+        app.buttons["catalogAddBook"].tap()
+        XCTAssertTrue(app.buttons["zlibraryPreviewConnect"].waitForExistence(timeout:5));app.buttons["zlibraryPreviewConnect"].tap()
+        expectation(for:NSPredicate(format:"label == %@ AND hittable == true","Add to library"),evaluatedWith:app.buttons["catalogAddBook"])
+        waitForExpectations(timeout:5)
+        app.buttons["catalogAddBook"].tap()
+        XCTAssertTrue(app.staticTexts["catalogAdded"].waitForExistence(timeout:15))
+        capture("Sparse popular book added without search")
+        app.buttons["catalogViewLibrary"].tap();app.swipeUp()
+        XCTAssertEqual(app.buttons.matching(identifier:"book-The Art of Noticing").count,1)
+        app.buttons["book-The Art of Noticing"].tap()
+        let surface = app.webViews["bookWebView"]
+        XCTAssertTrue(surface.waitForExistence(timeout:15))
+        expectation(for:NSPredicate(format:"exists == false"),evaluatedWith:app.staticTexts["Opening your book…"])
+        waitForExpectations(timeout:20)
+        for flow in ["Pages", "Scroll"] {
+            if !app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap() }
+            XCTAssertTrue(app.buttons["Appearance"].waitForExistence(timeout:5))
+            expectation(for:NSPredicate(format:"enabled == true"),evaluatedWith:app.buttons["Appearance"]);waitForExpectations(timeout:20)
+            app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            surface.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.2)).tap()
+            XCTAssertFalse(app.otherElements["readerError"].exists)
+            capture("Sparse popular import opened in \(flow)")
+        }
+    }
+    @MainActor func testSparsePopularDetailsFailureCanRetryAndUnsupportedIsDistinct() {
+        for scenario in ["failure", "unsupported"] {
+            let app = launch(details:scenario)
+            app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+            XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:10));app.buttons["catalogBook-sample"].tap()
+            if scenario == "failure" {
+                XCTAssertTrue(app.staticTexts["catalogDetailsError"].waitForExistence(timeout:10))
+                XCTAssertFalse(app.staticTexts["Leaf does not support this edition’s format. Choose another book or edition."].exists)
+                app.buttons["retryCatalogDetails"].tap()
+                XCTAssertTrue(app.staticTexts["catalogDetailsError"].waitForExistence(timeout:10))
+                XCTAssertTrue(app.buttons["retryCatalogDetails"].isEnabled)
+            } else {
+                XCTAssertTrue(app.staticTexts["Leaf does not support this edition’s format. Choose another book or edition."].waitForExistence(timeout:10))
+                XCTAssertFalse(app.buttons["retryCatalogDetails"].exists)
+            }
+            XCTAssertFalse(app.buttons["catalogAddBook"].exists)
+            capture("Sparse popular details \(scenario)")
+            app.navigationBars.buttons["Z-Library"].tap()
+            XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:5))
+            app.terminate()
+        }
     }
     @MainActor func testVerifiedAccountWithUnavailableFeedShowsWebsiteAccessWithoutSigningOut() {
         let app = launch(feedFailure:true)

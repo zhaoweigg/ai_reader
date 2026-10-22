@@ -3,7 +3,7 @@ import CoreFoundation
 
 // The mobile EAPI is unofficial. Keep wire details outside the library and reader.
 enum ZLibraryError: LocalizedError, Equatable {
-    case address, query, signInRequired, challenge, response, service(String), size, file, busy
+    case address, query, signInRequired, challenge, response, metadata, service(String), size, file, busy
     var errorDescription: String? {
         switch self {
         case .address: return "Enter an HTTPS website address without a path, port, or sign-in details."
@@ -11,6 +11,7 @@ enum ZLibraryError: LocalizedError, Equatable {
         case .signInRequired: return "Connect your Z-Library account to continue."
         case .challenge: return "The website returned a page or redirect instead of book data. Open the website to check access, then try again."
         case .response: return "Z-Library returned an unexpected response. Try again later."
+        case .metadata: return "This book’s format is not available yet. Try loading its details again."
         case .service(let message): return message
         case .size: return "This download exceeds Leaf’s 100 MB book limit. Choose a smaller edition."
         case .file: return "The download is not a complete supported book. Try another edition."
@@ -158,6 +159,7 @@ protocol ZLibraryServing {
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook]
     func search(_ query: String, page: Int, order: ZLibrarySearchOrder, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile
+    func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL
 }
 
@@ -257,7 +259,7 @@ struct ZLibraryClient: ZLibraryServing {
         guard safeID(id), safeID(hash), !title.isEmpty else { return nil }
         let cover = string(row["cover"])
         return ZLibraryBook(remoteID: id, hash: hash, title: String(title.prefix(500)), author: String(string(row["author"]).prefix(300)),
-                            fileExtension: string(row["extension"]).lowercased(), size: fileSize(row), language: string(row["language"]),
+                            fileExtension: string(row["extension"]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), size: fileSize(row), language: string(row["language"]),
                             year: string(row["year"]), coverURL: cover.isEmpty ? nil : try? ZLibraryOrigin.fileURL(cover, relativeTo: origin),
                             rating: score(row["rating"]) ?? score(row["interestScore"]),
                             ratingCount: positiveInteger(row["ratingCount"]), qualityScore: score(row["qualityScore"]))
@@ -296,7 +298,30 @@ struct ZLibraryClient: ZLibraryServing {
         let limit = Self.number(user["downloads_limit"] ?? user["dailyDownloadLimit"])
         return ZLibraryProfile(name: Self.string(user["email"]).isEmpty ? Self.string(user["name"]) : Self.string(user["email"]), remaining: limit.map { max(0, $0 - used) })
     }
+    func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
+        // Popular results are MinBook summaries: fetch only the selected edition, never the whole feed.
+        let object = try await object("book/\(book.remoteID)/\(book.hash)", origin: origin, session: session)
+        guard var row = object["book"] as? [String: Any] else { throw ZLibraryError.response }
+        for (key, expected) in [("id", book.remoteID), ("hash", book.hash)] {
+            let actual = Self.string(row[key])
+            guard actual.isEmpty || actual == expected else { throw ZLibraryError.response }
+            row[key] = expected
+        }
+        // Retain summary information when a detail response omits it.
+        for (key, value) in [("title", book.title), ("author", book.author), ("cover", book.coverURL?.absoluteString ?? ""),
+                             ("extension", book.fileExtension), ("filesizeString", book.size), ("language", book.language), ("year", book.year)] {
+            if Self.string(row[key]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { row[key] = value }
+        }
+        guard var resolved = Self.book(row, origin: origin) else { throw ZLibraryError.response }
+        guard !resolved.fileExtension.isEmpty else { throw ZLibraryError.metadata }
+        resolved.rating = resolved.rating ?? book.rating
+        resolved.ratingCount = resolved.ratingCount ?? book.ratingCount
+        resolved.qualityScore = resolved.qualityScore ?? book.qualityScore
+        return resolved
+    }
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL {
+        let book = book.fileExtension.isEmpty ? try await details(book, origin: origin, session: session) : book
+        try Task.checkCancellation()
         guard let format = book.format else { throw ZLibraryError.file }
         let object = try await object("book/\(book.remoteID)/\(book.hash)/file", origin: origin, session: session)
         let nested = object["file"] as? [String: Any]
