@@ -20,6 +20,7 @@
 		528EB5F991F8175152420471 /* ReaderEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */; };
 		54061AFBEC9BA1100163F4BA /* BookmarksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AB29A7913A706F43291361B /* BookmarksView.swift */; };
 		5664A96BFC589704B6A55C7C /* ChatGPTOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEC6851EC27447414454AFF7 /* ChatGPTOAuth.swift */; };
+		59B4EDBF40040C16DE521BB0 /* ReaderSelectionMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1484671B40D96BC623E4F9 /* ReaderSelectionMenu.swift */; };
 		629FC1922792EEB8C5174BEC /* ReaderChatSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C632D3424C29D507323DF84 /* ReaderChatSession.swift */; };
 		65B49DB9ADAD380F69073981 /* ChatGPTAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 229584F749B3CCD25F03CD5A /* ChatGPTAccountStore.swift */; };
 		6B85BEA3040860E753242175 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D59E60786ADEDA73444D967C /* SettingsView.swift */; };
@@ -72,6 +73,7 @@
 /* Begin PBXFileReference section */
 		14B74EB530BE5F91DAC4B044 /* ChatHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHistoryStore.swift; sourceTree = "<group>"; };
 		1B7679CE530CAB3E1CBC7BF6 /* ReaderModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderModel.swift; sourceTree = "<group>"; };
+		1C1484671B40D96BC623E4F9 /* ReaderSelectionMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSelectionMenu.swift; sourceTree = "<group>"; };
 		1DDD91EF78808E1BD8AE415A /* ChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTests.swift; sourceTree = "<group>"; };
 		1DFADC00594A53824F3A7DC6 /* Samples */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Samples; path = LeafReader/Resources/Samples; sourceTree = SOURCE_ROOT; };
 		229584F749B3CCD25F03CD5A /* ChatGPTAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTAccountStore.swift; sourceTree = "<group>"; };
@@ -155,6 +157,7 @@
 				F9567239B01E0D6638DA1D06 /* LibraryView.swift */,
 				DF8F5668FCD9D8ABD500192D /* ReaderAppearancePanel.swift */,
 				D1F25FA3CF6923499A67C834 /* ReaderChatPanel.swift */,
+				1C1484671B40D96BC623E4F9 /* ReaderSelectionMenu.swift */,
 				2AE2D547BB82C9FCAEE6E8D7 /* ReaderSurfaces.swift */,
 				782B9AF3266BE06B1B489337 /* ReaderView.swift */,
 				D59E60786ADEDA73444D967C /* SettingsView.swift */,
@@ -406,6 +409,7 @@
 				629FC1922792EEB8C5174BEC /* ReaderChatSession.swift in Sources */,
 				45A8DCDD2BA104372550136B /* ReaderModel.swift in Sources */,
 				88921C02F99C02FBC5B4505E /* ReaderPreferences.swift in Sources */,
+				59B4EDBF40040C16DE521BB0 /* ReaderSelectionMenu.swift in Sources */,
 				D6DA98B648C58A402A3FF952 /* ReaderSurfaces.swift in Sources */,
 				973AB757D5F2D3E1BA34EF5D /* ReaderView.swift in Sources */,
 				6B85BEA3040860E753242175 /* SettingsView.swift in Sources */,

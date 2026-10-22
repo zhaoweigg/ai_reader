@@ -1,7 +1,7 @@
 import { makeBook } from './foliate/view.js';
 import { openBookSource } from './book-source.js';
 
-const post = (type, detail = {}) => window.webkit?.messageHandlers.leaf.postMessage({ type, ...detail });
+const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const languageText = value => typeof value === 'string' ? value : value ? languageText(Object.values(value)[0]) : '';
 const contributor = value => Array.isArray(value) ? value.map(contributor).filter(Boolean).join(', ')
@@ -18,6 +18,10 @@ reducedMotion.addEventListener('change', () => { if (preferences) applyPreferenc
 function observeReadingTouches(doc) {
     if (observedDocuments.has(doc)) return;
     observedDocuments.add(doc);
+    doc.addEventListener('selectionchange', () => {
+        const selection = doc.getSelection();
+        post('selection', {text:selection && !selection.isCollapsed ? selection.toString().slice(0,12000) : ''});
+    });
     let start;
     doc.addEventListener('touchstart', event => {
         const point = event.touches.length === 1 ? event.touches[0] : null;
@@ -184,6 +188,7 @@ async function open(config) {
         view = document.createElement('foliate-view');
         document.body.append(view);
         view.addEventListener('load', ({ detail }) => {
+            post('selection', {text:''});
             observeReadingTouches(detail.doc);
             requestAnimationFrame(() => { if (preferences) applyPreferences(preferences); });
         });
@@ -222,6 +227,7 @@ async function open(config) {
 }
 
 function close() {
+    post('selection', {text:''});
     searchGeneration = null;
     const previous = view;
     view = null;
@@ -275,6 +281,10 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, close, command, applyPreferences, search, tap,
+    clearSelection: () => {
+        for (const {doc} of view?.renderer?.getContents?.() ?? []) doc?.getSelection()?.removeAllRanges();
+        post('selection', {text:''});
+    },
     chatContext: () => {
         const contents = view?.renderer?.getContents?.() ?? [];
         for (const {doc} of contents) {

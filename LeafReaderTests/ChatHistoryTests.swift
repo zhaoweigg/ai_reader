@@ -20,8 +20,9 @@ private final class HistoryProvider: ChatProvider {
     init(_ backing: ChatHistoryStore) { self.backing = backing }
     func page(before: Int64?, after: Int64?, limit: Int) throws -> ChatHistoryPage { try backing.page(before: before, after: after, limit: limit) }
     func loadDraft() throws -> String { try backing.loadDraft() }
-    func save(_ messages: [ReaderChatMessage], draft: String?) throws {
-        if fails { throw ChatHistoryError.write }; try backing.save(messages, draft: draft)
+    func loadSelectedContext() throws -> ReadingChatContext? { try backing.loadSelectedContext() }
+    func save(_ messages: [ReaderChatMessage], draft: String?, selection: ChatDraftSelectionUpdate) throws {
+        if fails { throw ChatHistoryError.write }; try backing.save(messages, draft: draft, selection: selection)
     }
     func remove(_ id: UUID) throws { if fails { throw ChatHistoryError.write }; try backing.remove(id) }
     func clear() throws { if fails { throw ChatHistoryError.write }; try backing.clear() }
@@ -51,6 +52,63 @@ private final class HistoryProvider: ChatProvider {
     }
     private func complete(_ provider: HistoryProvider, _ text: String = "An explanation") {
         provider.continuations.last?.yield(.text(text)); provider.continuations.last?.yield(.finished(truncated: false)); provider.continuations.last?.finish()
+    }
+    func testSelectedPassageAndDraftRestoreUntilSentOrExplicitlyRemoved() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        let original = ReaderChatSession(directory: directory, conversation: "book-a")
+        let selection = ReadingChatContext(title: context.title, author: context.author, chapter: context.chapter, text: context.text, source: "selection", locator: context.locator)
+        original.draft = "My own question"
+        original.attachSelection(selection, prompt: ReaderSelectionIntent.explain.prompt(for: selection.text))
+        XCTAssertEqual(original.draft, "My own question\n\nExplain this passage.")
+        XCTAssertTrue(original.messages.isEmpty); XCTAssertTrue(provider.requests.isEmpty)
+        original.close()
+        let restored = ReaderChatSession(directory: directory, conversation: "book-a")
+        XCTAssertEqual(restored.selectedContext, selection)
+        XCTAssertEqual(restored.draft, original.draft)
+        XCTAssertNil(ReaderChatSession(directory: directory, conversation: "book-b").selectedContext)
+        restored.send(settings: settings) { XCTFail("Use the selection snapshot even after native selection disappears"); return nil }
+        try await wait { provider.requests.count == 1 }
+        XCTAssertEqual(restored.messages.first?.context, selection)
+        XCTAssertTrue(provider.requests[0].turns.last?.content.contains(selection.text) == true)
+        XCTAssertNil(restored.selectedContext)
+        complete(provider); try await wait { !restored.isSending }
+        let sent = ReaderChatSession(directory: directory, conversation: "book-a")
+        XCTAssertNil(sent.selectedContext); XCTAssertEqual(sent.draft, "")
+        XCTAssertEqual(sent.messages.first?.context, selection)
+        sent.attachSelection(selection); sent.removeSelection(); sent.close()
+        XCTAssertNil(ReaderChatSession(directory: directory, conversation: "book-a").selectedContext)
+        sent.attachSelection(selection); sent.clear()
+        let cleared = ReaderChatSession(directory: directory, conversation: "book-a")
+        XCTAssertNil(cleared.selectedContext); XCTAssertTrue(cleared.messages.isEmpty)
+    }
+    func testFailedSelectionSaveKeepsAttachmentAndCannotSend() async throws {
+        let directory = try directory(), backing = try ChatHistoryStore(directory: directory, conversation: "book-a")
+        let history = FailingHistory(backing), provider = HistoryProvider(), session = ReaderChatSession(history: history)
+        history.fails = true
+        session.attachSelection(context, prompt: "Keep this question")
+        XCTAssertEqual(session.selectedContext, context); XCTAssertNotNil(session.historyError)
+        session.send(settings: settings(provider)) { XCTFail("Do not read or send when the draft cannot be saved"); return nil }
+        XCTAssertTrue(provider.requests.isEmpty); XCTAssertEqual(session.draft, "Keep this question")
+        history.fails = false; XCTAssertTrue(session.flush())
+        let restored = ReaderChatSession(history: backing)
+        XCTAssertEqual(restored.selectedContext, context); XCTAssertEqual(restored.draft, session.draft)
+    }
+    func testSelectionSharingRespectsPrivacyAndIntentLanguage() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        var config = settings.configuration; config.sharePage = false
+        try settings.save(config, replacementKey: nil)
+        let session = ReaderChatSession(directory: directory, conversation: "book-a")
+        session.attachSelection(context, prompt: "Explain this")
+        session.send(settings: settings) { XCTFail("Sharing is off"); return nil }
+        try await wait { provider.requests.count == 1 }
+        XCTAssertFalse(provider.requests[0].turns.contains { $0.content.contains(self.context.text) })
+        XCTAssertNil(session.messages.first?.context)
+        XCTAssertTrue(session.notice?.contains("sharing is off") == true)
+        complete(provider); try await wait { !session.isSending }
+        XCTAssertEqual(ReaderSelectionIntent.ask.prompt(for: "选中文字"), "")
+        XCTAssertEqual(ReaderSelectionIntent.explain.prompt(for: "选中文字"), "请解释这段文字。")
+        XCTAssertEqual(ReaderSelectionIntent.summarize.prompt(for: "选中文字"), "请总结这段文字。")
+        XCTAssertEqual(ReaderSelectionIntent.summarize.prompt(for: "A passage"), "Summarize this passage.")
     }
     func testCompletedConversationAndDraftRestoreAfterClosingAndRecreatingStore() async throws {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
