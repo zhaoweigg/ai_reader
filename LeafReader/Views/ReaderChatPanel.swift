@@ -58,7 +58,11 @@ struct ReaderChatPanel: View {
         VStack(spacing: compact ? 4 : 8) {
             if !compact {
                 Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
-                    .frame(maxWidth: .infinity).accessibilityHidden(true)
+                    .frame(maxWidth: .infinity).frame(height: 16)
+                    .contentShape(Rectangle()).gesture(dismissDrag)
+                    .accessibilityElement().accessibilityLabel("Chat drag handle")
+                    .accessibilityIdentifier("readerChatDragHandle")
+                    .accessibilityAction(named: "Close chat", close)
             }
             HStack(spacing: 8) {
                 Image(systemName: "leaf.fill").foregroundStyle(accent)
@@ -96,9 +100,7 @@ struct ReaderChatPanel: View {
                 .buttonStyle(.plain).accessibilityLabel("Close chat").accessibilityIdentifier("closeReaderChat")
             }
             .contentShape(Rectangle())
-            .simultaneousGesture(DragGesture(minimumDistance: 15).onEnded { gesture in
-                if gesture.translation.height > 40, abs(gesture.translation.width) < gesture.translation.height { close() }
-            })
+            .simultaneousGesture(dismissDrag)
 
             if isComposing || compact { Spacer(minLength: 0) }
             if !isComposing && !compact {
@@ -221,6 +223,12 @@ struct ReaderChatPanel: View {
                 .accessibilityIdentifier("confirmClearConversation")
             Button("Cancel", role: .cancel) {}
         } message: { Text("This deletes this book’s saved messages and draft from this device.") }
+    }
+
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 15).onEnded { gesture in
+            if gesture.translation.height > 40, abs(gesture.translation.width) < gesture.translation.height { close() }
+        }
     }
 
     private func close() {

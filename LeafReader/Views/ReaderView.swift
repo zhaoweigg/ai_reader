@@ -202,7 +202,6 @@ struct ReaderContent: View {
     }
     private func handleBookTap() -> Bool {
         guard chatIsPresented else { return false }
-        chatIsPresented = false
         model.hideControls()
         return true
     }
