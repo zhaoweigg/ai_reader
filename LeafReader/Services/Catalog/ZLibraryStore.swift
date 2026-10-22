@@ -254,8 +254,8 @@ struct UITestZLibraryClient: ZLibraryServing {
         if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_FEED_FAILURE"] == "1", session != nil {
             throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
         }
-        return [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:"epub",size:"Sample",language:"English",year:"2026",coverURL:nil),
-         ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"Sample",language:"English",year:"2026",coverURL:nil)]
+        return [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:"epub",size:"1.8 MB",language:"English",year:"2026",coverURL:nil,rating:4.6,ratingCount:52,qualityScore:4.2),
+         ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"2.4 MB",language:"English",year:"2026",coverURL:nil)]
     }
     func search(_ query: String, page: Int, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()

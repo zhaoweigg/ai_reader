@@ -109,10 +109,13 @@ struct ZLibraryView: View {
                                 ZLibraryCover(book:book)
                                 Text(book.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2).frame(maxWidth:.infinity,alignment:.leading)
                                 Text(book.author.isEmpty ? "Unknown author" : book.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text(book.fileSummary).font(.caption.weight(.medium)).foregroundStyle(.primary)
+                                if !book.editionSummary.isEmpty { Text(book.editionSummary).font(.caption2).foregroundStyle(.secondary) }
+                                Label(book.ratingSummary,systemImage:book.rating == nil ? "star" : "star.fill")
+                                    .font(.caption2).foregroundStyle(book.rating == nil ? Color.secondary : LeafStyle.accent)
+                                    .fixedSize(horizontal:false,vertical:true)
                                 if library.books.contains(where: { $0.catalogSource == book.sourceID }) {
                                     Label("In library",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(LeafStyle.accent)
-                                } else {
-                                    Text([book.fileExtension.uppercased(),book.language].filter { !$0.isEmpty }.joined(separator:" · ")).font(.caption2).foregroundStyle(.secondary)
                                 }
                             }.contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityIdentifier("catalogBook-\(book.remoteID)")
@@ -166,10 +169,18 @@ struct ZLibraryBookView: View {
                 VStack(alignment:.leading,spacing:14) {
                     Text("This edition").font(.caption).foregroundStyle(.secondary)
                     HStack { Image(systemName:"doc").font(.title2).foregroundStyle(LeafStyle.accent); VStack(alignment:.leading,spacing:4) {
-                        Text([book.fileExtension.uppercased(),book.size].filter { !$0.isEmpty }.joined(separator:" · ")).font(.headline)
-                        Text([book.language,book.year].filter { !$0.isEmpty }.joined(separator:" · ")).font(.subheadline).foregroundStyle(.secondary)
+                        Text(book.fileSummary).font(.headline)
+                        Text(book.editionSummary).font(.subheadline).foregroundStyle(.secondary)
                     };Spacer() }
                     Text(book.format == .pdf ? "Original page layout" : "Reading appearance can be adjusted in Leaf").font(.caption).foregroundStyle(.secondary)
+                }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(.background,in:.rect(cornerRadius:18))
+                VStack(alignment:.leading,spacing:12) {
+                    Text("Ratings & reviews").font(.headline)
+                    Label(book.ratingSummary,systemImage:book.rating == nil ? "star" : "star.fill").foregroundStyle(LeafStyle.accent)
+                    if let quality = book.qualityScore {
+                        Label("File quality \(quality.formatted(.number.precision(.fractionLength(0...1))))",systemImage:"doc.badge.checkmark").font(.subheadline)
+                    }
+                    Text("Scores are supplied by Z-Library. Written reviews are not available through this connection.").font(.caption).foregroundStyle(.secondary)
                 }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(.background,in:.rect(cornerRadius:18))
                 if let error = catalog.importError { Text(error).font(.subheadline).foregroundStyle(.red).accessibilityIdentifier("catalogImportError") }
                 if catalog.downloadingID == book.id {

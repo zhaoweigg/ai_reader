@@ -1,9 +1,10 @@
 import XCTest
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, dark: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
+        if dark { app.launchArguments += ["-AppleInterfaceStyle", "Dark"] }
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1";app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = "1"
         if feedFailure { app.launchEnvironment["LEAF_UI_ZLIB_FEED_FAILURE"] = "1" }
@@ -48,6 +49,14 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["catalogAddBook"].tap()
         XCTAssertTrue(app.staticTexts["catalogAdded"].waitForExistence(timeout:15))
         capture("Book added")
+        app.navigationBars.buttons["Z-Library"].tap()
+        let addedCard = app.buttons["catalogBook-sample"]
+        XCTAssertTrue(addedCard.waitForExistence(timeout:5))
+        XCTAssertTrue(addedCard.label.contains("In library"))
+        XCTAssertTrue(addedCard.label.contains("1.8 MB"))
+        XCTAssertTrue(addedCard.label.contains("52 ratings"))
+        addedCard.tap()
+        XCTAssertTrue(app.buttons["catalogViewLibrary"].waitForExistence(timeout:5))
         app.buttons["catalogViewLibrary"].tap()
         XCTAssertTrue(app.buttons["importBooks"].waitForExistence(timeout:5))
         // The same EPUB already exists in the seeded library; it must not be duplicated.
@@ -70,6 +79,30 @@ final class ZLibraryUITests: XCTestCase {
             reader.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.2)).tap()
             capture("Imported book \(flow)")
         }
+    }
+    @MainActor func testBookCardsShowSizesRatingsAndHonestMissingDataInDarkAppearance() {
+        let app = launch(dark:true)
+        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        let rated = app.buttons["catalogBook-sample"], unrated = app.buttons["catalogBook-sample2"]
+        XCTAssertTrue(rated.waitForExistence(timeout:10))
+        XCTAssertTrue(rated.label.contains("EPUB · 1.8 MB"))
+        XCTAssertTrue(rated.label.contains("English · 2026"))
+        XCTAssertTrue(rated.label.contains("52 ratings"))
+        XCTAssertTrue(unrated.label.contains("PDF · 2.4 MB"))
+        XCTAssertTrue(unrated.label.contains("No rating provided"))
+        capture("Catalog metadata dark portrait")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(rated.waitForExistence(timeout:5));capture("Catalog metadata dark landscape")
+        XCUIDevice.shared.orientation = .portrait
+        search("The Art of Noticing",app:app)
+        XCTAssertTrue(rated.waitForExistence(timeout:5));XCTAssertTrue(rated.label.contains("52 ratings"))
+        capture("Search metadata dark portrait")
+        rated.tap()
+        XCTAssertTrue(app.staticTexts["Ratings & reviews"].waitForExistence(timeout:5))
+        app.swipeUp()
+        XCTAssertTrue(app.staticTexts["File quality 4.2"].exists)
+        XCTAssertTrue(app.staticTexts["Scores are supplied by Z-Library. Written reviews are not available through this connection."].exists)
+        capture("Book rating and file quality details")
     }
     @MainActor func testConnectionRejectsUnsafeAddressAndCancellingKeepsCatalog() {
         let app = launch();app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()

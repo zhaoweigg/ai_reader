@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 // The mobile EAPI is unofficial. Keep wire details outside the library and reader.
 enum ZLibraryError: LocalizedError, Equatable {
@@ -106,6 +107,17 @@ struct ZLibraryBook: Identifiable, Equatable {
     let language: String
     let year: String
     let coverURL: URL?
+    var rating: Double? = nil
+    var ratingCount: Int? = nil
+    var qualityScore: Double? = nil
+    var fileSummary: String { [fileExtension.uppercased(), size.isEmpty ? "Size unavailable" : size].filter { !$0.isEmpty }.joined(separator: " · ") }
+    var editionSummary: String { [language, year].filter { !$0.isEmpty }.joined(separator: " · ") }
+    var ratingSummary: String {
+        guard let rating else { return "No rating provided" }
+        let value = rating.formatted(.number.precision(.fractionLength(0...1)))
+        guard let count = ratingCount else { return "Rating \(value)" }
+        return "\(value) · \(count.formatted()) \(count == 1 ? "rating" : "ratings")"
+    }
     var id: String { "\(remoteID):\(hash)" }
     var sourceID: String { "zlibrary:\(id)" }
     var format: BookFormat? { BookFormat.detect(URL(fileURLWithPath: "book.\(fileExtension)")) }
@@ -229,8 +241,36 @@ struct ZLibraryClient: ZLibraryServing {
         guard safeID(id), safeID(hash), !title.isEmpty else { return nil }
         let cover = string(row["cover"])
         return ZLibraryBook(remoteID: id, hash: hash, title: String(title.prefix(500)), author: String(string(row["author"]).prefix(300)),
-                            fileExtension: string(row["extension"]).lowercased(), size: string(row["filesizeString"]), language: string(row["language"]),
-                            year: string(row["year"]), coverURL: cover.isEmpty ? nil : try? ZLibraryOrigin.fileURL(cover, relativeTo: origin))
+                            fileExtension: string(row["extension"]).lowercased(), size: fileSize(row), language: string(row["language"]),
+                            year: string(row["year"]), coverURL: cover.isEmpty ? nil : try? ZLibraryOrigin.fileURL(cover, relativeTo: origin),
+                            rating: score(row["rating"]) ?? score(row["interestScore"]),
+                            ratingCount: positiveInteger(row["ratingCount"]), qualityScore: score(row["qualityScore"]))
+    }
+    // EAPI clients use interestScore for the book rating, separately from qualityScore.
+    // Preserve the provider's score without inventing a five-star scale or review count.
+    private static func score(_ value: Any?) -> Double? {
+        guard let text = scalar(value), text.count <= 32, let value = Double(text), value.isFinite, value > 0, value <= 10 else { return nil }
+        return value
+    }
+    private static func positiveInteger(_ value: Any?) -> Int? {
+        guard let text = scalar(value), let number = Int(text), number > 0 else { return nil }
+        return number
+    }
+    private static func scalar(_ value: Any?) -> String? {
+        if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
+        if let text = value as? String { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return (value as? NSNumber)?.stringValue
+    }
+    private static func fileSize(_ row: [String: Any]) -> String {
+        if let text = row["filesizeString"] as? String {
+            let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.count <= 40, text.range(of: #"^[0-9]+([.,][0-9]+)?\s*[KMGT]?i?B$"#, options: [.regularExpression, .caseInsensitive]) != nil,
+               let amount = Double(text.prefix { $0.isNumber || $0 == "." || $0 == "," }.replacingOccurrences(of: ",", with: ".")), amount.isFinite, amount > 0 {
+                return text
+            }
+        }
+        guard let text = scalar(row["filesize"]), let bytes = Int64(text), bytes > 0 else { return "" }
+        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile {
         guard session.valid else { throw ZLibraryError.signInRequired }

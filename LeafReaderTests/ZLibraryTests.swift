@@ -132,6 +132,51 @@ private final class CatalogURLProtocol: URLProtocol {
         let page = try await ZLibraryClient(transport:transport).search(" \(query)\n",page:2,origin:origin,session:browser)
         XCTAssertEqual(page.books.count,1);XCTAssertFalse(page.hasMore)
     }
+    func testCatalogMetadataSurvivesBothFeedsWithoutDetailRequestFanout() async throws {
+        let row: [String:Any] = ["id":12,"hash":"ab","title":"墓碑","extension":"pdf","filesizeString":"18.7 MB","filesize":1,
+                                 "language":"Chinese","year":2008,"interestScore":"4.6","ratingCount":"52","qualityScore":4.2]
+        let transport = CatalogTransport { [self] _,_ in try response(["success":1,"books":[row]]) }
+        let client = ZLibraryClient(transport:transport)
+        let popular = try await client.popular(origin:origin,session:session)
+        let search = try await client.search("墓碑",page:1,origin:origin,session:session)
+        XCTAssertEqual(popular,search.books)
+        let book = try XCTUnwrap(popular.first)
+        XCTAssertEqual(book.fileSummary,"PDF · 18.7 MB")
+        XCTAssertEqual(book.editionSummary,"Chinese · 2008")
+        XCTAssertEqual(book.rating,4.6);XCTAssertEqual(book.ratingCount,52);XCTAssertEqual(book.qualityScore,4.2)
+        XCTAssertTrue(book.ratingSummary.contains("52 ratings"))
+        XCTAssertEqual(transport.requests.map { $0.url!.path },["/eapi/book/most-popular","/eapi/book/search"])
+    }
+    func testCatalogMetadataSupportsByteSizesAndIndependentBookAndFileScores() throws {
+        let row: [String:Any] = ["id":12,"hash":"ab","title":"Edition","filesize":"2400000","rating":"4.7","interestScore":3,"qualityScore":"2.5","ratingCount":1]
+        let book = try XCTUnwrap(ZLibraryClient.book(row,origin:origin))
+        XCTAssertEqual(book.size,ByteCountFormatter.string(fromByteCount:2400000,countStyle:.file))
+        XCTAssertEqual(book.rating,4.7);XCTAssertEqual(book.qualityScore,2.5)
+        XCTAssertTrue(book.ratingSummary.hasSuffix("1 rating"))
+        var qualityOnly = row;qualityOnly.removeValue(forKey:"rating");qualityOnly.removeValue(forKey:"interestScore")
+        let missing = try XCTUnwrap(ZLibraryClient.book(qualityOnly,origin:origin))
+        XCTAssertNil(missing.rating);XCTAssertEqual(missing.ratingSummary,"No rating provided")
+        XCTAssertEqual(missing.qualityScore,2.5)
+    }
+    func testMalformedOrMissingMetadataDoesNotInventScoresCountsOrSizes() throws {
+        let base: [String:Any] = ["id":12,"hash":"ab","title":"Sparse edition"]
+        let sparse = try XCTUnwrap(ZLibraryClient.book(base,origin:origin))
+        XCTAssertEqual(sparse.fileSummary,"Size unavailable");XCTAssertEqual(sparse.ratingSummary,"No rating provided")
+        for value: Any in [NSNull(),true,false,"NaN","Infinity","-1",0,11,["value":4]] {
+            var row = base;row["rating"] = value;row["qualityScore"] = value
+            let book = try XCTUnwrap(ZLibraryClient.book(row,origin:origin))
+            XCTAssertNil(book.rating,"\(value)");XCTAssertNil(book.qualityScore,"\(value)")
+        }
+        for value: Any in [NSNull(),true,-1,0,"1.5","99999999999999999999999999"] {
+            var row = base;row["filesize"] = value;row["ratingCount"] = value
+            let book = try XCTUnwrap(ZLibraryClient.book(row,origin:origin))
+            XCTAssertTrue(book.size.isEmpty,"\(value)");XCTAssertNil(book.ratingCount,"\(value)")
+        }
+        for value in ["0 MB","-2 MB","unknown",String(repeating:"9",count:50)+" MB"] {
+            var row = base;row["filesizeString"] = value;row["filesize"] = 1024
+            XCTAssertEqual(ZLibraryClient.book(row,origin:origin)?.size,ByteCountFormatter.string(fromByteCount:1024,countStyle:.file))
+        }
+    }
     func testSearchValidatesQueryAndPageBeforeNetworkAndDetectsMoreResults() async throws {
         let rows = (1...30).map { ["id":String($0),"hash":"ab","title":"Edition \($0)","extension":"epub"] }
         let transport = CatalogTransport { [self] _,_ in try response(["success":1,"books":rows]) }
