@@ -302,9 +302,13 @@ final class ZLibraryStore: ObservableObject {
                 if issue == .signInRequired { connected = false }
                 websiteAccessNeeded = issue == .challenge || issue == .accessCheck
                 requestDiagnostic = (error as? ZLibraryRequestFailure)?.diagnostic
-                self.error = issue == .accessCheck ? issue?.localizedDescription : connected && websiteAccessNeeded
-                    ? (query.isEmpty ? "Your account is connected, but the website did not return popular-book data. Open the website to check access, then try again." : "Your account is connected, but the website did not return search results. Open the website to check access, then try again.")
-                    : error.localizedDescription
+                if issue == .accessCheck {
+                    self.error = ZLibraryError.accessCheck.localizedDescription + (connected ? " Your account remains connected." : "")
+                } else {
+                    self.error = connected && websiteAccessNeeded
+                        ? (query.isEmpty ? "Your account is connected, but the website did not return popular-book data. Open the website to check access, then try again." : "Your account is connected, but the website did not return search results. Open the website to check access, then try again.")
+                        : error.localizedDescription
+                }
             }
         }
     }

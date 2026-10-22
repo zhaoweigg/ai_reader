@@ -10,7 +10,7 @@ enum ZLibraryError: LocalizedError, Equatable {
         case .query: return "Enter a title, author, or ISBN of up to 500 characters."
         case .signInRequired: return "Connect your Z-Library account to continue."
         case .challenge: return "The website returned a page or redirect instead of book data. Open the website to check access, then try again."
-        case .accessCheck: return "The website is requesting a browser access check instead of returning book data. Open the website to review access. If it keeps returning, wait before retrying. Your saved account has been kept."
+        case .accessCheck: return "The website is requesting a browser access check instead of returning book data. Open the website to review access. If it keeps returning, wait before retrying."
         case .response: return "Z-Library returned an unexpected response. Try again later."
         case .metadata: return "This book’s format is not available yet. Try loading its details again."
         case .service(let message): return message
