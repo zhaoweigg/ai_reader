@@ -1,27 +1,30 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @Environment(\.leafTheme) private var theme
     var body: some View {
         NavigationStack {
             Form {
                 ReaderAppearanceControls()
-                Section("Reading companion") {
-                    NavigationLink("AI settings") { AISettingsView() }.accessibilityIdentifier("openAISettings")
-                }
-                Section("Bring your library") {
-                    formatRow("Books", "EPUB, MOBI, AZW, AZW3, PRC, FB2, FBZ")
-                    formatRow("Documents", "PDF, TXT, Markdown, HTML, RTF")
-                    formatRow("Comics", "CBZ")
-                    Text("Choose DRM-free files up to 100 MB. KFX, ACSM, CBR, and DjVu need conversion before importing.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                Section("Made for unhurried reading") {
-                    Label("Books stay on this device", systemImage: "internaldrive")
-                    Label("Offline reading; optional AI chat", systemImage: "wifi.slash")
-                    NavigationLink("Open-source acknowledgments") { AcknowledgmentsView() }
-                    HStack { Text("Leaf"); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0").foregroundStyle(.secondary) }
-                }
-            }.navigationTitle("Settings")
+                Group {
+                    Section("Reading companion") {
+                        NavigationLink("AI settings") { AISettingsView() }.accessibilityIdentifier("openAISettings")
+                    }
+                    Section("Bring your library") {
+                        formatRow("Books", "EPUB, MOBI, AZW, AZW3, PRC, FB2, FBZ")
+                        formatRow("Documents", "PDF, TXT, Markdown, HTML, RTF")
+                        formatRow("Comics", "CBZ")
+                        Text("Choose DRM-free files up to 100 MB. KFX, ACSM, CBR, and DjVu need conversion before importing.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Section("Made for unhurried reading") {
+                        Label("Books stay on this device", systemImage: "internaldrive")
+                        Label("Offline reading; optional AI chat", systemImage: "wifi.slash")
+                        NavigationLink("Open-source acknowledgments") { AcknowledgmentsView() }
+                        HStack { Text("Leaf"); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0").foregroundStyle(.secondary) }
+                    }
+                }.listRowBackground(theme.surface)
+            }.leafFormStyle().navigationTitle("Settings").toolbarBackground(theme.canvas, for: .navigationBar)
         }
     }
     private func formatRow(_ title: String, _ detail: String) -> some View {
@@ -30,6 +33,7 @@ struct SettingsView: View {
 }
 
 struct AcknowledgmentsView: View {
+    @Environment(\.leafTheme) private var theme
     private let licenses = [
         ("foliate-js", "foliate/LICENSE", "https://github.com/johnfactotum/foliate-js"),
         ("zip.js", "foliate/vendor/zip-lib/LICENSE", "https://github.com/gildas-lormeau/zip.js"),
@@ -43,9 +47,9 @@ struct AcknowledgmentsView: View {
                     if let root = Bundle.main.url(forResource: "Reader", withExtension: nil), let text = try? String(contentsOf: root.appendingPathComponent(path), encoding: .utf8) {
                         Text(text).font(.caption).textSelection(.enabled)
                     }
-                }
+                }.listRowBackground(theme.surface)
             }
             Section { Text("The bundled sample books are original short works created for Leaf. They are included for demonstrating the reader.").font(.footnote) }
-        }.navigationTitle("Acknowledgments").navigationBarTitleDisplayMode(.inline)
+        }.leafFormStyle().navigationTitle("Acknowledgments").navigationBarTitleDisplayMode(.inline)
     }
 }

@@ -622,6 +622,76 @@ final class ReaderEngineTests: XCTestCase {
         let (book, url) = try prepare("A Field Guide to Slow Days.txt", format: .txt)
         try await assertOpened(show(book, url: url), contains: "morning")
     }
+    func testEveryThemeUpdatesRenderedColorsWithoutChangingPassageOrGeometry() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        let web = try XCTUnwrap(model.webView)
+        let themes: [[String: Any]] = ReadingTheme.allCases.map { theme in
+            var prefs = preferences; prefs.theme = theme
+            return ["id": theme.id, "preferences": prefs.payload]
+        }
+        for size in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
+            window?.frame.size = size
+            try await Task.sleep(for: .milliseconds(300))
+            let result = try await web.callAsyncJavaScript("""
+                const view = document.querySelector('foliate-view'), renderer = view.renderer;
+                const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+                const rows = [];
+                for (const scrolling of [false, true]) {
+                  for (const [index, font] of ['Georgia','Palatino','System'].entries()) {
+                    const fontSize = [12,22,32][index], horizontalMargin = [12,20,36][index];
+                    const settings = {...themes[0].preferences, scrolling, font, fontSize, horizontalMargin};
+                    window.Leaf.applyPreferences(settings); await sleep(180);
+                    await view.goToFraction(0.4); await sleep(120);
+                    const doc = renderer.getContents()[0].doc;
+                    const originalText = doc.body.textContent;
+                    const saved = view.lastLocation.cfi;
+                    const before = doc.querySelector('p').getBoundingClientRect().width;
+                    for (const theme of themes) {
+                      window.Leaf.applyPreferences({...settings, ...theme.preferences, scrolling, font, fontSize, horizontalMargin});
+                      await sleep(150);
+                      const current = renderer.getContents()[0].doc;
+                      const style = current.defaultView.getComputedStyle(current.querySelector('p'));
+                      const rootStyle = current.defaultView.getComputedStyle(current.documentElement);
+                      const probe = current.createElement('span'); current.body.append(probe);
+                      probe.style.color = theme.preferences.foreground;
+                      const expectedInk = current.defaultView.getComputedStyle(probe).color;
+                      probe.style.color = theme.preferences.background;
+                      const expectedPage = current.defaultView.getComputedStyle(probe).color;
+                      probe.remove();
+                      rows.push({theme:theme.id, scrolling, font, fontSize, horizontalMargin,
+                        expectedInk, expectedPage, ink:style.color, page:rootStyle.backgroundColor,
+                        scheme:rootStyle.colorScheme, expectedScheme:theme.preferences.colorScheme,
+                        sameDocument:current===doc, sameText:originalText===current.body.textContent,
+                        width:current.querySelector('p').getBoundingClientRect().width, before,
+                        actualSize:parseFloat(style.fontSize), keptPassage:window.Leaf.isLocationVisible(saved),
+                        documents:renderer.getContents().length});
+                    }
+                  }
+                }
+                return rows;
+                """, arguments: ["themes": themes], in: nil, contentWorld: .page)
+            let rows = try XCTUnwrap(result as? [[String: Any]])
+            XCTAssertEqual(rows.count, ReadingTheme.allCases.count * 6)
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows), uniformTypeIdentifier: "public.json")
+            attachment.name = "Theme geometry \(Int(size.width))x\(Int(size.height))"
+            attachment.lifetime = .keepAlways; add(attachment)
+            for row in rows {
+                let label = "\(size) \(row)"
+                XCTAssertEqual(row["ink"] as? String, row["expectedInk"] as? String, label)
+                XCTAssertEqual(row["page"] as? String, row["expectedPage"] as? String, label)
+                XCTAssertEqual(row["scheme"] as? String, row["expectedScheme"] as? String, label)
+                XCTAssertEqual(row["sameDocument"] as? Bool, true, label)
+                XCTAssertEqual(row["sameText"] as? Bool, true, label)
+                XCTAssertEqual(row["keptPassage"] as? Bool, true, label)
+                XCTAssertEqual(row["documents"] as? Int, 1, label)
+                XCTAssertEqual(try XCTUnwrap(row["width"] as? Double), try XCTUnwrap(row["before"] as? Double), accuracy: 1, label)
+                XCTAssertEqual(try XCTUnwrap(row["actualSize"] as? Double), try XCTUnwrap(row["fontSize"] as? Double), accuracy: 0.1, label)
+            }
+        }
+    }
+
     func testEveryTextSizeAcrossScrollAndPageLayout() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         let model = try show(book, url: url)

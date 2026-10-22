@@ -3,6 +3,7 @@ import WebKit
 import ImageIO
 
 struct AddBooksView: View {
+    @Environment(\.leafTheme) private var theme
     let openFiles: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var path: [String] = []
@@ -10,14 +11,17 @@ struct AddBooksView: View {
     var body: some View {
         NavigationStack(path:$path) {
             List {
-                Button(action: openFiles) {
-                    source("From Files", subtitle:"On your iPhone, iCloud Drive & more", icon:"folder")
-                }.accessibilityIdentifier("addFromFiles")
-                NavigationLink(value:"zlibrary") {
-                    source("Z-Library",subtitle:"Browse the most popular books",icon:"book")
-                }.accessibilityIdentifier("addFromZLibrary")
-                Section { Text("Books you add are saved on this device for offline reading.").font(.footnote).foregroundStyle(.secondary) }
-            }
+                Group {
+                    Button(action: openFiles) {
+                        source("From Files", subtitle:"On your iPhone, iCloud Drive & more", icon:"folder")
+                    }.accessibilityIdentifier("addFromFiles")
+                    NavigationLink(value:"zlibrary") {
+                        source("Z-Library",subtitle:"Browse the most popular books",icon:"book")
+                    }.accessibilityIdentifier("addFromZLibrary")
+                    Section { Text("Books you add are saved on this device for offline reading.").font(.footnote).foregroundStyle(.secondary) }
+                }.listRowBackground(theme.surface)
+            }.leafFormStyle()
+            .toolbarBackground(theme.canvas, for: .navigationBar)
             .navigationTitle("Add books").navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for:String.self) { _ in ZLibraryView(close: { dismiss() }) }
             .toolbar { ToolbarItem(placement:.topBarTrailing) { Button("Close",systemImage:"xmark") { dismiss() }.labelStyle(.iconOnly) } }
@@ -26,14 +30,15 @@ struct AddBooksView: View {
     }
     private func source(_ title: String, subtitle: String, icon: String) -> some View {
         HStack(spacing:14) {
-            Image(systemName:icon).font(.title2).foregroundStyle(LeafStyle.accent).frame(width:46,height:46)
-                .background(LeafStyle.accent.opacity(0.1),in:.rect(cornerRadius:13))
+            Image(systemName:icon).font(.title2).foregroundStyle(theme.accent).frame(width:46,height:46)
+                .background(theme.accent.opacity(0.1),in:.rect(cornerRadius:13))
             VStack(alignment:.leading,spacing:4) { Text(title).font(.headline).foregroundStyle(.primary);Text(subtitle).font(.caption).foregroundStyle(.secondary) }
         }.padding(.vertical,8)
     }
 }
 
 struct ZLibraryView: View {
+    @Environment(\.leafTheme) private var theme
     let close: () -> Void
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var library: LibraryStore
@@ -62,7 +67,7 @@ struct ZLibraryView: View {
                             Button("Try again") { Task { await catalog.loadPopular() } }.disabled(catalog.loading)
                         }.buttonStyle(.bordered)
                         Text("You can also download a book using your browser and add it from Files.").font(.caption).foregroundStyle(.secondary)
-                    }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(.background,in:.rect(cornerRadius:18))
+                    }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(theme.surface,in:.rect(cornerRadius:18))
                 } else if !catalog.loading && catalog.books.isEmpty {
                     ContentUnavailableView("No books available",systemImage:"books.vertical",description:Text("Pull down to refresh the popular books list."))
                 }
@@ -74,7 +79,7 @@ struct ZLibraryView: View {
                                 Text(book.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2).frame(maxWidth:.infinity,alignment:.leading)
                                 Text(book.author.isEmpty ? "Unknown author" : book.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 if library.books.contains(where: { $0.catalogSource == book.sourceID }) {
-                                    Label("In library",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(LeafStyle.accent)
+                                    Label("In library",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(theme.accent)
                                 } else {
                                     Text([book.fileExtension.uppercased(),book.language].filter { !$0.isEmpty }.joined(separator:" · ")).font(.caption2).foregroundStyle(.secondary)
                                 }
@@ -84,7 +89,7 @@ struct ZLibraryView: View {
                 }
             }.padding(24).frame(maxWidth:900,alignment:.leading).frame(maxWidth:.infinity)
         }
-        .background(LeafStyle.canvas).navigationTitle("Z-Library").navigationBarTitleDisplayMode(.inline)
+        .background(theme.canvas).toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle("Z-Library").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement:.topBarTrailing) { Button { connection = true } label: { Image(systemName:"person.crop.circle") }.accessibilityLabel("Z-Library connection") } }
         .task { if catalog.books.isEmpty { await catalog.loadPopular() } }
         .refreshable { await catalog.loadPopular() }
@@ -94,6 +99,7 @@ struct ZLibraryView: View {
 }
 
 struct ZLibraryBookView: View {
+    @Environment(\.leafTheme) private var theme
     let book: ZLibraryBook
     let close: () -> Void
     @EnvironmentObject private var catalog: ZLibraryStore
@@ -108,12 +114,12 @@ struct ZLibraryBookView: View {
                 Text(book.author).foregroundStyle(.secondary)
                 VStack(alignment:.leading,spacing:14) {
                     Text("This edition").font(.caption).foregroundStyle(.secondary)
-                    HStack { Image(systemName:"doc").font(.title2).foregroundStyle(LeafStyle.accent); VStack(alignment:.leading,spacing:4) {
+                    HStack { Image(systemName:"doc").font(.title2).foregroundStyle(theme.accent); VStack(alignment:.leading,spacing:4) {
                         Text([book.fileExtension.uppercased(),book.size].filter { !$0.isEmpty }.joined(separator:" · ")).font(.headline)
                         Text([book.language,book.year].filter { !$0.isEmpty }.joined(separator:" · ")).font(.subheadline).foregroundStyle(.secondary)
                     };Spacer() }
                     Text(book.format == .pdf ? "Original page layout" : "Reading appearance can be adjusted in Leaf").font(.caption).foregroundStyle(.secondary)
-                }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(.background,in:.rect(cornerRadius:18))
+                }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(theme.surface,in:.rect(cornerRadius:18))
                 if let error = catalog.importError { Text(error).font(.subheadline).foregroundStyle(.red).accessibilityIdentifier("catalogImportError") }
                 if catalog.downloadingID == book.id {
                     if let progress = catalog.progress { ProgressView(value:progress).accessibilityLabel("Download progress") } else { ProgressView("Preparing download…") }
@@ -121,11 +127,11 @@ struct ZLibraryBookView: View {
                 }
             }.padding(24).frame(maxWidth:520).frame(maxWidth:.infinity)
         }
-        .background(LeafStyle.canvas).navigationTitle("Book details").navigationBarTitleDisplayMode(.inline)
+        .background(theme.canvas).toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle("Book details").navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge:.bottom) {
             VStack(spacing:8) {
                 if existing != nil {
-                    Label("Added to your library",systemImage:"checkmark.circle.fill").font(.subheadline).foregroundStyle(LeafStyle.accent).accessibilityIdentifier("catalogAdded")
+                    Label("Added to your library",systemImage:"checkmark.circle.fill").font(.subheadline).foregroundStyle(theme.accent).accessibilityIdentifier("catalogAdded")
                     Button("View in library",action:close).buttonStyle(.borderedProminent).accessibilityIdentifier("catalogViewLibrary")
                 } else if book.format == nil {
                     Text("Leaf does not support this edition’s format. Choose another book or edition.").font(.footnote).foregroundStyle(.secondary)
@@ -144,6 +150,7 @@ struct ZLibraryBookView: View {
 }
 
 struct ZLibraryConnectionView: View {
+    @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var catalog: ZLibraryStore
     @Environment(\.dismiss) private var dismiss
     @State private var address = ""
@@ -152,28 +159,31 @@ struct ZLibraryConnectionView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Website") {
-                    TextField("https://z-library.sk",text:$address).textContentType(.URL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .accessibilityIdentifier("zlibraryAddress")
-                    Button("Save website address") { Task { do { try await catalog.changeAddress(address); addressError = nil } catch { addressError = error.localizedDescription } } }
-                    if let addressError { Text(addressError).foregroundStyle(.red).font(.footnote) }
-                }
-                Section {
-                    if catalog.connected {
-                        Label("Connected",systemImage:"checkmark.shield").foregroundStyle(LeafStyle.accent)
-                        if !catalog.accountName.isEmpty { Text(catalog.accountName).font(.subheadline) }
-                        if let remaining = catalog.remaining { Text("\(remaining) downloads remaining").foregroundStyle(.secondary) }
+                Group {
+                    Section("Website") {
+                        TextField("https://z-library.sk",text:$address).textContentType(.URL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityIdentifier("zlibraryAddress")
+                        Button("Save website address") { Task { do { try await catalog.changeAddress(address); addressError = nil } catch { addressError = error.localizedDescription } } }
+                        if let addressError { Text(addressError).foregroundStyle(.red).font(.footnote) }
                     }
-                    Button(catalog.connected ? "Open sign-in page again" : "Sign in on Z-Library") {
-                        Task { do { try await catalog.changeAddress(address); await catalog.seedWebsite(); signingIn = true } catch { addressError = error.localizedDescription } }
-                    }.accessibilityIdentifier("zlibrarySignIn")
-                    if catalog.connected { Button("Disconnect",role:.destructive) { Task { do { try await catalog.disconnect() } catch { addressError = error.localizedDescription } } } }
-                    #if DEBUG
-                    if catalog.isPreview { Button("Connect preview account") { Task { if await catalog.connectPreview() { dismiss() } } }.accessibilityIdentifier("zlibraryPreviewConnect") }
-                    #endif
-                } footer: { Text("Sign in on the website. Leaf saves your session in Keychain, without saving your password. The connection uses Z-Library’s unofficial mobile interface.") }
-                if let error = catalog.connectionError { Section { Text(error).foregroundStyle(.red).font(.footnote) } }
-            }
+                    Section {
+                        if catalog.connected {
+                            Label("Connected",systemImage:"checkmark.shield").foregroundStyle(theme.accent)
+                            if !catalog.accountName.isEmpty { Text(catalog.accountName).font(.subheadline) }
+                            if let remaining = catalog.remaining { Text("\(remaining) downloads remaining").foregroundStyle(.secondary) }
+                        }
+                        Button(catalog.connected ? "Open sign-in page again" : "Sign in on Z-Library") {
+                            Task { do { try await catalog.changeAddress(address); await catalog.seedWebsite(); signingIn = true } catch { addressError = error.localizedDescription } }
+                        }.accessibilityIdentifier("zlibrarySignIn")
+                        if catalog.connected { Button("Disconnect",role:.destructive) { Task { do { try await catalog.disconnect() } catch { addressError = error.localizedDescription } } } }
+                        #if DEBUG
+                        if catalog.isPreview { Button("Connect preview account") { Task { if await catalog.connectPreview() { dismiss() } } }.accessibilityIdentifier("zlibraryPreviewConnect") }
+                        #endif
+                    } footer: { Text("Sign in on the website. Leaf saves your session in Keychain, without saving your password. The connection uses Z-Library’s unofficial mobile interface.") }
+                    if let error = catalog.connectionError { Section { Text(error).foregroundStyle(.red).font(.footnote) } }
+                }.listRowBackground(theme.surface)
+            }.leafFormStyle()
+            .toolbarBackground(theme.canvas, for: .navigationBar)
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement:.topBarTrailing) { Button("Close",systemImage:"xmark") { dismiss() }.labelStyle(.iconOnly).accessibilityLabel("Close connection") } }
             .onAppear { address = catalog.origin.url.absoluteString }

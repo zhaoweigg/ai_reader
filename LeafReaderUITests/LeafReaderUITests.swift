@@ -85,6 +85,46 @@ final class LeafReaderUITests: XCTestCase {
         app.tabBars.buttons["Settings"].tap()
         app.buttons["Day theme"].tap()
     }
+    @MainActor func testAppThemesApplyAcrossLibraryMenusReaderAndRelaunch() {
+        let app = launchApp()
+        for theme in ["Day", "Paper", "Night", "Sepia", "Sage", "Dusk"] {
+            app.tabBars.buttons["Settings"].tap()
+            let choice = app.buttons[theme + " theme"]
+            XCTAssertTrue(choice.waitForExistence(timeout: 5))
+            choice.tap()
+            XCTAssertTrue(choice.isSelected)
+            XCTAssertEqual(["Day", "Paper", "Night", "Sepia", "Sage", "Dusk"].filter { app.buttons[$0 + " theme"].isSelected }.count, 1)
+            capture(theme + " app theme picker", app: app)
+            app.tabBars.buttons["Library"].tap()
+            XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 5))
+            capture(theme + " themed library", app: app)
+            app.tabBars.buttons["Bookmarks"].tap()
+            capture(theme + " themed bookmarks", app: app)
+            app.tabBars.buttons["Library"].tap()
+            app.buttons["importBooks"].tap()
+            XCTAssertTrue(app.buttons["addFromFiles"].waitForExistence(timeout: 5))
+            capture(theme + " themed add books", app: app)
+            app.buttons["Close"].tap()
+        }
+        app.terminate(); app.launch()
+        app.tabBars.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["Dusk theme"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        app.buttons["Sage theme"].tap()
+        dismissAppearance(app)
+        showReaderControls(app); app.buttons["closeBook"].tap()
+        app.tabBars.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["Sage theme"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Sage theme"].isSelected)
+        capture("Reader theme synchronizes back to Settings", app: app)
+    }
+
     @MainActor func testLibrarySearchFiltersTitles() {
         let app = launchApp()
         let search = app.textFields["librarySearch"]
@@ -387,7 +427,7 @@ final class LeafReaderUITests: XCTestCase {
         waitForBook(app)
         defer { XCUIDevice.shared.orientation = .portrait }
         for flow in ["Pages", "Scroll"] {
-            for theme in ["Day", "Paper", "Night"] {
+            for theme in ["Day", "Paper", "Night", "Sepia", "Sage", "Dusk"] {
                 showReaderControls(app)
                 app.buttons["Appearance"].tap()
                 app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
