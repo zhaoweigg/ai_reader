@@ -389,6 +389,33 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testChatEdgeResizesInScroll() { verifyChatResize(flow: "Scroll") }
     @MainActor func testChatEdgeResizesInPDF() { verifyChatResize(flow: "PDF") }
 
+    @MainActor func testChatStaysOpenWhileSelectingTextInBothFlows() {
+        let app = launchApp()
+        app.buttons["featuredBook"].tap()
+        for flow in ["Pages", "Scroll"] {
+            showReaderControls(app); app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            dismissAppearance(app)
+            app.buttons["openReaderChat"].tap()
+            let paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
+            XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
+            paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.1)).press(forDuration: 1.2)
+            let ask = app.menuItems["Ask Leaf"].exists ? app.menuItems["Ask Leaf"] : app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat")).firstMatch
+            XCTAssertTrue(ask.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Native selection must keep chat open")
+            ask.tap()
+            XCTAssertTrue(app.staticTexts["chatSelectedPassage"].waitForExistence(timeout: 5))
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.typeText("Keep this selection")
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.staticTexts["chatSelectedPassage"].exists)
+            capture(flow + " selection while chat remains open", app: app)
+            app.buttons["removeChatSelection"].tap()
+            app.buttons["closeReaderChat"].tap()
+        }
+    }
+
     @MainActor private func verifyChatResize(flow: String) {
         let app = launchApp()
         defer { XCUIDevice.shared.orientation = .portrait }
