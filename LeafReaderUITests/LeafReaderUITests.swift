@@ -14,7 +14,7 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor private func capture(_ name: String, app: XCUIApplication) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -252,6 +252,95 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
     }
 
+    @MainActor func testRaisedChatLauncherInBothFlowsThemesAndRotation() {
+        let app = launchApp()
+        app.buttons["featuredBook"].tap()
+        waitForBook(app)
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for flow in ["Pages", "Scroll"] {
+            for theme in ["Day", "Paper", "Night"] {
+                showReaderControls(app)
+                app.buttons["Appearance"].tap()
+                app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+                app.segmentedControls["readingFlow"].buttons[flow].tap()
+                for margin in ["Narrow", "Wide", "Standard"] { app.buttons[margin + " margins"].tap() }
+                app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+                app.buttons[theme + " theme"].tap()
+                dismissAppearance(app)
+                let launcher = app.buttons["openReaderChat"]
+                XCTAssertTrue(launcher.waitForExistence(timeout: 5))
+                XCTAssertEqual(launcher.frame.width, 52, accuracy: 1)
+                capture(flow + " circular wrap " + theme, app: app)
+                launcher.tap()
+                let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+                input.tap(); input.typeText("Explain")
+                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+                XCTAssertLessThanOrEqual(app.otherElements["readerChatPanel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
+                app.buttons["closeReaderChat"].tap()
+                XCUIDevice.shared.orientation = .landscapeLeft
+                expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+                waitForExpectations(timeout: 5)
+                XCTAssertTrue(launcher.waitForExistence(timeout: 5))
+                launcher.tap()
+                XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+                app.buttons["closeReaderChat"].tap()
+                capture(flow + " landscape circular wrap " + theme, app: app)
+                XCUIDevice.shared.orientation = .portrait
+                expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+                waitForExpectations(timeout: 5)
+            }
+        }
+    }
+
+    @MainActor func testBothFlowsFillLandscapeViewportAndKeepLauncherInsideIt() {
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launchApp()
+        app.buttons["featuredBook"].tap()
+        for flow in ["Pages", "Scroll"] {
+            showReaderControls(app)
+            app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            dismissAppearance(app)
+            XCUIDevice.shared.orientation = .landscapeLeft
+            let launcher = app.buttons["openReaderChat"]
+            launcher.tap()
+            XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+            app.buttons["closeReaderChat"].tap()
+            let surface = readingSurface(app)
+            XCTAssertGreaterThan(surface.frame.width, surface.frame.height)
+            XCTAssertLessThanOrEqual(launcher.frame.maxX, surface.frame.maxX + 1)
+            XCTAssertGreaterThanOrEqual(launcher.frame.minY, surface.frame.minY)
+            let frames = "app: \(app.frame), surface: \(surface.frame), launcher: \(launcher.frame)"
+            let attachment = XCTAttachment(string: frames); attachment.name = flow + " landscape frames"; attachment.lifetime = .keepAlways; add(attachment)
+            capture(flow + " full screen landscape", app: app)
+            XCUIDevice.shared.orientation = .portrait
+        }
+    }
+
+    @MainActor func testScrollSwipesReachNextChapterAndPreviousChapter() {
+        let app = launchApp()
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
+        dismissAppearance(app)
+        let surface = readingSurface(app)
+        let nextChapter = surface.staticTexts["The ordinary world"]
+        for _ in 0..<9 {
+            if nextChapter.exists { break }
+            surface.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(nextChapter.waitForExistence(timeout: 5))
+        capture("Scroll continues into the next chapter", app: app)
+        surface.swipeDown(velocity: .slow)
+        showReaderControls(app)
+        XCTAssertTrue(app.staticTexts["Begin where you are"].waitForExistence(timeout: 5))
+        capture("Scroll returns to previous chapter", app: app)
+    }
+
     @MainActor func testStreamingChatKeepsTheBookVisibleAndPreservesItsPlace() {
         let app = launchApp()
         app.tabBars.buttons["Settings"].tap()
@@ -265,7 +354,13 @@ final class LeafReaderUITests: XCTestCase {
         let height = surface.frame.height
         let launcher = app.buttons["openReaderChat"]
         XCTAssertTrue(launcher.waitForExistence(timeout: 5))
-        capture("AI floating button on paper", app: app)
+        XCTAssertEqual(launcher.frame.width, 52, accuracy: 1)
+        XCTAssertGreaterThan(surface.frame.maxY - launcher.frame.maxY, 100)
+        let raisedFrame = launcher.frame
+        showReaderControls(app)
+        XCTAssertEqual(launcher.frame.minY, raisedFrame.minY, accuracy: 1, "Keep the icon and its wrap in place when controls appear")
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        capture("Raised AI icon with text wrapping on paper", app: app)
         launcher.tap()
         let panel = app.otherElements["readerChatPanel"]
         XCTAssertTrue(panel.waitForExistence(timeout: 5))

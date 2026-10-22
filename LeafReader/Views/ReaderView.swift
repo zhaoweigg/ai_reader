@@ -56,7 +56,7 @@ struct ReaderContent: View {
     var body: some View {
         ZStack {
             ZStack {
-                if book.format == .pdf { PDFBookSurface(model: model, url: url, theme: theme, onReaderTap: handleBookTap).id(model.reloadID) }
+                if book.format == .pdf { PDFBookSurface(model: model, url: url, theme: theme, onReaderTap: handleBookTap).padding(.trailing, 76).id(model.reloadID) }
                 else { WebBookSurface(model: model, url: url, preferences: preferences, onReaderTap: handleBookTap).id(model.reloadID) }
                 if !model.isReady, model.error == nil, !model.isLocked {
                     VStack(spacing: 16) { ProgressView(); Text("Opening your book…").font(.subheadline) }.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background)
@@ -109,14 +109,14 @@ struct ReaderContent: View {
                         }
                     }
                 }
-                .padding(.trailing, 10).padding(.bottom, showsControls ? 124 : 8)
+                .padding(.trailing, ReaderChatPlacement.trailing).padding(.bottom, ReaderChatPlacement.bottom)
             }
         }
         .background {
             GeometryReader { geometry in
                 Color.clear
-                    .onAppear { bookViewportHeight = geometry.size.height }
-                    .onChange(of: geometry.size.height) { _, height in bookViewportHeight = height }
+                    .onAppear { updateViewport(geometry.size) }
+                    .onChange(of: geometry.size) { _, size in updateViewport(size) }
             }
         }
         // Keep only the book full-height; the overlay uses the keyboard safe area.
@@ -189,6 +189,10 @@ struct ReaderContent: View {
             .presentationDragIndicator(panel == .appearance ? .visible : .automatic)
             .presentationBackgroundInteraction(panel == .appearance ? .enabled(upThrough: .medium) : .disabled)
         }
+    }
+    private func updateViewport(_ size: CGSize) {
+        bookViewportHeight = size.height
+        model.setReadingExclusion(ReaderChatPlacement.exclusion(in: size))
     }
     private func handleBookTap() -> Bool {
         guard chatIsPresented else { return false }

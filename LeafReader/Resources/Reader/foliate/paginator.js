@@ -1,3 +1,5 @@
+import { applyReadingExclusion, clearReadingExclusion, applyScrollExclusion } from './reading-exclusion.js'
+
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 const debounce = (f, wait, immediate) => {
@@ -96,7 +98,7 @@ const getVisibleRange = (doc, start, end, mapRect) => {
     const acceptNode = node => {
         const name = node.localName?.toLowerCase()
         // ignore all scripts, styles, and their children
-        if (name === 'script' || name === 'style') return FILTER_REJECT
+        if (name === 'script' || name === 'style' || node.hasAttribute?.('data-leaf-reading-exclusion')) return FILTER_REJECT
         if (node.nodeType === 1) {
             const { left, right } = mapRect(node.getBoundingClientRect())
             // no need to check child nodes if it's completely out of view
@@ -209,7 +211,7 @@ const setStylesImportant = (el, styles) => {
 
 class View {
     #destroyed = false
-    #observer = new ResizeObserver(() => this.expand())
+    #observer = new ResizeObserver(() => this.#column ? this.render(this.#layout) : this.expand(false))
     #element = document.createElement('div')
     #iframe = document.createElement('iframe')
     #contentRange = document.createRange()
@@ -277,7 +279,7 @@ class View {
                 // the resize observer above doesn't work in Firefox
                 // (see https://bugzilla.mozilla.org/show_bug.cgi?id=1832939)
                 // until the bug is fixed we can at least account for font load
-                doc.fonts.ready.then(() => this.expand())
+                doc.fonts.ready.then(() => { if (!this.#destroyed) this.render(this.#layout) })
 
                 resolve()
             }, { once: true })
@@ -288,6 +290,7 @@ class View {
         if (!layout) return
         this.#column = layout.flow !== 'scrolled'
         this.#layout = layout
+        clearReadingExclusion(this.document)
         if (this.#column) this.columnize(layout)
         else this.scrolled(layout)
     }
@@ -338,6 +341,7 @@ class View {
             'margin': '0',
         })
         this.setImageSize()
+        applyReadingExclusion(doc, this.#layout, this.#rtl, this.#vertical)
         this.expand()
     }
     setImageSize() {
@@ -361,7 +365,7 @@ class View {
             })
         }
     }
-    expand() {
+    expand(notify = true) {
         if (this.#destroyed) return
         const { documentElement } = this.document
         if (this.#column) {
@@ -409,7 +413,19 @@ class View {
                 this.#overlayer.redraw()
             }
         }
-        this.onExpand()
+        if (notify) this.onExpand()
+    }
+    updateScrollExclusion(exclusion) {
+        if (!exclusion || this.#column || this.#vertical || this.#rtl) return false
+        const frame = this.#iframe.getBoundingClientRect()
+        const host = this.container.getBoundingClientRect()
+        const changed = applyScrollExclusion(this.document, {
+            x: exclusion.x + exclusion.width / 2 + host.left - frame.left,
+            y: exclusion.y + exclusion.height / 2 + host.top - frame.top,
+            radius: exclusion.width / 2 + 6,
+        })
+        if (changed) this.expand(false)
+        return changed
     }
     set overlayer(overlayer) {
         this.#overlayer = overlayer
@@ -431,7 +447,7 @@ class View {
 // NOTE: everything here assumes the so-called "negative scroll type" for RTL
 export class Paginator extends HTMLElement {
     static observedAttributes = [
-        'flow', 'gap', 'margin',
+        'flow', 'gap', 'margin', 'reading-exclusion',
         'max-inline-size', 'max-block-size', 'max-column-count',
     ]
     #root = this.attachShadow({ mode: 'closed' })
@@ -457,6 +473,9 @@ export class Paginator extends HTMLElement {
     #touchState
     #touchScrolled
     #lastVisibleRange
+    #exclusionFrame
+    #updatingExclusion = false
+    #scrollContinuation
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -564,7 +583,14 @@ export class Paginator extends HTMLElement {
         this.#footer = this.#root.getElementById('footer')
 
         this.#observer.observe(this.#container)
-        this.#container.addEventListener('scroll', () => this.dispatchEvent(new Event('scroll')))
+        this.#container.addEventListener('scroll', () => {
+            this.dispatchEvent(new Event('scroll'))
+            if (this.scrolled && !this.#exclusionFrame) this.#exclusionFrame = requestAnimationFrame(() => {
+                this.#exclusionFrame = null
+                this.#updateScrollExclusion()
+                this.#continueScrollAtEdge()
+            })
+        })
         this.#container.addEventListener('scroll', debounce(() => {
             if (this.scrolled) {
                 if (this.#justAnchored) this.#justAnchored = false
@@ -637,6 +663,7 @@ export class Paginator extends HTMLElement {
     }
     attributeChangedCallback(name, _, value) {
         switch (name) {
+            case 'reading-exclusion':
             case 'flow':
                 this.render()
                 break
@@ -723,6 +750,15 @@ export class Paginator extends HTMLElement {
         // So we apply the inverse, f⁻¹ = -x / (x - 1) to the column gap.
         const gap = -g / (g - 1) * size
 
+        let exclusion
+        try {
+            const value = JSON.parse(this.getAttribute('reading-exclusion'))
+            if (value && [value.x, value.y, value.width, value.height].every(Number.isFinite)) {
+                const host = this.getBoundingClientRect()
+                const container = this.#container.getBoundingClientRect()
+                exclusion = { ...value, x:value.x - container.left + host.left, y:value.y - container.top + host.top }
+            }
+        } catch { }
         const flow = this.getAttribute('flow')
         if (flow === 'scrolled') {
             // FIXME: vertical-rl only, not -lr
@@ -735,7 +771,7 @@ export class Paginator extends HTMLElement {
             this.#header.replaceChildren()
             this.#footer.replaceChildren()
 
-            return { flow, margin, gap, columnWidth }
+            return { flow, margin, gap, columnWidth, exclusion }
         }
 
         const divisor = Math.min(maxColumnCount, Math.ceil(size / maxInlineSize))
@@ -759,7 +795,7 @@ export class Paginator extends HTMLElement {
         this.#header.replaceChildren(...heads)
         this.#footer.replaceChildren(...feet)
 
-        return { height, width, margin, gap, columnWidth }
+        return { height, width, margin, gap, columnWidth, exclusion }
     }
     render() {
         if (!this.#view) return
@@ -836,10 +872,12 @@ export class Paginator extends HTMLElement {
     #onTouchStart(e) {
         // Ignore new gestures until the current page has visibly settled.
         this.#touchState = null
+        this.#scrollContinuation = null
         if (this.#locked) return
         const touch = e.changedTouches[0]
         this.#touchState = {
-            x: touch?.screenX, y: touch?.screenY,
+            x: touch?.screenX, y: touch?.screenY, startX: touch?.screenX, startY: touch?.screenY,
+            startOffset: this.start,
             t: e.timeStamp,
             vx: 0, vy: 0,
         }
@@ -848,6 +886,7 @@ export class Paginator extends HTMLElement {
         const state = this.#touchState
         if (!state || this.#locked || state.pinched) return
         state.pinched = globalThis.visualViewport.scale > 1
+        if (e.touches.length > 1) state.pinched = true
         if (this.scrolled || state.pinched) return
         if (e.touches.length > 1) {
             if (this.#touchScrolled) e.preventDefault()
@@ -871,7 +910,17 @@ export class Paginator extends HTMLElement {
         this.#touchScrolled = false
         const state = this.#touchState
         this.#touchState = null
-        if (this.scrolled || !moved || !state) return
+        if (this.scrolled) {
+            if (!state || state.pinched || this.#locked || e.changedTouches.length !== 1) return
+            const touch = e.changedTouches[0]
+            const distance = this.#vertical ? state.startX - touch.screenX : state.startY - touch.screenY
+            if (Math.abs(distance) < 36) return
+            if (this.#view?.document.getSelection()?.isCollapsed === false) return
+            this.#scrollContinuation = { direction: distance > 0 ? 1 : -1, until: performance.now() + 1800 }
+            this.#continueScrollAtEdge()
+            return
+        }
+        if (!moved || !state) return
 
         // XXX: Firefox seems to report scale as 1... sometimes...?
         // at this point I'm basically throwing `requestAnimationFrame` at
@@ -884,6 +933,7 @@ export class Paginator extends HTMLElement {
         })
     }
     #onTouchCancel() {
+        this.#scrollContinuation = null
         const moved = this.#touchScrolled
         this.#touchScrolled = false
         this.#touchState = null
@@ -979,7 +1029,29 @@ export class Paginator extends HTMLElement {
         return getVisibleRange(this.#view.document,
             this.start - size, this.end - size, this.#getRectMapper())
     }
+    #updateScrollExclusion() {
+        if (!this.scrolled || !this.#view || this.#vertical || this.#rtl || this.#updatingExclusion) return
+        let exclusion
+        try { exclusion = JSON.parse(this.getAttribute('reading-exclusion')) } catch { return }
+        if (!exclusion?.width) return
+        this.#updatingExclusion = true
+        try {
+            // Preserve the visible passage and its pixel offset while old wrap
+            // lines above the viewport return to their normal width.
+            const anchor = this.#getVisibleRange().cloneRange()
+            anchor.collapse(true)
+            const top = uncollapse(anchor)?.getBoundingClientRect().top - this.start
+            for (let i = 0; i < 3; i++) {
+                if (!this.#view.updateScrollExclusion(exclusion)) break
+                const nextTop = uncollapse(anchor)?.getBoundingClientRect().top - this.start
+                const delta = nextTop - top
+                if (!Number.isFinite(delta) || Math.abs(delta) < 0.5) break
+                this.#container.scrollTop += delta
+            }
+        } finally { this.#updatingExclusion = false }
+    }
     #afterScroll(reason) {
+        this.#updateScrollExclusion()
         const range = this.#getVisibleRange()
         this.#lastVisibleRange = range
         // don't set new anchor if relocation was to scroll to anchor
@@ -1106,6 +1178,25 @@ export class Paginator extends HTMLElement {
     next(distance) {
         return this.#turnPage(1, distance)
     }
+    #continueScrollAtEdge() {
+        const intent = this.#scrollContinuation
+        if (!intent || !this.scrolled || this.#locked) return
+        if (performance.now() > intent.until) { this.#scrollContinuation = null; return }
+        const atEdge = intent.direction > 0 ? this.viewSize - this.end <= 2 : this.start <= 2
+        if (!atEdge) return
+        this.#scrollContinuation = null
+        this.continueScroll(intent.direction)
+    }
+    async continueScroll(direction) {
+        if (!this.scrolled || this.#locked) return
+        const index = this.#adjacentIndex(direction)
+        if (index == null) return
+        this.#locked = true
+        try {
+            await this.#goTo({ index, anchor: direction > 0 ? () => 0 : () => 1 })
+            this.dispatchEvent(new Event('scroll'))
+        } finally { this.#locked = false }
+    }
     prevSection() {
         return this.goTo({ index: this.#adjacentIndex(-1) })
     }
@@ -1138,6 +1229,7 @@ export class Paginator extends HTMLElement {
             $beforeStyle.textContent = beforeStyle
             $style.textContent = style
         } else $style.textContent = styles
+        if (this.hasAttribute('reading-exclusion')) this.render()
 
         // NOTE: needs `requestAnimationFrame` in Chromium
         requestAnimationFrame(() => {

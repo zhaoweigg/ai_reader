@@ -1,25 +1,29 @@
 import SwiftUI
 
+enum ReaderChatPlacement {
+    static let diameter: CGFloat = 52
+    static let trailing: CGFloat = 18
+    static let bottom: CGFloat = 112
+    static func exclusion(in size: CGSize) -> CGRect {
+        CGRect(x: size.width - trailing - diameter, y: size.height - bottom - diameter, width: diameter, height: diameter)
+    }
+}
+
 struct ReaderChatLauncher: View {
     let action: () -> Void
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Button(action: action) {
             ZStack {
-                Circle().fill(.ultraThinMaterial)
-                Circle().fill(LeafStyle.accent.opacity(reduceTransparency || contrast == .increased ? 1 : 0.42))
-                Image(systemName: "bubble.left")
-                    .font(.system(size: 24, weight: .medium))
-                    .overlay {
-                        Image(systemName: "leaf.fill")
-                            .font(.system(size: 10, weight: .medium)).offset(y: -2)
-                    }
-                    .foregroundStyle(.white.opacity(0.95))
+                Circle().fill(colorScheme == .dark ? Color(hex: "#243F44") : Color(hex: "#E7EFEB"))
+                Image(systemName: "leaf.fill")
+                    .font(.system(size: 25, weight: .medium))
+                    .foregroundStyle(colorScheme == .dark ? Color(hex: "#9ACFC0") : LeafStyle.accent)
             }
-            .frame(width: 48, height: 48)
-            .overlay(Circle().stroke(LeafStyle.accent.opacity(0.35), lineWidth: 0.5))
+            .frame(width: ReaderChatPlacement.diameter, height: ReaderChatPlacement.diameter)
+            .overlay(Circle().stroke(LeafStyle.accent.opacity(contrast == .increased ? 1 : 0.35), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.1), radius: 8, y: 3)
             .contentShape(Circle())
         }

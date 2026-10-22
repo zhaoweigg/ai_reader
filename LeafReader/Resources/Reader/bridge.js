@@ -9,6 +9,9 @@ const contributor = value => Array.isArray(value) ? value.map(contributor).filte
 let view;
 let searchGeneration;
 let preferences;
+let readingExclusion;
+const normalizedExclusion = value => value && [value.x, value.y, value.width, value.height].every(Number.isFinite)
+    && value.width > 0 && value.height > 0 ? value : null;
 let fixedIndex = 0;
 let lastLinkActivation = 0;
 const observedDocuments = new WeakSet();
@@ -52,7 +55,7 @@ function sanitize(doc) {
     doc.querySelectorAll('script,iframe,object,embed,form,base,meta[http-equiv],link[rel="import"]').forEach(el => el.remove());
     for (const el of doc.querySelectorAll('*')) {
         for (const attribute of [...el.attributes]) {
-            if (/^on/i.test(attribute.name) || /^(?:javascript|vbscript):/i.test(attribute.value.trim())) el.removeAttribute(attribute.name);
+            if (attribute.name === 'data-leaf-reading-exclusion' || /^on/i.test(attribute.name) || /^(?:javascript|vbscript):/i.test(attribute.value.trim())) el.removeAttribute(attribute.name);
         }
     }
     return doc;
@@ -112,6 +115,13 @@ function applyPreferences(value) {
         view.renderer.scrollToAnchor(anchor);
     }
     view.renderer.toggleAttribute('animated', !value.scrolling && !reducedMotion.matches);
+    const contentDocument = view.renderer.getContents?.()[0]?.doc;
+    const bookStyle = contentDocument?.defaultView.getComputedStyle(contentDocument.body);
+    const needsGutter = view.isFixedLayout || /^(vertical|sideways)/.test(bookStyle?.writingMode || '') || bookStyle?.direction === 'rtl';
+    // Fixed pages and vertical/RTL writing retain a separate button rail.
+    const gutter = readingExclusion && needsGutter ? Math.max(0, innerWidth - readingExclusion.x + 6) : 0;
+    view.style.boxSizing = 'border-box';
+    view.style.paddingRight = `${gutter}px`;
     if (view.isFixedLayout) { view.renderer.setAttribute('zoom', 'fit-page'); return; }
     const font = value.font === 'System' ? '-apple-system, sans-serif' : `"${value.font}", serif`;
     const bounded = (value, fallback, min, max) => Number.isFinite(Number(value))
@@ -123,7 +133,7 @@ function applyPreferences(value) {
     const paragraph = bounded(value.paragraphSpacing ?? 0.65, 0.65, 0, 1.5);
     const doc = view.renderer.getContents?.()[0]?.doc;
     const verticalText = doc && /^(vertical|sideways)/.test(doc.defaultView.getComputedStyle(doc.body).writingMode);
-    const inlineSize = (verticalText ? view.clientHeight : view.clientWidth) || 390;
+    const inlineSize = (verticalText ? view.clientHeight : view.clientWidth - gutter) || 390;
     // Foliate's gap is a percentage of the inline viewport; its margin and size
     // attributes are CSS lengths and must include units.
     const inlineMargin = verticalText ? vertical : horizontal;
@@ -131,6 +141,7 @@ function applyPreferences(value) {
     const attribute = (name, value) => {
         if (view.renderer.getAttribute(name) !== value) view.renderer.setAttribute(name, value);
     };
+    attribute('reading-exclusion', readingExclusion ? JSON.stringify(readingExclusion) : 'null');
     attribute('flow', value.scrolling ? 'scrolled' : 'paginated');
     attribute('margin', `${verticalText ? horizontal : vertical}px`);
     attribute('gap', `${gap}%`);
@@ -167,6 +178,7 @@ async function rejectEncryptedMOBI(file) {
 async function open(config) {
     try {
         close();
+        readingExclusion = normalizedExclusion(config.readingExclusion);
         const file = await openBookSource(config.name, config.format);
         if (['mobi','azw','azw3','prc'].includes(config.format)) await rejectEncryptedMOBI(file);
         const book = ['txt','md','html','rtf'].includes(config.format) ? await simpleBook(file, config.format) : await makeBook(file);
@@ -275,6 +287,10 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, close, command, applyPreferences, search, tap,
+    setReadingExclusion: value => {
+        readingExclusion = normalizedExclusion(value);
+        if (preferences) applyPreferences(preferences);
+    },
     chatContext: () => {
         const contents = view?.renderer?.getContents?.() ?? [];
         for (const {doc} of contents) {

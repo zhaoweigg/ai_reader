@@ -23,6 +23,7 @@ final class ReaderModel: NSObject, ObservableObject {
     weak var webView: WKWebView?
     weak var pdfView: PDFView?
     var preferences: ReaderPreferences?
+    private(set) var readingExclusion: CGRect?
     private var searchGeneration = UUID().uuidString
     private var lastAutomaticRecovery: Date?
     private var memoryWarningObserver: NSObjectProtocol?
@@ -122,10 +123,19 @@ final class ReaderModel: NSObject, ObservableObject {
             if let error { self.error = error.localizedDescription; self.isSearching = false }
         }
     }
+    func setReadingExclusion(_ rect: CGRect) {
+        guard readingExclusion != rect else { return }
+        readingExclusion = rect
+        if isReady, book?.format != .pdf { evaluate("setReadingExclusion", exclusionPayload) }
+    }
+    private var exclusionPayload: [String: Any] {
+        guard let rect = readingExclusion else { return [:] }
+        return ["x":rect.minX, "y":rect.minY, "width":rect.width, "height":rect.height]
+    }
     func openWebBook() {
         guard let book, let preferences else { return }
         evaluate("open", ["name": book.title + "." + book.format.rawValue, "format": book.format.rawValue,
-                          "locator": locator, "preferences": preferences.payload])
+                          "locator": locator, "preferences": preferences.payload, "readingExclusion": exclusionPayload])
     }
     func applyPreferences(_ value: ReaderPreferences) {
         guard value != preferences else { return }

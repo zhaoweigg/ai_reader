@@ -361,6 +361,175 @@ final class ReaderEngineTests: XCTestCase {
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
         attachment.name = "Page turn timing and swipe outcomes"; attachment.lifetime = .keepAlways; add(attachment)
     }
+    func testFloatingChatWrapInPagesAndScrollKeepsUnchangedLinesFullWidth() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        _ = try await waitForLayout(model, preferences: preferences)
+        let web = try XCTUnwrap(model.webView)
+        let result = try await web.callAsyncJavaScript("""
+            const view = document.querySelector('foliate-view');
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+            const initialDoc = view.renderer.getContents()[0].doc;
+            const first = initialDoc.querySelector('p').firstChild;
+            const savedRange = initialDoc.createRange();
+            savedRange.setStart(first, 8); savedRange.setEnd(first, 20);
+            const saved = view.getCFI(0, savedRange), savedText = savedRange.toString();
+            const originalText = initialDoc.body.textContent;
+            const icon = {x:innerWidth - 70, y:innerHeight - 164, width:52, height:52};
+            window.Leaf.setReadingExclusion(icon);
+            const metrics = [];
+            const measure = (scrolling,size,step) => {
+                const doc = view.renderer.getContents()[0].doc;
+                const frame = doc.defaultView.frameElement.getBoundingClientRect();
+                const cx = icon.x + 26 - frame.left, cy = icon.y + 26 - frame.top;
+                const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+                const range = doc.createRange();
+                let collisions = 0, farRight = 0;
+                const touching = [];
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                    if (node.parentElement.closest('script,style')) continue;
+                    range.selectNodeContents(node);
+                    const rects = [...range.getClientRects()];
+                    for (const r of rects) {
+                        const y = r.top + frame.top, x = r.right + frame.left;
+                        if (y > 0 && y < icon.y - 40 && x > 0 && x <= innerWidth)
+                            farRight = Math.max(farRight, x);
+                    }
+                    if (!rects.some(r => r.bottom > cy - 32 && r.top < cy + 32 && r.left < cx + 32 && r.right > cx - 90)) continue;
+                    for (let offset = 0; offset < node.length; offset++) {
+                        if (!node.data[offset].trim()) continue;
+                        range.setStart(node, offset); range.setEnd(node, offset + 1);
+                        for (const r of range.getClientRects()) {
+                            if (r.width < 0.5) continue;
+                            const dx = cx - Math.max(r.left, Math.min(cx, r.right));
+                            const dy = cy - Math.max(r.top, Math.min(cy, r.bottom));
+                            if (Math.hypot(dx, dy) < 26) { collisions++; touching.push({character:node.data[offset],left:r.left,right:r.right,top:r.top,bottom:r.bottom,cx,cy}); }
+                        }
+                    }
+                }
+                return {scrolling,size,step,collisions,touching,farRight,expectedRight:innerWidth-base.horizontalMargin,
+                    paragraphWidth:doc.querySelector('p').getBoundingClientRect().width, expectedWidth:innerWidth-2*base.horizontalMargin,
+                    markers:doc.querySelectorAll('[data-leaf-reading-exclusion]').length,
+                    sameText:doc.body.textContent === originalText,
+                    sameCFIText:view.resolveCFI(saved).anchor(doc).toString() === savedText};
+            };
+            for (const scrolling of [false,true]) {
+                for (const size of Array.from({length:21}, (_, i) => i + 12)) {
+                    window.Leaf.applyPreferences({...base, scrolling, fontSize:size});
+                    await sleep(100);
+                    await view.goTo(0); await sleep(80);
+                    for (let step = 0; step < 5; step++) {
+                        if (scrolling) {
+                            const doc = view.renderer.getContents()[0].doc;
+                            const container = doc.defaultView.frameElement.parentElement.parentElement;
+                            container.scrollTop = [0,250,700,1200,100][step];
+                            await sleep(100);
+                        }
+                        metrics.push(measure(scrolling,size,step));
+                        if (!scrolling) { await view.goRight(); await sleep(30); }
+                    }
+                }
+            }
+            const doc = view.renderer.getContents()[0].doc;
+            const visible = view.lastLocation.range.cloneRange();
+            const wrappedCFI = view.getCFI(0, visible), wrappedText = visible.toString();
+            window.Leaf.setReadingExclusion(null); await sleep(100);
+            if (view.resolveCFI(wrappedCFI).anchor(doc).toString() !== wrappedText)
+                throw new Error('Wrapped CFI changed after removing layout floats');
+            return metrics;
+            """, arguments: ["base": preferences.payload], in: nil, contentWorld: .page)
+        let metrics = try XCTUnwrap(result as? [[String: Any]])
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: metrics, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        attachment.name = "Pages and Scroll circular wrap and unaffected line widths"; attachment.lifetime = .keepAlways; add(attachment)
+        for row in metrics {
+            XCTAssertEqual(row["collisions"] as? Int, 0, "\(row)")
+            XCTAssertGreaterThan(row["markers"] as? Int ?? 0, 0, "\(row)")
+            XCTAssertEqual(try XCTUnwrap(row["paragraphWidth"] as? Double), try XCTUnwrap(row["expectedWidth"] as? Double), accuracy: 2, "\(row)")
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(row["farRight"] as? Double), try XCTUnwrap(row["expectedRight"] as? Double) - (row["size"] as? Double ?? 0) - 6, "\(row)")
+            XCTAssertEqual(row["sameText"] as? Bool, true)
+            XCTAssertEqual(row["sameCFIText"] as? Bool, true)
+        }
+        XCTAssertNil(model.error)
+    }
+    func testScrollWrapPreservesTheVisibleAnchorAcrossMarginsAndRepeatedScrolls() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view = document.querySelector('foliate-view');
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+            window.Leaf.setReadingExclusion({x:innerWidth-70,y:innerHeight-164,width:52,height:52});
+            const rows = [];
+            for (const margin of [12,20,36,48]) {
+                window.Leaf.applyPreferences({...base,scrolling:true,font:'System',fontSize:20,horizontalMargin:margin});
+                await sleep(100);
+                const doc = view.renderer.getContents()[0].doc;
+                const container = doc.defaultView.frameElement.parentElement.parentElement;
+                for (const offset of [0,200,700,1300,350,50]) {
+                    container.scrollTop = offset;
+                    const range = doc.caretRangeFromPoint(margin+5,container.scrollTop+24);
+                    if (!range || range.startContainer.nodeType!==3) continue;
+                    if (range.startOffset < range.startContainer.length) range.setEnd(range.startContainer,range.startOffset+1);
+                    const y = range.getBoundingClientRect().top-container.scrollTop;
+                    await sleep(120);
+                    rows.push({margin,offset,drift:range.getBoundingClientRect().top-container.scrollTop-y});
+                }
+            }
+            return rows;
+            """, arguments: ["base": preferences.payload], in: nil, contentWorld: .page)
+        let rows = try XCTUnwrap(result as? [[String: Double]])
+        XCTAssertGreaterThan(rows.count, 12)
+        for row in rows { XCTAssertLessThan(abs(row["drift"] ?? 999), 2, "\(row)") }
+    }
+    func testScrollGesturesContinueAcrossChapterEdgesAndKeepOneDocumentLoaded() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view = document.querySelector('foliate-view');
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+            window.Leaf.applyPreferences({...base, scrolling:true}); await sleep(150);
+            await view.goTo(1); await sleep(100);
+            const renderer = view.renderer;
+            const touch = (type,y) => {
+                const doc = renderer.getContents()[0].doc;
+                const event = new Event(type, {bubbles:true,cancelable:true});
+                const point = {screenX:150,screenY:y,clientX:150,clientY:y};
+                Object.defineProperties(event,{changedTouches:{value:[point]},touches:{value:type==='touchend'||type==='touchcancel'?[]:[point]}});
+                doc.dispatchEvent(event);
+            };
+            const edge = end => {
+                const doc = renderer.getContents()[0].doc;
+                const container = doc.defaultView.frameElement.parentElement.parentElement;
+                container.scrollTop = end ? container.scrollHeight : 0;
+            };
+            edge(true); await sleep(100);
+            touch('touchstart',350); touch('touchmove',200); touch('touchend',200); await sleep(300);
+            const next = renderer.getContents()[0].index;
+            edge(false); await sleep(80);
+            touch('touchstart',200); touch('touchmove',350); touch('touchend',350); await sleep(300);
+            const previous = renderer.getContents()[0].index;
+            await view.goTo(1); edge(false); await sleep(100);
+            touch('touchstart',350); touch('touchmove',200); touch('touchend',200);
+            edge(true); await sleep(300); // A flick reaches the edge after the finger lifts.
+            const momentumNext = renderer.getContents()[0].index;
+            await view.goTo(0); edge(false); await sleep(100);
+            touch('touchstart',200); touch('touchmove',350); touch('touchend',350); await sleep(100);
+            const start = renderer.getContents()[0].index;
+            await view.goTo(view.book.sections.length-1); edge(true); await sleep(100);
+            touch('touchstart',350); touch('touchmove',200); touch('touchend',200); await sleep(100);
+            return {next,previous,momentumNext,start,end:renderer.getContents()[0].index,last:view.book.sections.length-1,documents:renderer.getContents().length};
+            """, arguments: ["base": preferences.payload], in: nil, contentWorld: .page)
+        let metrics = try XCTUnwrap(result as? [String: Int])
+        XCTAssertEqual(metrics["next"], 2)
+        XCTAssertEqual(metrics["previous"], 1)
+        XCTAssertEqual(metrics["momentumNext"], 2)
+        XCTAssertEqual(metrics["start"], 0)
+        XCTAssertEqual(metrics["end"], metrics["last"])
+        XCTAssertEqual(metrics["documents"], 1)
+        XCTAssertNil(model.error)
+    }
     func testPlainTextRenders() async throws {
         let (book, url) = try prepare("A Field Guide to Slow Days.txt", format: .txt)
         try await assertOpened(show(book, url: url), contains: "morning")
