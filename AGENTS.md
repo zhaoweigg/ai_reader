@@ -15,6 +15,14 @@ The user requests two simulator test slots running in parallel to reduce waiting
 - Never install, launch, terminate, erase, or shut down another slot's device while it is owned. Do not reset the shared CoreSimulator service or shut down all devices while either slot is running.
 - Phone installation has one coordinator so an older feature build cannot overwrite the combined preview. Generic builds may run independently of simulator ownership.
 
+# iPhone preview installation
+
+- Offer a feature for iPhone testing as soon as its required checks, review, and signed build are ready. Do not wait for all other pending features to finish.
+- Before every actual iPhone installation, ask the user to **Install now**, **Hold**, or **Skip** for the specific ready build, naming its version and changes. Wait for explicit approval; prior unattended-install authorization does not apply.
+- Prepare and verify the build before asking. Build preparation, simulator testing, PR creation, and merging may proceed without installation approval.
+- Record ready builds and the user's decision in the shared coordination registry. Hold keeps the build pending; Skip skips that installation. Neither authorizes a later installation.
+- Keep one phone-install coordinator and preserve features already installed. If another build has since shipped, integrate and verify the ready change on that newer baseline before offering it; never overwrite the phone with a stale feature artifact.
+
 # Leaf reader verification
 
 The user explicitly requires all reading modes to be tested for future reader changes.
