@@ -13,6 +13,23 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor private func capture(_ name:String) {
         let attachment = XCTAttachment(screenshot:XCUIScreen.main.screenshot());attachment.name = name;attachment.lifetime = .keepAlways;add(attachment)
     }
+    @MainActor private func revealCatalogElement(_ element: XCUIElement, app: XCUIApplication) {
+        XCTAssertTrue(element.exists)
+        let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
+        for _ in 0..<12 {
+            let frame = element.frame
+            let top = app.navigationBars["Z-Library"].frame.maxY + 8
+            let bottom = app.frame.maxY - 24
+            if element.isHittable && frame.minY >= top && frame.maxY <= bottom { return }
+            let up = frame.maxY > bottom
+            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: up ? 0.68 : 0.43))
+            let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: up ? 0.43 : 0.68))
+            start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+        }
+        XCTAssertTrue(element.isHittable)
+        XCTAssertGreaterThanOrEqual(element.frame.minY, app.navigationBars["Z-Library"].frame.maxY)
+        XCTAssertLessThanOrEqual(element.frame.maxY, app.frame.maxY - 20)
+    }
     @MainActor private func search(_ query: String, app: XCUIApplication) {
         let field = app.textFields["zlibrarySearchField"]
         XCTAssertTrue(field.waitForExistence(timeout:5))
@@ -336,6 +353,48 @@ final class ZLibraryUITests: XCTestCase {
         }
         XCUIDevice.shared.orientation = .portrait
     }
+    @MainActor func testRepeatedSearchPopularNavigationReusesResultsAndRefreshShowsAccessCheck() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_REPEAT_GUARD": "1"]
+        for landscape in [false, true] {
+            XCUIDevice.shared.orientation = landscape ? .landscapeRight : .portrait
+            app.launch()
+            if landscape {
+                expectation(for: NSPredicate { _, _ in app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height }, evaluatedWith: app)
+                waitForExpectations(timeout: 10)
+            }
+            app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+            let loaded = app.buttons["catalogBook-sample2"].waitForExistence(timeout: 10)
+            if !loaded { capture("Initial catalog failure"); print(app.debugDescription) }
+            XCTAssertTrue(loaded)
+            for _ in 0..<5 {
+                search("books", app: app)
+                XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 5))
+                XCTAssertFalse(app.buttons["catalogBook-sample2"].exists)
+                XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
+                app.buttons["zlibraryClearSearch"].tap()
+                XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.staticTexts["zlibrarySavedResults"].exists)
+                XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
+            }
+            capture("Saved lists after ten view switches \(landscape ? "landscape" : "portrait")")
+            // A deliberate refresh still performs a request and presents the real failure.
+            app.buttons["zlibraryRefresh"].tap()
+            XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "browser access check")).firstMatch.exists)
+            let message = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "browser access check")).firstMatch
+            let catalogScroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
+            revealCatalogElement(message, app: app)
+            capture("Explicit refresh access check retains loaded books \(landscape ? "landscape" : "portrait")")
+            catalogScroll.swipeUp()
+            XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout: 5))
+            capture("Loaded books retained after explicit refresh failure \(landscape ? "landscape" : "portrait")")
+            app.terminate()
+        }
+        XCUIDevice.shared.orientation = .portrait
+    }
     @MainActor func testSearchSucceedsWhilePopularRedirectDiagnosisRemainsReadable() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -372,16 +431,11 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
         app.buttons["zlibraryClearSearch"].tap()
         XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
+        revealCatalogElement(app.buttons["Request details"], app: app)
         app.buttons["Request details"].tap()
         let landscapeDetails = app.staticTexts["zlibraryRequestDiagnostic"]
         XCTAssertTrue(landscapeDetails.waitForExistence(timeout: 5))
-        for _ in 0..<3 {
-            if landscapeDetails.isHittable && landscapeDetails.frame.minY >= 78 && landscapeDetails.frame.maxY <= window.frame.maxY { break }
-            app.swipeUp()
-        }
-        XCTAssertTrue(landscapeDetails.isHittable)
-        XCTAssertGreaterThanOrEqual(landscapeDetails.frame.minY, 78)
-        XCTAssertLessThanOrEqual(landscapeDetails.frame.maxY, window.frame.maxY)
+        revealCatalogElement(landscapeDetails, app: app)
         XCTAssertTrue(landscapeDetails.label.contains("reason: same URL refused"))
         XCTAssertFalse(landscapeDetails.label.contains("fixture-only"))
         capture("Popular307 diagnostic landscape")

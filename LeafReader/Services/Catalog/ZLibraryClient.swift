@@ -3,13 +3,14 @@ import CoreFoundation
 
 // The mobile EAPI is unofficial. Keep wire details outside the library and reader.
 enum ZLibraryError: LocalizedError, Equatable {
-    case address, query, signInRequired, challenge, response, metadata, service(String), size, file, busy
+    case address, query, signInRequired, challenge, accessCheck, response, metadata, service(String), size, file, busy
     var errorDescription: String? {
         switch self {
         case .address: return "Enter an HTTPS website address without a path, port, or sign-in details."
         case .query: return "Enter a title, author, or ISBN of up to 500 characters."
         case .signInRequired: return "Connect your Z-Library account to continue."
         case .challenge: return "The website returned a page or redirect instead of book data. Open the website to check access, then try again."
+        case .accessCheck: return "The website is requesting a browser access check instead of returning book data. Open the website to review access. If it keeps returning, wait before retrying."
         case .response: return "Z-Library returned an unexpected response. Try again later."
         case .metadata: return "This book’s format is not available yet. Try loading its details again."
         case .service(let message): return message
@@ -233,11 +234,15 @@ struct ZLibraryClient: ZLibraryServing {
             reason = "invalid Location"; destination = "invalid"
         }
         let update = payload.response.value(forHTTPHeaderField: "Set-Cookie") == nil ? "absent" : "present"
+        let marker = accessCheckMarker(payload)
+        return "Redirect target: \(destination) · reason: \(reason)\nRedirects followed: \(count)/3 · response cookie update: \(update) · access-check marker: \(marker)"
+    }
+    private static func accessCheckMarker(_ payload: ZLibraryPayload) -> String {
         let body = String(decoding: payload.data.prefix(4096), as: UTF8.self).lowercased()
         let cookie = payload.response.value(forHTTPHeaderField: "Set-Cookie")?.lowercased() ?? ""
-        let marker = body.contains("diamwall") || cookie.contains("__diamwall=") ? "DiamWall" :
-            (body.contains("/cdn-cgi/challenge") || body.contains("__cf_chl") ? "Cloudflare" : "not identified")
-        return "Redirect target: \(destination) · reason: \(reason)\nRedirects followed: \(count)/3 · response cookie update: \(update) · access-check marker: \(marker)"
+        if body.contains("diamwall") || cookie.contains("__diamwall=") { return "DiamWall" }
+        if body.contains("/cdn-cgi/challenge") || body.contains("__cf_chl") { return "Cloudflare" }
+        return "not identified"
     }
     private static func decode(_ payload: ZLibraryPayload, path: String, method: String, redirect: String? = nil) throws -> [String: Any] {
         do { return try Self.decode(payload) }
@@ -248,7 +253,7 @@ struct ZLibraryClient: ZLibraryServing {
             else if payload.response.mimeType == "text/html" || String(decoding: payload.data.prefix(128), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") { kind = "HTML instead of JSON" }
             else { kind = "JSON/API response" }
             let summary = "\(method) /eapi/\(path) · HTTP \(status) · \(kind)"
-            throw ZLibraryRequestFailure(issue: issue, diagnostic: summary + (redirect.map { "\n" + $0 } ?? ""))
+            throw ZLibraryRequestFailure(issue: issue == .challenge && accessCheckMarker(payload) != "not identified" ? .accessCheck : issue, diagnostic: summary + (redirect.map { "\n" + $0 } ?? ""))
         }
     }
     static func decode(_ payload: ZLibraryPayload) throws -> [String: Any] {
