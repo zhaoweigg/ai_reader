@@ -136,12 +136,14 @@ private final class CatalogURLProtocol: URLProtocol {
         let client = ZLibraryClient(transport:transport)
         let books = try await client.popular(origin:origin,session:browser)
         XCTAssertEqual(transport.requests.count,1,"Feed must not fan out into detail requests")
-        let summary = try XCTUnwrap(books.first)
+        var summary = try XCTUnwrap(books.first)
+        summary.rating = 4.5; summary.ratingCount = 10; summary.qualityScore = 4
         XCTAssertNil(summary.format)
         let details = try await client.details(summary,origin:origin,session:browser)
         XCTAssertEqual(details.format,.epub);XCTAssertEqual(details.size,"2 MB")
         XCTAssertEqual(details.sourceID,summary.sourceID);XCTAssertEqual(details.title,summary.title)
         XCTAssertEqual(details.coverURL,summary.coverURL);XCTAssertEqual(details.year,"2026")
+        XCTAssertEqual(details.rating,4.5);XCTAssertEqual(details.ratingCount,10);XCTAssertEqual(details.qualityScore,4)
         XCTAssertEqual(transport.requests.count,2)
     }
     func testMissingFormatIsRetryableAndDetailsCannotSwitchEditions() async throws {
