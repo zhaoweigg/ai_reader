@@ -358,18 +358,34 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(details.label.contains("access-check marker: DiamWall"))
         XCTAssertFalse(details.label.contains("fixture-only"))
         capture("Popular307 diagnostic after successful search portrait")
-        XCUIDevice.shared.orientation = .landscapeLeft
+        // Start a new scene in landscape; require actual interface geometry,
+        // not just the simulator's reported physical-device orientation.
+        app.terminate()
+        XCUIDevice.shared.orientation = .landscapeRight
+        app.launch()
         let window = app.windows.firstMatch
         expectation(for: NSPredicate { _, _ in window.frame.width > window.frame.height }, evaluatedWith: window)
         waitForExpectations(timeout: 10)
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
+        search("The Art of Noticing", app: app)
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+        app.buttons["zlibraryClearSearch"].tap()
+        XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
+        app.buttons["Request details"].tap()
+        let landscapeDetails = app.staticTexts["zlibraryRequestDiagnostic"]
+        XCTAssertTrue(landscapeDetails.waitForExistence(timeout: 5))
         for _ in 0..<3 {
-            if details.isHittable && details.frame.minY >= 78 && details.frame.maxY <= window.frame.maxY { break }
+            if landscapeDetails.isHittable && landscapeDetails.frame.minY >= 78 && landscapeDetails.frame.maxY <= window.frame.maxY { break }
             app.swipeUp()
         }
-        XCTAssertTrue(details.isHittable)
-        XCTAssertGreaterThanOrEqual(details.frame.minY, 78)
-        XCTAssertLessThanOrEqual(details.frame.maxY, window.frame.maxY)
+        XCTAssertTrue(landscapeDetails.isHittable)
+        XCTAssertGreaterThanOrEqual(landscapeDetails.frame.minY, 78)
+        XCTAssertLessThanOrEqual(landscapeDetails.frame.maxY, window.frame.maxY)
+        XCTAssertTrue(landscapeDetails.label.contains("reason: same URL refused"))
+        XCTAssertFalse(landscapeDetails.label.contains("fixture-only"))
         capture("Popular307 diagnostic landscape")
+        app.terminate()
         XCUIDevice.shared.orientation = .portrait
     }
     @MainActor func testVerifiedAccountWithUnavailableFeedShowsWebsiteAccessWithoutSigningOut() {
