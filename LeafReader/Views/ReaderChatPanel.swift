@@ -46,12 +46,99 @@ enum ReaderChatPlacement {
     }
 }
 
+struct ReaderChatButtonAppearance {
+    static let defaultTransparency = 0.88
+    static let transparencyRange = 0.2...0.95
+    let transparency: Double
+    init(transparency: Double) {
+        self.transparency = transparency.isFinite ? min(0.95,max(0.2,transparency)) : Self.defaultTransparency
+    }
+    var fillOpacity: Double { 1 - transparency }
+    var symbolOpacity: Double { min(1,fillOpacity * 0.55 / 0.12) }
+    var outlineOpacity: Double { min(1,fillOpacity * 0.25 / 0.12) }
+    func usesOnAccent(in theme: ReadingTheme) -> Bool {
+        func rgb(_ hex: String) -> [Double] {
+            let value = UInt32(hex.dropFirst(),radix:16) ?? 0
+            return [Double((value >> 16) & 255),Double((value >> 8) & 255),Double(value & 255)].map { $0 / 255 }
+        }
+        func luminance(_ channels: [Double]) -> Double {
+            zip(channels.map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055,2.4) },[0.2126,0.7152,0.0722]).map(*).reduce(0,+)
+        }
+        let accent = rgb(theme.accentHex), background = rgb(theme.backgroundHex)
+        let tint = zip(accent,background).map { $0 * fillOpacity + $1 * transparency }
+        let tintLuminance = luminance(tint)
+        func contrast(_ channels: [Double]) -> Double {
+            let other = luminance(channels)
+            return (max(tintLuminance,other)+0.05)/(min(tintLuminance,other)+0.05)
+        }
+        return contrast(rgb(theme.isDark ? theme.canvasHex : "#FFFFFF")) > contrast(accent)
+    }
+}
+
+private struct ReaderChatButtonIcon: View {
+    @Environment(\.leafTheme) private var theme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    let appearance: ReaderChatButtonAppearance
+    var isMoving = false
+    var body: some View {
+        ZStack {
+            // A color tint, never material blur: the underlying book stays sharp.
+            Circle().fill(theme.accent.opacity(reduceTransparency ? 1 : appearance.fillOpacity))
+            Image(systemName:isMoving ? "arrow.up.and.down.and.arrow.left.and.right" : "leaf.fill")
+                .font(.system(size:isMoving ? 21 : 25,weight:.medium))
+                .foregroundStyle((reduceTransparency || appearance.usesOnAccent(in:theme) ? theme.onAccent : theme.accent)
+                    .opacity(reduceTransparency || contrast == .increased ? 1 : appearance.symbolOpacity))
+        }
+        .frame(width:ReaderChatPlacement.diameter,height:ReaderChatPlacement.diameter)
+        .overlay(Circle().stroke(theme.accent.opacity(reduceTransparency ? 1 : isMoving || contrast == .increased ? 0.85 : appearance.outlineOpacity),
+                                 style:StrokeStyle(lineWidth:isMoving ? 1.5 : 0.5,dash:isMoving ? [4,3] : [])))
+        .contentShape(Circle())
+    }
+}
+
+struct ReaderChatButtonSettings: View {
+    @Environment(\.leafTheme) private var theme
+    @AppStorage("reader.chatButtonTransparency") private var transparency = ReaderChatButtonAppearance.defaultTransparency
+    private var appearance: ReaderChatButtonAppearance { ReaderChatButtonAppearance(transparency:transparency) }
+    var body: some View {
+        Form {
+            Section {
+                ZStack(alignment:.trailing) {
+                    Text("A little room to read.\nLet the page stay in view.\nKeep your companion close.")
+                        .font(.system(size:18,design:.serif)).lineSpacing(8).frame(maxWidth:.infinity,alignment:.leading)
+                    ReaderChatButtonIcon(appearance:appearance).padding(.trailing,12)
+                }.padding(.vertical,18).foregroundStyle(theme.foreground).accessibilityHidden(true)
+            } header: { Text("Preview") }
+                .listRowBackground(theme.surface)
+            Section {
+                HStack {
+                    Text("Transparency")
+                    Spacer()
+                    Text(appearance.transparency,format:.percent.precision(.fractionLength(0))).monospacedDigit().foregroundStyle(.secondary)
+                }
+                Slider(value:Binding(get: { appearance.transparency },set: { transparency = $0 }),in:ReaderChatButtonAppearance.transparencyRange,step:0.01)
+                    .accessibilityLabel("Floating button transparency")
+                    .accessibilityValue(Text(appearance.transparency,format:.percent.precision(.fractionLength(0))))
+                    .accessibilityIdentifier("chatButtonTransparency")
+                HStack { Text("More visible");Spacer();Text("More transparent") }.font(.caption).foregroundStyle(.secondary)
+                Button("Reset transparency") { transparency = ReaderChatButtonAppearance.defaultTransparency }
+                    .accessibilityIdentifier("resetChatButtonTransparency")
+            } footer: {
+                Text("Applies immediately to the floating Ask Leaf button in every book. Long press the button to move it. Reduce Transparency in iOS uses a solid button.")
+            }
+            .listRowBackground(theme.surface)
+        }.leafFormStyle()
+        .navigationTitle("Floating button").navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(theme.canvas,for:.navigationBar)
+    }
+}
+
 struct ReaderChatLauncher: View {
     @Environment(\.leafTheme) private var theme
     @Binding var isMoving: Bool
     let action: () -> Void
-    @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage("reader.chatButtonTransparency") private var transparency = ReaderChatButtonAppearance.defaultTransparency
     @AppStorage("reader.chatButtonX") private var savedX = -1.0
     @AppStorage("reader.chatButtonY") private var savedY = -1.0
     @State private var dragOrigin: CGPoint?
@@ -60,7 +147,9 @@ struct ReaderChatLauncher: View {
     var body: some View {
         GeometryReader { geometry in
             let center = draggedCenter ?? ReaderChatPlacement.center(x: savedX, y: savedY, in: geometry.size)
-            Button { if !isMoving { action() } } label: { icon }
+            Button { if !isMoving { action() } } label: {
+                ReaderChatButtonIcon(appearance:ReaderChatButtonAppearance(transparency:transparency),isMoving:isMoving)
+            }
             .buttonStyle(.plain)
             .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in isMoving = true })
             .simultaneousGesture(dragGesture(from: center, in: geometry.size))
@@ -84,21 +173,7 @@ struct ReaderChatLauncher: View {
             }
         }
         .coordinateSpace(name: "chatButtonViewport")
-        .sensoryFeedback(.selection, trigger: isMoving)
-    }
-    private var icon: some View {
-        ZStack {
-            // No material blur: book glyphs remain visible through the tint.
-            Circle().fill(theme.accent.opacity(reduceTransparency ? 1 : 0.12))
-            Image(systemName: isMoving ? "arrow.up.and.down.and.arrow.left.and.right" : "leaf.fill")
-                .font(.system(size: isMoving ? 21 : 25, weight: .medium))
-                .foregroundStyle((reduceTransparency ? theme.onAccent : theme.accent)
-                    .opacity(reduceTransparency || contrast == .increased ? 1 : 0.55))
-        }
-        .frame(width: ReaderChatPlacement.diameter, height: ReaderChatPlacement.diameter)
-        .overlay(Circle().stroke(theme.accent.opacity(isMoving || contrast == .increased ? 0.85 : 0.25),
-                                 style: StrokeStyle(lineWidth: isMoving ? 1.5 : 0.5, dash: isMoving ? [4, 3] : [])))
-        .contentShape(Circle())
+        .sensoryFeedback(.impact(weight:.heavy,intensity:0.85),trigger:isMoving) { wasMoving,moving in !wasMoving && moving }
     }
     private func dragGesture(from center: CGPoint, in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 1, coordinateSpace: .named("chatButtonViewport"))
@@ -132,6 +207,7 @@ struct ReaderChatPanel: View {
     let isComposing: Bool
     let onClose: () -> Void
     let onSettings: () -> Void
+    let onButtonSettings: () -> Void
     let onSend: () -> Void
     let onResize: (CGFloat, Bool) -> Void
     let onResizeStep: (CGFloat) -> Void
@@ -178,6 +254,8 @@ struct ReaderChatPanel: View {
                 if !isComposing && !compact {
                     Menu {
                         Button("AI settings", systemImage: "gearshape", action: onSettings)
+                        Button("Floating button",systemImage:"circle.lefthalf.filled",action:onButtonSettings)
+                            .accessibilityIdentifier("configureChatButton")
                         Button("Clear conversation", systemImage: "trash", role: .destructive) { confirmsClear = true }
                             .accessibilityIdentifier("requestClearConversation")
                     } label: {

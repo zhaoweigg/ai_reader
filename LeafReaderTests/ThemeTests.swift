@@ -2,6 +2,39 @@ import XCTest
 import SwiftUI
 @testable import LeafReader
 
+final class ReaderChatButtonAppearanceTests: XCTestCase {
+    func testDefaultRetainsTheExistingTranslucentAppearance() {
+        let appearance = ReaderChatButtonAppearance(transparency:0.88)
+        XCTAssertEqual(appearance.fillOpacity,0.12,accuracy:0.0001)
+        XCTAssertEqual(appearance.symbolOpacity,0.55,accuracy:0.0001)
+        XCTAssertEqual(appearance.outlineOpacity,0.25,accuracy:0.0001)
+        for theme in ReadingTheme.allCases { XCTAssertFalse(appearance.usesOnAccent(in:theme),theme.title) }
+    }
+    func testInvalidSavedPreferencesAreClampedAndButtonNeverBecomesInvisible() {
+        for value in [Double.nan,Double.infinity,-Double.infinity] {
+            XCTAssertEqual(ReaderChatButtonAppearance(transparency:value).transparency,0.88)
+        }
+        XCTAssertEqual(ReaderChatButtonAppearance(transparency:-1).transparency,0.2)
+        XCTAssertEqual(ReaderChatButtonAppearance(transparency:5).transparency,0.95)
+        let faint = ReaderChatButtonAppearance(transparency:0.95)
+        XCTAssertGreaterThan(faint.fillOpacity,0)
+        XCTAssertGreaterThan(faint.symbolOpacity,0.2)
+    }
+    func testTransparencyScalesEveryLayerAndUsesReadableSymbolForStrongerTint() {
+        var previousFill = 1.0, previousSymbol = 1.0, previousOutline = 1.0
+        for value in [0.2,0.4,0.6,0.8,0.88,0.95] {
+            let appearance = ReaderChatButtonAppearance(transparency:value)
+            XCTAssertLessThanOrEqual(appearance.fillOpacity,previousFill)
+            XCTAssertLessThanOrEqual(appearance.symbolOpacity,previousSymbol)
+            XCTAssertLessThanOrEqual(appearance.outlineOpacity,previousOutline)
+            previousFill = appearance.fillOpacity;previousSymbol = appearance.symbolOpacity;previousOutline = appearance.outlineOpacity
+        }
+        for theme in ReadingTheme.allCases {
+            XCTAssertTrue(ReaderChatButtonAppearance(transparency:0.2).usesOnAccent(in:theme),theme.title)
+        }
+    }
+}
+
 final class ThemeTests: XCTestCase {
     func testThemesKeepReadableTextAndActionContrast() {
         for theme in ReadingTheme.allCases {

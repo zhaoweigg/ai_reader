@@ -8,6 +8,7 @@ struct SettingsView: View {
                 ReaderAppearanceControls()
                 Group {
                     Section("Reading companion") {
+                        NavigationLink("Floating button") { ReaderChatButtonSettings() }.accessibilityIdentifier("openChatButtonSettings")
                         NavigationLink("AI settings") { AISettingsView() }.accessibilityIdentifier("openAISettings")
                     }
                     Section("Bring your library") {
