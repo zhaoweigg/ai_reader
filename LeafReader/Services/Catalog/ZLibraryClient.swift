@@ -135,12 +135,28 @@ struct ZLibrarySearchPage {
     let books: [ZLibraryBook]
     let hasMore: Bool
 }
+enum ZLibrarySearchOrder: String, CaseIterable, Identifiable {
+    case popular, bestMatch = "bestmatch", recentlyAdded = "date", titleAscending = "titleA", titleDescending = "title", year, fileSizeDescending = "filesize", fileSizeAscending = "filesizeA"
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .popular: return "Most popular"
+        case .bestMatch: return "Best match"
+        case .recentlyAdded: return "Recently added"
+        case .titleAscending: return "Title (A–Z)"
+        case .titleDescending: return "Title (Z–A)"
+        case .year: return "Year"
+        case .fileSizeDescending: return "File size ↓"
+        case .fileSizeAscending: return "File size ↑"
+        }
+    }
+}
 protocol ZLibraryTransport {
     func send(_ request: URLRequest, toFile: Bool, progress: @escaping @Sendable (Double?) -> Void) async throws -> ZLibraryPayload
 }
 protocol ZLibraryServing {
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook]
-    func search(_ query: String, page: Int, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage
+    func search(_ query: String, page: Int, order: ZLibrarySearchOrder, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL
 }
@@ -219,11 +235,11 @@ struct ZLibraryClient: ZLibraryServing {
         guard let rows = object["books"] as? [[String: Any]] else { throw ZLibraryError.response }
         return Self.books(rows, origin: origin, limit: 200)
     }
-    func search(_ query: String, page: Int, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
+    func search(_ query: String, page: Int, order: ZLibrarySearchOrder = .popular, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, query.count <= 500, (1...ZLibrarySearchPage.maximumPages).contains(page) else { throw ZLibraryError.query }
         let object = try await object("book/search", origin: origin, session: session,
-                                      form: ["message": query, "page": String(page), "limit": String(ZLibrarySearchPage.pageSize)])
+                                      form: ["message": query, "page": String(page), "limit": String(ZLibrarySearchPage.pageSize), "order": order.rawValue])
         guard let rows = object["books"] as? [[String: Any]] else { throw ZLibraryError.response }
         let books = Self.books(rows, origin: origin, limit: ZLibrarySearchPage.pageSize)
         return ZLibrarySearchPage(books: books, hasMore: !books.isEmpty && rows.count >= ZLibrarySearchPage.pageSize)
