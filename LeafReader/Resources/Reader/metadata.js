@@ -1,4 +1,5 @@
 import { makeBook } from './foliate/view.js';
+import { openBookSource } from './book-source.js';
 
 const post = value => window.webkit.messageHandlers.leafMetadata.postMessage(value);
 const languageText = value => typeof value === 'string' ? value : value ? languageText(Object.values(value)[0]) : '';
@@ -62,9 +63,7 @@ async function embeddedCover(book) {
 let book;
 try {
     const config = new URLSearchParams(location.search);
-    const response = await fetch('leaf-reader://reader/book');
-    if (!response.ok) throw new Error('Book unavailable');
-    book = await makeBook(new File([await response.blob()], config.get('name')));
+    book = await makeBook(await openBookSource(config.get('name'), config.get('format')));
     // A missing or unsupported cover must not prevent metadata or import.
     let cover = null;
     try { cover = await embeddedCover(book); } catch { }

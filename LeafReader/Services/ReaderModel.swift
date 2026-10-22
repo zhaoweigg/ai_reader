@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 import PDFKit
+import OSLog
 
 @MainActor
 final class ReaderModel: NSObject, ObservableObject {
@@ -15,6 +16,7 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var isSearching = false
     @Published var hasSearched = false
     @Published var controlsVisible = false
+    @Published private(set) var reloadID = UUID()
     let bookID: UUID
     let library: LibraryStore
     let initialLocator: String?
@@ -22,16 +24,50 @@ final class ReaderModel: NSObject, ObservableObject {
     weak var pdfView: PDFView?
     var preferences: ReaderPreferences?
     private var searchGeneration = UUID().uuidString
+    private var lastAutomaticRecovery: Date?
+    private var memoryWarningObserver: NSObjectProtocol?
+    private var memoryWarningCount = 0
+    private static let logger = Logger(subsystem: "com.weizhao.leafreader", category: "ReaderLifecycle")
 
     init(bookID: UUID, library: LibraryStore, initialLocator: String?) {
         self.bookID = bookID; self.library = library; self.initialLocator = initialLocator
         super.init()
         locator = initialLocator ?? library.book(bookID)?.locator ?? ""
         fraction = library.book(bookID)?.progress ?? 0
+        memoryWarningObserver = NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.memoryWarningCount += 1
+                Self.logger.warning("Received system memory warning; clearing search results.")
+                self.search("")
+            }
+        }
     }
+    deinit { if let memoryWarningObserver { NotificationCenter.default.removeObserver(memoryWarningObserver) } }
     var book: Book? { library.book(bookID) }
     var isBookmarked: Bool { book?.bookmarks.contains { $0.locator == locator } ?? false }
     var positionLabel: String { "\(Int(fraction * 100))%" }
+    func reload() {
+        library.flush()
+        error = nil; isReady = false; isSearching = false
+        searchGeneration = UUID().uuidString
+        searchResults = []; hasSearched = false
+        reloadID = UUID()
+    }
+    func webProcessTerminated(_ view: WKWebView, now: Date = Date()) {
+        guard webView === view else { return }
+        Self.logger.error("WebKit reader process stopped; observed native memory warnings: \(self.memoryWarningCount, privacy: .public). Termination cause is unavailable.")
+        webView = nil
+        // WebKit does not supply a termination cause here. One recovery also
+        // handles a suspended process being reclaimed while Leaf is backgrounded.
+        if let lastAutomaticRecovery, now.timeIntervalSince(lastAutomaticRecovery) < 60 {
+            isReady = false; isSearching = false
+            error = "The book renderer stopped again. Reload to continue from your saved place."
+        } else {
+            lastAutomaticRecovery = now
+            reload()
+        }
+    }
     func readingChatContext() async throws -> ReadingChatContext? {
         guard isReady, !isLocked, error == nil else { throw ChatError.configuration("Wait for the book to finish opening before asking about it.") }
         let title = book?.title ?? ""
@@ -80,8 +116,10 @@ final class ReaderModel: NSObject, ObservableObject {
     }
     func evaluate(_ method: String, _ payload: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
-        webView?.evaluateJavaScript("void window.Leaf.\(method)(\(json))") { [weak self] _, error in
-            if let error { self?.error = error.localizedDescription; self?.isSearching = false }
+        guard let view = webView else { return }
+        view.evaluateJavaScript("void window.Leaf.\(method)(\(json))") { [weak self, weak view] _, error in
+            guard let self, let view, self.webView === view else { return }
+            if let error { self.error = error.localizedDescription; self.isSearching = false }
         }
     }
     func openWebBook() {

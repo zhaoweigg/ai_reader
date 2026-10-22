@@ -53,7 +53,14 @@ struct WebBookSurface: UIViewRepresentable {
     }
     static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
         view.configuration.userContentController.removeScriptMessageHandler(forName: "leaf")
+        view.navigationDelegate = nil
+        view.scrollView.delegate = nil
+        coordinator.onReaderTap = nil
+        if coordinator.model.webView === view { coordinator.model.webView = nil }
         view.stopLoading()
+        view.evaluateJavaScript("window.Leaf?.close()") { [weak view] _, _ in
+            view?.loadHTMLString("", baseURL: nil)
+        }
     }
     @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         let model: ReaderModel
@@ -75,7 +82,7 @@ struct WebBookSurface: UIViewRepresentable {
             if scrollView.contentOffset != .zero { scrollView.setContentOffset(.zero, animated: false) }
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any] else { return }
+            guard message.webView === model.webView, message.frameInfo.isMainFrame, let body = message.body as? [String: Any] else { return }
             model.receive(body)
         }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -83,8 +90,10 @@ struct WebBookSurface: UIViewRepresentable {
             let allowed = url?.scheme == "leaf-reader" || url?.scheme == "blob" || url?.absoluteString == "about:blank"
             decisionHandler(allowed ? .allow : .cancel)
         }
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { model.error = error.localizedDescription }
-        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { model.isReady = false; model.error = "The reader ran out of memory. Reopen the book, or try a smaller copy." }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            if model.webView === webView { model.error = error.localizedDescription }
+        }
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { model.webProcessTerminated(webView) }
     }
 }
 
@@ -110,6 +119,11 @@ struct PDFBookSurface: UIViewRepresentable {
     func updateUIView(_ view: PDFView, context: Context) {
         context.coordinator.onReaderTap = onReaderTap
         view.backgroundColor = UIColor(theme.background)
+    }
+    static func dismantleUIView(_ view: PDFView, coordinator: Coordinator) {
+        coordinator.onReaderTap = nil
+        view.document = nil
+        if coordinator.model.pdfView === view { coordinator.model.pdfView = nil }
     }
     @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let model: ReaderModel

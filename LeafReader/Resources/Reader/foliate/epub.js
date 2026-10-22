@@ -905,6 +905,9 @@ class Loader {
     }
     destroy() {
         for (const url of this.#cache.values()) URL.revokeObjectURL(url)
+        this.#cache.clear()
+        this.#children.clear()
+        this.#refCount.clear()
     }
 }
 

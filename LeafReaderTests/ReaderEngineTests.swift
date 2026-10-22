@@ -83,6 +83,146 @@ final class ReaderEngineTests: XCTestCase {
         let (book, url) = try prepare("A Short History of Stars.fb2", format: .fb2)
         try await assertOpened(show(book, url: url), contains: "light")
     }
+    func testDiskByteRangesRejectInvalidAndOverflowingRequests() {
+        XCTAssertEqual(ReaderAssetHandler.byteRange("bytes=0-9", size: 100), 0..<10)
+        XCTAssertEqual(ReaderAssetHandler.byteRange("bytes=95-999", size: 100), 95..<100)
+        XCTAssertEqual(ReaderAssetHandler.byteRange("bytes=50-", size: 100), 50..<100)
+        XCTAssertEqual(ReaderAssetHandler.byteRange("bytes=-5", size: 100), 95..<100)
+        XCTAssertEqual(ReaderAssetHandler.byteRange("bytes=-999", size: 100), 0..<100)
+        for header in ["bytes=100-", "bytes=5-4", "bytes=-0", "bytes=-", "bytes=0-1,3-4", "bytes=+1-2", "bytes=0-9999999999999999999999999", "items=0-1"] {
+            XCTAssertNil(ReaderAssetHandler.byteRange(header, size: 100), header)
+        }
+        XCTAssertNil(ReaderAssetHandler.byteRange("bytes=0-1", size: 0))
+    }
+    func testNativeDiskDeliveryIsChunkedAndStopsAfterCancellation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("book.epub")
+        try Data(repeating: 7, count: 1024 * 1024).write(to: file)
+        let handler = ReaderAssetHandler(bookURL: file, format: .epub, assets: root)
+        let web = WKWebView()
+        var request = URLRequest(url: URL(string: "leaf-reader://reader/book")!)
+        request.setValue("bytes=100-300099", forHTTPHeaderField: "Range")
+        let ranged = MemorySchemeTask(request: request)
+        handler.webView(web, start: ranged)
+        try await waitUntil { ranged.finished || ranged.error != nil }
+        XCTAssertNil(ranged.error)
+        XCTAssertEqual(ranged.response?.statusCode, 206)
+        XCTAssertEqual(ranged.response?.value(forHTTPHeaderField: "Content-Range"), "bytes 100-300099/1048576")
+        XCTAssertEqual(ranged.received, 300000)
+        XCTAssertLessThanOrEqual(ranged.largestChunk, 64 * 1024)
+        let cancelled = MemorySchemeTask(request: URLRequest(url: request.url!))
+        cancelled.onChunk = { handler.webView(web, stop: cancelled) }
+        handler.webView(web, start: cancelled)
+        try await waitUntil { cancelled.received > 0 }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(cancelled.received, 64 * 1024)
+        XCTAssertFalse(cancelled.finished)
+        XCTAssertNil(cancelled.error)
+        cancelled.onChunk = nil
+    }
+    func testEPUBResourcesStayBoundedAcrossManyChapterChanges() async throws {
+        let (book, url) = try prepare("MemoryStress.epub", format: .epub, fixtures: true)
+        let model = try show(book, url: url)
+        try await waitUntil { model.isReady || model.error != nil }
+        XCTAssertNil(model.error)
+        let web = try XCTUnwrap(model.webView)
+        let result = try await web.callAsyncJavaScript("""
+            const active = new Map(); let peakCount = 0, peakBytes = 0, requests = 0, largestRead = 0;
+            let nonRangeReads = 0, heads = 0;
+            const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
+            const fetchOriginal = window.fetch.bind(window);
+            URL.createObjectURL = blob => {
+                const url = create(blob); active.set(url, blob.size);
+                peakCount = Math.max(peakCount, active.size);
+                peakBytes = Math.max(peakBytes, [...active.values()].reduce((a,b) => a+b, 0));
+                return url;
+            };
+            URL.revokeObjectURL = url => { active.delete(url); revoke(url); };
+            window.fetch = async (url, options) => {
+                const response = await fetchOriginal(url, options);
+                if (String(url).endsWith('/book')) {
+                    if (options?.method === 'HEAD') heads++;
+                    else {
+                        requests++;
+                        if (!options?.headers?.Range) nonRangeReads++;
+                        largestRead = Math.max(largestRead, Number(response.headers.get('Content-Length')));
+                    }
+                }
+                return response;
+            };
+            try {
+                await window.Leaf.open(config);
+                const view = document.querySelector('foliate-view');
+                const count = view.book.sections.length;
+                let maxDocuments = 0;
+                for (let n = 0; n < 160; n++) {
+                    await view.goTo((n * 37) % count);
+                    maxDocuments = Math.max(maxDocuments, view.renderer.getContents().length);
+                    if (n % 20 === 0) await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                const finalCount = active.size;
+                window.Leaf.close();
+                return {count, heads, requests, nonRangeReads, largestRead, peakCount, peakBytes,
+                    finalCount, afterClose:active.size, maxDocuments};
+            } finally {
+                window.fetch = fetchOriginal; URL.createObjectURL = create; URL.revokeObjectURL = revoke;
+            }
+            """, arguments: ["config": ["name": "MemoryStress.epub", "format": "epub", "locator": "", "preferences": preferences.payload]], in: nil, contentWorld: .page)
+        let metrics = try XCTUnwrap(result as? [String: Int])
+        XCTAssertGreaterThanOrEqual(metrics["count"] ?? 0, 128)
+        XCTAssertEqual(metrics["heads"], 1)
+        XCTAssertGreaterThan(metrics["requests"] ?? 0, 160)
+        XCTAssertEqual(metrics["nonRangeReads"], 0)
+        XCTAssertLessThanOrEqual(metrics["largestRead"] ?? .max, 256 * 1024)
+        XCTAssertLessThanOrEqual(metrics["peakCount"] ?? .max, 16)
+        XCTAssertLessThanOrEqual(metrics["peakBytes"] ?? .max, 16 * 1024 * 1024)
+        XCTAssertLessThanOrEqual(metrics["finalCount"] ?? .max, 8)
+        XCTAssertEqual(metrics["afterClose"], 0)
+        XCTAssertEqual(metrics["maxDocuments"], 1)
+        let attachment = XCTAttachment(data: try JSONEncoder().encode(metrics), uniformTypeIdentifier: "public.json")
+        attachment.name = "160 chapter changes and released resources"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+    func testRendererTerminationRestoresPassageAndLimitsRecoveryLoops() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        model.send("seek", value: 0.55)
+        try await waitUntil { model.fraction > 0.4 }
+        let locator = model.locator, oldID = model.reloadID
+        let oldWeb = try XCTUnwrap(model.webView)
+        let now = Date()
+        model.webProcessTerminated(oldWeb, now: now)
+        XCTAssertNotEqual(model.reloadID, oldID)
+        XCTAssertFalse(model.isReady)
+        XCTAssertNil(model.error)
+        XCTAssertEqual(model.locator, locator)
+        // Rebuild the surface as ReaderView's reloadID does in production.
+        window?.rootViewController = UIHostingController(rootView: WebBookSurface(model: model, url: url, preferences: preferences))
+        try await waitUntil { model.isReady || model.error != nil }
+        XCTAssertNil(model.error)
+        let encoded = String(decoding: try JSONEncoder().encode(locator), as: UTF8.self)
+        let visible = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
+        XCTAssertEqual(visible, true)
+        let restoredID = model.reloadID
+        model.webProcessTerminated(oldWeb, now: now.addingTimeInterval(1))
+        XCTAssertEqual(model.reloadID, restoredID) // Ignore callbacks from a discarded surface.
+        model.webProcessTerminated(try XCTUnwrap(model.webView), now: now.addingTimeInterval(2))
+        XCTAssertEqual(model.reloadID, restoredID)
+        XCTAssertTrue(model.error?.contains("renderer stopped") == true)
+        XCTAssertFalse(model.error?.contains("memory") == true)
+    }
+    func testClosingReaderReleasesNativeWebView() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        weak var closedView = model.webView
+        XCTAssertNotNil(closedView)
+        window?.rootViewController = nil
+        try await waitUntil({ closedView == nil }, timeout: 10)
+        XCTAssertNil(model.webView)
+    }
     func testChatContextUsesVisiblePassageOrSelectionWithoutMovingTheBook() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         let model = try show(book, url: url)
@@ -416,4 +556,19 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(model.locator, "pdf:2")
         XCTAssertEqual(model.fraction, 2.0 / 3.0, accuracy: 0.001)
     }
+}
+
+@MainActor private final class MemorySchemeTask: NSObject, WKURLSchemeTask {
+    let request: URLRequest
+    var response: HTTPURLResponse?
+    var received = 0
+    var largestChunk = 0
+    var finished = false
+    var error: Error?
+    var onChunk: (() -> Void)?
+    init(request: URLRequest) { self.request = request }
+    func didReceive(_ response: URLResponse) { self.response = response as? HTTPURLResponse }
+    func didReceive(_ data: Data) { received += data.count; largestChunk = max(largestChunk, data.count); onChunk?() }
+    func didFinish() { finished = true }
+    func didFailWithError(_ error: Error) { self.error = error }
 }

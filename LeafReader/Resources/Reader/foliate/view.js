@@ -39,7 +39,8 @@ const makeZipLoader = async file => {
     const loadText = load(entry => entry.getData(new TextWriter()))
     const loadBlob = load((entry, type) => entry.getData(new BlobWriter(type)))
     const getSize = name => map.get(name)?.uncompressedSize ?? 0
-    return { entries, loadText, loadBlob, getSize }
+    const destroy = () => { map.clear(); entries.length = 0; return reader.close() }
+    return { entries, loadText, loadBlob, getSize, destroy }
 }
 
 const getFileEntries = async entry => entry.isFile ? entry
@@ -87,21 +88,25 @@ export const makeBook = async file => {
     else if (!file.size) throw new NotFoundError('File not found')
     else if (await isZip(file)) {
         const loader = await makeZipLoader(file)
-        if (isCBZ(file)) {
-            const { makeComicBook } = await import('./comic-book.js')
-            book = makeComicBook(loader, file)
-        }
-        else if (isFBZ(file)) {
-            const { makeFB2 } = await import('./fb2.js')
-            const { entries } = loader
-            const entry = entries.find(entry => entry.filename.endsWith('.fb2'))
-            const blob = await loader.loadBlob((entry ?? entries[0]).filename)
-            book = await makeFB2(blob)
-        }
-        else {
-            const { EPUB } = await import('./epub.js')
-            book = await new EPUB(loader).init()
-        }
+        try {
+            if (isCBZ(file)) {
+                const { makeComicBook } = await import('./comic-book.js')
+                book = makeComicBook(loader, file)
+            }
+            else if (isFBZ(file)) {
+                const { makeFB2 } = await import('./fb2.js')
+                const { entries } = loader
+                const entry = entries.find(entry => entry.filename.endsWith('.fb2'))
+                const blob = await loader.loadBlob((entry ?? entries[0]).filename)
+                book = await makeFB2(blob)
+            }
+            else {
+                const { EPUB } = await import('./epub.js')
+                book = await new EPUB(loader).init()
+            }
+            const destroy = book.destroy?.bind(book)
+            book.destroy = () => { destroy?.(); loader.destroy() }
+        } catch (error) { loader.destroy(); throw error }
     }
     else if (await isPDF(file)) {
         const { makePDF } = await import('./pdf.js')

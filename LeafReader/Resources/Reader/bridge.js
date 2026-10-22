@@ -1,4 +1,5 @@
 import { makeBook } from './foliate/view.js';
+import { openBookSource } from './book-source.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers.leaf.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -165,10 +166,8 @@ async function rejectEncryptedMOBI(file) {
 
 async function open(config) {
     try {
-        view?.close(); view?.book?.destroy?.(); view?.remove();
-        const response = await fetch('leaf-reader://reader/book');
-        if (!response.ok) throw new Error('The book file could not be read.');
-        const file = new File([await response.blob()], config.name);
+        close();
+        const file = await openBookSource(config.name, config.format);
         if (['mobi','azw','azw3','prc'].includes(config.format)) await rejectEncryptedMOBI(file);
         const book = ['txt','md','html','rtf'].includes(config.format) ? await simpleBook(file, config.format) : await makeBook(file);
         if (!book.sections?.length) throw new Error('This book has no readable sections. Try another copy.');
@@ -222,6 +221,15 @@ async function open(config) {
     } catch(error) { post('error', { message:readableError(error) }); }
 }
 
+function close() {
+    searchGeneration = null;
+    const previous = view;
+    view = null;
+    previous?.close();
+    previous?.book?.destroy?.();
+    previous?.remove();
+}
+
 function readableError(error) {
     const message = error?.message || String(error);
     return /encrypt|drm|password/i.test(message) ? 'This book is protected. Import a DRM-free copy, or unlock a password-protected PDF in the PDF reader.'
@@ -266,7 +274,7 @@ async function search({query, generation}) {
     } catch(error) { post('searchResults', {generation, items}); }
 }
 
-window.Leaf = { open, command, applyPreferences, search, tap,
+window.Leaf = { open, close, command, applyPreferences, search, tap,
     chatContext: () => {
         const contents = view?.renderer?.getContents?.() ?? [];
         for (const {doc} of contents) {

@@ -38,7 +38,6 @@ struct ReaderContent: View {
     @State private var password = ""
     @State private var seek = 0.0
     @State private var seeking = false
-    @State private var reloadID = UUID()
     private var showsControls: Bool {
         model.controlsVisible || panel != nil || !model.isReady || model.isLocked || model.error != nil || voiceOverEnabled
     }
@@ -55,8 +54,8 @@ struct ReaderContent: View {
     var body: some View {
         ZStack {
             ZStack {
-                if book.format == .pdf { PDFBookSurface(model: model, url: url, theme: theme, onReaderTap: handleBookTap).id(reloadID) }
-                else { WebBookSurface(model: model, url: url, preferences: preferences, onReaderTap: handleBookTap).id(reloadID) }
+                if book.format == .pdf { PDFBookSurface(model: model, url: url, theme: theme, onReaderTap: handleBookTap).id(model.reloadID) }
+                else { WebBookSurface(model: model, url: url, preferences: preferences, onReaderTap: handleBookTap).id(model.reloadID) }
                 if !model.isReady, model.error == nil, !model.isLocked {
                     VStack(spacing: 16) { ProgressView(); Text("Opening your book…").font(.subheadline) }.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background)
                 }
@@ -72,7 +71,7 @@ struct ReaderContent: View {
                     ContentUnavailableView {
                         Label("This book could not be opened", systemImage: "book.closed")
                     } description: { Text(error) } actions: {
-                        Button("Try again") { model.error = nil; model.isReady = false; reloadID = UUID() }.buttonStyle(.bordered)
+                        Button("Reload book") { model.reload() }.buttonStyle(.bordered)
                         Button("Back to library") { dismiss() }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background).accessibilityIdentifier("readerError")
                 }

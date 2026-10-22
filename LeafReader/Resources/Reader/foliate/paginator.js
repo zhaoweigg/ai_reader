@@ -208,6 +208,7 @@ const setStylesImportant = (el, styles) => {
 }
 
 class View {
+    #destroyed = false
     #observer = new ResizeObserver(() => this.expand())
     #element = document.createElement('div')
     #iframe = document.createElement('iframe')
@@ -254,6 +255,7 @@ class View {
         if (typeof src !== 'string') throw new Error(`${src} is not string`)
         return new Promise(resolve => {
             this.#iframe.addEventListener('load', () => {
+                if (this.#destroyed) { resolve(); return }
                 const doc = this.document
                 afterLoad?.(doc)
 
@@ -360,6 +362,7 @@ class View {
         }
     }
     expand() {
+        if (this.#destroyed) return
         const { documentElement } = this.document
         if (this.#column) {
             const side = this.#vertical ? 'height' : 'width'
@@ -416,7 +419,12 @@ class View {
         return this.#overlayer
     }
     destroy() {
-        if (this.document) this.#observer.unobserve(this.document.body)
+        this.#destroyed = true
+        this.#observer.disconnect()
+        this.#contentRange = document.createRange()
+        this.#overlayer = null
+        this.onExpand = () => {}
+        this.#iframe.src = 'about:blank'
     }
 }
 
@@ -1132,20 +1140,26 @@ export class Paginator extends HTMLElement {
         } else $style.textContent = styles
 
         // NOTE: needs `requestAnimationFrame` in Chromium
-        requestAnimationFrame(() =>
-            this.#background.style.background = getBackground(this.#view.document))
+        requestAnimationFrame(() => {
+            if (this.#view?.document)
+                this.#background.style.background = getBackground(this.#view.document)
+        })
 
         // needed because the resize observer doesn't work in Firefox
-        this.#view?.document?.fonts?.ready?.then(() => this.#view.expand())
+        this.#view?.document?.fonts?.ready?.then(() => this.#view?.expand())
     }
     focusView() {
         this.#view.document.defaultView.focus()
     }
     destroy() {
-        this.#observer.unobserve(this)
-        this.#view.destroy()
+        this.#observer.disconnect()
+        this.#view?.destroy()
+        this.#view?.element.remove()
         this.#view = null
+        this.#anchor = 0
+        this.#lastVisibleRange = null
         this.sections[this.#index]?.unload?.()
+        this.sections = []
         this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)
     }
 }
