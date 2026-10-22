@@ -140,7 +140,7 @@ function applyPreferences(value) {
     attribute('gap', `${gap}%`);
     attribute('max-inline-size', '680px');
     view.renderer.setStyles?.(`
-        html { color-scheme: ${value.background === '#17232E' ? 'dark' : 'light'}; font-size:${size}px !important;
+        html { color-scheme: ${value.colorScheme ?? (value.background === '#17232E' ? 'dark' : 'light')}; font-size:${size}px !important;
             -webkit-text-size-adjust:none !important; text-size-adjust:none !important; }
         html, body { background:${value.background} !important; color:${value.foreground} !important; }
         body { font-family:${font} !important; font-size:1rem !important; padding:0 !important; }
@@ -149,7 +149,7 @@ function applyPreferences(value) {
         p { margin-block:0 ${paragraph}em !important; }
         h1,h2,h3 { font-family:${font} !important; line-height:1.2; color:${value.foreground} !important; }
         pre { white-space:pre-wrap; font-size:0.85em; }
-        a { color:${value.background === '#17232E' ? '#93CABB' : '#24776A'} !important; }
+        a { color:${value.accent ?? (value.background === '#17232E' ? '#93CABB' : '#24776A')} !important; }
         img,svg { max-width:100%; }`);
 }
 

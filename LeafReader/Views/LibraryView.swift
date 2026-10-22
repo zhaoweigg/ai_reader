@@ -4,6 +4,7 @@ private enum LibraryFilter: String, CaseIterable { case all = "All books", readi
 private enum LibrarySort: String, CaseIterable { case recent = "Recently opened", added = "Recently added", title = "Title", author = "Author" }
 
 struct LibraryView: View {
+    @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var library: LibraryStore
     let onImport: () -> Void
     let onOpen: (UUID) -> Void
@@ -68,7 +69,7 @@ struct LibraryView: View {
                             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                             TextField("Find a title or author", text: $query).accessibilityIdentifier("librarySearch")
                             if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.accessibilityLabel("Clear search") }
-                        }.padding(13).background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
+                        }.padding(13).background(theme.surface, in: .rect(cornerRadius: 12))
                         Picker("Library filter", selection: $filter) {
                             ForEach(LibraryFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }.pickerStyle(.segmented)
@@ -82,7 +83,7 @@ struct LibraryView: View {
                         } description: {
                             Text(query.isEmpty ? "Import a book from Files, iCloud Drive, or another app." : "Try another title or author, or change your filters.")
                         } actions: {
-                            if library.books.isEmpty { Button("Import books", action: onImport).buttonStyle(.borderedProminent) }
+                            if library.books.isEmpty { Button("Import books", action: onImport).buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent) }
                         }.padding(.vertical, 22)
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 145, maximum: 195), spacing: 24, alignment: .top)], alignment: .leading, spacing: 28) {
@@ -96,7 +97,7 @@ struct LibraryView: View {
                                             Text(book.format.label).font(.system(size: 10, weight: .semibold)).padding(.horizontal, 6).padding(.vertical, 3)
                                                 .background(.quaternary, in: .rect(cornerRadius: 4))
                                             Spacer(minLength: 2)
-                                            if book.isFavorite { Image(systemName: "heart.fill").font(.caption2).foregroundStyle(LeafStyle.accent) }
+                                            if book.isFavorite { Image(systemName: "heart.fill").font(.caption2).foregroundStyle(theme.accent) }
                                             if book.lastOpenedAt != nil { Text(book.progressLabel).font(.caption2).foregroundStyle(.secondary) }
                                         }
                                     }.contentShape(Rectangle())
@@ -120,13 +121,14 @@ struct LibraryView: View {
                 }
                 .padding(.horizontal, 24).padding(.bottom, 20).frame(maxWidth: 960, alignment: .leading).frame(maxWidth: .infinity)
             }
-            .background(LeafStyle.canvas)
+            .background(theme.canvas)
+            .toolbarBackground(theme.canvas, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     HStack(alignment: .center, spacing: 7) {
                         Image(systemName: "leaf.fill")
                             .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(LeafStyle.accent)
+                            .foregroundStyle(theme.accent)
                         Text("leaf").font(.system(size: 25, weight: .semibold, design: .serif))
                     }
                     .padding(.horizontal, 10)
@@ -135,7 +137,7 @@ struct LibraryView: View {
                     .accessibilityElement(children: .combine).accessibilityLabel("Leaf reader")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: onImport) { Label("Add books", systemImage: "plus") }.buttonStyle(.borderedProminent).clipShape(Capsule())
+                    Button(action: onImport) { Label("Add books", systemImage: "plus") }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).clipShape(Capsule())
                         .disabled(library.isImporting).accessibilityIdentifier("importBooks")
                 }
             }
@@ -160,7 +162,7 @@ struct LibraryView: View {
                     if book.lastOpenedAt != nil { ProgressView(value: book.progress).tint(Color(hex: "#B8DFD4")) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 BookCover(book: book, coverURL: library.coverURL(book)).frame(width: 105).rotationEffect(.degrees(5))
-            }.padding(24).frame(minHeight: 208).background(Color(hex: "#203C4D"), in: .rect(cornerRadius: 18))
+            }.padding(24).frame(minHeight: 208).background(theme.featured, in: .rect(cornerRadius: 18))
         }.buttonStyle(.plain).accessibilityIdentifier("featuredBook")
     }
 }
