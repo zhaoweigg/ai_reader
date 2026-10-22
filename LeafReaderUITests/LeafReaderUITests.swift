@@ -35,7 +35,14 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor private func showReaderControls(_ app: XCUIApplication) {
         waitForBook(app)
         if !app.buttons["closeBook"].exists {
-            readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            let surface = readingSurface(app)
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            // Native setup taps can be consumed after rotation. Record the state before
+            // one bounded retry; direct immersive-tap assertions remain single taps.
+            if !app.buttons["closeBook"].waitForExistence(timeout: 2) {
+                capture("Reader controls setup tap retry", app: app)
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+            }
         }
         XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
     }
@@ -47,6 +54,13 @@ final class LeafReaderUITests: XCTestCase {
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.segmentedControls["appearanceTabs"])
         waitForExpectations(timeout: 5)
         XCTAssertFalse(app.buttons["closeBook"].exists)
+    }
+
+    @MainActor private func revealAppearanceControl(_ app: XCUIApplication, _ control: XCUIElement) {
+        let form = app.descendants(matching: .any)["appearanceForm"].firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5))
+        for _ in 0..<3 where !control.isHittable { form.swipeUp() }
+        XCTAssertTrue(control.isHittable)
     }
 
     @MainActor func testLibraryReaderBookmarksAndAppearance() throws {
@@ -85,6 +99,75 @@ final class LeafReaderUITests: XCTestCase {
         app.tabBars.buttons["Settings"].tap()
         app.buttons["Day theme"].tap()
     }
+    @MainActor func testAppThemesApplyAcrossLibraryMenusReaderAndRelaunch() {
+        let app = launchApp()
+        for theme in ["Day", "Paper", "Night", "Sepia", "Sage", "Dusk"] {
+            app.tabBars.buttons["Settings"].tap()
+            let choice = app.buttons[theme + " theme"]
+            XCTAssertTrue(choice.waitForExistence(timeout: 5))
+            choice.tap()
+            XCTAssertTrue(choice.isSelected)
+            XCTAssertEqual(["Day", "Paper", "Night", "Sepia", "Sage", "Dusk"].filter { app.buttons[$0 + " theme"].isSelected }.count, 1)
+            capture(theme + " app theme picker", app: app)
+            app.tabBars.buttons["Library"].tap()
+            XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 5))
+            capture(theme + " themed library", app: app)
+            app.tabBars.buttons["Bookmarks"].tap()
+            capture(theme + " themed bookmarks", app: app)
+            app.tabBars.buttons["Library"].tap()
+            app.buttons["importBooks"].tap()
+            XCTAssertTrue(app.buttons["addFromFiles"].waitForExistence(timeout: 5))
+            capture(theme + " themed add books", app: app)
+            app.buttons["Close"].tap()
+        }
+        app.terminate(); app.launch()
+        app.tabBars.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["Dusk theme"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        app.buttons["Sage theme"].tap()
+        dismissAppearance(app)
+        showReaderControls(app); app.buttons["closeBook"].tap()
+        app.tabBars.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["Sage theme"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Sage theme"].isSelected)
+        capture("Reader theme synchronizes back to Settings", app: app)
+    }
+
+    @MainActor func testThemeSelectorFitsLandscapeAndKeepsItsChoiceAfterRotation() {
+        let app = launchApp()
+        defer { XCUIDevice.shared.orientation = .portrait }
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["Night theme"].tap()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.buttons["Sage theme"].tap()
+        XCTAssertTrue(app.buttons["Sage theme"].isSelected)
+        capture("Landscape app theme selector", app: app)
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(app.buttons["Sage theme"].isSelected)
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        revealAppearanceControl(app, app.buttons["Paper theme"])
+        app.buttons["Paper theme"].tap()
+        XCTAssertTrue(app.buttons["Paper theme"].isSelected)
+        capture("Landscape reader theme selector", app: app)
+        revealAppearanceControl(app, app.buttons["Dusk theme"])
+        app.buttons["Dusk theme"].tap()
+        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        capture("Reader theme selector after rotation", app: app)
+    }
+
     @MainActor func testLibrarySearchFiltersTitles() {
         let app = launchApp()
         let search = app.textFields["librarySearch"]
@@ -118,6 +201,7 @@ final class LeafReaderUITests: XCTestCase {
         preview.name = "Reader preview layout"; preview.lifetime = .keepAlways; add(preview)
         tabs.buttons["Themes"].tap()
         let compact = app.buttons["compactLayout"]
+        revealAppearanceControl(app, compact)
         XCTAssertTrue(compact.waitForExistence(timeout: 5))
         compact.tap()
         XCTAssertTrue(compact.isSelected)
@@ -133,6 +217,7 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 20)
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        revealAppearanceControl(app, app.buttons["compactLayout"])
         XCTAssertTrue(app.buttons["compactLayout"].isSelected)
     }
 
@@ -599,7 +684,7 @@ final class LeafReaderUITests: XCTestCase {
         waitForBook(app)
         defer { XCUIDevice.shared.orientation = .portrait }
         for flow in ["Pages", "Scroll"] {
-            for theme in ["Day", "Paper", "Night"] {
+            for theme in ["Day", "Paper", "Night", "Sepia", "Sage", "Dusk"] {
                 showReaderControls(app)
                 app.buttons["Appearance"].tap()
                 app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()

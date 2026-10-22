@@ -47,10 +47,10 @@ enum ReaderChatPlacement {
 }
 
 struct ReaderChatLauncher: View {
+    @Environment(\.leafTheme) private var theme
     @Binding var isMoving: Bool
     let action: () -> Void
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage("reader.chatButtonX") private var savedX = -1.0
     @AppStorage("reader.chatButtonY") private var savedY = -1.0
@@ -89,14 +89,14 @@ struct ReaderChatLauncher: View {
     private var icon: some View {
         ZStack {
             // No material blur: book glyphs remain visible through the tint.
-            Circle().fill(LeafStyle.accent.opacity(reduceTransparency ? 1 : 0.12))
+            Circle().fill(theme.accent.opacity(reduceTransparency ? 1 : 0.12))
             Image(systemName: isMoving ? "arrow.up.and.down.and.arrow.left.and.right" : "leaf.fill")
                 .font(.system(size: isMoving ? 21 : 25, weight: .medium))
-                .foregroundStyle((colorScheme == .dark || reduceTransparency ? Color(hex: "#9ACFC0") : LeafStyle.accent)
+                .foregroundStyle((reduceTransparency ? theme.onAccent : theme.accent)
                     .opacity(reduceTransparency || contrast == .increased ? 1 : 0.55))
         }
         .frame(width: ReaderChatPlacement.diameter, height: ReaderChatPlacement.diameter)
-        .overlay(Circle().stroke(LeafStyle.accent.opacity(isMoving || contrast == .increased ? 0.85 : 0.25),
+        .overlay(Circle().stroke(theme.accent.opacity(isMoving || contrast == .increased ? 0.85 : 0.25),
                                  style: StrokeStyle(lineWidth: isMoving ? 1.5 : 0.5, dash: isMoving ? [4, 3] : [])))
         .contentShape(Circle())
     }
@@ -125,6 +125,7 @@ struct ReaderChatLauncher: View {
 }
 
 struct ReaderChatPanel: View {
+    @Environment(\.leafTheme) private var theme
     @ObservedObject var session: ReaderChatSession
     @EnvironmentObject private var settings: AISettingsStore
     let bookTitle: String
@@ -138,8 +139,7 @@ struct ReaderChatPanel: View {
     @FocusState private var inputFocused: Bool
     @State private var confirmsClear = false
 
-    private var accent: Color { colorScheme == .dark ? Color(hex: "#93CABB") : LeafStyle.accent }
-    @Environment(\.colorScheme) private var colorScheme
+    private var accent: Color { theme.accent }
     private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
@@ -300,7 +300,7 @@ struct ReaderChatPanel: View {
                     .accessibilityIdentifier("readerChatInput")
                 Button(action: session.isSending ? session.stop : send) {
                     Image(systemName: session.isSending ? "stop.fill" : "arrow.up").font(.system(size: 19, weight: .medium))
-                        .foregroundStyle(question.isEmpty && !session.isSending ? Color.secondary : Color.white)
+                        .foregroundStyle(question.isEmpty && !session.isSending ? Color.secondary : theme.onAccent)
                         .frame(width: 44, height: 44)
                         .background(question.isEmpty && !session.isSending ? accent.opacity(0.1) : accent, in: Circle())
                 }

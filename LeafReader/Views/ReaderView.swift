@@ -72,7 +72,7 @@ struct ReaderContent: View {
                         Text("Unlock this PDF").font(.title2)
                         SecureField("PDF password", text: $password).textFieldStyle(.roundedBorder).frame(maxWidth: 300)
                         if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red) }
-                        Button("Unlock") { model.unlockPDF(password) }.buttonStyle(.borderedProminent)
+                        Button("Unlock") { model.unlockPDF(password) }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent)
                     }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background)
                 } else if let error = model.error {
                     ContentUnavailableView {
@@ -172,8 +172,8 @@ struct ReaderContent: View {
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showsControls)
-        .background(theme.background.ignoresSafeArea()).foregroundStyle(theme.foreground).tint(theme == .night ? Color(hex: "#93CABB") : LeafStyle.accent)
-        .preferredColorScheme(theme == .night ? .dark : .light)
+        .background(theme.background.ignoresSafeArea()).foregroundStyle(theme.foreground).tint(theme.accent)
+        .preferredColorScheme(theme.colorScheme)
         .statusBarHidden(!showsControls)
         .persistentSystemOverlays(showsControls ? .automatic : .hidden)
         .accessibilityAction(.escape) { library.flush(); dismiss() }
@@ -197,14 +197,15 @@ struct ReaderContent: View {
                         List(model.chapters) { chapter in
                             Button { model.send("navigate", value: chapter.href); self.panel = nil } label: {
                                 Text(chapter.label).padding(.leading, CGFloat(chapter.depth) * 16).foregroundStyle(.primary)
-                            }
-                        }.overlay { if model.chapters.isEmpty { ContentUnavailableView("No table of contents", systemImage: "list.bullet", description: Text("Use the progress slider to move through this book.")) } }.navigationTitle("Contents")
+                            }.listRowBackground(theme.surface)
+                        }.leafFormStyle().overlay { if model.chapters.isEmpty { ContentUnavailableView("No table of contents", systemImage: "list.bullet", description: Text("Use the progress slider to move through this book.")) } }.navigationTitle("Contents")
                     case .bookmarks:
                         List(library.book(book.id)?.bookmarks ?? []) { bookmark in
                             Button { model.send("navigate", value: bookmark.locator); self.panel = nil } label: {
                                 VStack(alignment: .leading, spacing: 4) { Text(bookmark.label); Text("\(Int(bookmark.fraction * 100))% through the book").font(.caption).foregroundStyle(.secondary) }
                             }.swipeActions { Button("Delete", role: .destructive) { library.removeBookmark(book.id, bookmarkID: bookmark.id) } }
-                        }.overlay { if (library.book(book.id)?.bookmarks ?? []).isEmpty { ContentUnavailableView("No saved places yet", systemImage: "bookmark", description: Text("Tap the bookmark at the top of the page to save your place.")) } }.navigationTitle("Saved places")
+                            .listRowBackground(theme.surface)
+                        }.leafFormStyle().overlay { if (library.book(book.id)?.bookmarks ?? []).isEmpty { ContentUnavailableView("No saved places yet", systemImage: "bookmark", description: Text("Tap the bookmark at the top of the page to save your place.")) } }.navigationTitle("Saved places")
                     case .search: ReaderSearchView(model: model) { self.panel = nil; model.hideControls() }
                     }
                 }.navigationBarTitleDisplayMode(.inline).toolbar {
@@ -215,6 +216,8 @@ struct ReaderContent: View {
                     }
                 }
             }
+            .environment(\.leafTheme, theme)
+            .tint(theme.accent)
             .presentationDetents(panel == .appearance ? [.medium, .large] : [.large])
             .presentationDragIndicator(panel == .appearance ? .visible : .automatic)
             .presentationBackgroundInteraction(panel == .appearance ? .enabled(upThrough: .medium) : .disabled)
@@ -280,6 +283,7 @@ struct ReaderContent: View {
 }
 
 struct ReaderSearchView: View {
+    @Environment(\.leafTheme) private var theme
     @ObservedObject var model: ReaderModel
     let onNavigate: () -> Void
     @State private var query = ""
@@ -287,11 +291,11 @@ struct ReaderSearchView: View {
         List(model.searchResults) { result in
             Button { model.send("navigate", value: result.locator); onNavigate() } label: {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(result.label).font(.caption.weight(.semibold)).foregroundStyle(LeafStyle.accent)
+                    Text(result.label).font(.caption.weight(.semibold)).foregroundStyle(theme.accent)
                     Text(result.excerpt).font(.subheadline).foregroundStyle(.primary)
                 }.padding(.vertical, 4)
-            }
-        }
+            }.listRowBackground(theme.surface)
+        }.leafFormStyle()
         .overlay {
             if model.isSearching { ProgressView("Searching…") }
             else if model.searchResults.isEmpty {

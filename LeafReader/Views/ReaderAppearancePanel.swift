@@ -6,6 +6,7 @@ enum ReaderAppearanceTab: String, CaseIterable, Identifiable {
 }
 
 struct ReaderAppearancePanel: View {
+    @Environment(\.leafTheme) private var theme
     @State private var tab: ReaderAppearanceTab = .font
     var body: some View {
         VStack(spacing: 0) {
@@ -15,9 +16,10 @@ struct ReaderAppearancePanel: View {
             .pickerStyle(.segmented).accessibilityIdentifier("appearanceTabs")
             .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 4)
             Form { ReaderAppearanceControls(tab: tab) }
-                .contentMargins(.top, 8, for: .scrollContent)
+                .accessibilityIdentifier("appearanceForm")
+                .contentMargins(.top, 8, for: .scrollContent).leafFormStyle()
         }
-        .background(LeafStyle.canvas).navigationTitle("Appearance")
+        .background(theme.canvas).navigationTitle("Appearance")
     }
 }
 
@@ -35,11 +37,11 @@ private enum ReadingPreset: String, CaseIterable, Identifiable {
 }
 
 struct ReaderAppearanceControls: View {
+    @Environment(\.leafTheme) private var appTheme
     var tab: ReaderAppearanceTab? = nil
     @AppStorage("reader.fontSize") private var fontSize = 19.0
     @AppStorage("reader.lineHeight") private var lineHeight = 1.65
     @AppStorage("reader.font") private var font = "Georgia"
-    @AppStorage("reader.theme") private var theme = ReadingTheme.day.rawValue
     @AppStorage("reader.scrolling") private var scrolling = false
     @AppStorage("reader.horizontalMargin") private var horizontalMargin = 20.0
     @AppStorage("reader.verticalMargin") private var verticalMargin = 12.0
@@ -57,26 +59,15 @@ struct ReaderAppearanceControls: View {
     }
 
     var body: some View {
-        if tab == nil || tab == .themes { themeControls }
-        if tab == nil || tab == .font { fontControls }
-        if tab == nil || tab == .layout { layoutControls }
+        Group {
+            if tab == nil || tab == .themes { themeControls }
+            if tab == nil || tab == .font { fontControls }
+            if tab == nil || tab == .layout { layoutControls }
+        }.listRowBackground(appTheme.surface)
     }
 
     @ViewBuilder private var themeControls: some View {
-        Section("Page color") {
-            HStack(spacing: 12) {
-                ForEach(ReadingTheme.allCases) { item in
-                    Button { theme = item.rawValue } label: {
-                        VStack(spacing: 7) {
-                            Text("Aa").font(.system(size: 23, design: .serif)).foregroundStyle(item.foreground)
-                                .frame(maxWidth: .infinity).frame(height: 48).background(item.background, in: .rect(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme == item.rawValue ? LeafStyle.accent : Color.secondary.opacity(0.25), lineWidth: theme == item.rawValue ? 2 : 1))
-                            Text(item.title).font(.caption).foregroundStyle(.primary)
-                        }
-                    }.buttonStyle(.plain).accessibilityLabel("\(item.title) theme").accessibilityAddTraits(theme == item.rawValue ? .isSelected : [])
-                }
-            }.padding(.vertical, 4)
-        }
+        ThemePicker()
         Section {
             HStack(spacing: 8) {
                 ForEach(ReadingPreset.allCases) { preset in
@@ -174,12 +165,12 @@ struct ReaderAppearanceControls: View {
 }
 
 private struct AppearanceChoice<Illustration: View>: View {
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.leafTheme) private var theme
     let title: String
     let selected: Bool
     let action: () -> Void
     @ViewBuilder let illustration: () -> Illustration
-    private var accent: Color { colorScheme == .dark ? Color(hex: "#93CABB") : LeafStyle.accent }
+    private var accent: Color { theme.accent }
     var body: some View {
         Button(action: action) {
             VStack(spacing: 6) {
