@@ -1,10 +1,9 @@
 import XCTest
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false, dark: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
-        if dark { app.launchArguments += ["-AppleInterfaceStyle", "Dark"] }
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1";app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = "1"
         if feedFailure { app.launchEnvironment["LEAF_UI_ZLIB_FEED_FAILURE"] = "1" }
@@ -81,7 +80,11 @@ final class ZLibraryUITests: XCTestCase {
         }
     }
     @MainActor func testBookCardsShowSizesRatingsAndHonestMissingDataInDarkAppearance() {
-        let app = launch(dark:true)
+        let app = launch()
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["Night theme"].tap()
+        XCTAssertTrue(app.buttons["Night theme"].isSelected)
+        app.tabBars.buttons["Library"].tap()
         app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
         let rated = app.buttons["catalogBook-sample"], unrated = app.buttons["catalogBook-sample2"]
         XCTAssertTrue(rated.waitForExistence(timeout:10))
