@@ -35,14 +35,20 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor func testSearchOrderMenuAllOptionsPaginationAndDetailsPreserveSelection() {
         let app = launch()
         app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
-        XCTAssertTrue(app.buttons["zlibrarySearchOrder"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
+        XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
+        capture("Popular feed without search sorting Day")
+        let field = app.textFields["zlibrarySearchField"]
+        field.tap();field.typeText("墓碑")
+        XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
+        app.buttons["zlibrarySubmitSearch"].tap()
+        XCTAssertTrue(app.buttons["zlibrarySearchOrder"].waitForExistence(timeout:5))
         app.buttons["zlibrarySearchOrder"].tap()
         for title in ["Most popular","Best match","Recently added","Title (A–Z)","Title (Z–A)","Year","File size ↓","File size ↑"] {
             XCTAssertTrue(app.buttons[title].firstMatch.exists)
         }
         capture("Search order menu Day portrait")
         app.buttons["Most popular"].firstMatch.tap()
-        search("墓碑",app:app)
         for (title,id) in [("Most popular","sample"),("Best match","sample"),("Recently added","sample2"),("Title (A–Z)","sample2"),("Title (Z–A)","sample"),("Year","sample"),("File size ↓","sample2"),("File size ↑","sample")] {
             chooseOrder(title,app:app)
             XCTAssertTrue(app.buttons["catalogBook-\(id)"].waitForExistence(timeout:5))
@@ -61,14 +67,18 @@ final class ZLibraryUITests: XCTestCase {
         app.navigationBars.buttons["Z-Library"].tap()
         XCTAssertTrue(app.buttons["zlibrarySearchOrder"].label.contains("Best match"))
         capture("Sorted search results Day portrait")
+        app.buttons["zlibraryClearSearch"].tap()
+        XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
     }
     @MainActor func testSearchOrderInNightLandscapeFailureRetryAndRelaunch() {
         let app = launch()
         app.tabBars.buttons["Settings"].tap();app.buttons["Night theme"].tap();app.tabBars.buttons["Library"].tap()
         app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
-        XCTAssertTrue(app.buttons["zlibrarySearchOrder"].waitForExistence(timeout:10))
-        chooseOrder("Year",app:app)
+        XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
+        XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
         search("unavailable",app:app)
+        chooseOrder("Year",app:app)
         XCTAssertTrue(app.staticTexts["Could not search books"].waitForExistence(timeout:5))
         app.buttons["Try again"].tap()
         XCTAssertTrue(app.staticTexts["Could not search books"].waitForExistence(timeout:5))
@@ -76,8 +86,13 @@ final class ZLibraryUITests: XCTestCase {
         capture("Sorted search failure Night portrait")
         app.buttons["zlibraryClearSearch"].tap()
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
         XCUIDevice.shared.orientation = .landscapeLeft
         expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);waitForExpectations(timeout:5)
+        XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
+        capture("Popular feed without search sorting Night landscape")
+        search("books",app:app)
+        XCTAssertTrue(app.buttons["zlibrarySearchOrder"].waitForExistence(timeout:5))
         app.buttons["zlibrarySearchOrder"].tap()
         XCTAssertTrue(app.buttons["Best match"].firstMatch.waitForExistence(timeout:5))
         capture("Search order menu Night landscape")
@@ -85,10 +100,12 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["zlibrarySearchOrder"].label.contains("Best match"))
         app.terminate();XCUIDevice.shared.orientation = .portrait;app.launch()
         app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
-        XCTAssertTrue(app.buttons["zlibrarySearchOrder"].waitForExistence(timeout:10))
-        XCTAssertTrue(app.buttons["zlibrarySearchOrder"].label.contains("Best match"))
-        XCTAssertTrue(app.staticTexts["Most popular"].exists)
+        XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
+        XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
         XCTAssertEqual(app.textFields["zlibrarySearchField"].value as? String,"Title, author, or ISBN")
+        search("stars",app:app)
+        XCTAssertTrue(app.buttons["zlibrarySearchOrder"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["zlibrarySearchOrder"].label.contains("Best match"))
         capture("Saved search order Night portrait")
     }
     @MainActor func testPopularCatalogConnectsImportsAndPreservesExistingBook() {
