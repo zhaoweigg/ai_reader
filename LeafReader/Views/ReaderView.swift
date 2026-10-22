@@ -11,7 +11,7 @@ struct ReaderView: View {
     }
 }
 
-private enum ReaderPanel: String, Identifiable { case contents, appearance, search, bookmarks, aiSettings; var id: String { rawValue } }
+private enum ReaderPanel: String, Identifiable { case contents, appearance, search, bookmarks, aiSettings, buttonAppearance; var id: String { rawValue } }
 
 struct ReaderContent: View {
     let book: Book
@@ -144,6 +144,8 @@ struct ReaderContent: View {
                     }, onSettings: {
                         chat.stop()
                         panel = .aiSettings
+                    }, onButtonSettings: {
+                        panel = .buttonAppearance
                     }, onSend: {
                         chat.send(settings: aiSettings) { try await model.readingChatContext() }
                     }, onResize: { translation, ended in
@@ -193,6 +195,7 @@ struct ReaderContent: View {
                     switch panel {
                     case .appearance: ReaderAppearancePanel()
                     case .aiSettings: AISettingsView()
+                    case .buttonAppearance: ReaderChatButtonSettings()
                     case .contents:
                         List(model.chapters) { chapter in
                             Button { model.send("navigate", value: chapter.href); self.panel = nil } label: {

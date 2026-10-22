@@ -678,6 +678,93 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(quote.exists)
     }
 
+    @MainActor func testFloatingButtonTransparencyInPages() { verifyButtonTransparency(flow:"Pages") }
+    @MainActor func testFloatingButtonTransparencyInScroll() { verifyButtonTransparency(flow:"Scroll") }
+
+    @MainActor private func verifyButtonTransparency(flow:String) {
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launchApp()
+        func openButtonSettings() {
+            app.tabBars.buttons["Settings"].tap()
+            let link = app.buttons["openChatButtonSettings"]
+            for _ in 0..<6 where !link.isHittable { app.swipeUp() }
+            XCTAssertTrue(link.isHittable);link.tap()
+            XCTAssertTrue(app.sliders["chatButtonTransparency"].waitForExistence(timeout:5))
+        }
+        openButtonSettings()
+        let slider = app.sliders["chatButtonTransparency"]
+        XCTAssertEqual(slider.value as? String,"88%")
+        slider.adjust(toNormalizedSliderPosition:0)
+        XCTAssertEqual(slider.value as? String,"20%")
+        capture(flow + " more visible button settings preview",app:app)
+        app.navigationBars.buttons["Settings"].tap();app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap();showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons[flow].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+        dismissAppearance(app)
+        let surface = readingSurface(app), bookFrame = surface.frame
+        let launcher = app.buttons["openReaderChat"]
+        XCTAssertEqual(launcher.frame.width,52,accuracy:1)
+        launcher.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).press(forDuration:0.65,thenDragTo:surface.coordinate(withNormalizedOffset:CGVector(dx:0.75,dy:0.4)))
+        XCTAssertEqual(launcher.value as? String,"Move mode")
+        capture(flow + " stronger tint in drag mode",app:app)
+        app.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.6)).tap()
+        XCTAssertEqual(launcher.value as? String,"Stationary")
+        let position = launcher.frame
+        launcher.tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap();input.typeText("Keep my transparency draft")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
+        app.buttons["Hide keyboard"].tap()
+        app.buttons["chatOptions"].tap();app.buttons["configureChatButton"].tap()
+        XCTAssertTrue(slider.waitForExistence(timeout:5))
+        XCTAssertEqual(slider.value as? String,"20%")
+        slider.adjust(toNormalizedSliderPosition:1)
+        if slider.value as? String != "95%" {
+            // XCTest's normalized gesture can stop short on the stepped native slider.
+            // Finish at the physical track endpoint, retaining the exact maximum assertion.
+            slider.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).press(
+                forDuration:0.05,
+                thenDragTo:slider.coordinate(withNormalizedOffset:CGVector(dx:1,dy:0.5)),
+                withVelocity:.slow,
+                thenHoldForDuration:0.1
+            )
+        }
+        XCTAssertEqual(slider.value as? String,"95%")
+        capture(flow + " faint button live preview",app:app)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout:5))
+        XCTAssertEqual(input.value as? String,"Keep my transparency draft")
+        XCTAssertEqual(surface.frame.width,bookFrame.width,accuracy:2)
+        XCTAssertEqual(surface.frame.height,bookFrame.height,accuracy:2)
+        app.buttons["closeReaderChat"].tap()
+        XCTAssertEqual(launcher.frame.minX,position.minX,accuracy:1)
+        XCTAssertEqual(launcher.frame.minY,position.minY,accuracy:1)
+        capture(flow + " 95 percent transparent button over text",app:app)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);waitForExpectations(timeout:5)
+        XCTAssertLessThanOrEqual(launcher.frame.maxX,surface.frame.maxX)
+        XCTAssertLessThanOrEqual(launcher.frame.maxY,surface.frame.maxY)
+        capture(flow + " faint button landscape",app:app)
+        XCUIDevice.shared.orientation = .portrait
+        expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
+        showReaderControls(app);app.buttons["closeBook"].tap()
+        app.terminate();app.launch();openButtonSettings()
+        XCTAssertEqual(slider.value as? String,"95%")
+        app.buttons["resetChatButtonTransparency"].tap()
+        XCTAssertEqual(slider.value as? String,"88%")
+        app.navigationBars.buttons["Settings"].tap();app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap();waitForBook(app)
+        XCTAssertEqual(launcher.frame.minX,position.minX,accuracy:2)
+        XCTAssertEqual(launcher.frame.minY,position.minY,accuracy:2)
+        XCTAssertEqual(launcher.frame.width,52,accuracy:1)
+        capture(flow + " default opacity and position restored",app:app)
+    }
+
     @MainActor func testTranslucentChatLauncherInBothFlowsThemesAndRotation() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()
