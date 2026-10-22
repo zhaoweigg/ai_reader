@@ -2,10 +2,11 @@ import Foundation
 
 // The mobile EAPI is unofficial. Keep wire details outside the library and reader.
 enum ZLibraryError: LocalizedError, Equatable {
-    case address, signInRequired, challenge, response, service(String), size, file, busy
+    case address, query, signInRequired, challenge, response, service(String), size, file, busy
     var errorDescription: String? {
         switch self {
         case .address: return "Enter an HTTPS website address without a path, port, or sign-in details."
+        case .query: return "Enter a title, author, or ISBN of up to 500 characters."
         case .signInRequired: return "Connect your Z-Library account to continue."
         case .challenge: return "The website returned a page or redirect instead of book data. Open the website to check access, then try again."
         case .response: return "Z-Library returned an unexpected response. Try again later."
@@ -116,11 +117,18 @@ struct ZLibraryPayload {
     var file: URL?
     var response: HTTPURLResponse
 }
+struct ZLibrarySearchPage {
+    static let pageSize = 30
+    static let maximumPages = 10
+    let books: [ZLibraryBook]
+    let hasMore: Bool
+}
 protocol ZLibraryTransport {
     func send(_ request: URLRequest, toFile: Bool, progress: @escaping @Sendable (Double?) -> Void) async throws -> ZLibraryPayload
 }
 protocol ZLibraryServing {
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook]
+    func search(_ query: String, page: Int, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL
 }
@@ -138,13 +146,21 @@ struct ZLibraryClient: ZLibraryServing {
         }
         return request
     }
-    func object(_ path: String, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [String: Any] {
+    func object(_ path: String, origin: ZLibraryOrigin, session: ZLibrarySession?, form: [String: String]? = nil) async throws -> [String: Any] {
         var request = request(path, origin: origin, session: session)
+        if let form {
+            let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Data(form.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: allowed)!)" }.joined(separator: "&").utf8)
+        }
+        let method = request.httpMethod ?? "GET"
         var visited = Set([request.url!]), count = 0
         while true {
             try Task.checkCancellation()
             let payload = try await transport.send(request, toFile: false, progress: { _ in })
             if (300...399).contains(payload.response.statusCode),
+               (method == "GET" || [307, 308].contains(payload.response.statusCode)),
                let location = payload.response.value(forHTTPHeaderField: "Location"),
                let url = URL(string: location, relativeTo: request.url)?.absoluteURL {
                 var next = request; next.url = url
@@ -155,10 +171,10 @@ struct ZLibraryClient: ZLibraryServing {
                     continue
                 }
             }
-            return try Self.decode(payload, path: path)
+            return try Self.decode(payload, path: path, method: method)
         }
     }
-    private static func decode(_ payload: ZLibraryPayload, path: String) throws -> [String: Any] {
+    private static func decode(_ payload: ZLibraryPayload, path: String, method: String) throws -> [String: Any] {
         do { return try Self.decode(payload) }
         catch let issue as ZLibraryError {
             let status = payload.response.statusCode
@@ -166,7 +182,7 @@ struct ZLibraryClient: ZLibraryServing {
             if (300...399).contains(status) { kind = "redirect not followed" }
             else if payload.response.mimeType == "text/html" || String(decoding: payload.data.prefix(128), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") { kind = "HTML instead of JSON" }
             else { kind = "JSON/API response" }
-            throw ZLibraryRequestFailure(issue: issue, diagnostic: "GET /eapi/\(path) · HTTP \(status) · \(kind)")
+            throw ZLibraryRequestFailure(issue: issue, diagnostic: "\(method) /eapi/\(path) · HTTP \(status) · \(kind)")
         }
     }
     static func decode(_ payload: ZLibraryPayload) throws -> [String: Any] {
@@ -189,8 +205,20 @@ struct ZLibraryClient: ZLibraryServing {
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook] {
         let object = try await object("book/most-popular", origin: origin, session: session)
         guard let rows = object["books"] as? [[String: Any]] else { throw ZLibraryError.response }
+        return Self.books(rows, origin: origin, limit: 200)
+    }
+    func search(_ query: String, page: Int, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, query.count <= 500, (1...ZLibrarySearchPage.maximumPages).contains(page) else { throw ZLibraryError.query }
+        let object = try await object("book/search", origin: origin, session: session,
+                                      form: ["message": query, "page": String(page), "limit": String(ZLibrarySearchPage.pageSize)])
+        guard let rows = object["books"] as? [[String: Any]] else { throw ZLibraryError.response }
+        let books = Self.books(rows, origin: origin, limit: ZLibrarySearchPage.pageSize)
+        return ZLibrarySearchPage(books: books, hasMore: !books.isEmpty && rows.count >= ZLibrarySearchPage.pageSize)
+    }
+    private static func books(_ rows: [[String: Any]], origin: ZLibraryOrigin, limit: Int) -> [ZLibraryBook] {
         var seen = Set<String>()
-        return rows.prefix(200).compactMap { row in
+        return rows.prefix(limit).compactMap { row in
             guard let book = Self.book(row, origin: origin), seen.insert(book.id).inserted else { return nil }
             return book
         }
