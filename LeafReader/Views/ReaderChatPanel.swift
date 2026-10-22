@@ -198,13 +198,7 @@ struct ReaderChatPanel: View {
                             ForEach(session.messages) { message in
                                 HStack {
                                     if message.isUser { Spacer(minLength: 32) }
-                                    Text(message.text.isEmpty ? (message.state == .streaming ? "Thinking…" : "No response text") : message.text)
-                                        .font(.subheadline).lineSpacing(3)
-                                        .textSelection(.enabled)
-                                        .padding(message.isUser ? 10 : 0)
-                                        .background(message.isUser ? accent.opacity(0.1) : .clear,
-                                                    in: RoundedRectangle(cornerRadius: 16))
-                                        .accessibilityIdentifier(message.isUser ? "chatQuestion" : "chatReply")
+                                    ReaderChatMessageBubble(message: message, accent: accent)
                                     if !message.isUser { Spacer(minLength: 0) }
                                 }.id(message.id)
                             }
@@ -221,6 +215,7 @@ struct ReaderChatPanel: View {
                     }
                     .defaultScrollAnchor(.bottom)
                     .scrollDismissesKeyboard(.interactively)
+                    .accessibilityIdentifier("chatMessageHistory")
                     .onChange(of: session.messages.last?.text) { _, _ in
                         if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
@@ -328,5 +323,42 @@ struct ReaderChatPanel: View {
         guard !question.isEmpty, !session.isSending else { return }
         inputFocused = false
         onSend()
+    }
+}
+
+private struct ReaderChatMessageBubble: View {
+    let message: ReaderChatMessage
+    let accent: Color
+    @State private var quoteExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if message.isUser, let context = message.context, context.source == "selection", !context.isEmpty {
+                Button { quoteExpanded.toggle() } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Label("Quoted text", systemImage: "text.quote").font(.caption2.weight(.medium))
+                            Spacer(minLength: 8)
+                            Image(systemName: quoteExpanded ? "chevron.up" : "chevron.down").font(.caption2)
+                        }.foregroundStyle(accent)
+                        Text(context.text).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(quoteExpanded ? nil : 2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("chatQuotedPassage")
+                    }
+                    .padding(8).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .background(accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(quoteExpanded ? "Collapse quoted text" : "Expand quoted text")
+                .accessibilityValue(context.text)
+                .accessibilityIdentifier("toggleChatQuote")
+            }
+            Text(message.text.isEmpty ? (message.state == .streaming ? "Thinking…" : "No response text") : message.text)
+                .font(.subheadline).lineSpacing(3).textSelection(.enabled)
+                .accessibilityIdentifier(message.isUser ? "chatQuestion" : "chatReply")
+        }
+        .padding(message.isUser ? 10 : 0)
+        .background(message.isUser ? accent.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 16))
     }
 }

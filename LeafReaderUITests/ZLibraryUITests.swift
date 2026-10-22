@@ -14,11 +14,13 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor private func search(_ query: String, app: XCUIApplication) {
         let field = app.textFields["zlibrarySearchField"]
-        XCTAssertTrue(field.waitForExistence(timeout:5));field.tap()
-        if let value = field.value as? String, value != "Title, author, or ISBN" {
-            field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:value.count))
-        }
+        XCTAssertTrue(field.waitForExistence(timeout:5))
+        // Tapping a long query places the caret in its middle. Use the product's clear
+        // control instead of assuming repeated backspace starts at the end of the text.
+        if app.buttons["zlibraryClearSearch"].exists { app.buttons["zlibraryClearSearch"].tap() }
+        field.tap()
         field.typeText(query)
+        XCTAssertEqual(field.value as? String,query)
         app.buttons["zlibrarySubmitSearch"].tap()
     }
     @MainActor func testPopularCatalogConnectsImportsAndPreservesExistingBook() {
