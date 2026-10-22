@@ -73,7 +73,8 @@ final class ZLibraryStore: ObservableObject {
             try Task.checkCancellation()
             guard token == generation else { return false }
             let encoded = try JSONEncoder().encode(candidate)
-            try credentials.write(String(decoding: encoded, as: UTF8.self), account: source.url.absoluteString)
+            do { try credentials.write(String(decoding: encoded, as: UTF8.self), account: source.url.absoluteString) }
+            catch { throw ZLibraryError.service("Leaf could not save the Z-Library session in Keychain. Your existing connection was kept.") }
             // Discard responses started with the old account (including anonymous feed loads).
             generation = UUID(); downloadTask?.cancel(); downloadTask = nil
             loading = false; verifying = false; downloadingID = nil; progress = nil; books = []

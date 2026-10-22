@@ -244,12 +244,12 @@ private final class CatalogURLProtocol: URLProtocol {
     }
     func testNewCatalogBookExtractsCoverAndPersistsSourceBeforeSuccess() async throws {
         let root = try folder()
-        let source = try XCTUnwrap(Bundle.main.url(forResource:"The Art of Noticing.epub",withExtension:nil,subdirectory:"Samples"))
+        let source = try XCTUnwrap(Bundle(for:type(of:self)).url(forResource:"Covered.epub",withExtension:nil,subdirectory:"Fixtures"))
         let library = LibraryStore(root:root,seedSamples:false)
         let imported = try await library.importCatalogBook(source,catalogID:"zlibrary:new:edition",title:"Catalog title",author:"Catalog author")
         XCTAssertEqual(library.books.count,1)
-        XCTAssertEqual(imported.title,"The Art of Noticing")
-        XCTAssertEqual(imported.author,"Leaf Editions")
+        XCTAssertEqual(imported.title,"书封面 · Imported")
+        XCTAssertEqual(imported.author,"林海")
         XCTAssertEqual(imported.catalogSource,"zlibrary:new:edition")
         XCTAssertNil(imported.lastOpenedAt);XCTAssertEqual(imported.locator,"")
         let cover = try XCTUnwrap(library.coverURL(imported))

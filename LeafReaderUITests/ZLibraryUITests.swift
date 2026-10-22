@@ -28,7 +28,8 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["catalogAddBook"].waitForExistence(timeout:5));app.buttons["catalogAddBook"].tap()
         XCTAssertTrue(app.buttons["zlibraryPreviewConnect"].waitForExistence(timeout:5));app.buttons["zlibraryPreviewConnect"].tap()
         XCTAssertTrue(app.buttons["catalogAddBook"].waitForExistence(timeout:5))
-        XCTAssertEqual(app.buttons["catalogAddBook"].label,"Add to library")
+        expectation(for:NSPredicate(format:"label == %@ AND hittable == true","Add to library"),evaluatedWith:app.buttons["catalogAddBook"])
+        waitForExpectations(timeout:5)
         app.buttons["catalogAddBook"].tap()
         XCTAssertTrue(app.staticTexts["catalogAdded"].waitForExistence(timeout:15))
         capture("Book added")
@@ -40,8 +41,11 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["book-The Art of Noticing"].tap()
         let surface = app.webViews["bookWebView"]
         XCTAssertTrue(surface.waitForExistence(timeout:15))
+        expectation(for:NSPredicate(format:"exists == false"),evaluatedWith:app.staticTexts["Opening your book…"])
+        waitForExpectations(timeout:20)
+        XCTAssertFalse(app.otherElements["readerError"].exists)
         for flow in ["Pages","Scroll"] {
-            if !app.buttons["Appearance"].isHittable { surface.tap() }
+            if !app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap() }
             XCTAssertTrue(app.buttons["Appearance"].waitForExistence(timeout:5))
             expectation(for:NSPredicate(format:"enabled == true"),evaluatedWith:app.buttons["Appearance"]);waitForExpectations(timeout:20)
             app.buttons["Appearance"].tap()
