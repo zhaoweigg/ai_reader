@@ -16,6 +16,7 @@ struct ReaderAppearancePanel: View {
             .pickerStyle(.segmented).accessibilityIdentifier("appearanceTabs")
             .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 4)
             Form { ReaderAppearanceControls(tab: tab) }
+                .accessibilityIdentifier("appearanceForm")
                 .contentMargins(.top, 8, for: .scrollContent).leafFormStyle()
         }
         .background(theme.canvas).navigationTitle("Appearance")

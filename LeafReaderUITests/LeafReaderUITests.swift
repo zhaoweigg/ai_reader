@@ -49,6 +49,13 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["closeBook"].exists)
     }
 
+    @MainActor private func revealAppearanceControl(_ app: XCUIApplication, _ control: XCUIElement) {
+        let form = app.descendants(matching: .any)["appearanceForm"].firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5))
+        for _ in 0..<3 where !control.isHittable { form.swipeUp() }
+        XCTAssertTrue(control.isHittable)
+    }
+
     @MainActor func testLibraryReaderBookmarksAndAppearance() throws {
         let app = launchApp()
         XCTAssertTrue(app.buttons["importBooks"].waitForExistence(timeout: 10))
@@ -142,9 +149,11 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
         XCUIDevice.shared.orientation = .landscapeLeft
+        revealAppearanceControl(app, app.buttons["Paper theme"])
         app.buttons["Paper theme"].tap()
         XCTAssertTrue(app.buttons["Paper theme"].isSelected)
         capture("Landscape reader theme selector", app: app)
+        revealAppearanceControl(app, app.buttons["Dusk theme"])
         app.buttons["Dusk theme"].tap()
         XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
         XCUIDevice.shared.orientation = .portrait
@@ -185,6 +194,7 @@ final class LeafReaderUITests: XCTestCase {
         preview.name = "Reader preview layout"; preview.lifetime = .keepAlways; add(preview)
         tabs.buttons["Themes"].tap()
         let compact = app.buttons["compactLayout"]
+        revealAppearanceControl(app, compact)
         XCTAssertTrue(compact.waitForExistence(timeout: 5))
         compact.tap()
         XCTAssertTrue(compact.isSelected)
@@ -200,6 +210,7 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 20)
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        revealAppearanceControl(app, app.buttons["compactLayout"])
         XCTAssertTrue(app.buttons["compactLayout"].isSelected)
     }
 
