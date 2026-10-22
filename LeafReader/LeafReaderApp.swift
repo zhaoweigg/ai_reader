@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct LeafReaderApp: App {
     @StateObject private var library: LibraryStore
     @StateObject private var aiSettings: AISettingsStore
+    @StateObject private var catalog: ZLibraryStore
     private let readingDefaults: UserDefaults
 
     init() {
@@ -14,6 +15,7 @@ struct LeafReaderApp: App {
         var chatProvider: (any ChatProvider)?
         var chatGPT: ChatGPTAccountStore?
         var chatCredentials = KeychainChatCredentials()
+        var catalogClient: any ZLibraryServing = ZLibraryClient()
         #if DEBUG
         let process = ProcessInfo.processInfo
         if process.arguments.contains("--ui-testing"),
@@ -27,6 +29,7 @@ struct LeafReaderApp: App {
             if process.environment["LEAF_UI_CHATGPT_CONNECTED"] == "1" {
                 chatGPT = ChatGPTAccountStore.uiTestConnected(defaults: defaults, credentials: chatCredentials)
             }
+            if process.environment["LEAF_UI_ZLIB_MOCK"] == "1" { catalogClient = UITestZLibraryClient() }
         } else if NSClassFromString("XCTestCase") != nil {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUnitTests/\(UUID().uuidString)", isDirectory: true)
             seedSamples = false
@@ -34,11 +37,14 @@ struct LeafReaderApp: App {
         #endif
         _library = StateObject(wrappedValue: LibraryStore(root: root, seedSamples: seedSamples))
         _aiSettings = StateObject(wrappedValue: AISettingsStore(defaults: defaults, credentials: chatCredentials, providerOverride: chatProvider, chatGPTOverride: chatGPT))
+        var catalogCredentials = chatCredentials
+        catalogCredentials.service += ".zlibrary"
+        _catalog = StateObject(wrappedValue: ZLibraryStore(defaults: defaults, credentials: catalogCredentials, client: catalogClient))
         readingDefaults = defaults
     }
 
     var body: some Scene {
-        WindowGroup { AppView().environmentObject(library).environmentObject(aiSettings).defaultAppStorage(readingDefaults).tint(LeafStyle.accent) }
+        WindowGroup { AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).defaultAppStorage(readingDefaults).tint(LeafStyle.accent) }
     }
 }
 
@@ -51,18 +57,23 @@ struct AppView: View {
     @EnvironmentObject private var library: LibraryStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
+    @State private var addingBooks = false
+    @State private var pickFilesAfterDismiss = false
     @State private var destination: ReadingDestination?
     @State private var pendingURLs: [URL] = []
     @State private var drainingImports = false
     var body: some View {
         TabView {
-            LibraryView(onImport: { importing = true }, onOpen: { destination = ReadingDestination(id: $0) })
+            LibraryView(onImport: { addingBooks = true }, onOpen: { destination = ReadingDestination(id: $0) })
                 .tabItem { Label("Library", systemImage: "books.vertical") }
             BookmarksView(onOpen: { id, locator in destination = ReadingDestination(id: id, locator: locator) })
                 .tabItem { Label("Bookmarks", systemImage: "bookmark") }
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
         }
+        .sheet(isPresented: $addingBooks, onDismiss: {
+            if pickFilesAfterDismiss { pickFilesAfterDismiss = false; importing = true }
+        }) { AddBooksView(openFiles: { pickFilesAfterDismiss = true; addingBooks = false }) }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): enqueue(urls)
@@ -76,10 +87,11 @@ struct AppView: View {
         }
         .alert(item: $library.notice) { Alert(title: Text($0.title), message: Text($0.message), dismissButton: .default(Text("OK"))) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { library.flush() } }
+        .onChange(of: library.isImporting) { _, busy in if !busy { processQueue() } }
     }
     private func enqueue(_ urls: [URL]) { pendingURLs.append(contentsOf: urls); processQueue() }
     private func processQueue() {
-        guard !drainingImports, !pendingURLs.isEmpty else { return }
+        guard !drainingImports, !library.isImporting, !pendingURLs.isEmpty else { return }
         drainingImports = true
         Task {
             while !pendingURLs.isEmpty {

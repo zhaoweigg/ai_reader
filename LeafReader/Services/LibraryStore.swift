@@ -65,6 +65,36 @@ final class LibraryStore: ObservableObject {
         }
     }
 
+    func importCatalogBook(_ source: URL, catalogID: String, title: String, author: String) async throws -> Book {
+        if let existing = books.first(where: { $0.catalogSource == catalogID }) { return existing }
+        guard !isImporting else { throw ZLibraryError.busy }
+        guard canSave, let disk else { throw LibraryError.unavailable }
+        isImporting = true; importCount = 0
+        defer { isImporting = false }
+        let existing = Set(books.map(\.fingerprint))
+        let imported: Book
+        do {
+            imported = try await Task.detached(priority: .userInitiated) { try disk.prepareImport(source, existing: existing) }.value
+        } catch LibraryError.duplicate {
+            let fingerprint = try await Task.detached(priority: .userInitiated) { try LibraryDisk.fingerprint(source) }.value
+            guard let book = books.first(where: { $0.fingerprint == fingerprint }) else { throw LibraryError.duplicate }
+            // A book previously added from Files keeps its position, bookmarks, and chat fingerprint.
+            var updated = books; let index = updated.firstIndex(where: { $0.id == book.id })!
+            updated[index].catalogSource = catalogID
+            try disk.save(updated); books = updated
+            return updated[index]
+        }
+        var book = imported
+        book.catalogSource = catalogID
+        if !title.isEmpty { book.title = title }
+        if !author.isEmpty { book.author = author }
+        do { try disk.save(books + [book]); books.append(book) }
+        catch { try? disk.removeFiles(book); throw error }
+        await refreshMetadata(book.id)
+        importCount = 1
+        return self.book(book.id) ?? book
+    }
+
     func refreshMissingMetadata() async {
         guard canSave else { return }
         for book in books where needsMetadata(book) { await refreshMetadata(book.id) }

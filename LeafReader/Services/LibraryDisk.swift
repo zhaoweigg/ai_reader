@@ -37,11 +37,7 @@ struct LibraryDisk {
         let size = values.fileSize ?? 0
         guard size > 0 else { throw LibraryError.empty }
         guard size <= 100 * 1024 * 1024 else { throw LibraryError.tooLarge }
-        let handle = try FileHandle(forReadingFrom: source)
-        defer { try? handle.close() }
-        var hash = SHA256()
-        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty { hash.update(data: chunk) }
-        let fingerprint = hash.finalize().map { String(format: "%02x", $0) }.joined()
+        let fingerprint = try Self.fingerprint(source)
         guard !existing.contains(fingerprint) else { throw LibraryError.duplicate }
         let id = UUID()
         let fileName = id.uuidString + "." + format.rawValue
@@ -55,6 +51,14 @@ struct LibraryDisk {
         }
         try FileManager.default.copyItem(at: source, to: destination)
         return book
+    }
+
+    static func fingerprint(_ source: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: source)
+        defer { try? handle.close() }
+        var hash = SHA256()
+        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty { hash.update(data: chunk) }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     func removeFiles(_ book: Book) throws {
