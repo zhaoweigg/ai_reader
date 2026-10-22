@@ -68,7 +68,7 @@ struct ReaderContent: View {
                         Text("Unlock this PDF").font(.title2)
                         SecureField("PDF password", text: $password).textFieldStyle(.roundedBorder).frame(maxWidth: 300)
                         if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red) }
-                        Button("Unlock") { model.unlockPDF(password) }.buttonStyle(.borderedProminent)
+                        Button("Unlock") { model.unlockPDF(password) }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent)
                     }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.background)
                 } else if let error = model.error {
                     ContentUnavailableView {

@@ -132,13 +132,13 @@ struct ZLibraryBookView: View {
             VStack(spacing:8) {
                 if existing != nil {
                     Label("Added to your library",systemImage:"checkmark.circle.fill").font(.subheadline).foregroundStyle(theme.accent).accessibilityIdentifier("catalogAdded")
-                    Button("View in library",action:close).buttonStyle(.borderedProminent).accessibilityIdentifier("catalogViewLibrary")
+                    Button("View in library",action:close).buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).accessibilityIdentifier("catalogViewLibrary")
                 } else if book.format == nil {
                     Text("Leaf does not support this edition’s format. Choose another book or edition.").font(.footnote).foregroundStyle(.secondary)
                 } else {
                     Button { if catalog.connected { catalog.add(book,library:library) } else { connection = true } } label: {
                         Label(catalog.downloadingID == book.id ? "Adding to library…" : catalog.connected ? "Add to library" : "Connect to add book",systemImage:"plus").frame(maxWidth:.infinity)
-                    }.buttonStyle(.borderedProminent).controlSize(.large).disabled(catalog.downloadingID != nil || library.isImporting).accessibilityIdentifier("catalogAddBook")
+                    }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large).disabled(catalog.downloadingID != nil || library.isImporting).accessibilityIdentifier("catalogAddBook")
                     Text("Saved on this device for offline reading").font(.caption).foregroundStyle(.secondary)
                 }
             }.padding().frame(maxWidth:.infinity).background(.regularMaterial)
@@ -193,6 +193,7 @@ struct ZLibraryConnectionView: View {
 }
 
 struct ZLibraryWebsiteSignIn: View {
+    @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var catalog: ZLibraryStore
     @Environment(\.dismiss) private var dismiss
     @State private var message: String?
@@ -211,7 +212,7 @@ struct ZLibraryWebsiteSignIn: View {
                     } else { message = "Finish signing in on the website, then tap Check connection." }
                     checking = false
                 } } label: { HStack { if checking { ProgressView() }; Text("Check connection") }.frame(maxWidth:.infinity) }
-                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(checking).padding()
+                    .buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large).disabled(checking).padding()
             }
             .navigationTitle(catalog.origin.url.host ?? "Z-Library").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement:.topBarLeading) { Button("Cancel") { checkTask?.cancel();dismiss() } } }

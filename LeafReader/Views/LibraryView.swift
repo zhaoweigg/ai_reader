@@ -83,7 +83,7 @@ struct LibraryView: View {
                         } description: {
                             Text(query.isEmpty ? "Import a book from Files, iCloud Drive, or another app." : "Try another title or author, or change your filters.")
                         } actions: {
-                            if library.books.isEmpty { Button("Import books", action: onImport).buttonStyle(.borderedProminent) }
+                            if library.books.isEmpty { Button("Import books", action: onImport).buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent) }
                         }.padding(.vertical, 22)
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 145, maximum: 195), spacing: 24, alignment: .top)], alignment: .leading, spacing: 28) {
@@ -137,8 +137,8 @@ struct LibraryView: View {
                     .accessibilityElement(children: .combine).accessibilityLabel("Leaf reader")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: onImport) { Label("Add books", systemImage: "plus") }.buttonStyle(.borderedProminent).clipShape(Capsule())
-                        .foregroundStyle(theme.onAccent).disabled(library.isImporting).accessibilityIdentifier("importBooks")
+                    Button(action: onImport) { Label("Add books", systemImage: "plus") }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).clipShape(Capsule())
+                        .disabled(library.isImporting).accessibilityIdentifier("importBooks")
                 }
             }
             .safeAreaInset(edge: .bottom) {
