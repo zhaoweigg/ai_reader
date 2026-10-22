@@ -242,6 +242,22 @@ private final class CatalogURLProtocol: URLProtocol {
         let reopened = LibraryStore(root:root.appendingPathComponent("Library"),seedSamples:false)
         XCTAssertEqual(reopened.books.first?.catalogSource,"zlibrary:12:hash")
     }
+    func testNewCatalogBookExtractsCoverAndPersistsSourceBeforeSuccess() async throws {
+        let root = try folder()
+        let source = try XCTUnwrap(Bundle.main.url(forResource:"The Art of Noticing.epub",withExtension:nil,subdirectory:"Samples"))
+        let library = LibraryStore(root:root,seedSamples:false)
+        let imported = try await library.importCatalogBook(source,catalogID:"zlibrary:new:edition",title:"Catalog title",author:"Catalog author")
+        XCTAssertEqual(library.books.count,1)
+        XCTAssertEqual(imported.title,"The Art of Noticing")
+        XCTAssertEqual(imported.author,"Leaf Editions")
+        XCTAssertEqual(imported.catalogSource,"zlibrary:new:edition")
+        XCTAssertNil(imported.lastOpenedAt);XCTAssertEqual(imported.locator,"")
+        let cover = try XCTUnwrap(library.coverURL(imported))
+        XCTAssertTrue(FileManager.default.fileExists(atPath:cover.path))
+        let restored = LibraryStore(root:root,seedSamples:false)
+        XCTAssertEqual(restored.books.first?.catalogSource,imported.catalogSource)
+        XCTAssertEqual(restored.books.first?.coverFileName,imported.coverFileName)
+    }
     func testQuotaStopsDownloadBeforeFileRequest() async throws {
         let client = CatalogService(), (store,_,_) = store(client)
         _ = await store.connect(session);client.remaining = 0
