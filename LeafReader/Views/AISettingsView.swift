@@ -54,7 +54,7 @@ struct AISettingsView: View {
                 Toggle("Include current passage", isOn: $configuration.sharePage).accessibilityIdentifier("aiSharePage")
                 Text("Sending shares your question, up to 12,000 characters of selected text or the current page, book details, and recent chat with the chosen provider. Images and entire books are not uploaded. Disable this to send questions and chat text only.")
                     .font(.footnote).foregroundStyle(.secondary)
-                Text("Conversations stay in memory until you close the book. Provider retention follows that provider’s policy.")
+                Text("Conversations and drafts are saved on this device for each book until you clear them. Provider retention follows that provider’s policy.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if configuration.provider != .chatGPT {

@@ -39,6 +39,7 @@ struct ReaderChatPanel: View {
     let onSettings: () -> Void
     let onSend: () -> Void
     @FocusState private var inputFocused: Bool
+    @State private var confirmsClear = false
 
     private var accent: Color { colorScheme == .dark ? Color(hex: "#93CABB") : LeafStyle.accent }
     @Environment(\.colorScheme) private var colorScheme
@@ -58,10 +59,11 @@ struct ReaderChatPanel: View {
                 if !isComposing {
                     Menu {
                         Button("AI settings", systemImage: "gearshape", action: onSettings)
-                        Button("Clear conversation", systemImage: "trash", role: .destructive) { session.clear() }
+                        Button("Clear conversation", systemImage: "trash", role: .destructive) { confirmsClear = true }
+                            .accessibilityIdentifier("requestClearConversation")
                     } label: {
                         Image(systemName: "ellipsis").frame(width: 44, height: 44)
-                    }.accessibilityLabel("Chat options")
+                    }.accessibilityLabel("Chat options").accessibilityIdentifier("chatOptions")
                 }
                 if isComposing {
                     Button { inputFocused = false } label: {
@@ -84,6 +86,22 @@ struct ReaderChatPanel: View {
             })
 
             if !isComposing {
+                if session.hasEarlierMessages || session.hasNewerMessages {
+                    HStack {
+                        Button("Earlier") { session.loadEarlier() }
+                            .disabled(!session.hasEarlierMessages || session.isSending)
+                            .accessibilityLabel("Earlier messages").accessibilityIdentifier("earlierChatMessages")
+                        Spacer()
+                        if session.hasNewerMessages {
+                            Button("Latest") { session.loadLatest() }.disabled(session.isSending)
+                                .accessibilityLabel("Latest messages").accessibilityIdentifier("latestChatMessages")
+                            Spacer()
+                        }
+                        Button("Newer") { session.loadNewer() }
+                            .disabled(!session.hasNewerMessages || session.isSending)
+                            .accessibilityLabel("Newer messages").accessibilityIdentifier("newerChatMessages")
+                    }.font(.caption)
+                }
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 12) {
@@ -117,6 +135,15 @@ struct ReaderChatPanel: View {
                         if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }.frame(maxHeight: .infinity)
+                if let historyError = session.historyError {
+                    HStack {
+                        Text(historyError).font(.caption).foregroundStyle(.red).lineLimit(3)
+                            .accessibilityIdentifier("chatHistoryError")
+                        if session.canSaveHistory {
+                            Button("Try saving again") { session.flush() }.font(.caption.bold())
+                        }
+                    }
+                }
                 if let error = session.error {
                     HStack(spacing: 8) {
                         Text(error).font(.caption).foregroundStyle(.red).lineLimit(3).accessibilityIdentifier("readerChatError")
@@ -154,6 +181,11 @@ struct ReaderChatPanel: View {
         .foregroundStyle(.primary).tint(accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
         .accessibilityAction(.escape, close)
+        .confirmationDialog("Clear this book’s conversation?", isPresented: $confirmsClear, titleVisibility: .visible) {
+            Button("Clear conversation", role: .destructive) { session.clear() }
+                .accessibilityIdentifier("confirmClearConversation")
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("This deletes this book’s saved messages and draft from this device.") }
     }
 
     private func close() {

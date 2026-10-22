@@ -21,6 +21,7 @@ struct ReaderContent: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var library: LibraryStore
     @AppStorage("reader.fontSize") private var fontSize = 19.0
     @AppStorage("reader.lineHeight") private var lineHeight = 1.65
@@ -32,7 +33,7 @@ struct ReaderContent: View {
     @AppStorage("reader.paragraphSpacing") private var paragraphSpacing = 0.65
     @State private var panel: ReaderPanel?
     @State private var chatIsPresented = false
-    @StateObject private var chat = ReaderChatSession()
+    @StateObject private var chat: ReaderChatSession
     @EnvironmentObject private var aiSettings: AISettingsStore
     @State private var bookViewportHeight: CGFloat = 0
     @State private var password = ""
@@ -50,6 +51,7 @@ struct ReaderContent: View {
     init(book: Book, url: URL, library: LibraryStore, initialLocator: String?) {
         self.book = book; self.url = url
         _model = StateObject(wrappedValue: ReaderModel(bookID: book.id, library: library, initialLocator: initialLocator))
+        _chat = StateObject(wrappedValue: ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true), conversation: book.fingerprint))
     }
     var body: some View {
         ZStack {
@@ -153,7 +155,8 @@ struct ReaderContent: View {
         .persistentSystemOverlays(showsControls ? .automatic : .hidden)
         .accessibilityAction(.escape) { library.flush(); dismiss() }
         .task { library.open(book.id) }
-        .onDisappear { chat.stop(); library.flush() }
+        .onDisappear { chat.close(); library.flush() }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { chat.flush() } }
         .sheet(item: $panel, onDismiss: { model.hideControls() }) { panel in
             NavigationStack {
                 Group {

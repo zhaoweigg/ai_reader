@@ -379,6 +379,67 @@ final class LeafReaderUITests: XCTestCase {
         capture("ChatGPT native browser callback", app: app)
     }
 
+    @MainActor private func openFeaturedChat(_ app: XCUIApplication) {
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        app.buttons["openReaderChat"].tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+    }
+    @MainActor private func sendChatQuestion(_ question: String, app: XCUIApplication) {
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText(question); app.buttons["sendReaderChat"].tap()
+        let reply = app.staticTexts.matching(identifier: "chatReply").firstMatch
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "Test reply:"), evaluatedWith: reply)
+        waitForExpectations(timeout: 10)
+    }
+    @MainActor func testChatHistoryAndDraftSurviveClosingBookAndRelaunch() {
+        let app = launchApp(); openFeaturedChat(app)
+        sendChatQuestion("Remember this question", app: app)
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 5)
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("An unsent followup")
+        app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
+        openFeaturedChat(app)
+        XCTAssertTrue(app.staticTexts["Remember this question"].exists)
+        let restoredInput = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertEqual(restoredInput.value as? String, "An unsent followup")
+        app.terminate(); app.launch(); openFeaturedChat(app)
+        XCTAssertTrue(app.staticTexts["Remember this question"].exists)
+        XCTAssertTrue(app.staticTexts.matching(identifier: "chatReply").firstMatch.label.contains("Test reply:"))
+        let restartedInput = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertEqual(restartedInput.value as? String, "An unsent followup")
+        capture("Conversation and draft restored after restart", app: app)
+    }
+    @MainActor func testClearedConversationStaysClearedAfterRelaunch() {
+        let app = launchApp(); openFeaturedChat(app)
+        sendChatQuestion("A question to clear", app: app)
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 5)
+        app.buttons["chatOptions"].tap(); app.buttons["requestClearConversation"].tap()
+        capture("Clear conversation confirmation", app: app)
+        if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap() }
+        XCTAssertTrue(app.staticTexts["A question to clear"].exists)
+        app.buttons["chatOptions"].tap(); app.buttons["requestClearConversation"].tap()
+        app.buttons["confirmClearConversation"].firstMatch.tap()
+        XCTAssertFalse(app.staticTexts["A question to clear"].exists)
+        app.terminate(); app.launch(); openFeaturedChat(app)
+        XCTAssertFalse(app.staticTexts.matching(identifier: "chatQuestion").firstMatch.exists)
+        XCTAssertFalse(app.staticTexts.matching(identifier: "chatReply").firstMatch.exists)
+        capture("Cleared conversation after restart", app: app)
+    }
+    @MainActor func testPartialChatRestoresStoppedAfterRestart() {
+        let app = launchApp(slowChat: true); openFeaturedChat(app)
+        sendChatQuestion("Keep my partial reply", app: app)
+        app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
+        app.terminate(); app.launch(); openFeaturedChat(app)
+        XCTAssertTrue(app.staticTexts["Keep my partial reply"].exists)
+        XCTAssertTrue(app.staticTexts.matching(identifier: "chatReply").firstMatch.label.contains("Test reply:"))
+        XCTAssertTrue(app.buttons["Retry"].exists)
+        XCTAssertEqual(app.buttons["sendReaderChat"].label, "Send message")
+        capture("Interrupted reply retained with Retry after restart", app: app)
+    }
+
     @MainActor func testChatStopAndRetryKeepOneQuestion() {
         let app = launchApp(slowChat: true)
         app.buttons["featuredBook"].tap(); waitForBook(app)

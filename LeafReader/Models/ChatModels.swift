@@ -63,8 +63,8 @@ struct ReadingChatContext: Codable, Equatable {
     }
 }
 
-struct ReaderChatMessage: Identifiable, Equatable {
-    enum State: Equatable { case complete, streaming, failed, stopped }
+struct ReaderChatMessage: Identifiable, Equatable, Codable {
+    enum State: String, Equatable, Codable { case complete, streaming, failed, stopped }
     let id: UUID
     let isUser: Bool
     var text: String
