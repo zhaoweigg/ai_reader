@@ -1,5 +1,22 @@
 import SwiftUI
 
+enum ReaderChatSizing {
+    static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> ClosedRange<CGFloat> {
+        let usable = max(0, availableHeight - 16)
+        let minimum: CGFloat = fullHeight < 500 ? 132 : (composing ? (hasSelection ? 216 : 176) : (hasSelection ? 260 : 200))
+        let lower = min(minimum, usable)
+        return lower...max(lower, min(fullHeight * 0.85, usable * 0.88))
+    }
+    static func height(fraction: Double, fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> CGFloat {
+        let limits = bounds(fullHeight: fullHeight, availableHeight: availableHeight, composing: composing, hasSelection: hasSelection)
+        let desired: CGFloat
+        if composing, !fraction.isFinite || fraction <= 0 {
+            desired = min(fullHeight / 3, max(hasSelection ? 216 : 176, availableHeight * 0.35))
+        } else { desired = fullHeight * CGFloat(fraction.isFinite && fraction > 0 ? fraction : 1.0 / 3) }
+        return min(limits.upperBound, max(limits.lowerBound, desired))
+    }
+}
+
 enum ReaderChatPlacement {
     static let diameter: CGFloat = 52
     static let trailing: CGFloat = 18
@@ -115,6 +132,9 @@ struct ReaderChatPanel: View {
     let onClose: () -> Void
     let onSettings: () -> Void
     let onSend: () -> Void
+    let onResize: (CGFloat, Bool) -> Void
+    let onResizeStep: (CGFloat) -> Void
+    let onResetSize: () -> Void
     @FocusState private var inputFocused: Bool
     @State private var confirmsClear = false
 
@@ -124,16 +144,24 @@ struct ReaderChatPanel: View {
 
     var body: some View {
         GeometryReader { geometry in
-            content(compact: geometry.size.height < 200)
+            content(compact: geometry.size.height < 200, showsHistory: geometry.size.height >= 200 && (!isComposing || geometry.size.height >= 300))
         }
     }
-    private func content(compact: Bool) -> some View {
+    private func content(compact: Bool, showsHistory: Bool) -> some View {
         VStack(spacing: compact ? 4 : 8) {
             Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
-                .frame(maxWidth: .infinity).frame(height: compact ? 6 : 16)
-                .contentShape(Rectangle()).gesture(dismissDrag)
-                .accessibilityElement().accessibilityLabel("Chat drag handle")
+                .frame(maxWidth: .infinity).frame(height: compact ? 12 : 20)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 3, coordinateSpace: .global)
+                    .onChanged { onResize($0.translation.height, false) }
+                    .onEnded { onResize($0.translation.height, true) })
+                .accessibilityElement().accessibilityLabel("Resize chat")
+                .accessibilityHint("Drag up to expand or down to shrink. Swipe down on the header to close.")
                 .accessibilityIdentifier("readerChatDragHandle")
+                .accessibilityAdjustableAction { direction in
+                    switch direction { case .increment: onResizeStep(56); case .decrement: onResizeStep(-56); @unknown default: break }
+                }
+                .accessibilityAction(named: "Reset chat size", onResetSize)
                 .accessibilityAction(named: "Close chat", close)
             HStack(spacing: 8) {
                 Image(systemName: "leaf.fill").foregroundStyle(accent)
@@ -173,9 +201,11 @@ struct ReaderChatPanel: View {
             }
             .contentShape(Rectangle())
             .simultaneousGesture(dismissDrag)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("readerChatHeader")
 
-            if isComposing || compact { Spacer(minLength: 0) }
-            if !isComposing && !compact {
+            if !showsHistory { Spacer(minLength: 0) }
+            if showsHistory {
                 if session.hasEarlierMessages || session.hasNewerMessages {
                     HStack {
                         Button("Earlier") { session.loadEarlier() }
