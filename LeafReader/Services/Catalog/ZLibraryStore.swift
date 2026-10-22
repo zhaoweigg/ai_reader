@@ -269,15 +269,17 @@ struct UITestZLibraryClient: ZLibraryServing {
         if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_DETAILS"] == "failure" { throw ZLibraryError.metadata }
         return ZLibraryBook(remoteID: book.remoteID, hash: book.hash, title: book.title, author: book.author,
                             fileExtension: ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_DETAILS"] == "unsupported" ? "djvu" : "epub",
-                            size: "1 MB", language: "English", year: "2026", coverURL: book.coverURL)
+                            size: "1 MB", language: "English", year: "2026", coverURL: book.coverURL,
+                            rating: book.rating, ratingCount: book.ratingCount, qualityScore: book.qualityScore)
     }
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile { ZLibraryProfile(name:"Preview account",remaining:5) }
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook] {
         if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_FEED_FAILURE"] == "1", session != nil {
             throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
         }
-        return [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_DETAILS"] == nil ? "epub" : "",size:"Sample",language:"English",year:"2026",coverURL:nil),
-         ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"Sample",language:"English",year:"2026",coverURL:nil)]
+        let sparse = ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_DETAILS"] != nil
+        return [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:sparse ? "" : "epub",size:sparse ? "" : "1.8 MB",language:sparse ? "" : "English",year:sparse ? "" : "2026",coverURL:nil,rating:4.6,ratingCount:52,qualityScore:4.2),
+         ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"2.4 MB",language:"English",year:"2026",coverURL:nil)]
     }
     func search(_ query: String, page: Int, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
