@@ -359,8 +359,14 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertFalse(details.label.contains("fixture-only"))
         capture("Popular307 diagnostic after successful search portrait")
         XCUIDevice.shared.orientation = .landscapeLeft
-        details.swipeUp()
-        XCTAssertTrue(details.exists)
+        let window = app.windows.firstMatch
+        for _ in 0..<3 {
+            if details.isHittable && details.frame.minY >= 78 && details.frame.maxY <= window.frame.maxY { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(details.isHittable)
+        XCTAssertGreaterThanOrEqual(details.frame.minY, 78)
+        XCTAssertLessThanOrEqual(details.frame.maxY, window.frame.maxY)
         capture("Popular307 diagnostic landscape")
         XCUIDevice.shared.orientation = .portrait
     }
