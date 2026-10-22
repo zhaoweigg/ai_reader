@@ -29,6 +29,9 @@ private final class CatalogTransport: ZLibraryTransport {
     var popularError: Error?
     var popularSessions: [ZLibrarySession?] = []
     var popularContinuation: CheckedContinuation<[ZLibraryBook],Error>?
+    var popularBooks: [ZLibraryBook] = []
+    var detailCalls = 0
+    var detailHandler: ((ZLibraryBook) async throws -> ZLibraryBook)?
     var searchCalls: [(String, Int, ZLibrarySession?)] = []
     var searchHandler: ((String, Int) async throws -> ZLibrarySearchPage)?
     func profile(origin:ZLibraryOrigin,session:ZLibrarySession) async throws -> ZLibraryProfile {
@@ -41,7 +44,11 @@ private final class CatalogTransport: ZLibraryTransport {
         popularSessions.append(session)
         if suspendPopular { return try await withCheckedThrowingContinuation { popularContinuation = $0 } }
         if let popularError { throw popularError }
-        return []
+        return popularBooks
+    }
+    func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
+        detailCalls += 1
+        return try await detailHandler?(book) ?? book
     }
     func download(_ book:ZLibraryBook,origin:ZLibraryOrigin,session:ZLibrarySession,progress:@escaping @Sendable (Double?)->Void) async throws -> URL {
         downloads += 1;if let downloadError { throw downloadError };guard let file else { throw ZLibraryError.file };return file
@@ -113,6 +120,89 @@ private final class CatalogURLProtocol: URLProtocol {
         let books = try await ZLibraryClient(transport:transport).popular(origin:origin,session:session)
         XCTAssertEqual(books.count,1);XCTAssertEqual(books[0].format,.epub);XCTAssertEqual(books[0].size,"1 MB")
         XCTAssertEqual(books[0].coverURL?.host,"images.example")
+    }
+    func testSparsePopularBookLoadsOnlySelectedEditionWithSavedWebsiteContext() async throws {
+        let browser = ZLibrarySession(userID:"42",userKey:"test-only",websiteCookies:[ZLibraryWebsiteCookie(name:"access",value:"context",path:"/eapi/book/12",expires:nil)],userAgent:"Saved browser")
+        let transport = CatalogTransport { [self] request,_ in
+            if request.url?.path == "/eapi/book/most-popular" {
+                return try response(["success":1,"books":[["id":12,"hash":"ab1234","title":"A test book","author":"Test author","cover":"https://images.example/cover.jpg"]]])
+            }
+            XCTAssertEqual(request.url?.path,"/eapi/book/12/ab1234")
+            XCTAssertEqual(request.httpMethod,"GET");XCTAssertNil(request.httpBody)
+            XCTAssertEqual(request.value(forHTTPHeaderField:"User-Agent"),browser.userAgent)
+            XCTAssertTrue(request.value(forHTTPHeaderField:"Cookie")?.contains("access=context") == true)
+            return try response(["success":1,"book":["id":12,"hash":"ab1234","extension":" EPUB \n","filesizeString":"2 MB","language":"English","year":2026]])
+        }
+        let client = ZLibraryClient(transport:transport)
+        let books = try await client.popular(origin:origin,session:browser)
+        XCTAssertEqual(transport.requests.count,1,"Feed must not fan out into detail requests")
+        var summary = try XCTUnwrap(books.first)
+        summary.rating = 4.5; summary.ratingCount = 10; summary.qualityScore = 4
+        XCTAssertNil(summary.format)
+        let details = try await client.details(summary,origin:origin,session:browser)
+        XCTAssertEqual(details.format,.epub);XCTAssertEqual(details.size,"2 MB")
+        XCTAssertEqual(details.sourceID,summary.sourceID);XCTAssertEqual(details.title,summary.title)
+        XCTAssertEqual(details.coverURL,summary.coverURL);XCTAssertEqual(details.year,"2026")
+        XCTAssertEqual(details.rating,4.5);XCTAssertEqual(details.ratingCount,10);XCTAssertEqual(details.qualityScore,4)
+        XCTAssertEqual(transport.requests.count,2)
+    }
+    func testMissingFormatIsRetryableAndDetailsCannotSwitchEditions() async throws {
+        for row: [String:Any] in [["extension":"  "],["id":"other","extension":"epub"],["hash":"other","extension":"epub"]] {
+            let transport = CatalogTransport { [self] _,_ in try response(["success":1,"book":row]) }
+            let sparse = ZLibraryBook(remoteID:"12",hash:"ab1234",title:"A test book",author:"Test",fileExtension:"",size:"",language:"",year:"",coverURL:nil)
+            do {
+                _ = try await ZLibraryClient(transport:transport).details(sparse,origin:origin,session:nil)
+                XCTFail("Invalid details accepted")
+            } catch { XCTAssertEqual(error as? ZLibraryError,row["extension"] as? String == "  " ? .metadata : .response) }
+        }
+    }
+    func testDownloadHydratesSparseEditionBeforeFileRequestAndValidatesBytes() async throws {
+        let sparse = ZLibraryBook(remoteID:"12",hash:"ab1234",title:"A test book",author:"Test",fileExtension:"",size:"",language:"",year:"",coverURL:nil)
+        let temp = try folder().appendingPathComponent("download.part")
+        try Data([0x50,0x4b,0x03,0x04]).write(to:temp)
+        let transport = CatalogTransport { [self] request,toFile in
+            switch request.url?.path {
+            case "/eapi/book/12/ab1234": return try response(["success":1,"book":["extension":"epub"]])
+            case "/eapi/book/12/ab1234/file": return try response(["success":1,"file":["downloadLink":"https://cdn.example/file"]])
+            default:
+                XCTAssertTrue(toFile);XCTAssertNil(request.value(forHTTPHeaderField:"Cookie"))
+                return ZLibraryPayload(data:Data(),file:temp,response:HTTPURLResponse(url:request.url!,statusCode:200,httpVersion:nil,headerFields:nil)!)
+            }
+        }
+        let file = try await ZLibraryClient(transport:transport).download(sparse,origin:origin,session:session,progress:{_ in})
+        XCTAssertEqual(file.pathExtension,"epub");XCTAssertTrue(FileManager.default.fileExists(atPath:file.path))
+        XCTAssertEqual(transport.requests.map { $0.url!.path },["/eapi/book/12/ab1234","/eapi/book/12/ab1234/file","/file"])
+    }
+    func testUnsupportedResolvedFormatNeverRequestsDownloadLink() async throws {
+        let sparse = ZLibraryBook(remoteID:"12",hash:"ab1234",title:"A test book",author:"Test",fileExtension:"",size:"",language:"",year:"",coverURL:nil)
+        let transport = CatalogTransport { [self] request,_ in
+            XCTAssertEqual(request.url?.path,"/eapi/book/12/ab1234")
+            return try response(["success":1,"book":["extension":"djvu"]])
+        }
+        do { _ = try await ZLibraryClient(transport:transport).download(sparse,origin:origin,session:session,progress:{_ in});XCTFail("Unsupported file downloaded") }
+        catch { XCTAssertEqual(error as? ZLibraryError,.file) }
+        XCTAssertEqual(transport.requests.count,1)
+    }
+    func testResolvedDetailsUpdateFeedAndAreReusedWithoutAnotherRequest() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        let sparse = ZLibraryBook(remoteID:book.remoteID,hash:book.hash,title:book.title,author:book.author,fileExtension:"",size:"",language:"",year:"",coverURL:nil)
+        client.popularBooks = [sparse];client.detailHandler = { [self] _ in book }
+        await store.loadPopular()
+        let first = try await store.details(sparse)
+        let second = try await store.details(sparse)
+        XCTAssertEqual(first,book);XCTAssertEqual(second,book);XCTAssertEqual(store.books,[book])
+        XCTAssertEqual(client.detailCalls,1)
+    }
+    func testLateDetailsAfterDisconnectCannotRestoreFeedOrAccount() async throws {
+        let client = CatalogService(), (store,_,_) = store(client)
+        var pending: CheckedContinuation<ZLibraryBook,Error>?
+        client.detailHandler = { _ in try await withCheckedThrowingContinuation { pending = $0 } }
+        let task = Task { try await store.details(book) }
+        try await wait { pending != nil }
+        try await store.disconnect()
+        pending?.resume(returning:book)
+        do { _ = try await task.value;XCTFail("Stale details escaped") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(store.books.isEmpty);XCTAssertFalse(store.connected)
     }
     func testSearchPOSTEncodesUnicodeReservedCharactersAndKeepsSessionOutOfURL() async throws {
         let query = "十日终焉 + C++ & author=王 #978"
