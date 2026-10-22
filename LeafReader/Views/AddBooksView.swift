@@ -67,6 +67,21 @@ struct ZLibraryView: View {
                         .font(.subheadline.weight(.semibold)).disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("zlibrarySubmitSearch")
                 }.padding(14).frame(minHeight: 48).background(theme.surface, in: .rect(cornerRadius: 14))
+                Menu {
+                    Picker("Sort search results", selection: Binding(get: { catalog.searchOrder }, set: { order in
+                        searchFocused = false
+                        Task { await catalog.setSearchOrder(order) }
+                    })) {
+                        ForEach(ZLibrarySearchOrder.allCases) { order in Text(order.title).tag(order) }
+                    }
+                } label: {
+                    HStack(spacing:8) {
+                        Label("Search order",systemImage:"arrow.up.arrow.down").foregroundStyle(.secondary)
+                        Spacer(minLength:8)
+                        Text(catalog.searchOrder.title).foregroundStyle(theme.accent)
+                        Image(systemName:"chevron.down").font(.caption).foregroundStyle(theme.accent)
+                    }.font(.subheadline).padding(.vertical,4).contentShape(Rectangle())
+                }.accessibilityIdentifier("zlibrarySearchOrder")
                 HStack(alignment:.firstTextBaseline) {
                     Text(catalog.activeQuery.isEmpty ? "Most popular" : "Search results").font(.system(size:32,weight:.regular,design:.serif))
                     Spacer()
