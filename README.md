@@ -100,6 +100,22 @@ The local `leaf-reader://` scheme exposes only bundled reader resources and the 
 
 ## Tests
 
+### Z-Library popular books
+
+Choose **Add books → Z-Library** to browse **Most popular** without a search step. Each card represents an edition returned by the service, including its actual format, language, and size. Unsupported editions cannot be downloaded into Leaf. Pull down to refresh.
+
+**Connection** opens the configured HTTPS website (initially `https://z-library.sk`) for the user to sign in. The app reads only that website’s session cookies, verifies the account through the profile endpoint, and stores the session in device-only Keychain rather than storing a password. Cancelling a reconnect retains the existing connection. Disconnecting removes the saved session and the sign-in web data. External top-level sign-in redirects require the user to explicitly configure the trusted destination address first.
+
+This uses Z-Library’s unofficial mobile interface, including `book/most-popular`; it is not OAuth. Account compatibility is not yet verified against a live account. Website verification pages, unavailable domains, expired sessions, and download limits are reported separately from successful imports. The app does not automatically send account credentials to alternative domains. If the interface is unavailable, a book downloaded in the user’s browser can still be added from Files.
+
+Book downloads stream into protected temporary files with a 100 MB cap. Catalog/image responses are limited to 2 MB; cover thumbnails are downsampled and use an 8 MB cache. Download redirects strip credentials when leaving the configured origin. Completed books pass through the existing import and cover-extraction path; failures and cancellations remove partial downloads. Content duplicates link the existing book without replacing its reading location, bookmarks, or conversation identity.
+
+Debug UI tests opt into an isolated sample catalog with `--ui-testing`, a unique `LEAF_UI_TEST_ID`, and `LEAF_UI_ZLIB_MOCK=1`. The preview account and bundled sample downloads do not contact Z-Library and are excluded from Release builds.
+
+Verification for **1.7.0 build 22** passed all **25 distinct targeted cases**: 18 catalog/session/transfer tests, 5 library tests, and 2 native UI tests. `build/ZLibrarySigned.xcresult` passed all 23 unit cases plus the connection/address UI case; the corrected reader-readiness helper and final import UI passed in `build/ZLibraryUIVerified.xcresult`. The import flow exercises real simulator Keychain storage, a sample-file download, duplicate linking, and actual EPUB reading in both Pages and Scroll. A separate fresh-library case verifies embedded-cover extraction before import success. Screenshots were inspected for the catalog in portrait/landscape, the added-book state, and both reading flows. Use normal simulator signing for these UI tests: disabling signing prevents real Keychain access. Results/screenshots are under `build/zlibrary-signed-*` and `build/zlibrary-ui-verified-*`.
+
+The initial broader regression attempt was interrupted after shared CoreSimulator startup and WebKit failures during concurrent agent runs. It is not reported as a passing full suite; final feature checks ran serially on the healthy iPhone 17 Pro simulator after the shared service was restarted. Ten production-client HTTP/parser/download cases additionally passed as native macOS checks (`build/zlibrary-host-checks.log`). Release signing and verification passed, but no live Z-Library account grant or download has been completed.
+
 `LeafReaderTests` covers format aliases, duplicate imports, source preservation, invalid files, manifest corruption, bookmark persistence, and actual WebKit rendering of EPUB, FB2, TXT, MOBI, HTML, CBZ, plus PDFKit rendering/navigation/search. EPUB tests also search rendered content, navigate, bookmark, and reopen at the saved location. UI tests exercise the library, appearance controls, bookmarks, and library search.
 
 The initial version was verified on October 20, 2026: **16 tests passed, zero failures or skips**, on iPhone 17 Pro Simulator running iOS 26.5 (13 unit/integration tests and 3 UI tests). The PDF UI test turns a page, closes the reader, and verifies that reopening restores that page. EPUB restoration checks that the start of the saved passage is visible; progress estimates can change with pagination. Debug UI tests use a separate temporary library and preferences suite for each test instead of changing the normal library or reading settings.

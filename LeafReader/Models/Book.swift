@@ -39,6 +39,7 @@ struct Book: Identifiable, Codable, Equatable {
     var locator: String = ""
     var coverFileName: String?
     var metadataVersion: Int?
+    var catalogSource: String?
     var isFavorite = false
     var bookmarks: [BookBookmark] = []
     var isFinished: Bool { progress >= 0.995 }
