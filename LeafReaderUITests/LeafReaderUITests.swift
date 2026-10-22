@@ -35,7 +35,14 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor private func showReaderControls(_ app: XCUIApplication) {
         waitForBook(app)
         if !app.buttons["closeBook"].exists {
-            readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            let surface = readingSurface(app)
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            // WebKit can consume a setup tap while clearing selection/focus after rotation.
+            // Keep a snapshot of that state; direct immersive-tap assertions remain single taps.
+            if !app.buttons["closeBook"].waitForExistence(timeout: 2) {
+                capture("Reader controls setup tap retry", app: app)
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+            }
         }
         XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
     }
