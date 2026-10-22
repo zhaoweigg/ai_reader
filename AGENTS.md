@@ -10,6 +10,7 @@ The user requests two simulator test slots running in parallel to reduce waiting
 
 - Coordinate ownership with the other active Leaf chats before using a slot; report the assigned device UUID and release it when the test process exits. Keep at most two simulator test jobs active, one per device.
 - Communicate through `codex_app.send_message_to_thread` when user authorization is present. The coordinator maintains the shared local ownership record at `/Users/weizhao/workspace/ai_reader/build/simulator-coordination.json`, accessible from all worktrees. Read it before requesting a slot; a stale record does not override a running job or an explicit ownership handoff.
+- The live read-only slot dashboard is `http://127.0.0.1:8765/`; it refreshes this registry every two seconds. Start it from the main checkout with `python3 scripts/coordination_dashboard.py --registry /Users/weizhao/workspace/ai_reader/build/simulator-coordination.json --port 8765`. Keep registry assignments and queue current at handoffs; use accurate state labels and include queued requests. Publish only slot/queue information, never credentials or private phone artifacts.
 - Slot A: iOS 26.5 iPhone 17 Pro, `20E63AE6-36C3-4BC1-B319-06A2FDB902EC`. Slot B: iOS 26.5 Leaf Floating Button QA, `F42C5A14-2B1E-48DE-8B14-B1B46A9C4F34`. Verify availability before use; coordinate a replacement if either device is unavailable.
 - Pin each test job to its assigned UUID with `-parallel-testing-enabled NO`; use separate DerivedData and result-bundle paths. Split independent checks between the two slots rather than launching duplicate suites.
 - Never install, launch, terminate, erase, or shut down another slot's device while it is owned. Do not reset the shared CoreSimulator service or shut down all devices while either slot is running.
@@ -17,6 +18,7 @@ The user requests two simulator test slots running in parallel to reduce waiting
 
 # iPhone preview installation
 
+- Prioritize the coordinator's ready-feature main builds, install approval questions, approved installations, and simulator handoffs over dashboard polish or ancillary development.
 - Workers implement and test on feature branches. They finish all applicable automated, affected-mode UI, screenshot, and integration checks, fix and retest failures, then merge their PR when everything passes. Their handoff includes the tested head, merge commit, results, screenshots, and any verification limits. Pending or failing worker checks mean the feature is not ready.
 - The coordinator uses the worker's completed verification evidence; do not repeat simulator testing after merge. Build clean merged `main`, verify the build and signature, and ask the user before installing. Report build failures to the worker instead of starting a duplicate simulator test cycle.
 - Offer each ready feature as soon as its worker checks pass, its PR is merged, and the coordinator's signed `main` build is verified. Clearly state verification that cannot be performed; never report it as passed. Do not wait for unrelated pending features to finish.
