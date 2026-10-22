@@ -37,7 +37,8 @@ struct ZLibraryView: View {
     let close: () -> Void
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var library: LibraryStore
-    @State private var connection = false
+    private enum Sheet: String, Identifiable { case connection, website; var id: String { rawValue } }
+    @State private var sheet: Sheet?
     var body: some View {
         ScrollView {
             VStack(alignment:.leading,spacing:20) {
@@ -47,7 +48,7 @@ struct ZLibraryView: View {
                     if catalog.isPreview { Text("Preview").font(.caption).foregroundStyle(.secondary) }
                 }
                 if !catalog.connected {
-                    Button { connection = true } label: { Label("Connect Z-Library",systemImage:"person.crop.circle") }
+                    Button { sheet = .connection } label: { Label("Connect Z-Library",systemImage:"person.crop.circle") }
                         .buttonStyle(.bordered).accessibilityIdentifier("connectZLibrary")
                 }
                 if catalog.loading && catalog.books.isEmpty {
@@ -58,9 +59,19 @@ struct ZLibraryView: View {
                         Label("Could not load popular books",systemImage:"exclamationmark.circle").font(.headline)
                         Text(error).font(.subheadline).foregroundStyle(.secondary)
                         HStack {
-                            Button("Connection") { connection = true }
+                            if catalog.websiteAccessNeeded {
+                                Button("Open website") { Task { await catalog.seedWebsite(); sheet = .website } }
+                                    .accessibilityIdentifier("zlibraryCheckWebsite")
+                            } else { Button("Connection") { sheet = .connection } }
                             Button("Try again") { Task { await catalog.loadPopular() } }.disabled(catalog.loading)
                         }.buttonStyle(.bordered)
+                        if let diagnostic = catalog.requestDiagnostic {
+                            DisclosureGroup("Request details") {
+                                Text(diagnostic).font(.caption.monospaced()).textSelection(.enabled)
+                                    .accessibilityIdentifier("zlibraryRequestDiagnostic")
+                                Text("Contains no cookies, account details, or response content.").font(.caption2).foregroundStyle(.secondary)
+                            }.font(.caption)
+                        }
                         Text("You can also download a book using your browser and add it from Files.").font(.caption).foregroundStyle(.secondary)
                     }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(.background,in:.rect(cornerRadius:18))
                 } else if !catalog.loading && catalog.books.isEmpty {
@@ -85,10 +96,12 @@ struct ZLibraryView: View {
             }.padding(24).frame(maxWidth:900,alignment:.leading).frame(maxWidth:.infinity)
         }
         .background(LeafStyle.canvas).navigationTitle("Z-Library").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement:.topBarTrailing) { Button { connection = true } label: { Image(systemName:"person.crop.circle") }.accessibilityLabel("Z-Library connection") } }
+        .toolbar { ToolbarItem(placement:.topBarTrailing) { Button { sheet = .connection } label: { Image(systemName:"person.crop.circle") }.accessibilityLabel("Z-Library connection") } }
         .task { if catalog.books.isEmpty { await catalog.loadPopular() } }
         .refreshable { await catalog.loadPopular() }
-        .sheet(isPresented:$connection,onDismiss: { Task { await catalog.loadPopular() } }) { ZLibraryConnectionView() }
+        .sheet(item:$sheet,onDismiss: { Task { await catalog.loadPopular() } }) { sheet in
+            if sheet == .website { ZLibraryWebsiteSignIn() } else { ZLibraryConnectionView() }
+        }
         .presentationDetents([.large])
     }
 }
@@ -160,11 +173,11 @@ struct ZLibraryConnectionView: View {
                 }
                 Section {
                     if catalog.connected {
-                        Label("Connected",systemImage:"checkmark.shield").foregroundStyle(LeafStyle.accent)
+                        Label("Account connected",systemImage:"checkmark.shield").foregroundStyle(LeafStyle.accent)
                         if !catalog.accountName.isEmpty { Text(catalog.accountName).font(.subheadline) }
                         if let remaining = catalog.remaining { Text("\(remaining) downloads remaining").foregroundStyle(.secondary) }
                     }
-                    Button(catalog.connected ? "Open sign-in page again" : "Sign in on Z-Library") {
+                    Button(catalog.connected ? "Open website" : "Sign in on Z-Library") {
                         Task { do { try await catalog.changeAddress(address); await catalog.seedWebsite(); signingIn = true } catch { addressError = error.localizedDescription } }
                     }.accessibilityIdentifier("zlibrarySignIn")
                     if catalog.connected { Button("Disconnect",role:.destructive) { Task { do { try await catalog.disconnect() } catch { addressError = error.localizedDescription } } } }
@@ -232,6 +245,14 @@ private struct ZLibrarySignInWebView: UIViewRepresentable {
         }
         func webView(_ webView:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error) {
             if (error as NSError).code != NSURLErrorCancelled { parent.message = "The website could not be loaded. Check its address and your connection." }
+        }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard let url = webView.url, parent.store.origin.contains(url) else { return }
+            // Keep normal API requests consistent with the browser session the user opened.
+            // This reads only browser identity; it never solves or automates verification.
+            webView.evaluateJavaScript("navigator.userAgent") { [weak self] value, _ in
+                if let text = value as? String { self?.parent.store.captureWebsiteUserAgent(text) }
+            }
         }
     }
 }
