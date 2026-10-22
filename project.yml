@@ -29,7 +29,7 @@ targets:
       path: LeafReader/Info.plist
       properties:
         CFBundleDisplayName: Leaf
-        CFBundleShortVersionString: "1.9.7"
+        CFBundleShortVersionString: "1.9.6"
         CFBundleVersion: "36"
         UILaunchScreen: {}
         NSAppTransportSecurity:

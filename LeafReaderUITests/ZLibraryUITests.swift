@@ -312,6 +312,9 @@ final class ZLibraryUITests: XCTestCase {
             XCTAssertTrue(app.staticTexts["Account connected"].waitForExistence(timeout: 5))
             capture("Restored catalog account \(orientation.rawValue)")
             app.buttons["Close connection"].tap()
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Loading popular books…"])
+            waitForExpectations(timeout: 10)
+            XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
             capture("Restored popular catalog \(orientation.rawValue)")
         }
         XCUIDevice.shared.orientation = .portrait
