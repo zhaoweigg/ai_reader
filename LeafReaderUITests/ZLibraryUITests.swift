@@ -336,6 +336,41 @@ final class ZLibraryUITests: XCTestCase {
         }
         XCUIDevice.shared.orientation = .portrait
     }
+    @MainActor func testRepeatedSearchPopularNavigationReusesResultsAndRefreshShowsAccessCheck() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_REPEAT_GUARD": "1"]
+        for landscape in [false, true] {
+            XCUIDevice.shared.orientation = landscape ? .landscapeRight : .portrait
+            app.launch()
+            if landscape {
+                expectation(for: NSPredicate { _, _ in app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height }, evaluatedWith: app)
+                waitForExpectations(timeout: 10)
+            }
+            app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+            XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout: 10))
+            for _ in 0..<5 {
+                search("books", app: app)
+                XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 5))
+                XCTAssertFalse(app.buttons["catalogBook-sample2"].exists)
+                XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
+                app.buttons["zlibraryClearSearch"].tap()
+                XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.staticTexts["zlibrarySavedResults"].exists)
+                XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
+            }
+            capture("Saved lists after ten view switches \(landscape ? "landscape" : "portrait")")
+            // A deliberate refresh still performs a request and presents the real failure.
+            let scroll = app.scrollViews.firstMatch
+            scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).press(forDuration: 0.1, thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)))
+            XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "browser access check")).firstMatch.exists)
+            XCTAssertTrue(app.buttons["catalogBook-sample2"].exists)
+            capture("Explicit refresh access check retains loaded books \(landscape ? "landscape" : "portrait")")
+            app.terminate()
+        }
+        XCUIDevice.shared.orientation = .portrait
+    }
     @MainActor func testSearchSucceedsWhilePopularRedirectDiagnosisRemainsReadable() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]

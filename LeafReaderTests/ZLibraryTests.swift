@@ -462,7 +462,8 @@ private final class CatalogURLProtocol: URLProtocol {
         await store.reload()
         XCTAssertTrue(store.connected);XCTAssertTrue(store.websiteAccessNeeded)
         XCTAssertTrue(store.error?.contains("search results") == true)
-        XCTAssertEqual(store.activeQuery,"author query");XCTAssertTrue(store.books.isEmpty)
+        XCTAssertEqual(store.activeQuery,"author query");XCTAssertEqual(store.books,[book])
+        XCTAssertTrue(store.showingSavedResults)
         client.searchHandler = { _,_ in throw ZLibraryRequestFailure(issue:.signInRequired,diagnostic:"POST /eapi/book/search · HTTP 401 · JSON/API response") }
         await store.retry()
         XCTAssertFalse(store.connected);XCTAssertEqual(store.activeQuery,"author query")
@@ -562,7 +563,7 @@ private final class CatalogURLProtocol: URLProtocol {
             }
             do { _ = try await ZLibraryClient(transport: transport).popular(origin: origin, session: session); XCTFail("Rejected redirect followed") }
             catch let failure as ZLibraryRequestFailure {
-                XCTAssertEqual(failure.issue, .challenge)
+                XCTAssertEqual(failure.issue, .accessCheck)
                 XCTAssertTrue(failure.diagnostic.contains("HTTP 307 · redirect not followed"))
                 XCTAssertTrue(failure.diagnostic.contains("reason: " + reason))
                 XCTAssertTrue(failure.diagnostic.contains("Redirect target: " + target))
@@ -595,6 +596,82 @@ private final class CatalogURLProtocol: URLProtocol {
             XCTAssertEqual(count, looping ? 2 : 4)
         }
     }
+    func testRepeatedNavigationReusesListsIncludingEmptyResultsAndAllPaginationState() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        client.popularBooks = [book]
+        client.searchHandler = { query, page in
+            let rows = query == "empty" ? [] : [ZLibraryBook(remoteID: "\(page)", hash: "ab", title: query, author: "", fileExtension: "epub", size: "", language: "", year: "", coverURL: nil)]
+            return ZLibrarySearchPage(books: rows, hasMore: query != "empty")
+        }
+        await store.loadPopular(); await store.search("books"); await store.loadMore()
+        let pages = store.books
+        for _ in 0..<20 {
+            await store.loadPopular(); XCTAssertEqual(store.books, [book])
+            await store.search("books"); XCTAssertEqual(store.books, pages)
+            XCTAssertTrue(store.canLoadMore); XCTAssertTrue(store.showingSavedResults)
+        }
+        XCTAssertEqual(client.popularSessions.count, 1); XCTAssertEqual(client.searchCalls.count, 2)
+        await store.loadMore(); XCTAssertEqual(client.searchCalls.last?.1, 3)
+        await store.search("empty"); await store.loadPopular(); await store.search("empty")
+        XCTAssertTrue(store.books.isEmpty); XCTAssertFalse(store.canLoadMore)
+        XCTAssertEqual(client.searchCalls.filter { $0.0 == "empty" }.count, 1)
+    }
+    func testSavedSearchesAreBoundedAndIsolatedByOrderAndAccount() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        client.searchHandler = { [self] _, _ in ZLibrarySearchPage(books: [book], hasMore: false) }
+        await store.loadPopular()
+        for query in ["one", "two", "three", "four"] { await store.search(query) }
+        await store.search("one"); XCTAssertEqual(client.searchCalls.count, 5) // LRU eviction
+        await store.setSearchOrder(.year); XCTAssertEqual(client.searchCalls.count, 6)
+        await store.setSearchOrder(.popular); XCTAssertEqual(client.searchCalls.count, 7) // Explicit sort restarts
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        await store.search("one"); XCTAssertEqual(client.searchCalls.count, 8)
+        try await store.disconnect(); await store.search("one"); XCTAssertEqual(client.searchCalls.count, 9)
+        try await store.changeAddress("https://another.example"); await store.search("one")
+        XCTAssertEqual(client.searchCalls.count, 10)
+    }
+    func testCachedNavigationCancelsPendingNetworkAndRejectsLateResults() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        client.popularBooks = [book]; await store.loadPopular()
+        var pending: CheckedContinuation<ZLibrarySearchPage, Error>?
+        client.searchHandler = { _, _ in try await withCheckedThrowingContinuation { pending = $0 } }
+        let task = Task { await store.search("pending") }; try await wait { pending != nil }
+        await store.loadPopular(); XCTAssertEqual(store.books, [book]); XCTAssertFalse(store.loading)
+        pending?.resume(returning: ZLibrarySearchPage(books: [], hasMore: false)); await task.value
+        XCTAssertEqual(store.books, [book]); XCTAssertTrue(store.activeQuery.isEmpty)
+        XCTAssertEqual(client.popularSessions.count, 1); XCTAssertNil(store.error)
+    }
+    func testAccessCheckRefreshKeepsSavedResultsAndDoesNotRetryAutomatically() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.popularBooks = [book]; await store.loadPopular()
+        client.popularError = ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "GET /eapi/book/most-popular · HTTP 307")
+        await store.reload()
+        XCTAssertEqual(store.books, [book]); XCTAssertTrue(store.showingSavedResults)
+        XCTAssertTrue(store.websiteAccessNeeded); XCTAssertTrue(store.connected)
+        XCTAssertTrue(store.error?.contains("browser access check") == true)
+        XCTAssertEqual(client.popularSessions.count, 2)
+        await store.search("different"); await store.loadPopular()
+        XCTAssertEqual(client.popularSessions.count, 2); XCTAssertEqual(store.books, [book])
+        XCTAssertNil(store.error); XCTAssertTrue(store.showingSavedResults)
+        client.popularError = nil; await store.reload()
+        XCTAssertEqual(client.popularSessions.count, 3); XCTAssertFalse(store.showingSavedResults)
+    }
+    func testLiveShapedPOSTAccessCheckMakesOnlyOneRequestAndPreservesAccount() async throws {
+        let transport = CatalogTransport { [self] request, _ in
+            if request.url!.path == "/eapi/user/profile" { return try response(["success": 1, "user": ["id": 42]]) }
+            XCTAssertEqual(request.httpMethod, "POST")
+            return ZLibraryPayload(data: Data(), file: nil, response: HTTPURLResponse(url: request.url!, statusCode: 307, httpVersion: nil, headerFields: ["Location": request.url!.absoluteString, "Set-Cookie": "__diamwall=private-value; Path=/"])!)
+        }
+        let (store, _, _) = store(ZLibraryClient(transport: transport))
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        await store.search("private query")
+        XCTAssertTrue(store.websiteAccessNeeded); XCTAssertTrue(store.connected)
+        XCTAssertTrue(store.error?.contains("browser access check") == true)
+        XCTAssertTrue(store.requestDiagnostic?.contains("access-check marker: DiamWall") == true)
+        XCTAssertEqual(transport.requests.count, 2) // Profile plus exactly one search, no loop.
+        XCTAssertFalse(store.requestDiagnostic?.contains("private-") ?? true)
+    }
     func testSearchSuccessThenClearReportsIndependentPopular307WithoutSigningOut() async throws {
         var popularCalls = 0
         let row: [String: Any] = ["id": 12, "hash": "ab1234", "title": "A test book", "author": "Test author", "extension": "epub"]
@@ -619,8 +696,10 @@ private final class CatalogURLProtocol: URLProtocol {
         await store.loadPopular(); XCTAssertEqual(store.books.count, 1)
         await store.search("test book"); XCTAssertEqual(store.books.count, 1); XCTAssertNil(store.error)
         await store.loadPopular()
+        XCTAssertEqual(popularCalls, 1); XCTAssertTrue(store.showingSavedResults)
+        await store.reload() // Explicit refresh still surfaces the real access check.
         XCTAssertTrue(store.activeQuery.isEmpty); XCTAssertTrue(store.connected)
-        XCTAssertTrue(store.websiteAccessNeeded); XCTAssertTrue(store.books.isEmpty)
+        XCTAssertTrue(store.websiteAccessNeeded); XCTAssertEqual(store.books.count, 1)
         XCTAssertTrue(store.requestDiagnostic?.contains("HTTP 307") == true)
         XCTAssertTrue(store.requestDiagnostic?.contains("same URL refused") == true)
         await store.search("test book")

@@ -92,6 +92,10 @@ struct ZLibraryView: View {
                 if !catalog.activeQuery.isEmpty {
                     Text("Results for “\(catalog.activeQuery)”").font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                 }
+                if catalog.showingSavedResults {
+                    Text("Previously loaded · Pull down to refresh").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("zlibrarySavedResults")
+                }
                 if !catalog.connected {
                     Button { sheet = .connection } label: { Label("Connect Z-Library",systemImage:"person.crop.circle") }
                         .buttonStyle(.bordered).accessibilityIdentifier("connectZLibrary")
@@ -145,7 +149,7 @@ struct ZLibraryView: View {
                         }.buttonStyle(.plain).accessibilityIdentifier("catalogBook-\(book.remoteID)")
                     }
                 }
-                if catalog.loading && !catalog.books.isEmpty { ProgressView("Loading more books…").frame(maxWidth: .infinity) }
+                if catalog.loading && !catalog.books.isEmpty { ProgressView(catalog.showingSavedResults ? "Refreshing books…" : "Loading more books…").frame(maxWidth: .infinity) }
                 else if catalog.canLoadMore {
                     Button("Load more books") { searchFocused = false; Task { await catalog.loadMore() } }
                         .buttonStyle(.bordered).frame(maxWidth: .infinity).accessibilityIdentifier("zlibraryLoadMore")
@@ -162,7 +166,7 @@ struct ZLibraryView: View {
             if value.isEmpty && !catalog.activeQuery.isEmpty { Task { await catalog.loadPopular() } }
         }
         .onDisappear { catalog.cancelCatalogLoad() }
-        .task { if catalog.books.isEmpty { await catalog.reload() } }
+        .task { await catalog.search(catalog.activeQuery) }
         .refreshable { await catalog.reload() }
         .scrollDismissesKeyboard(.interactively)
         .sheet(item:$sheet,onDismiss: { Task { await catalog.reload() } }) { sheet in
