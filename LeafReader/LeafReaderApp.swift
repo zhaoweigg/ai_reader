@@ -12,6 +12,7 @@ struct LeafReaderApp: App {
         var seedSamples = true
         var defaults = UserDefaults.standard
         var chatProvider: (any ChatProvider)?
+        var chatGPT: ChatGPTAccountStore?
         var chatCredentials = KeychainChatCredentials()
         #if DEBUG
         let process = ProcessInfo.processInfo
@@ -23,13 +24,16 @@ struct LeafReaderApp: App {
                 chatProvider = UITestChatProvider(slow: process.environment["LEAF_UI_CHAT_SLOW"] == "1")
             }
             defaults = UserDefaults(suiteName: "com.leafreader.uitests.\(id.uuidString)") ?? .standard
+            if process.environment["LEAF_UI_CHATGPT_CONNECTED"] == "1" {
+                chatGPT = ChatGPTAccountStore.uiTestConnected(defaults: defaults, credentials: chatCredentials)
+            }
         } else if NSClassFromString("XCTestCase") != nil {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUnitTests/\(UUID().uuidString)", isDirectory: true)
             seedSamples = false
         }
         #endif
         _library = StateObject(wrappedValue: LibraryStore(root: root, seedSamples: seedSamples))
-        _aiSettings = StateObject(wrappedValue: AISettingsStore(defaults: defaults, credentials: chatCredentials, providerOverride: chatProvider))
+        _aiSettings = StateObject(wrappedValue: AISettingsStore(defaults: defaults, credentials: chatCredentials, providerOverride: chatProvider, chatGPTOverride: chatGPT))
         readingDefaults = defaults
     }
 

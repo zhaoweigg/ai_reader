@@ -49,9 +49,9 @@ final class AISettingsStore: ObservableObject {
     let providerOverride: (any ChatProvider)?
     let chatGPT: ChatGPTAccountStore
     init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(),
-         providerOverride: (any ChatProvider)? = nil) {
+         providerOverride: (any ChatProvider)? = nil, chatGPTOverride: ChatGPTAccountStore? = nil) {
         self.defaults = defaults; self.credentials = credentials; self.providerOverride = providerOverride
-        chatGPT = ChatGPTAccountStore(defaults: defaults, credentials: credentials)
+        chatGPT = chatGPTOverride ?? ChatGPTAccountStore(defaults: defaults, credentials: credentials)
         configuration = defaults.data(forKey: "ai.configuration").flatMap { try? JSONDecoder().decode(ChatConfiguration.self, from: $0) } ?? ChatConfiguration()
     }
     func key(for configuration: ChatConfiguration) throws -> String? { try credentials.read(account: configuration.credentialAccount) }

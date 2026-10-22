@@ -30,6 +30,17 @@ private struct ChatGPTTestStream: ChatTransport {
     }
 }
 
+@MainActor private final class ChatGPTTestBrowser: ChatGPTAuthorizing {
+    var started = false
+    var cancelCount = 0
+    var handler: () async throws -> (ChatGPTOAuthAttempt, URL) = { throw ChatGPTError.cancelled }
+    func authorize(hostID: String, registration: ChatGPTAccount?, reconsent: Bool) async throws -> (ChatGPTOAuthAttempt, URL) {
+        started = true
+        return try await handler()
+    }
+    func cancel() { cancelCount += 1 }
+}
+
 private final class ChatGPTTestSigner {
     let key: SecKey
     let jwks: [String: Any]
@@ -81,11 +92,11 @@ final class ChatGPTTests: XCTestCase {
                        tokens: ChatGPTTokens(accessToken: "access-\(client)", refreshToken: "refresh-\(client)", idToken: "test-id",
                                              scopes: scopes, expiresAt: expiry))
     }
-    private func store(http: ChatGPTTestHTTP = ChatGPTTestHTTP(), credentials: ChatGPTTestCredentials = ChatGPTTestCredentials()) -> (ChatGPTAccountStore, UserDefaults) {
+    private func store(http: ChatGPTTestHTTP = ChatGPTTestHTTP(), credentials: ChatGPTTestCredentials = ChatGPTTestCredentials(), browser: (any ChatGPTAuthorizing)? = nil) -> (ChatGPTAccountStore, UserDefaults) {
         let suite = "ChatGPTOAuthTests.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
-        return (ChatGPTAccountStore(defaults: defaults, credentials: credentials, client: ChatGPTOAuthClient(http: http)), defaults)
+        return (ChatGPTAccountStore(defaults: defaults, credentials: credentials, client: ChatGPTOAuthClient(http: http), browser: browser), defaults)
     }
     private func callback(_ attempt: ChatGPTOAuthAttempt, state: String? = nil, client: String = "test-client", error: String? = nil) -> URL {
         var parts = URLComponents(url: attempt.redirectURI, resolvingAgainstBaseURL: false)!
@@ -185,6 +196,72 @@ final class ChatGPTTests: XCTestCase {
         XCTAssertEqual(tokens, ["rotated-access", "rotated-access"])
         XCTAssertEqual(http.requests.count, 1)
         XCTAssertEqual(store.selected?.tokens?.refreshToken, "rotated-refresh")
+    }
+    private func waitForSignIn(_ store: ChatGPTAccountStore) async throws {
+        let deadline = Date().addingTimeInterval(3)
+        while store.isBusy && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(store.isBusy)
+    }
+    func testCancelledAdditionalSignInPreservesConnectionCatalogAndSavedModel() async throws {
+        for failure: Error in [ChatGPTError.cancelled, CancellationError(), URLError(.cancelled)] {
+            let browser = ChatGPTTestBrowser(), http = ChatGPTTestHTTP(), credentials = ChatGPTTestCredentials()
+            browser.handler = { throw failure }
+            let (store, defaults) = store(http: http, credentials: credentials, browser: browser)
+            try store.accept(account())
+            http.handler = { _ in (200, try self.json(["models": [["slug": "chosen-model", "display_name": "Chosen Model", "visibility": "list"]]])) }
+            await store.loadModels()
+            let settings = AISettingsStore(defaults: defaults, credentials: credentials, chatGPTOverride: store)
+            var configuration = settings.configuration; configuration.provider = .chatGPT; configuration.profile.model = "chosen-model"
+            try settings.save(configuration, replacementKey: nil)
+            let savedCredentials = credentials.values, selected = store.selectedID, models = store.models
+            store.signIn()
+            try await waitForSignIn(store)
+            XCTAssertTrue(browser.started)
+            XCTAssertNil(store.error); XCTAssertNil(store.notice)
+            XCTAssertEqual(store.selectedID, selected)
+            XCTAssertEqual(store.models, models)
+            XCTAssertEqual(store.selected?.tokens?.accessToken, "access-test-client")
+            XCTAssertEqual(credentials.values, savedCredentials)
+            let restored = AISettingsStore(defaults: defaults, credentials: credentials)
+            XCTAssertEqual(restored.configuration.profile.model, "chosen-model")
+            XCTAssertEqual(restored.chatGPT.selectedID, selected)
+        }
+    }
+    func testExplicitSignInCancellationKeepsExistingCredentials() async throws {
+        let browser = ChatGPTTestBrowser(), credentials = ChatGPTTestCredentials()
+        browser.handler = { try await Task.sleep(for: .seconds(30)); throw ChatGPTError.cancelled }
+        let (store, _) = store(credentials: credentials, browser: browser)
+        try store.accept(account())
+        let saved = credentials.values
+        store.signIn(existing: store.selected)
+        let deadline = Date().addingTimeInterval(3)
+        while !browser.started && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(browser.started)
+        store.cancelSignIn()
+        try await waitForSignIn(store)
+        XCTAssertEqual(browser.cancelCount, 1)
+        XCTAssertNil(store.error); XCTAssertNotNil(store.selected?.tokens)
+        XCTAssertEqual(credentials.values, saved)
+    }
+    func testCancelledFirstSignInIsNotAnError() async throws {
+        let browser = ChatGPTTestBrowser(), credentials = ChatGPTTestCredentials()
+        let (store, _) = store(credentials: credentials, browser: browser)
+        store.signIn()
+        try await waitForSignIn(store)
+        XCTAssertTrue(store.accounts.isEmpty); XCTAssertNil(store.error); XCTAssertNil(store.notice)
+        XCTAssertTrue(credentials.values.isEmpty)
+    }
+    func testRealSignInFailureStillSurfacesWithoutDisconnectingAccount() async throws {
+        let browser = ChatGPTTestBrowser(), credentials = ChatGPTTestCredentials()
+        browser.handler = { throw ChatGPTError.network }
+        let (store, _) = store(credentials: credentials, browser: browser)
+        try store.accept(account())
+        let saved = credentials.values
+        store.signIn()
+        try await waitForSignIn(store)
+        XCTAssertEqual(store.error, ChatGPTError.network.localizedDescription)
+        XCTAssertNotNil(store.selected?.tokens)
+        XCTAssertEqual(credentials.values, saved)
     }
     func testTemporaryRefreshFailureKeepsTokensAndTerminalFailureClearsThem() async throws {
         let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)

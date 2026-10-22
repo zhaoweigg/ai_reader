@@ -1,13 +1,14 @@
 import XCTest
 
 final class LeafReaderUITests: XCTestCase {
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
         app.launch()
         return app
     }
@@ -325,6 +326,36 @@ final class LeafReaderUITests: XCTestCase {
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         showReaderControls(app)
         XCTAssertEqual(app.buttons["toggleBookmark"].label, "Add bookmark")
+    }
+
+    @MainActor func testConnectedChatGPTOffersAnotherAccountAndCancelsQuietly() {
+        let app = launchApp(mockChat: false, chatGPTConnected: true)
+        app.tabBars.buttons["Settings"].tap()
+        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.buttons["openAISettings"].tap()
+        let connected = app.descendants(matching: .any)["chatGPTConnectionState"].firstMatch
+        XCTAssertTrue(connected.waitForExistence(timeout: 5))
+        XCTAssertEqual(connected.label, "ChatGPT connected")
+        XCTAssertFalse(app.buttons["continueWithChatGPT"].exists)
+        XCTAssertFalse(app.buttons["Sign in again"].exists)
+        let identity = app.descendants(matching: .any)["connectedChatGPTAccount"].firstMatch
+        XCTAssertEqual(identity.value as? String, "reader@example.test")
+        XCTAssertEqual(app.buttons["chatGPTModelPicker"].value as? String, "Sample Reader")
+        let add = app.buttons["addChatGPTAccount"]
+        XCTAssertEqual(add.label, "Add another ChatGPT account")
+        for _ in 0..<3 where !add.isHittable { app.swipeUp() }
+        capture("Connected ChatGPT account actions", app: app)
+        add.tap()
+        let cancel = app.buttons["cancelChatGPTSignIn"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        cancel.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: cancel)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(connected.label, "ChatGPT connected")
+        XCTAssertFalse(app.staticTexts["chatGPTConnectionError"].exists)
+        XCTAssertFalse(app.staticTexts["Sign-in cancelled."].exists)
+        XCTAssertEqual(app.buttons["chatGPTModelPicker"].value as? String, "Sample Reader")
+        capture("Connected after cancelling another account", app: app)
     }
 
     @MainActor func testChatGPTNativeBrowserReturnsToLeaf() {

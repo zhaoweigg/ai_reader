@@ -17,7 +17,7 @@ final class ChatGPTAccountStore: ObservableObject {
     private let credentials: any ChatCredentialStore
     private let defaults: UserDefaults
     private let client: ChatGPTOAuthClient
-    private let browser = ChatGPTBrowserSignIn()
+    private let browser: any ChatGPTAuthorizing
     private let vaultAccount = "chatgpt.oauth.v1"
     private var refreshes: [String: Task<ChatGPTAccount, Error>] = [:]
     private var requests: [UUID: (String, () -> Void)] = [:]
@@ -31,8 +31,9 @@ final class ChatGPTAccountStore: ObservableObject {
         let id = "urn:uuid:\(UUID().uuidString.lowercased())"
         defaults.set(id, forKey: "chatgpt.hostID"); return id
     }
-    init(defaults: UserDefaults, credentials: any ChatCredentialStore, client: ChatGPTOAuthClient = ChatGPTOAuthClient()) {
+    init(defaults: UserDefaults, credentials: any ChatCredentialStore, client: ChatGPTOAuthClient = ChatGPTOAuthClient(), browser: (any ChatGPTAuthorizing)? = nil) {
         self.defaults = defaults; self.credentials = credentials; self.client = client
+        self.browser = browser ?? ChatGPTBrowserSignIn()
         do {
             if let text = try credentials.read(account: vaultAccount) {
                 let saved = try JSONDecoder().decode(ChatGPTVault.self, from: Data(text.utf8))
@@ -58,7 +59,13 @@ final class ChatGPTAccountStore: ObservableObject {
                 try self.accept(account)
                 if !account.canUsePlan { self.notice = ChatGPTError.permissionMissing.localizedDescription }
                 else { await self.loadModels() }
-            } catch { self.error = Self.message(error) }
+            } catch ChatGPTError.cancelled {
+                // Cancelling an optional login leaves the current connection intact.
+            } catch is CancellationError {
+            } catch let failure as URLError where failure.code == .cancelled {
+            } catch {
+                if !Task.isCancelled { self.error = Self.message(error) }
+            }
         }
     }
     func cancelSignIn() { signInTask?.cancel(); browser.cancel() }
@@ -177,11 +184,40 @@ final class ChatGPTAccountStore: ObservableObject {
         return ChatGPTError.network.localizedDescription
     }
     #if DEBUG
+    static func uiTestConnected(defaults: UserDefaults, credentials: any ChatCredentialStore) -> ChatGPTAccountStore {
+        let store = ChatGPTAccountStore(defaults: defaults, credentials: credentials,
+            client: ChatGPTOAuthClient(http: UITestChatGPTCatalog()), browser: UITestChatGPTSignIn())
+        let account = ChatGPTAccount(clientID: "ui-test-client", subject: "ui-test-reader", email: "reader@example.test",
+            tokens: ChatGPTTokens(accessToken: "ui-test-only", refreshToken: "ui-test-only", idToken: "ui-test-only",
+                scopes: ["chatgpt.tokens.use.direct"], expiresAt: Date().addingTimeInterval(3600)))
+        try? store.accept(account)
+        var configuration = ChatConfiguration(); configuration.provider = .chatGPT; configuration.profile.model = "ui-test-model"
+        if let data = try? JSONEncoder().encode(configuration) { defaults.set(data, forKey: "ai.configuration") }
+        return store
+    }
     func testBrowserLoopback() async {
-        guard !isBusy else { return }; isBusy = true; error = nil; notice = nil
+        guard !isBusy, let browser = browser as? ChatGPTBrowserSignIn else { return }; isBusy = true; error = nil; notice = nil
         defer { isBusy = false }
         do { _ = try await browser.testLoopback(); notice = "Native browser callback verified." }
         catch { self.error = Self.message(error) }
     }
     #endif
 }
+
+#if DEBUG
+// Used only by explicit UI-test launches with isolated defaults and Keychain.
+private struct UITestChatGPTCatalog: ChatGPTHTTPClient {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        guard request.url == ChatGPTEndpoints.models else { throw ChatGPTError.network }
+        let data = Data(#"{"models":[{"slug":"ui-test-model","display_name":"Sample Reader","visibility":"list"}]}"#.utf8)
+        return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+}
+@MainActor private final class UITestChatGPTSignIn: ChatGPTAuthorizing {
+    func authorize(hostID: String, registration: ChatGPTAccount?, reconsent: Bool) async throws -> (ChatGPTOAuthAttempt, URL) {
+        try await Task.sleep(for: .seconds(30))
+        throw ChatGPTError.cancelled
+    }
+    func cancel() {}
+}
+#endif

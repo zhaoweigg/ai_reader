@@ -96,7 +96,13 @@ final class ChatGPTLoopbackListener {
 }
 
 @MainActor
-final class ChatGPTBrowserSignIn: NSObject, ASWebAuthenticationPresentationContextProviding {
+protocol ChatGPTAuthorizing {
+    func authorize(hostID: String, registration: ChatGPTAccount?, reconsent: Bool) async throws -> (ChatGPTOAuthAttempt, URL)
+    func cancel()
+}
+
+@MainActor
+final class ChatGPTBrowserSignIn: NSObject, ChatGPTAuthorizing, ASWebAuthenticationPresentationContextProviding {
     private var browser: ASWebAuthenticationSession?
     private var listener: ChatGPTLoopbackListener?
     private var pending: CheckedContinuation<URL, Error>?
