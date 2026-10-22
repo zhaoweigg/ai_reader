@@ -30,7 +30,8 @@ targets:
       properties:
         CFBundleDisplayName: Leaf
         CFBundleShortVersionString: "1.9.6"
-        CFBundleVersion: "35"
+        CFBundleShortVersionString: "1.9.7"
+        CFBundleVersion: "36"
         UILaunchScreen: {}
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

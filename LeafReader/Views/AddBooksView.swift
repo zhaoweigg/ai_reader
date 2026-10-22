@@ -314,10 +314,11 @@ struct ZLibraryWebsiteSignIn: View {
     @State private var message: String?
     @State private var checking = false
     @State private var checkTask: Task<Void,Never>?
+    @State private var browserReady = false
     var body: some View {
         NavigationStack {
             VStack(spacing:0) {
-                ZLibrarySignInWebView(store:catalog,message:$message)
+                ZLibrarySignInWebView(store:catalog,message:$message,ready:$browserReady)
                 if let message { Text(message).font(.footnote).foregroundStyle(.secondary).padding() }
                 if let error = catalog.connectionError { Text(error).font(.footnote).foregroundStyle(.red).padding() }
                 Button { checking = true; checkTask = Task {
@@ -327,11 +328,14 @@ struct ZLibraryWebsiteSignIn: View {
                     } else { message = "Finish signing in on the website, then tap Check connection." }
                     checking = false
                 } } label: { HStack { if checking { ProgressView() }; Text("Check connection") }.frame(maxWidth:.infinity) }
-                    .buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large).disabled(checking).padding()
+                    .buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large).disabled(checking || !browserReady).padding()
             }
             .navigationTitle(catalog.origin.url.host ?? "Z-Library").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement:.topBarLeading) { Button("Cancel") { checkTask?.cancel();dismiss() } } }
-            .onDisappear { checkTask?.cancel() }
+            .onDisappear {
+                checkTask?.cancel()
+                Task { try? await catalog.saveWebsiteContext() }
+            }
         }
     }
 }
@@ -339,18 +343,29 @@ struct ZLibraryWebsiteSignIn: View {
 private struct ZLibrarySignInWebView: UIViewRepresentable {
     let store: ZLibraryStore
     @Binding var message: String?
+    @Binding var ready: Bool
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context:Context) -> WKWebView {
         let config = WKWebViewConfiguration(); config.websiteDataStore = store.websiteData
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         let view = WKWebView(frame:.zero,configuration:config); view.navigationDelegate = context.coordinator
-        view.isInspectable = false; view.load(URLRequest(url:store.origin.url)); return view
+        view.isInspectable = false
+        #if DEBUG
+        if store.isPreview, ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_WEBSITE_FIXTURE"] == "1" {
+            view.loadHTMLString("<html><body><h1>Offline connection fixture</h1><script>document.cookie='site_access=refreshed-preview; path=/; Secure';</script></body></html>", baseURL: store.origin.url)
+            return view
+        }
+        #endif
+        view.load(URLRequest(url:store.origin.url)); return view
     }
     func updateUIView(_ uiView: WKWebView, context:Context) {}
     static func dismantleUIView(_ view:WKWebView,coordinator:Coordinator) { view.stopLoading();view.navigationDelegate = nil }
     final class Coordinator: NSObject, WKNavigationDelegate {
         let parent: ZLibrarySignInWebView
         init(_ parent: ZLibrarySignInWebView) { self.parent = parent }
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            parent.ready = false
+        }
         func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping (WKNavigationActionPolicy)->Void) {
             guard let url = action.request.url else { decisionHandler(.cancel);return }
             if url.absoluteString == "about:blank" || parent.store.origin.contains(url) || (action.targetFrame?.isMainFrame == false && url.scheme == "https" && url.user == nil && url.password == nil) { decisionHandler(.allow) }
@@ -364,7 +379,10 @@ private struct ZLibrarySignInWebView: UIViewRepresentable {
             // Keep normal API requests consistent with the browser session the user opened.
             // This reads only browser identity; it never solves or automates verification.
             webView.evaluateJavaScript("navigator.userAgent") { [weak self] value, _ in
-                if let text = value as? String { self?.parent.store.captureWebsiteUserAgent(text) }
+                guard let self else { return }
+                if let text = value as? String { self.parent.store.captureWebsiteUserAgent(text) }
+                self.parent.ready = true
+                Task { try? await self.parent.store.saveWebsiteContext() }
             }
         }
     }

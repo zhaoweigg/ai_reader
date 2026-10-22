@@ -23,10 +23,17 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var importedID: UUID?
     @Published private(set) var importError: String?
     private var signInData: WKWebsiteDataStore?
+    private var seedingWebsite = false
     private var websiteUserAgent: String?
     var websiteData: WKWebsiteDataStore {
         if let signInData { return signInData }
-        let data = WKWebsiteDataStore.nonPersistent(); signInData = data; return data
+        // A stable, isolated WebKit store survives app replacement, including website
+        // storage that cannot be reconstructed from the two account cookies alone.
+        let key = "zlibrary.websiteData.\(origin.url.absoluteString)"
+        let identifier = defaults.string(forKey: key).flatMap(UUID.init(uuidString:)) ?? UUID()
+        defaults.set(identifier.uuidString, forKey: key)
+        let data = WKWebsiteDataStore(forIdentifier: identifier)
+        signInData = data; return data
     }
     private let defaults: UserDefaults
     private let credentials: any ChatCredentialStore
@@ -52,6 +59,7 @@ final class ZLibraryStore: ObservableObject {
         #endif
         do { session = try credentials.read(account: origin.url.absoluteString).flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode(ZLibrarySession.self, from: $0) }
             if session?.valid != true { session = nil }
+            websiteUserAgent = session?.userAgent
             accountName = session == nil ? "" : "Saved account"
         } catch { connectionError = "Leaf could not read your saved connection. Unlock your device and try again." }
     }
@@ -59,15 +67,17 @@ final class ZLibraryStore: ObservableObject {
         let next = try ZLibraryOrigin(address)
         guard next != origin else { return }
         try await disconnect()
+        signInData = nil
         origin = next; defaults.set(next.url.absoluteString, forKey: "zlibrary.origin")
         session = try credentials.read(account: next.url.absoluteString).flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode(ZLibrarySession.self, from: $0) }
         if session?.valid != true { session = nil }
-        await clearWebsite()
+        websiteUserAgent = session?.userAgent
     }
     func clearWebsite() async {
         websiteUserAgent = nil
-        guard let signInData else { return }
-        await signInData.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+        // Disconnect must clear disk-backed data even if no browser was opened
+        // during this launch.
+        await websiteData.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
     }
     func disconnect() async throws {
         try credentials.write(nil, account: origin.url.absoluteString)
@@ -113,16 +123,43 @@ final class ZLibraryStore: ObservableObject {
         let context = trusted.filter { !["remix_userid", "remix_userkey"].contains($0.name) }.map {
             ZLibraryWebsiteCookie(name: $0.name, value: $0.value, path: $0.path, expires: $0.expiresDate)
         }.filter(\.valid)
-        let candidate = ZLibrarySession(userID: user.value, userKey: key.value, websiteCookies: context, userAgent: websiteUserAgent)
+        let candidate = ZLibrarySession(userID: user.value, userKey: key.value, websiteCookies: context.isEmpty ? nil : context.sorted { ($0.name, $0.path) < ($1.name, $1.path) }, userAgent: websiteUserAgent ?? session?.userAgent)
         return candidate.valid ? candidate : nil
     }
     func captureWebsiteUserAgent(_ text: String) {
         if ZLibrarySession.validUserAgent(text) { websiteUserAgent = text }
     }
+    // Never adopt a different browser account without explicit Check connection.
+    // Capture refreshed cookies even when the user simply closes the website.
+    func saveWebsiteContext() async throws {
+        guard !seedingWebsite, let existing = session, let data = signInData else { return }
+        let token = generation, source = origin
+        let cookies = await data.httpCookieStore.allCookies()
+        try Task.checkCancellation()
+        guard !seedingWebsite, token == generation, source == origin,
+              let candidate = cookieCandidate(cookies),
+              candidate.userID == existing.userID, candidate.userKey == existing.userKey,
+              candidate != existing else { return }
+        let encoded = try JSONEncoder().encode(candidate)
+        try credentials.write(String(decoding: encoded, as: UTF8.self), account: source.url.absoluteString)
+        session = candidate
+    }
     func seedWebsite() async {
-        guard let session else { return }
+        guard !seedingWebsite, let session else { return }
+        seedingWebsite = true
+        defer { seedingWebsite = false }
         let source = origin, data = websiteData, token = generation
-        websiteUserAgent = session.userAgent
+        websiteUserAgent = websiteUserAgent ?? session.userAgent
+        let cookies = await data.httpCookieStore.allCookies()
+        guard token == generation else { return }
+        let browser = cookieCandidate(cookies)
+        let sameAccount = browser?.userID == session.userID && browser?.userKey == session.userKey
+        // Do not overwrite newer access cookies with the older Keychain snapshot.
+        if sameAccount { return }
+        if browser != nil {
+            await data.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+            guard token == generation else { return }
+        }
         for (name, value) in [("remix_userid",session.userID),("remix_userkey",session.userKey)] {
             guard token == generation else { return }
             if let cookie = HTTPCookie(properties: [.domain:source.url.host!, .path:"/", .name:name, .value:value, .secure:"TRUE"]) {
@@ -131,6 +168,10 @@ final class ZLibraryStore: ObservableObject {
         }
         for context in session.websiteCookies ?? [] where context.valid && (context.expires.map { $0 > Date() } ?? true) {
             guard token == generation else { return }
+            if browser == nil, cookies.contains(where: {
+                $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == source.url.host &&
+                $0.name == context.name && $0.path == context.path && ($0.expiresDate.map { $0 > Date() } ?? true)
+            }) { continue }
             var properties: [HTTPCookiePropertyKey: Any] = [.domain: source.url.host!, .path: context.path, .name: context.name, .value: context.value, .secure: "TRUE"]
             if let expires = context.expires { properties[.expires] = expires }
             if let cookie = HTTPCookie(properties: properties) { await data.httpCookieStore.setCookie(cookie) }
@@ -173,21 +214,25 @@ final class ZLibraryStore: ObservableObject {
         await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
     }
     private func performLoad(query: String, page: Int, order: ZLibrarySearchOrder, append: Bool, request: UUID, token: UUID, source: ZLibraryOrigin) async {
-        var saved = session
         defer { if token == generation && request == catalogRequest { loading = false; catalogTask = nil } }
         do {
             try Task.checkCancellation()
-            // Reuse only this origin's browser context and only for the same verified account.
-            // Opening/closing the website can refresh access without another account sign-in.
-            if let existing = saved, let signInData {
-                let cookies = await signInData.httpCookieStore.allCookies()
-                try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
-                if let candidate = cookieCandidate(cookies), candidate.userID == existing.userID, candidate.userKey == existing.userKey, candidate != existing {
-                    let encoded = try JSONEncoder().encode(candidate)
-                    try credentials.write(String(decoding: encoded, as: UTF8.self), account: source.url.absoluteString)
-                    session = candidate; saved = candidate
-                }
+            // Keychain may have been locked during app initialization. Retry on use
+            // rather than making the user reconnect an account that is still saved.
+            if session == nil {
+                session = try credentials.read(account: source.url.absoluteString)
+                    .flatMap { $0.data(using: .utf8) }
+                    .flatMap { try? JSONDecoder().decode(ZLibrarySession.self, from: $0) }
+                if session?.valid != true { session = nil }
+                websiteUserAgent = session?.userAgent
+                connectionError = nil
             }
+            // Restore Keychain account cookies that WebKit treats as session-only,
+            // while retaining any newer persistent browser access cookies.
+            await seedWebsite()
+            try await saveWebsiteContext()
+            try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
+            let saved = session
             if let saved, !connected {
                 let profile = try await client.profile(origin: source, session: saved)
                 try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
@@ -283,6 +328,10 @@ struct UITestZLibraryClient: ZLibraryServing {
     }
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile { ZLibraryProfile(name:"Preview account",remaining:5) }
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook] {
+        if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_WEBSITE_FIXTURE"] == "1", let session,
+           session.userAgent == nil || session.websiteCookies?.contains(where: { $0.name == "site_access" && $0.value == "refreshed-preview" }) != true {
+            throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
+        }
         if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_FEED_FAILURE"] == "1", session != nil {
             throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
         }

@@ -57,6 +57,7 @@ struct AppView: View {
     @AppStorage("reader.theme") private var themeName = ReadingTheme.day.rawValue
     private var theme: ReadingTheme { ReadingTheme(rawValue: themeName) ?? .day }
     @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var catalog: ZLibraryStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
     @State private var addingBooks = false
@@ -88,7 +89,12 @@ struct AppView: View {
             ReaderView(bookID: target.id, initialLocator: target.locator).environmentObject(library).environment(\.leafTheme, theme)
         }
         .alert(item: $library.notice) { Alert(title: Text($0.title), message: Text($0.message), dismissButton: .default(Text("OK"))) }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { library.flush() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                library.flush()
+                Task { try? await catalog.saveWebsiteContext() }
+            }
+        }
         .onChange(of: library.isImporting) { _, busy in if !busy { processQueue() } }
         .environment(\.leafTheme, theme)
         .preferredColorScheme(theme.colorScheme)
