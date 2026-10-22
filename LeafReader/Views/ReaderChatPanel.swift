@@ -65,9 +65,10 @@ struct ReaderChatPanel: View {
             HStack(spacing: 8) {
                 Image(systemName: "leaf.fill").foregroundStyle(accent)
                 if compact, let selection = session.selectedContext {
-                    Text(selection.text).font(.caption).lineLimit(1).accessibilityIdentifier("chatSelectedPassage")
+                    Text(selection.text).font(.caption).lineLimit(1).layoutPriority(-1).accessibilityIdentifier("chatSelectedPassage")
                     Button { session.removeSelection() } label: { Image(systemName: "xmark.circle").frame(width: 44, height: 44) }
                         .accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
+                    if !isComposing { selectionActions(compact: true) }
                 } else { Text("Ask Leaf").font(.headline).foregroundStyle(accent) }
                 Spacer(minLength: 4)
                 if !isComposing && !compact {
@@ -134,16 +135,12 @@ struct ReaderChatPanel: View {
                                     if !message.isUser { Spacer(minLength: 0) }
                                 }.id(message.id)
                             }
-                            if session.messages.isEmpty {
+                            if session.messages.isEmpty && session.selectedContext == nil {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(session.selectedContext != nil
-                                         ? (ReaderChatMessage.usesChinese(bookTitle) ? "针对选中的文字提问。" : "Ask a question about the selected text.")
-                                         : (ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page."))
+                                    Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
                                         .font(.subheadline)
-                                    if session.selectedContext == nil {
-                                        Text(settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off.")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
+                                    Text(settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off.")
+                                        .font(.caption).foregroundStyle(.secondary)
                                     Button("AI settings", action: onSettings).font(.subheadline)
                                 }
                             }
@@ -190,10 +187,14 @@ struct ReaderChatPanel: View {
                         Image(systemName: "xmark").frame(width: 44, height: 44)
                     }.accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
                 }.padding(.leading, 8)
+                if !isComposing {
+                    selectionActions(compact: false)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8)
+                }
             }
 
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Ask about this page…", text: $session.draft, axis: .vertical)
+                TextField(session.selectedContext == nil ? "Ask about this page…" : "Ask about the selected text…", text: $session.draft, axis: .vertical)
                     .font(.subheadline).lineLimit(1...(compact ? 1 : 3))
                     .focused($inputFocused).submitLabel(.send)
                     .onSubmit(send)
@@ -221,6 +222,22 @@ struct ReaderChatPanel: View {
                 .accessibilityIdentifier("confirmClearConversation")
             Button("Cancel", role: .cancel) {}
         } message: { Text("This deletes this book’s saved messages and draft from this device.") }
+    }
+
+    private func selectionActions(compact: Bool) -> some View {
+        HStack(spacing: compact ? 4 : 8) {
+            ForEach([ReaderSelectionIntent.explain, .summarize], id: \.rawValue) { intent in
+                Button { session.prepareSelectionPrompt(intent) } label: {
+                    Text(intent == .explain ? "Explain" : "Summarize")
+                        .font(.caption.weight(.medium)).lineLimit(1).fixedSize()
+                        .foregroundStyle(accent).padding(.horizontal, compact ? 10 : 14).frame(height: 44)
+                        .background(accent.opacity(0.08), in: Capsule())
+                        .overlay(Capsule().stroke(accent.opacity(0.2), lineWidth: 0.75))
+                }
+                .buttonStyle(.plain).accessibilityLabel(intent.title)
+                .accessibilityIdentifier(intent == .explain ? "explainChatSelection" : "summarizeChatSelection")
+            }
+        }
     }
 
     private var dismissDrag: some Gesture {

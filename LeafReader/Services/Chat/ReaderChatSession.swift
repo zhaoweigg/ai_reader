@@ -102,6 +102,16 @@ final class ReaderChatSession: ObservableObject {
     }
     func removeSelection() { selectedContext = nil; selectionDirty = true; flush() }
 
+    func prepareSelectionPrompt(_ intent: ReaderSelectionIntent) {
+        guard let selection = selectedContext, intent != .ask else { return }
+        let prompt = intent.prompt(for: selection.text)
+        let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let presets = [ReaderSelectionIntent.explain, .summarize].map { $0.prompt(for: selection.text) }
+        if current.isEmpty || presets.contains(current) { draft = prompt }
+        else if !current.hasSuffix(prompt) { draft += "\n\n" + prompt }
+        flush()
+    }
+
     func send(settings: AISettingsStore, context: @escaping @MainActor () async throws -> ReadingChatContext?) {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isSending, !question.isEmpty else { return }
