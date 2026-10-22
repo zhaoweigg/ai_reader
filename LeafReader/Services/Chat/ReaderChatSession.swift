@@ -108,6 +108,9 @@ final class ReaderChatSession: ObservableObject {
         let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let presets = [ReaderSelectionIntent.explain, .summarize].map { $0.prompt(for: selection.text) }
         if current.isEmpty || presets.contains(current) { draft = prompt }
+        else if let previous = presets.first(where: { current.hasSuffix("\n\n" + $0) }) {
+            draft = String(current.dropLast(previous.count)) + prompt
+        }
         else if !current.hasSuffix(prompt) { draft += "\n\n" + prompt }
         flush()
     }
