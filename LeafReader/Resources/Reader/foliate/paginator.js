@@ -1,5 +1,3 @@
-import { applyReadingExclusion, clearReadingExclusion, applyScrollExclusion } from './reading-exclusion.js'
-
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 const debounce = (f, wait, immediate) => {
@@ -98,7 +96,7 @@ const getVisibleRange = (doc, start, end, mapRect) => {
     const acceptNode = node => {
         const name = node.localName?.toLowerCase()
         // ignore all scripts, styles, and their children
-        if (name === 'script' || name === 'style' || node.hasAttribute?.('data-leaf-reading-exclusion')) return FILTER_REJECT
+        if (name === 'script' || name === 'style') return FILTER_REJECT
         if (node.nodeType === 1) {
             const { left, right } = mapRect(node.getBoundingClientRect())
             // no need to check child nodes if it's completely out of view
@@ -290,7 +288,6 @@ class View {
         if (!layout) return
         this.#column = layout.flow !== 'scrolled'
         this.#layout = layout
-        clearReadingExclusion(this.document)
         if (this.#column) this.columnize(layout)
         else this.scrolled(layout)
     }
@@ -341,7 +338,6 @@ class View {
             'margin': '0',
         })
         this.setImageSize()
-        applyReadingExclusion(doc, this.#layout, this.#rtl, this.#vertical)
         this.expand()
     }
     setImageSize() {
@@ -415,18 +411,6 @@ class View {
         }
         if (notify) this.onExpand()
     }
-    updateScrollExclusion(exclusion) {
-        if (!exclusion || this.#column || this.#vertical || this.#rtl) return false
-        const frame = this.#iframe.getBoundingClientRect()
-        const host = this.container.getBoundingClientRect()
-        const changed = applyScrollExclusion(this.document, {
-            x: exclusion.x + exclusion.width / 2 + host.left - frame.left,
-            y: exclusion.y + exclusion.height / 2 + host.top - frame.top,
-            radius: exclusion.width / 2 + 6,
-        })
-        if (changed) this.expand(false)
-        return changed
-    }
     set overlayer(overlayer) {
         this.#overlayer = overlayer
         this.#element.append(overlayer.element)
@@ -447,7 +431,7 @@ class View {
 // NOTE: everything here assumes the so-called "negative scroll type" for RTL
 export class Paginator extends HTMLElement {
     static observedAttributes = [
-        'flow', 'gap', 'margin', 'reading-exclusion',
+        'flow', 'gap', 'margin',
         'max-inline-size', 'max-block-size', 'max-column-count',
     ]
     #root = this.attachShadow({ mode: 'closed' })
@@ -473,8 +457,7 @@ export class Paginator extends HTMLElement {
     #touchState
     #touchScrolled
     #lastVisibleRange
-    #exclusionFrame
-    #updatingExclusion = false
+    #scrollFrame
     #scrollContinuation
     constructor() {
         super()
@@ -585,9 +568,8 @@ export class Paginator extends HTMLElement {
         this.#observer.observe(this.#container)
         this.#container.addEventListener('scroll', () => {
             this.dispatchEvent(new Event('scroll'))
-            if (this.scrolled && !this.#exclusionFrame) this.#exclusionFrame = requestAnimationFrame(() => {
-                this.#exclusionFrame = null
-                this.#updateScrollExclusion()
+            if (this.scrolled && !this.#scrollFrame) this.#scrollFrame = requestAnimationFrame(() => {
+                this.#scrollFrame = null
                 this.#continueScrollAtEdge()
             })
         })
@@ -663,7 +645,6 @@ export class Paginator extends HTMLElement {
     }
     attributeChangedCallback(name, _, value) {
         switch (name) {
-            case 'reading-exclusion':
             case 'flow':
                 this.render()
                 break
@@ -750,15 +731,6 @@ export class Paginator extends HTMLElement {
         // So we apply the inverse, f⁻¹ = -x / (x - 1) to the column gap.
         const gap = -g / (g - 1) * size
 
-        let exclusion
-        try {
-            const value = JSON.parse(this.getAttribute('reading-exclusion'))
-            if (value && [value.x, value.y, value.width, value.height].every(Number.isFinite)) {
-                const host = this.getBoundingClientRect()
-                const container = this.#container.getBoundingClientRect()
-                exclusion = { ...value, x:value.x - container.left + host.left, y:value.y - container.top + host.top }
-            }
-        } catch { }
         const flow = this.getAttribute('flow')
         if (flow === 'scrolled') {
             // FIXME: vertical-rl only, not -lr
@@ -771,7 +743,7 @@ export class Paginator extends HTMLElement {
             this.#header.replaceChildren()
             this.#footer.replaceChildren()
 
-            return { flow, margin, gap, columnWidth, exclusion }
+            return { flow, margin, gap, columnWidth }
         }
 
         const divisor = Math.min(maxColumnCount, Math.ceil(size / maxInlineSize))
@@ -795,7 +767,7 @@ export class Paginator extends HTMLElement {
         this.#header.replaceChildren(...heads)
         this.#footer.replaceChildren(...feet)
 
-        return { height, width, margin, gap, columnWidth, exclusion }
+        return { height, width, margin, gap, columnWidth }
     }
     render() {
         if (!this.#view) return
@@ -1029,29 +1001,7 @@ export class Paginator extends HTMLElement {
         return getVisibleRange(this.#view.document,
             this.start - size, this.end - size, this.#getRectMapper())
     }
-    #updateScrollExclusion() {
-        if (!this.scrolled || !this.#view || this.#vertical || this.#rtl || this.#updatingExclusion) return
-        let exclusion
-        try { exclusion = JSON.parse(this.getAttribute('reading-exclusion')) } catch { return }
-        if (!exclusion?.width) return
-        this.#updatingExclusion = true
-        try {
-            // Preserve the visible passage and its pixel offset while old wrap
-            // lines above the viewport return to their normal width.
-            const anchor = this.#getVisibleRange().cloneRange()
-            anchor.collapse(true)
-            const top = uncollapse(anchor)?.getBoundingClientRect().top - this.start
-            for (let i = 0; i < 3; i++) {
-                if (!this.#view.updateScrollExclusion(exclusion)) break
-                const nextTop = uncollapse(anchor)?.getBoundingClientRect().top - this.start
-                const delta = nextTop - top
-                if (!Number.isFinite(delta) || Math.abs(delta) < 0.5) break
-                this.#container.scrollTop += delta
-            }
-        } finally { this.#updatingExclusion = false }
-    }
     #afterScroll(reason) {
-        this.#updateScrollExclusion()
         const range = this.#getVisibleRange()
         this.#lastVisibleRange = range
         // don't set new anchor if relocation was to scroll to anchor
@@ -1104,6 +1054,8 @@ export class Paginator extends HTMLElement {
         return index >= 0 && index <= this.sections.length - 1
     }
     async #goTo({ index, anchor, select}) {
+        // At a book edge, Scroll's page command can have no adjacent section.
+        if (index == null || !this.#canGoToIndex(index)) return
         if (index === this.#index) await this.#display({ index, anchor, select })
         else {
             const oldIndex = this.#index
@@ -1229,7 +1181,6 @@ export class Paginator extends HTMLElement {
             $beforeStyle.textContent = beforeStyle
             $style.textContent = style
         } else $style.textContent = styles
-        if (this.hasAttribute('reading-exclusion')) this.render()
 
         // NOTE: needs `requestAnimationFrame` in Chromium
         requestAnimationFrame(() => {

@@ -191,8 +191,7 @@ const isElementNode = ({ nodeType }) => nodeType === 1
 const getChildNodes = (node, filter) => {
     const nodes = Array.from(node.childNodes)
         // "content other than element and character data is ignored"
-        .filter(node => (isTextNode(node) || isElementNode(node))
-            && !node.hasAttribute?.('data-leaf-reading-exclusion'))
+        .filter(node => isTextNode(node) || isElementNode(node))
     return filter ? nodes.map(node => {
         const accept = filter(node)
         if (accept === NodeFilter.FILTER_REJECT) return null

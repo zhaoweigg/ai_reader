@@ -4,33 +4,106 @@ enum ReaderChatPlacement {
     static let diameter: CGFloat = 52
     static let trailing: CGFloat = 18
     static let bottom: CGFloat = 112
-    static func exclusion(in size: CGSize) -> CGRect {
-        CGRect(x: size.width - trailing - diameter, y: size.height - bottom - diameter, width: diameter, height: diameter)
+    static func bounds(in size: CGSize) -> CGRect {
+        let inset = diameter / 2 + 8
+        return CGRect(x: min(inset, size.width / 2), y: min(inset, size.height / 2),
+                      width: max(0, size.width - inset * 2), height: max(0, size.height - inset * 2))
+    }
+    static func clamp(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        let bounds = bounds(in: size)
+        return CGPoint(x: min(bounds.maxX, max(bounds.minX, point.x)),
+                       y: min(bounds.maxY, max(bounds.minY, point.y)))
+    }
+    static func center(x: Double, y: Double, in size: CGSize) -> CGPoint {
+        let bounds = bounds(in: size)
+        guard x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else {
+            return clamp(CGPoint(x: size.width - trailing - diameter / 2,
+                                 y: size.height - bottom - diameter / 2), in: size)
+        }
+        return CGPoint(x: bounds.minX + bounds.width * x, y: bounds.minY + bounds.height * y)
+    }
+    static func normalized(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        let bounds = bounds(in: size), point = clamp(point, in: size)
+        return CGPoint(x: bounds.width > 0 ? (point.x - bounds.minX) / bounds.width : 0.5,
+                       y: bounds.height > 0 ? (point.y - bounds.minY) / bounds.height : 0.5)
     }
 }
 
 struct ReaderChatLauncher: View {
+    @Binding var isMoving: Bool
     let action: () -> Void
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage("reader.chatButtonX") private var savedX = -1.0
+    @AppStorage("reader.chatButtonY") private var savedY = -1.0
+    @State private var dragOrigin: CGPoint?
+    @State private var draggedCenter: CGPoint?
 
     var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle().fill(colorScheme == .dark ? Color(hex: "#243F44") : Color(hex: "#E7EFEB"))
-                Image(systemName: "leaf.fill")
-                    .font(.system(size: 25, weight: .medium))
-                    .foregroundStyle(colorScheme == .dark ? Color(hex: "#9ACFC0") : LeafStyle.accent)
+        GeometryReader { geometry in
+            let center = draggedCenter ?? ReaderChatPlacement.center(x: savedX, y: savedY, in: geometry.size)
+            Button { if !isMoving { action() } } label: { icon }
+            .buttonStyle(.plain)
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in isMoving = true })
+            .simultaneousGesture(dragGesture(from: center, in: geometry.size))
+            .position(center)
+            .accessibilityLabel("Ask Leaf")
+            .accessibilityValue(isMoving ? "Move mode" : "Stationary")
+            .accessibilityHint(isMoving ? "Drag to move. Tap elsewhere to finish." : "Opens your reading companion. Long press to move.")
+            .accessibilityIdentifier("openReaderChat")
+            .accessibilityAction(named: "Move button") { isMoving = true }
+            .accessibilityAction(named: "Move left") { move(center, dx: -24, dy: 0, in: geometry.size) }
+            .accessibilityAction(named: "Move right") { move(center, dx: 24, dy: 0, in: geometry.size) }
+            .accessibilityAction(named: "Move up") { move(center, dx: 0, dy: -24, in: geometry.size) }
+            .accessibilityAction(named: "Move down") { move(center, dx: 0, dy: 24, in: geometry.size) }
+            .accessibilityAction(named: "Finish moving") { isMoving = false }
+            .onChange(of: geometry.size) { _, _ in dragOrigin = nil; draggedCenter = nil }
+            .onChange(of: isMoving) { _, moving in
+                if !moving {
+                    if let draggedCenter { save(draggedCenter, in: geometry.size) }
+                    dragOrigin = nil; draggedCenter = nil
+                }
             }
-            .frame(width: ReaderChatPlacement.diameter, height: ReaderChatPlacement.diameter)
-            .overlay(Circle().stroke(LeafStyle.accent.opacity(contrast == .increased ? 1 : 0.35), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.1), radius: 8, y: 3)
-            .contentShape(Circle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Ask Leaf")
-        .accessibilityHint("Opens your reading companion")
-        .accessibilityIdentifier("openReaderChat")
+        .coordinateSpace(name: "chatButtonViewport")
+        .sensoryFeedback(.selection, trigger: isMoving)
+    }
+    private var icon: some View {
+        ZStack {
+            // No material blur: book glyphs remain visible through the tint.
+            Circle().fill(LeafStyle.accent.opacity(reduceTransparency ? 1 : 0.12))
+            Image(systemName: isMoving ? "arrow.up.and.down.and.arrow.left.and.right" : "leaf.fill")
+                .font(.system(size: isMoving ? 21 : 25, weight: .medium))
+                .foregroundStyle((colorScheme == .dark || reduceTransparency ? Color(hex: "#9ACFC0") : LeafStyle.accent)
+                    .opacity(reduceTransparency || contrast == .increased ? 1 : 0.55))
+        }
+        .frame(width: ReaderChatPlacement.diameter, height: ReaderChatPlacement.diameter)
+        .overlay(Circle().stroke(LeafStyle.accent.opacity(isMoving || contrast == .increased ? 0.85 : 0.25),
+                                 style: StrokeStyle(lineWidth: isMoving ? 1.5 : 0.5, dash: isMoving ? [4, 3] : [])))
+        .contentShape(Circle())
+    }
+    private func dragGesture(from center: CGPoint, in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: .named("chatButtonViewport"))
+            .onChanged { value in
+                guard isMoving else { return }
+                if dragOrigin == nil { dragOrigin = center }
+                guard let origin = dragOrigin else { return }
+                draggedCenter = ReaderChatPlacement.clamp(CGPoint(x: origin.x + value.translation.width,
+                                                                  y: origin.y + value.translation.height), in: size)
+            }
+            .onEnded { _ in
+                if let draggedCenter { save(draggedCenter, in: size) }
+                dragOrigin = nil; draggedCenter = nil
+            }
+    }
+    private func save(_ point: CGPoint, in size: CGSize) {
+        let normalized = ReaderChatPlacement.normalized(point, in: size)
+        savedX = normalized.x; savedY = normalized.y
+    }
+    private func move(_ center: CGPoint, dx: CGFloat, dy: CGFloat, in size: CGSize) {
+        isMoving = true
+        save(CGPoint(x: center.x + dx, y: center.y + dy), in: size)
     }
 }
 
