@@ -15,7 +15,7 @@ struct AddBooksView: View {
                     Button(action: openFiles) {
                         source("From Files", subtitle:"On your iPhone, iCloud Drive & more", icon:"folder")
                     }.buttonStyle(.plain).accessibilityIdentifier("addFromFiles")
-                    Button { path.append("zlibrary") } label: {
+                    Button { path = ["zlibrary"] } label: {
                         source("Z-Library",subtitle:"Search books or browse the most popular",icon:"book")
                     }.buttonStyle(.plain).accessibilityIdentifier("addFromZLibrary")
                     Section { Text("Books you add are saved on this device for offline reading.").font(.footnote).foregroundStyle(.secondary) }
