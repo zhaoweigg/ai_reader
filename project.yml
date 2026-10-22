@@ -29,8 +29,8 @@ targets:
       path: LeafReader/Info.plist
       properties:
         CFBundleDisplayName: Leaf
-        CFBundleShortVersionString: "1.9.3"
-        CFBundleVersion: "32"
+        CFBundleShortVersionString: "1.9.5"
+        CFBundleVersion: "34"
         UILaunchScreen: {}
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
