@@ -9,6 +9,7 @@
 The user requests two simulator test slots running in parallel to reduce waiting.
 
 - Coordinate ownership with the other active Leaf chats before using a slot; report the assigned device UUID and release it when the test process exits. Keep at most two simulator test jobs active, one per device.
+- Communicate through `codex_app.send_message_to_thread` when user authorization is present. The coordinator maintains the shared local ownership record at `/Users/weizhao/workspace/ai_reader/build/simulator-coordination.json`, accessible from all worktrees. Read it before requesting a slot; a stale record does not override a running job or an explicit ownership handoff.
 - Slot A: iOS 26.5 iPhone 17 Pro, `20E63AE6-36C3-4BC1-B319-06A2FDB902EC`. Slot B: iOS 26.5 Leaf Floating Button QA, `F42C5A14-2B1E-48DE-8B14-B1B46A9C4F34`. Verify availability before use; coordinate a replacement if either device is unavailable.
 - Pin each test job to its assigned UUID with `-parallel-testing-enabled NO`; use separate DerivedData and result-bundle paths. Split independent checks between the two slots rather than launching duplicate suites.
 - Never install, launch, terminate, erase, or shut down another slot's device while it is owned. Do not reset the shared CoreSimulator service or shut down all devices while either slot is running.
