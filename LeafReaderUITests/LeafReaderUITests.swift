@@ -724,6 +724,16 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(slider.waitForExistence(timeout:5))
         XCTAssertEqual(slider.value as? String,"20%")
         slider.adjust(toNormalizedSliderPosition:1)
+        if slider.value as? String != "95%" {
+            // XCTest's normalized gesture can stop short on the stepped native slider.
+            // Finish at the physical track endpoint, retaining the exact maximum assertion.
+            slider.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).press(
+                forDuration:0.05,
+                thenDragTo:slider.coordinate(withNormalizedOffset:CGVector(dx:1,dy:0.5)),
+                withVelocity:.slow,
+                thenHoldForDuration:0.1
+            )
+        }
         XCTAssertEqual(slider.value as? String,"95%")
         capture(flow + " faint button live preview",app:app)
         app.buttons["Done"].tap()
