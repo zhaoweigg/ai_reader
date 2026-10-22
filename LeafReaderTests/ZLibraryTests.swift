@@ -92,7 +92,7 @@ private final class CatalogURLProtocol: URLProtocol {
         try FileManager.default.createDirectory(at:url,withIntermediateDirectories:true)
         addTeardownBlock { try? FileManager.default.removeItem(at:url) };return url
     }
-    private func store(_ client:CatalogService? = nil) -> (ZLibraryStore,CatalogCredentials,UserDefaults) {
+    private func store(_ client:(any ZLibraryServing)? = nil) -> (ZLibraryStore,CatalogCredentials,UserDefaults) {
         let name = "LeafZLibraryTests.\(UUID())", defaults = UserDefaults(suiteName:name)!, credentials = CatalogCredentials()
         addTeardownBlock {
             for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix("zlibrary.websiteData.") {
@@ -541,6 +541,90 @@ private final class CatalogURLProtocol: URLProtocol {
         do { _ = try await ZLibraryClient(transport:transport).popular(origin:origin,session:browser);XCTFail("Unbounded redirects") }
         catch { XCTAssertEqual(ZLibraryRequestFailure.issue(error),.challenge) }
         XCTAssertEqual(count,4)
+    }
+    func testRedirectDiagnosticsExplainPolicyWithoutExposingTargetOrResponse() async throws {
+        let cases: [(String?, String, String)] = [
+            (nil, "missing Location", "missing"),
+            ("https://[", "invalid Location", "invalid"),
+            ("/eapi/book/most-popular", "same URL refused", "same URL"),
+            ("/verify/private-path?token=private-query#private-fragment", "outside API refused", "same-origin website"),
+            ("https://private-host.example/eapi/private-path?token=private-query", "different API origin refused", "different origin"),
+            ("http://catalog.example/eapi/private-path", "HTTPS required", "non-HTTPS"),
+            ("https://private-user:private-password@catalog.example/eapi/private-path", "credentials in target", "same-origin API"),
+            ("https://catalog.example:443/eapi/private-path", "explicit port refused", "different origin")
+        ]
+        for (location, reason, target) in cases {
+            let transport = CatalogTransport { request, _ in
+                var headers = ["Content-Type": "text/html", "Set-Cookie": "__diamwall=private-cookie; Path=/; Secure"]
+                headers["Location"] = location
+                return ZLibraryPayload(data: Data("<html>private-body reader@private.example</html>".utf8), file: nil,
+                    response: HTTPURLResponse(url: request.url!, statusCode: 307, httpVersion: nil, headerFields: headers)!)
+            }
+            do { _ = try await ZLibraryClient(transport: transport).popular(origin: origin, session: session); XCTFail("Rejected redirect followed") }
+            catch let failure as ZLibraryRequestFailure {
+                XCTAssertEqual(failure.issue, .challenge)
+                XCTAssertTrue(failure.diagnostic.contains("HTTP 307 · redirect not followed"))
+                XCTAssertTrue(failure.diagnostic.contains("reason: " + reason))
+                XCTAssertTrue(failure.diagnostic.contains("Redirect target: " + target))
+                XCTAssertTrue(failure.diagnostic.contains("Redirects followed: 0/3"))
+                XCTAssertTrue(failure.diagnostic.contains("response cookie update: present"))
+                XCTAssertTrue(failure.diagnostic.contains("access-check marker: DiamWall"))
+                for secret in ["private-", "reader@", "token=", "__diamwall=", "test-only-session", "catalog.example"] {
+                    XCTAssertFalse(failure.diagnostic.contains(secret), secret)
+                }
+            }
+            XCTAssertEqual(transport.requests.count, 1)
+        }
+    }
+    func testRedirectLoopAndHopLimitDiagnosticsStayBounded() async throws {
+        for looping in [true, false] {
+            var count = 0
+            let transport = CatalogTransport { request, _ in
+                count += 1
+                let target = looping ? "/eapi/next" : "/eapi/next/\(count)?token=not-for-diagnostic"
+                return ZLibraryPayload(data: Data(), file: nil,
+                    response: HTTPURLResponse(url: request.url!, statusCode: 307, httpVersion: nil, headerFields: ["Location": target])!)
+            }
+            do { _ = try await ZLibraryClient(transport: transport).popular(origin: origin, session: session); XCTFail("Unbounded redirect") }
+            catch let failure as ZLibraryRequestFailure {
+                XCTAssertTrue(failure.diagnostic.contains(looping ? "reason: redirect loop" : "reason: redirect limit reached"))
+                XCTAssertTrue(failure.diagnostic.contains(looping ? "Redirects followed: 1/3" : "Redirects followed: 3/3"))
+                XCTAssertTrue(failure.diagnostic.contains("response cookie update: absent"))
+                XCTAssertFalse(failure.diagnostic.contains("not-for-diagnostic"))
+            }
+            XCTAssertEqual(count, looping ? 2 : 4)
+        }
+    }
+    func testSearchSuccessThenClearReportsIndependentPopular307WithoutSigningOut() async throws {
+        var popularCalls = 0
+        let row: [String: Any] = ["id": 12, "hash": "ab1234", "title": "A test book", "author": "Test author", "extension": "epub"]
+        let transport = CatalogTransport { [self] request, _ in
+            switch request.url!.path {
+            case "/eapi/user/profile": return try response(["success": 1, "user": ["id": 42, "name": "Test reader"]])
+            case "/eapi/book/search":
+                XCTAssertEqual(request.httpMethod, "POST")
+                return try response(["success": 1, "books": [row]])
+            default:
+                popularCalls += 1
+                XCTAssertEqual(request.url!.path, "/eapi/book/most-popular")
+                XCTAssertEqual(request.httpMethod, "GET")
+                if popularCalls == 1 { return try response(["success": 1, "books": [row]]) }
+                return ZLibraryPayload(data: Data(), file: nil,
+                    response: HTTPURLResponse(url: request.url!, statusCode: 307, httpVersion: nil,
+                        headerFields: ["Location": request.url!.absoluteString, "Set-Cookie": "__diamwall=fixture-only; Path=/"])!)
+            }
+        }
+        let (store, _, _) = store(ZLibraryClient(transport: transport))
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        await store.loadPopular(); XCTAssertEqual(store.books.count, 1)
+        await store.search("test book"); XCTAssertEqual(store.books.count, 1); XCTAssertNil(store.error)
+        await store.loadPopular()
+        XCTAssertTrue(store.activeQuery.isEmpty); XCTAssertTrue(store.connected)
+        XCTAssertTrue(store.websiteAccessNeeded); XCTAssertTrue(store.books.isEmpty)
+        XCTAssertTrue(store.requestDiagnostic?.contains("HTTP 307") == true)
+        XCTAssertTrue(store.requestDiagnostic?.contains("same URL refused") == true)
+        await store.search("test book")
+        XCTAssertEqual(store.books.count, 1); XCTAssertNil(store.error); XCTAssertNil(store.requestDiagnostic)
     }
     func testFailureDiagnosticsExcludeBodiesCookiesQueriesAndAccountDetails() async throws {
         let transport = CatalogTransport { request,_ in
