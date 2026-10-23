@@ -104,7 +104,10 @@ final class SimulatorIsolationUITests: XCTestCase {
         app.buttons["openReaderChat"].tap()
         XCTAssertEqual(input.value as? String, token, "Draft must survive peer activity and both scene changes")
         input.tap(); input.typeText("-local")
-        XCTAssertEqual(input.value as? String, token + "-local")
+        let edited = input.value as? String ?? ""
+        XCTAssertTrue(edited.contains("-local"))
+        XCTAssertEqual(edited.replacingOccurrences(of: "-local", with: ""), token,
+                       "Typing at the tapped insertion point must preserve this device's draft")
         record(flow + " restored", app: app)
     }
 
