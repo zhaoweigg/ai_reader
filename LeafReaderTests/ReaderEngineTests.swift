@@ -619,6 +619,40 @@ final class ReaderEngineTests: XCTestCase {
         let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json")
         attachment.name="Continuous chapter boundary geometry";attachment.lifetime = .keepAlways;add(attachment)
     }
+    func testDelayedPreviousChapterKeepsFinalPassageDuringEndNavigation() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            const last=view.book.sections.length-1,previous=view.book.sections[last-1],load=previous.load,rows=[];
+            const ready=async indices=>{const end=performance.now()+8000;while(performance.now()<end){if(indices.every(i=>r.getContents().some(c=>c.index===i&&c.doc?.body)))return;await sleep(10);}throw new Error('Delayed neighbor not ready');};
+            try {
+                for(const delay of [40,90,130,210]){
+                    previous.load=load;
+                    await view.goTo(0);await ready([0,1]);
+                    previous.load=async()=>{await sleep(delay);return load();};
+                    await view.goTo(last);await r.scrollToAnchor(1);
+                    const doc=r.getContents()[0].doc,frame=doc.defaultView.frameElement;
+                    const saved=view.lastLocation.cfi,before=frame.getBoundingClientRect().top;
+                    await sleep(80);await r.next();await ready([last-1,last]);await sleep(300);
+                    rows.push({delay,active:r.getContents()[0].index,savedVisible:window.Leaf.isLocationVisible(saved),before,after:frame.getBoundingClientRect().top,
+                        saved,current:view.lastLocation.cfi});
+                }
+                return rows;
+            } finally {previous.load=load;}
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let rows=try XCTUnwrap(result as? [[String:Any]])
+        let attachment=XCTAttachment(data:try JSONSerialization.data(withJSONObject:rows),uniformTypeIdentifier:"public.json")
+        attachment.name="Delayed previous chapter with final-page navigation";attachment.lifetime = .keepAlways;add(attachment)
+        for row in rows {
+            XCTAssertEqual(row["active"] as? Int,3,"\(row)")
+            XCTAssertEqual(row["savedVisible"] as? Bool,true,"\(row)")
+            XCTAssertEqual(row["before"] as? Double ?? 0,row["after"] as? Double ?? 999,accuracy:3,"\(row)")
+        }
+    }
+
     func testContinuousScrollEvictsDistantChaptersAndReleasesQueuedResourcesOnClose() async throws {
         let (book, url) = try prepare("MemoryStress.epub", format: .epub, fixtures: true)
         var prefs = preferences; prefs.scrolling = true
