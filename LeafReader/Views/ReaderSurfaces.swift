@@ -167,8 +167,19 @@ struct PDFBookSurface: UIViewRepresentable {
         init(_ model: ReaderModel) { self.model = model; super.init() }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
+            // PDFKit can briefly clear currentSelection as its native long press
+            // finishes. That interaction must never become an edge-page tap.
+            if let view = gesture.view as? ReaderPDFView, view.isHandlingNativeSelectionGesture {
+                #if DEBUG
+                readerSelectionMenuTrace("pdfReaderTapSuppressed", source: view)
+                #endif
+                return
+            }
             if onReaderTap?() == true { return }
             guard let view = gesture.view as? PDFView, view.currentSelection?.string?.isEmpty != false else { return }
+            #if DEBUG
+            readerSelectionMenuTrace("pdfReaderTap", source: view)
+            #endif
             let point = gesture.location(in: view)
             if let page = view.page(for: point, nearest: false), let annotation = page.annotation(at: view.convert(point, to: page)) {
                 model.openPDFAnnotation(annotation)

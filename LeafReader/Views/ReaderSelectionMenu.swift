@@ -205,6 +205,15 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         var selectionChanged = false
     }
     private var bookTouch: BookTouch?
+    // UIKit can deliver a reader tap just after its native selection completes.
+    // A short monotonic grace protects only that completed selection gesture.
+    private var completedSelectionTouchUntil: TimeInterval = 0
+    var isHandlingNativeSelectionGesture: Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now < completedSelectionTouchUntil { return true }
+        guard let touch = bookTouch else { return false }
+        return touch.beganOnHandle || now - touch.timestamp >= 0.45 && touch.distance <= 20
+    }
     private var adjustingSelectionHandle = false
     private var requestMenu: (() async -> Void)?
     private var requestTask: Task<Void, Never>?
@@ -250,6 +259,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     }
     func detach() {
         dismiss()
+        completedSelectionTouchUntil = 0
         if let selectionTouch { selectionTouch.observe = nil; selectionTouch.view?.removeGestureRecognizer(selectionTouch) }
         selectionTouch = nil; requestMenu = nil; source = nil
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
@@ -319,6 +329,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
             bookTouch = nil
             let longPress = timestamp - touch.timestamp >= 0.45 && touch.distance <= 20
             let adjusted = touch.beganOnHandle && (touch.selectionChanged || touch.distance > 3)
+            if longPress || adjusted { completedSelectionTouchUntil = ProcessInfo.processInfo.systemUptime + 0.3 }
             #if DEBUG
             readerSelectionMenuTrace("bookTouchEnded", source: source, context: longPress || adjusted, point: point)
             #endif
@@ -689,6 +700,7 @@ final class ReaderWebView: WKWebView {
 
 final class ReaderPDFView: PDFView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
+    var isHandlingNativeSelectionGesture: Bool { selectionMenu.isHandlingNativeSelectionGesture }
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil { selectionMenu.detach() }
@@ -748,6 +760,9 @@ private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTr
         "legacyMenuVisible": UIMenuController.shared.isMenuVisible,
         "visibleMenuWindow": source?.window?.windowScene?.windows.contains(where: { $0 is ReaderSelectionWindow && !$0.isHidden }) ?? false]
     if let source {
+        if let pdf = source as? PDFView, let page = pdf.currentPage, let document = pdf.document {
+            row["pdfPage"] = document.index(for: page)
+        }
         row["deviceOrientation"] = UIDevice.current.orientation.rawValue
         if let scene = source.window?.windowScene {
             row["interfaceOrientation"] = scene.effectiveGeometry.interfaceOrientation.rawValue

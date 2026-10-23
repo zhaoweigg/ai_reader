@@ -488,6 +488,28 @@ final class LeafReaderUITests: XCTestCase {
                 let lateDismissedMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
                 lateDismissedMenu.isInverted = true; waitForExpectations(timeout: 0.45)
             }
+            if flow == "PDF" {
+                // Leaving a selection must not permanently disable ordinary
+                // reader edge taps after the native gesture-completion grace.
+                selectFixturePassage(flow, app: app)
+                XCTAssertTrue(app.scrollViews["expandedSelectionMenu"].waitForExistence(timeout: 5))
+                revealSelectionAction("ask", app: app).tap()
+                XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+                app.buttons["closeReaderChat"].tap()
+                showReaderControls(app)
+                let title = app.staticTexts["readerChapterTitle"], originalPage = title.label
+                XCTAssertFalse(originalPage.isEmpty)
+                let surface = readingSurface(app)
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+                showReaderControls(app)
+                XCTAssertNotEqual(title.label, originalPage, "A normal right-edge tap must advance after selection closes")
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
+                showReaderControls(app)
+                XCTAssertEqual(title.label, originalPage, "A normal left-edge tap must return to the original PDF page")
+                capture("PDF ordinary edge navigation resumes after native selection", app: app)
+            }
             if geometryFixture { setReaderOrientation(.portrait, app: app) }
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
