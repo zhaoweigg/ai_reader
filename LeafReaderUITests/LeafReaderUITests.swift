@@ -561,6 +561,63 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["audioPlayPause"].waitForExistence(timeout: 3))
     }
 
+    /// Real on-device engine in Pages, Scroll and PDF. Runs only when the test runner
+    /// receives LEAF_UI_KOKORO_ROOT (a prepared read-only pack root); skipped otherwise.
+    @MainActor func testNaturalVoiceReadsInPagesScrollAndPDFWhenThePackIsInstalled() throws {
+        guard let root = ProcessInfo.processInfo.environment["LEAF_UI_KOKORO_ROOT"], !root.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_LEAF_UI_KOKORO_ROOT to a prepared voice-pack root to exercise the real engine")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
+        app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"; app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = "1"
+        app.launchEnvironment["LEAF_UI_KOKORO_ROOT"] = root
+        app.launch()
+        let status = app.buttons["listeningSettings"], pause = app.buttons["audioPlayPause"]
+        func waitForVoice(_ label: String) {
+            // "Generating voice…" first, then "Listening" once the first chunk is audible.
+            expectation(for: NSPredicate(format: "label BEGINSWITH %@", "Listening"), evaluatedWith: status); waitForExpectations(timeout: 90)
+            XCTAssertEqual(pause.label, "Pause listening", label)
+            XCTAssertTrue(app.staticTexts["spokenPassage"].exists, label)
+        }
+        app.buttons["featuredBook"].tap()
+        for flow in ["Pages", "Scroll"] {
+            showReaderControls(app); app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap(); dismissAppearance(app); showReaderControls(app)
+            app.buttons["Listen"].tap()
+            let engine = app.segmentedControls["listeningEngine"]; XCTAssertTrue(engine.waitForExistence(timeout: 5))
+            engine.buttons["Natural voice (on-device)"].tap()
+            XCTAssertTrue(app.buttons["kokoroRemove"].waitForExistence(timeout: 5), "Prepared pack is recognized as installed")
+            XCTAssertFalse(app.buttons["kokoroDownload"].exists)
+            if flow == "Pages" { capture("Natural voice installed settings", app: app) }
+            app.buttons["listenFromPage"].tap()
+            let generating = status.waitForExistence(timeout: 5) && status.label.hasPrefix("Generating voice")
+            if generating { capture(flow + " natural voice generating", app: app) }
+            waitForVoice(flow + " first passage")
+            capture(flow + " natural voice listening", app: app)
+            pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+            pause.tap(); XCTAssertEqual(pause.label, "Pause listening")
+            app.buttons["audioNext"].tap()
+            waitForVoice(flow + " next passage")
+            capture(flow + " natural voice next passage", app: app)
+            app.buttons["listeningSettings"].tap()
+            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Last passage used the iPhone voice")).firstMatch.exists,
+                           flow + ": the real engine spoke every passage")
+            app.buttons["Stop listening"].tap()
+            XCTAssertFalse(app.buttons["audioPlayPause"].waitForExistence(timeout: 3))
+        }
+        showReaderControls(app); app.buttons["closeBook"].tap()
+        let search = app.textFields["librarySearch"]; XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
+        app.buttons["book-Notes from the Coast"].tap()
+        showReaderControls(app); app.buttons["Listen"].tap()
+        XCTAssertTrue(app.buttons["kokoroRemove"].waitForExistence(timeout: 5), "Engine choice persists into the PDF reader")
+        app.buttons["listenFromPage"].tap()
+        waitForVoice("PDF")
+        capture("PDF natural voice listening", app: app)
+        app.buttons["stopListening"].tap()
+    }
+
     @MainActor func testPDFListeningFromSelectionAndBottomMenu() {
         let app = launchApp()
         let search = app.textFields["librarySearch"]; XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")

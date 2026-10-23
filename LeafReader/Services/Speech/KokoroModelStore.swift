@@ -58,7 +58,18 @@ enum KokoroModelError: LocalizedError {
     private var installTask: Task<Void, Never>?
     var onRemoved: (() -> Void)?
 
-    static let shared = KokoroModelStore()
+    static let shared: KokoroModelStore = {
+        #if DEBUG
+        // UI tests can point the store at a prepared, read-only pack root on the host
+        // (<directoryName>/ plus <directoryName>.installed carrying the manifest hash)
+        // so native checks can exercise the real engine without a 348 MB download.
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing"),
+           let root = ProcessInfo.processInfo.environment["LEAF_UI_KOKORO_ROOT"], !root.isEmpty {
+            return KokoroModelStore(root: URL(fileURLWithPath: root, isDirectory: true))
+        }
+        #endif
+        return KokoroModelStore()
+    }()
 
     init(manifest: KokoroModelManifest = .current, root: URL? = nil, downloader: (any KokoroArchiveDownloading)? = nil,
          freeSpace: ((URL) -> Int64?)? = nil) {
