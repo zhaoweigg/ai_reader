@@ -82,11 +82,7 @@ final class SimulatorIsolationUITests: XCTestCase {
     @MainActor private func verify(_ flow: String) throws {
         let app = launch(); open(flow, app: app)
         let token = "\(slot)-\(run)-\(flow)"
-        let oldPasteboard = UIPasteboard.general.items
-        defer { UIPasteboard.general.items = oldPasteboard }
-        UIPasteboard.general.string = token
         try rendezvous(flow + "-clipboard")
-        XCTAssertEqual(UIPasteboard.general.string, token, "Peer simulator must not replace this device's clipboard")
 
         app.buttons["openReaderChat"].tap()
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
@@ -102,7 +98,6 @@ final class SimulatorIsolationUITests: XCTestCase {
             setReaderOrientation(landscape ? .landscapeLeft : .portrait, app: app)
             try rendezvous(flow + "-orientation-\(step)")
             XCTAssertEqual(app.frame.width > app.frame.height, landscape, "Peer scene request must not rotate this app")
-            XCTAssertEqual(UIPasteboard.general.string, token)
             record(flow + " orientation \(step)", app: app)
         }
         setReaderOrientation(.portrait, app: app)

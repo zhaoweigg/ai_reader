@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import signal
 import subprocess
 import sys
 import tempfile
@@ -96,7 +97,14 @@ def main():
                "-resultBundlePath", spec["result_bundle"]]
     command += ["-only-testing:" + identifier for identifier in spec["tests"]]
     original = None
+    original_clipboard = None
+    process = None
     exit_code = 1
+    def forward_signal(number, _frame):
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, number)
+    previous_handlers = {number: signal.signal(number, forward_signal)
+                         for number in (signal.SIGINT, signal.SIGTERM)}
     try:
         with preference_lock(spec["registry"]):
             original = keyboard_snapshot(spec["device_uuid"])
@@ -104,16 +112,45 @@ def main():
             atomic_json(evidence, metadata)  # persist before the first preference mutation
             set_keyboard(spec["device_uuid"], {"present": True, "value": False})
         subprocess.run(guard + ["--require-idle"], check=True)
+        original_clipboard = subprocess.check_output(
+            ["xcrun", "simctl", "pbpaste", spec["device_uuid"]], timeout=10)
+        clipboard_token = (spec["slot"] + "-" + spec["test_runner_env"]["LEAF_ISOLATION_RUN"]).encode()
+        subprocess.run(["xcrun", "simctl", "pbcopy", spec["device_uuid"]],
+                       input=clipboard_token, timeout=10, check=True)
         started = time.monotonic()
         with open(worktree / spec["log"], "w") as log:
-            process = subprocess.Popen(command, cwd=worktree, env=env, stdout=log, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(command, cwd=worktree, env=env, stdout=log,
+                                       stderr=subprocess.STDOUT, start_new_session=True)
             metadata.update(started_at=stamp(), pid=process.pid, command=command)
             atomic_json(evidence, metadata)
             print(json.dumps({"event": "START", "slot": spec["slot"], "pid": process.pid,
                               "lease_id": spec["lease_id"]}), flush=True)
-            exit_code = process.wait()
+            try:
+                exit_code = process.wait(timeout=spec.get("timeout", 600))
+            except subprocess.TimeoutExpired:
+                metadata["timed_out"] = True
+                for number, seconds in [(signal.SIGINT, 20), (signal.SIGTERM, 10), (signal.SIGKILL, 10)]:
+                    os.killpg(process.pid, number)
+                    try:
+                        exit_code = process.wait(timeout=seconds)
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+        clipboard = subprocess.check_output(["xcrun", "simctl", "pbpaste", spec["device_uuid"]], timeout=10)
+        metadata["clipboard_isolated"] = clipboard == clipboard_token
+        if not metadata["clipboard_isolated"]:
+            exit_code = exit_code or 1
         metadata.update(actual_exit=exit_code, finished_at=stamp(), seconds=time.monotonic() - started)
     finally:
+        # An exception or interrupt must never restore preferences while our child still runs.
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=30)
+        if original_clipboard is not None:
+            subprocess.run(guard, check=True)
+            subprocess.run(["xcrun", "simctl", "pbcopy", spec["device_uuid"]],
+                           input=original_clipboard, timeout=10, check=True)
+            metadata["clipboard_restored"] = True
         if original is not None:
             # Never restore preferences after ownership has moved to a different lease.
             subprocess.run(guard, check=True)
@@ -122,6 +159,8 @@ def main():
                 metadata["restored_keyboard"] = keyboard_snapshot(spec["device_uuid"])
                 metadata["preferences_restored"] = True
         atomic_json(evidence, metadata)
+        for number, handler in previous_handlers.items():
+            signal.signal(number, handler)
     print(json.dumps({"event": "RELEASE", "slot": spec["slot"], "actual_exit": exit_code,
                       "lease_id": spec["lease_id"], "evidence": str(evidence)}), flush=True)
     return exit_code
