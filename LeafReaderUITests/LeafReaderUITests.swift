@@ -436,6 +436,9 @@ final class LeafReaderUITests: XCTestCase {
         capture("Repeated and changed selections use fresh menu snapshots", app: app)
         XCUIDevice.shared.press(.home); app.activate()
         XCTAssertFalse(menu.exists, "A backgrounded scene must release its selection window")
+        // Reader chrome stays hidden while chat is open; close chat through its
+        // normal control before exercising book-close with a new active menu.
+        app.buttons["closeReaderChat"].tap()
         showReaderControls(app); selectFixturePassage("Pages", app: app)
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
         app.buttons["closeBook"].tap()
@@ -444,6 +447,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(menu.exists, "Reopening cannot retain an orphaned menu window")
         app.buttons["openReaderChat"].tap()
         XCTAssertEqual(input.value as? String, "Keep my menu question again")
+        XCTAssertEqual(app.staticTexts["chatSelectedPassage"].label, changedSelection)
         capture("Selection window cleared and question restored after reopening", app: app)
     }
     @MainActor func testExpandedSelectionMenuKeepsNativeTextActionsInAllReaderFlows() {
