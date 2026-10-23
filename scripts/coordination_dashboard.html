@@ -16,7 +16,7 @@
   @media(max-width:480px){main{padding:22px 16px}.slot-body{padding:16px}.slot{grid-template-columns:42px 1fr}.purpose{font-size:17px}h1{font-size:27px}header{gap:10px}#connection{padding-top:4px}}
 </style>
 <main>
-  <header><div><div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3c2 3 5 1 9 2 6 1 9 5 9 11-3-4-7-6-12-6 6 2 10 5 12 10l-2 1c-1-4-3-5-5-5C7 17 2 12 3 3Z"/></svg>Leaf</div><h1>Simulator slots</h1><p class="muted small">Two devices, one owner per device.</p></div><div id="connection" role="status">Connecting</div></header>
+  <header><div><div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3c2 3 5 1 9 2 6 1 9 5 9 11-3-4-7-6-12-6 6 2 10 5 12 10l-2 1c-1-4-3-5-5-5C7 17 2 12 3 3Z"/></svg>Leaf</div><h1>Simulator slots</h1><p id="slot-summary" class="muted small">One owner per device.</p></div><div id="connection" role="status">Connecting</div></header>
   <p id="error" role="alert"></p>
   <section id="slots" class="slots" aria-label="Simulator assignments" aria-live="polite"></section>
   <section class="queue"><div class="queue-heading"><h2>Waiting queue</h2><span id="queue-count"></span></div><ol id="queue" aria-live="polite"></ol></section>
@@ -29,6 +29,7 @@
   function worker(id,agents){return !id?'Unassigned':agents[id]?.label||'Worker '+id.slice(-6);}
   function render(state){
     const agents=state.agents||{},slots=state.slots||{};
+    byId('slot-summary').textContent=Object.keys(slots).length+' devices, one owner per device.';
     byId('slots').replaceChildren();
     Object.entries(slots).sort(([a],[b])=>a.localeCompare(b)).forEach(([name,slot])=>{
       const article=node('article',undefined,'slot'),body=node('div',undefined,'slot-body'),top=node('div',undefined,'slot-top');

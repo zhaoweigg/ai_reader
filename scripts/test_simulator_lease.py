@@ -1,5 +1,11 @@
 import unittest
-from simulator_lease import validate
+import contextlib
+import io
+import json
+from pathlib import Path
+import tempfile
+from unittest.mock import patch, Mock
+from simulator_lease import validate, main
 
 
 class LeaseTests(unittest.TestCase):
@@ -16,6 +22,24 @@ class LeaseTests(unittest.TestCase):
     def test_current_lease_passes_without_mutating_record(self):
         self.assertEqual(self.check()["lease_id"], "new-job")
         self.assertEqual(self.record["state"], "assigned")
+
+    def test_cli_accepts_registered_third_slot(self):
+        record = {**self.record, "device_uuid": "DEVICE-C"}
+        with tempfile.TemporaryDirectory() as directory:
+            registry = Path(directory) / "registry.json"
+            registry.write_text(json.dumps({"slots": {"C": record}}))
+            args = ["simulator_lease.py", "--registry", str(registry), "--slot", "C",
+                    "--owner", "worker", "--lease", "new-job", "--head", "source",
+                    "--device", "DEVICE-C", "--worktree", directory, "--require-idle"]
+            output = io.StringIO()
+            with patch("sys.argv", args), patch("simulator_lease.subprocess.check_output", side_effect=["source", ""]), \
+                 patch("simulator_lease.subprocess.run", return_value=Mock(returncode=0)), contextlib.redirect_stdout(output):
+                self.assertEqual(main(), 0)
+            self.assertEqual(json.loads(output.getvalue())["slot"], "C")
+
+    def test_unregistered_slot_is_still_refused(self):
+        with self.assertRaisesRegex(ValueError, "Lease mismatch"):
+            self.check(slot="C")
 
     def test_delayed_old_go_is_rejected_even_for_same_worker(self):
         with self.assertRaisesRegex(ValueError, "lease_id"):

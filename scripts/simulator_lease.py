@@ -34,7 +34,7 @@ def validate(registry, slot, owner, lease, head, device, process_lines=()):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", type=Path, required=True)
-    parser.add_argument("--slot", choices=("A", "B"), required=True)
+    parser.add_argument("--slot", required=True, help="Slot name present in the canonical registry (A, B, C, ...)")
     parser.add_argument("--owner", required=True)
     parser.add_argument("--lease", required=True)
     parser.add_argument("--head", required=True)
