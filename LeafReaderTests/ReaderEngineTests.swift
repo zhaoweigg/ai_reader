@@ -621,6 +621,7 @@ final class ReaderEngineTests: XCTestCase {
         let result = try await web.callAsyncJavaScript("""
             const active=new Map(),create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL);
             let peakCount=0,peakBytes=0,maxDocuments=0,maxFrames=0;
+            const errors=[],error=console.error;console.error=(...args)=>{errors.push(args.map(String).join(' '));error(...args);};
             URL.createObjectURL=blob=>{const url=create(blob);active.set(url,blob.size);peakCount=Math.max(peakCount,active.size);peakBytes=Math.max(peakBytes,[...active.values()].reduce((a,b)=>a+b,0));return url;};
             URL.revokeObjectURL=url=>{active.delete(url);revoke(url);};
             const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -630,7 +631,7 @@ final class ReaderEngineTests: XCTestCase {
                 const ready=async()=>{
                     const until=performance.now()+8000;
                     while(performance.now()<until){
-                        if(r.getContents().some(x=>!x.doc))throw new Error('Null mounted document: '+JSON.stringify(r.getContents().map(x=>({index:x.index,doc:!!x.doc,connected:x.doc?.defaultView?.frameElement?.isConnected})))) ;
+                        if(r.getContents().some(x=>!x.doc))throw new Error('Null mounted document: '+JSON.stringify(r.getContents().map(x=>({index:x.index,doc:!!x.doc,connected:x.doc?.defaultView?.frameElement?.isConnected})))+' errors='+JSON.stringify(errors));
                         if(r.getContents().length===3 && r.getContents().every(x=>x.doc.URL!=='about:blank' && x.doc.body.textContent.trim())){await sleep(20);return;}
                         await sleep(10);
                     }
@@ -647,7 +648,7 @@ final class ReaderEngineTests: XCTestCase {
                 // Close with an adjacent chapter read still queued/in flight.
                 await view.goTo(20);window.Leaf.close();await sleep(350);
                 return {count,peakCount,peakBytes,maxDocuments,maxFrames,afterClose:active.size};
-            } finally { URL.createObjectURL=create;URL.revokeObjectURL=revoke; }
+            } finally { URL.createObjectURL=create;URL.revokeObjectURL=revoke;console.error=error; }
             """, arguments: ["config": ["name":"MemoryStress.epub","format":"epub","locator":"","preferences":prefs.payload]], in:nil,contentWorld:.page)
         let metrics = try XCTUnwrap(result as? [String:Int])
         XCTAssertGreaterThanOrEqual(metrics["count"] ?? 0,128)

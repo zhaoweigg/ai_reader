@@ -1000,7 +1000,7 @@ export class Paginator extends HTMLElement {
         return { height, width, margin, gap, columnWidth }
     }
     render() {
-        if (!this.#view) return
+        if (!this.#view?.ready) return
         if (!this.scrolled && this.#scrollViews.size) this.#clearScrollWindow()
         this.#scrollRendering = true
         this.#view.render(this.#beforeRender({
