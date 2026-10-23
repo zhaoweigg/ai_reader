@@ -925,14 +925,22 @@ final class LeafReaderUITests: XCTestCase {
         let surface = readingSurface(app)
         let nextChapter = surface.staticTexts["The ordinary world"]
         for _ in 0..<9 {
-            if nextChapter.exists { break }
+            if nextChapter.exists && nextChapter.isHittable { break }
             surface.swipeUp(velocity: .slow)
         }
-        XCTAssertTrue(nextChapter.waitForExistence(timeout: 5))
+        XCTAssertTrue(nextChapter.exists && nextChapter.isHittable, "A preloaded offscreen chapter does not count as crossing")
         capture("Scroll continues into the next chapter", app: app)
-        surface.swipeDown(velocity: .slow)
         showReaderControls(app)
-        XCTAssertTrue(app.staticTexts["Begin where you are"].waitForExistence(timeout: 5))
+        let chapterTitle = app.staticTexts["readerChapterTitle"]
+        for _ in 0..<4 where chapterTitle.label != "The ordinary world" {
+            surface.swipeUp(velocity: .slow); showReaderControls(app)
+        }
+        XCTAssertEqual(chapterTitle.label,"The ordinary world")
+        for _ in 0..<4 where chapterTitle.label != "Begin where you are" {
+            surface.swipeDown(velocity: .slow); showReaderControls(app)
+        }
+        showReaderControls(app)
+        XCTAssertEqual(chapterTitle.label,"Begin where you are")
         capture("Scroll returns to previous chapter", app: app)
     }
 
