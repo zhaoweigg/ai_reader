@@ -776,6 +776,36 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    @MainActor func testOnlyEnhancedAndPremiumAppleVoiceSettingsInPagesScrollAndPDF() {
+        defer { orient(.portrait) }
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            showReaderControls(app); app.buttons["Listen"].tap()
+            let engine = app.segmentedControls["listeningEngine"]
+            XCTAssertTrue(engine.waitForExistence(timeout: 5))
+            XCTAssertTrue(engine.buttons["Natural voice"].exists)
+            XCTAssertTrue(engine.buttons["Apple voices"].exists)
+            XCTAssertFalse(engine.buttons["iPhone voice"].exists)
+            engine.buttons["Apple voices"].tap()
+            let guidance = app.otherElements["appleVoiceDownloadGuidance"]
+            let picker = app.buttons["listeningVoice"].exists ? app.buttons["listeningVoice"] : app.otherElements["listeningVoice"]
+            XCTAssertTrue(guidance.waitForExistence(timeout: 3) || picker.waitForExistence(timeout: 3), "Actual installed-quality list or explicit download guidance must be shown")
+            capture(flow + " Apple high-quality voice choices portrait", app: app)
+            orient(.landscapeLeft)
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            XCTAssertTrue(engine.isHittable)
+            XCTAssertLessThanOrEqual(engine.frame.maxX, app.frame.maxX)
+            XCTAssertGreaterThanOrEqual(engine.frame.minX, app.frame.minX)
+            capture(flow + " Apple high-quality voice settings landscape", app: app)
+            orient(.portrait)
+            XCTAssertTrue(engine.buttons["Apple voices"].isSelected)
+            engine.buttons["Natural voice"].tap()
+            XCTAssertTrue(app.buttons["kokoroDownload"].waitForExistence(timeout: 5), "Natural voices remain available independently of downloaded Apple voices")
+            capture(flow + " Natural voice pack option retained", app: app)
+            app.terminate()
+        }
+    }
+
     /// Rendered landscape via the public scene-geometry fixture (no physical-rotation claim):
     /// the new engine rows and the player capsule must stay inside the frame and reachable.
     @MainActor func testNaturalVoiceSettingsAndPlayerFitLandscapeViaGeometryFixture() {

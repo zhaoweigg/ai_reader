@@ -125,6 +125,9 @@ struct ReaderAudioSettings: View {
             .onReceive(NotificationCenter.default.publisher(for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in
                 voices = AppleVoiceCatalog.installed
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                voices = AppleVoiceCatalog.installed
+            }
     }
 }
 
