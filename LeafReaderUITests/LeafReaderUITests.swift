@@ -559,17 +559,27 @@ final class LeafReaderUITests: XCTestCase {
         orient(.landscapeLeft)
         var frame = app.frame
         XCTAssertGreaterThan(frame.width, frame.height, "Landscape geometry must be applied")
+        // The sheet is short in landscape, so the form scrolls; every row must be
+        // fully inside the frame once scrolled to, and nothing may be clipped sideways.
+        let form = app.scrollViews.containing(.segmentedControl, identifier: "listeningEngine").firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5), "Listening form is a scroll view in landscape")
+        func reveal(_ element: XCUIElement, _ label: String, up: Bool = true) {
+            for _ in 0..<4 where !(element.exists && frame.contains(element.frame)) { up ? form.swipeUp() : form.swipeDown() }
+            XCTAssertTrue(element.exists, label)
+            XCTAssertTrue(frame.contains(element.frame), label + " inside the landscape frame")
+            XCTAssertTrue(element.isHittable, label + " hittable in landscape")
+        }
         XCTAssertTrue(engine.isHittable); XCTAssertTrue(frame.contains(engine.frame), "Engine picker inside the landscape frame")
-        XCTAssertTrue(app.buttons["kokoroDownload"].isHittable); XCTAssertTrue(frame.contains(app.buttons["kokoroDownload"].frame), "Download row inside the landscape frame")
         XCTAssertLessThanOrEqual(engine.frame.maxX, frame.maxX); XCTAssertGreaterThanOrEqual(engine.frame.minX, frame.minX)
         capture("Natural voice settings landscape", app: app)
-        let follow = app.switches["followSpokenText"]
-        if !follow.isHittable { app.swipeUp() }
-        XCTAssertTrue(follow.waitForExistence(timeout: 5)); XCTAssertTrue(frame.contains(follow.frame), "Follow toggle reachable in landscape")
+        reveal(app.buttons["kokoroDownload"], "Download row")
+        XCTAssertLessThanOrEqual(app.buttons["kokoroDownload"].frame.maxX, frame.maxX)
+        capture("Natural voice settings landscape download row", app: app)
+        reveal(app.switches["followSpokenText"], "Follow toggle")
         XCTAssertTrue(app.sliders["listeningSpeedSlider"].exists)
         capture("Natural voice settings landscape scrolled", app: app)
-        if !app.buttons["listenFromPage"].isHittable { app.swipeDown() }
-        XCTAssertTrue(app.buttons["listenFromPage"].waitForExistence(timeout: 5)); app.buttons["listenFromPage"].tap()
+        reveal(app.buttons["listenFromPage"], "Listen from this page", up: false)
+        app.buttons["listenFromPage"].tap()
         let pause = app.buttons["audioPlayPause"], player = app.otherElements["readerAudioPlayer"]
         expectation(for: NSPredicate(format: "label == %@", "Pause listening"), evaluatedWith: pause); waitForExpectations(timeout: 15)
         frame = app.frame
