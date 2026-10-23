@@ -129,6 +129,13 @@ private extension UIView {
         return [CGRect(x: first.minX - 18, y: first.minY - 24, width: 36, height: first.height + 36),
                 CGRect(x: last.maxX - 18, y: last.minY - 12, width: 36, height: last.height + 36)]
     }
+    func selectionHandleContains(_ point: CGPoint) -> Bool {
+        let handles = nativeSelectionHandleViews
+        if handles.count == 2 {
+            return handles.contains { convert($0.bounds, from: $0).insetBy(dx: -10, dy: -10).contains(point) }
+        }
+        return selectionHandles.contains { $0.contains(point) } && !selectionRectangles.contains { $0.contains(point) }
+    }
 }
 
 private struct ReaderSelectionAction {
@@ -189,7 +196,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     private struct BookTouch {
         let start: CGPoint
         let timestamp: TimeInterval
-        let beganInSelection: Bool
+        let beganOnHandle: Bool
         var distance: CGFloat = 0
         var selectionChanged = false
     }
@@ -281,20 +288,19 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         guard let source, !showsSystemMenu else { bookTouch = nil; return }
         switch phase {
         case .began:
-            let inSelection = source.selectionContains(point) || source.selectionHandles.contains { $0.contains(point) }
-            bookTouch = BookTouch(start: point, timestamp: timestamp, beganInSelection: inSelection)
+            bookTouch = BookTouch(start: point, timestamp: timestamp, beganOnHandle: source.selectionHandleContains(point))
         case .moved:
             guard var touch = bookTouch else { return }
             touch.distance = max(touch.distance, hypot(point.x - touch.start.x, point.y - touch.start.y))
             bookTouch = touch
-            if touch.beganInSelection, touch.distance > 3, controller != nil {
+            if touch.beganOnHandle, touch.distance > 3, controller != nil {
                 adjustingSelectionHandle = true; dismiss(keepingHandleObserver: true)
             }
         case .ended:
             guard let touch = bookTouch else { return }
             bookTouch = nil
             let longPress = timestamp - touch.timestamp >= 0.45 && touch.distance <= 20
-            let adjusted = touch.beganInSelection && (touch.selectionChanged || touch.distance > 3)
+            let adjusted = touch.beganOnHandle && (touch.selectionChanged || touch.distance > 3)
             #if DEBUG
             readerSelectionMenuTrace("bookTouchEnded", source: source, context: longPress || adjusted, point: point)
             #endif
@@ -382,8 +388,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard let source, let view = touch.view else { return false }
         let point = touch.location(in: source)
-        let onHandle = source.selectionHandles.contains { $0.contains(point) }
-            && !source.selectionRectangles.contains { $0.contains(point) }
+        let onHandle = source.selectionHandleContains(point)
         if gestureRecognizer === selectionTouch {
             var ancestor: UIView? = view
             while let current = ancestor, current !== source {
@@ -391,6 +396,10 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
             }
             return view.isDescendant(of: source)
         }
+        // Native grip stems can overlap selected glyphs. Only the passive book
+        // observer watches their completion; an outside pan losing arbitration
+        // to UIKit must not dismiss the newly refreshed actions afterward.
+        if onHandle { return false }
         if gestureRecognizer is UIPanGestureRecognizer { adjustingSelectionHandle = onHandle }
         #if DEBUG
         readerSelectionMenuTrace(onHandle ? "handleTouch" : "outsideTouch", source: source, point: point, target: view)
