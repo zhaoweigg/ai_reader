@@ -30,6 +30,7 @@
 		48197B9BA6699E9830F76310 /* AddBooksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBECD7296E1A713FB8FE684C /* AddBooksView.swift */; };
 		48A42EA6731C8ED591702A66 /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 04DE0EA9FD13D33E62324BDB /* libbz2.tbd */; };
 		4B9CCD168963BB4BB85D5646 /* ReadAloudSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B903372F35178474AE142CA2 /* ReadAloudSession.swift */; };
+		4E578E713AA3E88189174E7E /* SimulatorIsolationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29BA80C5301FC8CBF3A19A35 /* SimulatorIsolationUITests.swift */; };
 		4FFA5D443B98E1E4B80522B2 /* ChatHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AF0B59C16AA23A2176C159D /* ChatHistoryTests.swift */; };
 		5175F4EE33DC29DFEC2CC159 /* SceneGeometryFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B92EE29A85D2F11CB7CE6D7 /* SceneGeometryFixture.swift */; };
 		51E73A18348FB06EA3C85062 /* LibraryDisk.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62F03A2C012E7FD2C2F2AE2 /* LibraryDisk.swift */; };
@@ -122,6 +123,7 @@
 		27735E21F07ADCA25D2777AC /* ZLibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryStore.swift; sourceTree = "<group>"; };
 		2776E6B6192B8E7EC19E4B8F /* ChatProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatProvider.swift; sourceTree = "<group>"; };
 		28A014A572292DC05A6C0789 /* KokoroModelStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroModelStore.swift; sourceTree = "<group>"; };
+		29BA80C5301FC8CBF3A19A35 /* SimulatorIsolationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorIsolationUITests.swift; sourceTree = "<group>"; };
 		2AE2D547BB82C9FCAEE6E8D7 /* ReaderSurfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSurfaces.swift; sourceTree = "<group>"; };
 		34C5A29FFA6B5D43FE7AF65C /* ReaderAssetHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAssetHandler.swift; sourceTree = "<group>"; };
 		379B84A8D58BA66045270D3C /* ChatGPTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTTests.swift; sourceTree = "<group>"; };
@@ -270,6 +272,7 @@
 				276132151BB695DA489747FD /* LeafReaderUITests.swift */,
 				5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */,
 				1B92EE29A85D2F11CB7CE6D7 /* SceneGeometryFixture.swift */,
+				29BA80C5301FC8CBF3A19A35 /* SimulatorIsolationUITests.swift */,
 				613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */,
 			);
 			path = LeafReaderUITests;
@@ -506,6 +509,7 @@
 				FD3C12EFA92B6645053C6669 /* LeafReaderUITests.swift in Sources */,
 				1608AF5DEBCE97A8D9E72A38 /* LibraryChatUITests.swift in Sources */,
 				5175F4EE33DC29DFEC2CC159 /* SceneGeometryFixture.swift in Sources */,
+				4E578E713AA3E88189174E7E /* SimulatorIsolationUITests.swift in Sources */,
 				93E967055EC1E395AC160A13 /* ZLibraryUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
