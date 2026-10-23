@@ -1,6 +1,6 @@
 # Concurrent simulator UI tests
 
-Both Leaf slots may run native UI tests at the same time, with one exclusive job per UUID and at most two jobs total. The October 23, 2026 comparison passed the same reader workflows serially and concurrently. The coordinator released both experiment leases immediately after the paired jobs exited, then dispatched independent worker UI jobs on A and B. Reporting and PR work do not hold a simulator.
+Leaf has three slots (A, B and C) with one exclusive job per UUID and at most three jobs total. Slot C reuses the existing unowned iOS 26.5 Leaf Selection Chat QA simulator, `B3A82A8F-F803-481C-93D8-546FE7DD215D`, at the user's request. The benchmark below measured two devices; it does not claim three-way throughput or isolation coverage. The October 23, 2026 comparison passed the same reader workflows serially and concurrently. The coordinator released both experiment leases immediately after the paired jobs exited, then dispatched independent worker UI jobs on A and B. Reporting and PR work do not hold a simulator.
 
 ## What was established
 
