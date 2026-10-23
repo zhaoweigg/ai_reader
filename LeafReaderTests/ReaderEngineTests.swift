@@ -667,6 +667,48 @@ final class ReaderEngineTests: XCTestCase {
         }
     }
 
+    func testSelectingVisibleNeighborKeepsItsOwnCFIWithoutMovingScrollPassage() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        var prefs=preferences; prefs.scrolling=true
+        let model=try show(book,url:url,readerPreferences:prefs)
+        try await assertOpened(model,contains:"attention")
+        let web=try XCTUnwrap(model.webView)
+        let passage=try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            await view.goTo(1);
+            const end=performance.now()+8000;
+            while(!r.getContents().some(c=>c.index===2&&c.doc?.body)) {if(performance.now()>end)throw new Error('Neighbor not ready');await sleep(10);}
+            const next=r.getContents().find(c=>c.index===2).doc,frame=next.defaultView.frameElement,container=frame.parentElement.parentElement;
+            const offset=frame.parentElement.getBoundingClientRect().top-container.getBoundingClientRect().top+container.scrollTop;
+            container.scrollTop=offset-container.clientHeight*0.45;await sleep(300);
+            return view.lastLocation.cfi;
+            """,arguments:[:],in:nil,contentWorld:.page) as? String
+        let locator=try XCTUnwrap(passage)
+        try await waitUntil {model.locator==locator}
+        let result=try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,doc=r.getContents().find(c=>c.index===2).doc;
+            const container=doc.defaultView.frameElement.parentElement.parentElement,top=container.scrollTop,active=r.getContents()[0].index;
+            const range=doc.createRange(),node=doc.querySelector('p').firstChild;
+            range.setStart(node,2);range.setEnd(node,12);
+            const selection=doc.getSelection();selection.removeAllRanges();selection.addRange(range);
+            const expected=view.getCFI(2,range),chapter=view.getProgressOf(2,range).tocItem?.label;
+            await new Promise(resolve=>setTimeout(resolve,100));
+            return {text:selection.toString(),expected,chapter,active,afterActive:r.getContents()[0].index,top,afterTop:container.scrollTop};
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let state=try XCTUnwrap(result as? [String:Any]),text=try XCTUnwrap(state["text"] as? String)
+        try await waitUntil {model.selectedReadingContext()?.text==text}
+        let context=try XCTUnwrap(model.selectedReadingContext())
+        XCTAssertEqual(context.locator,state["expected"] as? String,"The quote belongs to the selected neighboring chapter")
+        XCTAssertEqual(context.chapter,state["chapter"] as? String)
+        XCTAssertEqual(model.locator,locator,"Selecting an already visible neighbor must preserve the reading passage")
+        XCTAssertEqual(state["active"] as? Int,1)
+        XCTAssertEqual(state["afterActive"] as? Int,1)
+        XCTAssertEqual(state["top"] as? Double ?? 0,state["afterTop"] as? Double ?? 999,accuracy:1)
+        let snapshot=try await model.readingChatContext()
+        XCTAssertEqual(snapshot?.locator,context.locator)
+        XCTAssertEqual(snapshot?.text,text)
+    }
+
     func testContinuousScrollEvictsDistantChaptersAndReleasesQueuedResourcesOnClose() async throws {
         let (book, url) = try prepare("MemoryStress.epub", format: .epub, fixtures: true)
         var prefs = preferences; prefs.scrolling = true
