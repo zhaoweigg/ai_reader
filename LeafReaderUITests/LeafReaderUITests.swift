@@ -1415,6 +1415,34 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(launcher.value as? String, "Stationary")
     }
 
+    @MainActor func testReaderRotatesRightAndLeftWithoutSelectingText() {
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launchApp(); app.buttons["featuredBook"].tap()
+        for flow in ["Pages", "Scroll"] {
+            showReaderControls(app); app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap(); dismissAppearance(app)
+            for (name, direction) in [("Right", UIDeviceOrientation.landscapeRight), ("Left", .landscapeLeft)] {
+                XCUIDevice.shared.orientation = .portrait
+                let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.frame.height > app.frame.width }, object: app)
+                XCTAssertEqual(XCTWaiter.wait(for: [portrait], timeout: 6), .completed)
+                XCUIDevice.shared.orientation = direction
+                let landscape = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.frame.width > app.frame.height }, object: app)
+                let result = XCTWaiter.wait(for: [landscape], timeout: 6)
+                let surface = readingSurface(app)
+                let menuVisible = app.scrollViews["expandedSelectionMenu"].exists
+                let geometry = XCTAttachment(string: "Flow: \(flow), requested: \(name), reported device: \(XCUIDevice.shared.orientation.rawValue), app: \(app.frame), book: \(surface.frame), custom menu: \(menuVisible)\n\(app.debugDescription)")
+                geometry.name = flow + " no-selection landscape " + name + " geometry"; geometry.lifetime = .keepAlways; add(geometry)
+                capture(flow + " no-selection landscape " + name, app: app)
+                XCTAssertEqual(result, .completed, "Actual interface must rotate " + name + " without any selection menu")
+                XCTAssertGreaterThan(surface.frame.width, surface.frame.height)
+                XCTAssertFalse(app.scrollViews["expandedSelectionMenu"].exists)
+            }
+            XCUIDevice.shared.orientation = .portrait
+        }
+    }
+
     @MainActor func testBothFlowsFillLandscapeViewportAndKeepLauncherInsideIt() {
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }
