@@ -76,7 +76,7 @@ final class ReaderEngineTests: XCTestCase {
             web.configuration.userContentController.removeScriptMessageHandler(forName: "leaf")
             let expected = try await web.callAsyncJavaScript(selectWord, arguments: ["word": "way"], in: nil, contentWorld: .page) as? [String: String]
             XCTAssertEqual(model.selectedReadingContext()?.text, "Attention")
-            _ = try await web.evaluateJavaScript("window.savedContextForTest=window.Leaf.chatContext;window.Leaf.chatContext=()=>{const value=window.savedContextForTest();const end=performance.now()+180;while(performance.now()<end){};return value;};")
+            _ = try await web.evaluateJavaScript("window.savedContextForTest=window.Leaf.chatContext;window.Leaf.chatContext=()=>{const value=window.savedContextForTest();const end=performance.now()+180;while(performance.now()<end){};return value;};void 0;")
             let cancelled = Task { await model.refreshSelectedWebContext() }
             try await Task.sleep(for: .milliseconds(25)); cancelled.cancel(); await cancelled.value
             XCTAssertEqual(model.selectedReadingContext()?.text, "Attention", "A cancelled request cannot attach a late selection")
@@ -91,7 +91,7 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertNil(model.selectedReadingContext(), "Clearing selection must not substitute page text for a selected quote")
         }
     }
-    func testSelectionRefreshKeepsTheFocusedNeighborCFIWhenAnotherChapterRetainsASelection() async throws {
+    func testSelectionRefreshKeepsTheLatestNeighborCFIWhenAnotherChapterRetainsASelection() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         var prefs = preferences; prefs.scrolling = true
         let model = try show(book, url: url, readerPreferences: prefs)
@@ -111,21 +111,43 @@ final class ReaderEngineTests: XCTestCase {
             const view=document.querySelector('foliate-view'),contents=view.renderer.getContents();
             const earlier=contents.find(c=>c.index===1),latest=contents.find(c=>c.index===2);
             function select(content){const doc=content.doc,node=doc.querySelector('p').firstChild,range=doc.createRange();range.setStart(node,2);range.setEnd(node,12);doc.body.tabIndex=-1;doc.body.focus({preventScroll:true});const selected=doc.getSelection();selected.removeAllRanges();selected.addRange(range);return {range,selected};}
-            const old=select(earlier),current=select(latest);
+            const old=select(earlier);
+            await new Promise(resolve=>setTimeout(resolve,80));
+            const current=select(latest);
             latest.doc.body.focus({preventScroll:true});
             await new Promise(resolve=>setTimeout(resolve,80));
-            return {text:current.selected.toString(),expected:view.getCFI(2,current.range),focused:latest.doc.hasFocus(),oldRetained:!old.selected.isCollapsed,place:view.lastLocation.cfi};
+            return {text:current.selected.toString(),expected:view.getCFI(2,current.range),oldRetained:!old.selected.isCollapsed,place:view.lastLocation.cfi};
             """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
         let expected = try XCTUnwrap(state)
-        XCTAssertEqual(expected["focused"] as? Bool, true)
+        XCTAssertEqual(expected["oldRetained"] as? Bool, true, "Keep the older chapter range to reproduce the stale lookup")
         XCTAssertFalse((expected["text"] as? String ?? "").isEmpty)
         await model.refreshSelectedWebContext()
         XCTAssertEqual(model.selectedReadingContext()?.text, expected["text"] as? String)
-        XCTAssertEqual(model.selectedReadingContext()?.locator, expected["expected"] as? String, "The current focused selection owns the CFI")
+        XCTAssertEqual(model.selectedReadingContext()?.locator, expected["expected"] as? String, "The latest selection owns the CFI")
         let currentPlace = try await web.evaluateJavaScript("window.Leaf.currentLocation()") as? String
         XCTAssertEqual(currentPlace, expected["place"] as? String)
+        _ = try await web.callAsyncJavaScript("""
+            const contents=document.querySelector('foliate-view').renderer.getContents();
+            contents.find(c=>c.index===2).doc.getSelection().removeAllRanges();
+            await new Promise(resolve=>setTimeout(resolve,80));
+            return contents.find(c=>c.index===1).doc.getSelection().toString();
+            """, arguments: [:], in: nil, contentWorld: .page)
+        await model.refreshSelectedWebContext()
+        XCTAssertNil(model.selectedReadingContext(), "Clearing the current range must not resurrect the retained older chapter selection")
+        let mountedAfterNavigation = try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),doc=view.renderer.getContents().find(c=>c.index===2).doc;
+            const range=doc.createRange(),node=doc.querySelector('p').firstChild;
+            range.setStart(node,2);range.setEnd(node,12);doc.getSelection().addRange(range);
+            await new Promise(resolve=>setTimeout(resolve,80));
+            await window.Leaf.command({action:'navigate',value:'section:0'});
+            await new Promise(resolve=>setTimeout(resolve,100));
+            return view.renderer.getContents().map(c=>c.index);
+            """, arguments: [:], in: nil, contentWorld: .page) as? [Int]
+        XCTAssertFalse(try XCTUnwrap(mountedAfterNavigation).contains(2), "Navigation must evict the distant selection owner")
+        await model.refreshSelectedWebContext()
+        XCTAssertNil(model.selectedReadingContext(), "An evicted owner cannot fall back to an older mounted selection")
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: expected), uniformTypeIdentifier: "public.json")
-        attachment.name = "Focused neighboring selection and retained prior range"; attachment.lifetime = .keepAlways; add(attachment)
+        attachment.name = "Latest neighboring selection and retained prior range"; attachment.lifetime = .keepAlways; add(attachment)
     }
     func testSpokenRangeMapsTrimmedInlineRubyBreaksAndLeavesSavedHighlightsInteractiveInBothFlows() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
