@@ -150,18 +150,20 @@ final class ReaderEngineTests: XCTestCase {
         attachment.name = "Latest neighboring selection and retained prior range"; attachment.lifetime = .keepAlways; add(attachment)
     }
     func testSpokenPositionFollowsInsideLongChineseParagraphInBothFlows() async throws {
-        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
         for scrolling in [false, true] {
             var prefs = preferences; prefs.scrolling = scrolling
             let model = try show(book, url: url, readerPreferences: prefs)
             try await assertOpened(model, contains: "窗外")
             let rows = try await model.webView?.callAsyncJavaScript("""
                 const view=document.querySelector('foliate-view'),content=view.renderer.getContents()[0],doc=content.doc,p=doc.querySelector('p');
-                p.textContent='清晨窗外的树叶轻轻摇动，旅人沿着河边的小路慢慢走去。'.repeat(40);
-                await new Promise(r=>setTimeout(r,150));
                 const whole=doc.createRange();whole.selectNodeContents(p);
                 const packet=await window.Leaf.readAloudChunk({locator:view.getCFI(0,whole)}),rows=[];
                 for(const location of [3,300,650,12]){
+                    // Simulate a cached semantic snapshot spanning the paragraph.
+                    // Navigation must use physical line visibility, even if layout
+                    // has changed since this snapshot was recorded.
+                    view.lastLocation.range=whole.cloneRange();
                     await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location,length:1,follow:true});
                     await new Promise(r=>setTimeout(r,80));
                     const segment=packet.segments.find(s=>location>=s.offset&&location<s.offset+s.length),word=view.resolveCFI(segment.locator).anchor(doc);
@@ -177,7 +179,13 @@ final class ReaderEngineTests: XCTestCase {
             let value = try XCTUnwrap(rows)
             let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: value), uniformTypeIdentifier: "public.json")
             attachment.name = "Long Chinese speech follow scrolling=\(scrolling)"; attachment.lifetime = .keepAlways; add(attachment)
-            for row in value { XCTAssertEqual(row["visible"] as? Bool, true, "scrolling=\(scrolling) \(row)") }
+            for row in value {
+                XCTAssertEqual(row["visible"] as? Bool, true, "scrolling=\(scrolling) \(row)")
+                let paint = row["paint"] as? [[Double]] ?? []
+                XCTAssertEqual(paint.count, 1)
+                XCTAssertGreaterThan(paint.first?[2] ?? 0, (row["width"] as? Double ?? 0) * 3, "Highlight the rendered line, not a character")
+            }
+            XCTAssertNil(model.error)
         }
     }
     func testSpokenRangeMapsTrimmedInlineRubyBreaksAndLeavesSavedHighlightsInteractiveInBothFlows() async throws {
@@ -215,6 +223,44 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertEqual(value["hit"] as? String, value["saved"] as? String)
             for key in ["mapped", "html", "selection", "samePlace", "cleared", "savedStillPresent"] { XCTAssertEqual(value[key] as? Bool, true, "\(key): \(value)") }
             XCTAssertGreaterThan(value["rectangles"] as? Int ?? 0, 0)
+        }
+    }
+    func testActualChineseSpeechRestoresAnOffscreenOffsetAndKeepsItsWholeLineVisible() async throws {
+        let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "窗外")
+            let web = try XCTUnwrap(model.webView)
+            let loaded = try await model.readAloudPassage(at: "section:0")
+            let passage = try XCTUnwrap(loaded)
+            let name = "RealChineseLine.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: name)!
+            let session = ReadAloudSession(defaults: defaults)
+            defer { session.stop(); defaults.removePersistentDomain(forName: name) }
+            session.followsText = true; session.speed = 2
+            session.source = { [weak model] locator in try await model?.readAloudPassage(at: locator) }
+            session.highlight = { [weak model] passage, range, follow in model?.highlightReadAloud(passage, range: range, follow: follow) }
+            session.start(at: passage.locator, offset: 650)
+            try await waitUntil({ !session.spokenText.isEmpty || session.error != nil }, timeout: 20)
+            XCTAssertNil(session.error); XCTAssertFalse(session.spokenText.isEmpty)
+            session.pause()
+            let offset = try XCTUnwrap(session.bookmark?.offset)
+            XCTAssertGreaterThanOrEqual(offset, 650)
+            try await Task.sleep(for: .milliseconds(150))
+            let value = try await web.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'),content=view.renderer.getContents()[0],doc=content.doc;
+                const segment=packet.segments.find(s=>offset>=s.offset&&offset<s.offset+s.length),word=view.resolveCFI(segment.locator).anchor(doc);
+                word.setStart(word.startContainer,word.startOffset+offset-segment.offset);word.setEnd(word.startContainer,word.startOffset+1);
+                const seed=word.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect();
+                const rect=content.overlayer.element.querySelector('[data-leaf-spoken-line] rect');
+                return {x:seed.left+frame.left,y:seed.top+frame.top,visible:seed.left+frame.left>=-1&&seed.right+frame.left<=innerWidth+1&&seed.top+frame.top>=-1&&seed.bottom+frame.top<=innerHeight+1,
+                    width:Number(rect?.getAttribute('width')),wordWidth:seed.width,spoken:content.overlayer.element.querySelector('[data-leaf-spoken-line]')?.getAttribute('data-leaf-spoken-text')};
+                """, arguments: ["packet": try JSONSerialization.jsonObject(with: JSONEncoder().encode(passage)), "offset": offset], in: nil, contentWorld: .page) as? [String: Any]
+            XCTAssertEqual(value?["visible"] as? Bool, true, "\(value ?? [:])")
+            XCTAssertGreaterThan(value?["width"] as? Double ?? 0, (value?["wordWidth"] as? Double ?? 0) * 3)
+            let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
+            let screenshot = XCTAttachment(image: try XCTUnwrap(image)); screenshot.name = "Actual Chinese speech full line scrolling=\(scrolling) offset=\(offset)"; screenshot.lifetime = .keepAlways; add(screenshot)
         }
     }
     func testSpokenRangeOnlyLoadsColdChaptersWhenFollowingAndLatestRangeWins() async throws {
@@ -256,7 +302,8 @@ final class ReaderEngineTests: XCTestCase {
         let original = try Data(contentsOf: url)
         let passage = ReadAloudPassage(text: text as String, locator: "pdf:1:0", nextLocator: "pdf:2:0", language: "en", label: "Page 2")
         model.highlightReadAloud(passage, range: town, follow: false)
-        XCTAssertEqual(view.highlightedSelections?.first?.string, "town")
+        let line = try XCTUnwrap(view.highlightedSelections?.first?.string)
+        XCTAssertTrue(line.contains("town")); XCTAssertGreaterThan(line.count, 4)
         XCTAssertEqual(view.currentSelection?.string, selected)
         XCTAssertEqual(page.annotations.count, annotations)
         model.highlightReadAloud(nil, range: NSRange(location: 0, length: 0), follow: false)
@@ -826,9 +873,11 @@ final class ReaderEngineTests: XCTestCase {
                         ['x','y','width','height'].every((name,j) => Math.abs(Number(rect.getAttribute(name)) - expected[i][['left','top','width','height'][j]]) < 0.75));
                     const spokenRange=view.resolveCFI(speech.segments[0].locator).anchor(content.doc);
                     spokenRange.setEnd(spokenRange.startContainer,spokenRange.startOffset+6);
-                    const spokenExpected=[...spokenRange.getClientRects()],spokenActual=[...content.overlayer.element.querySelectorAll('[data-leaf-spoken-word] rect')];
-                    const spokenBounds=spokenActual.length===spokenExpected.length&&spokenActual.every((rect,i)=>
-                        ['x','y','width','height'].every((name,j)=>Math.abs(Number(rect.getAttribute(name))-spokenExpected[i][['left','top','width','height'][j]])<0.75));
+                    const seed=spokenRange.getClientRects()[0],all=content.doc.createRange();all.selectNodeContents(spokenRange.startContainer);
+                    const fragments=[...all.getClientRects()].filter(r=>Math.abs(r.top-seed.top)<1&&r.left<=seed.right&&r.right>=seed.left);
+                    const expectedLine=fragments[0],spokenActual=[...content.overlayer.element.querySelectorAll('[data-leaf-spoken-line] rect')];
+                    const spokenBounds=!!expectedLine&&spokenActual.length===1&&
+                        ['x','y','width','height'].every((name,j)=>Math.abs(Number(spokenActual[0].getAttribute(name))-expectedLine[['left','top','width','height'][j]])<0.75);
                     rows.push({font, scrolling, size, quote:range.toString() === quote,
                         text:content.doc.body.textContent === originalText, sameBounds, spokenBounds, rectangles:actual.length});
                 }

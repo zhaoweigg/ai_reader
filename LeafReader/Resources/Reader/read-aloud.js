@@ -131,6 +131,51 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
 
 const spokenViews = new WeakMap();
 const spokenKey = 'leaf-spoken-word';
+
+// Work with the laid-out text, not character spans. A DOM text range returns
+// one rectangle per wrapped fragment. Merge fragments on the spoken line,
+// including inline emphasis/ruby bases, but never the next pagination column.
+function spokenLineRects(range) {
+    const doc = range.startContainer.ownerDocument;
+    const seed = [...range.getClientRects()].find(rect => rect.width > 0 && rect.height > 0);
+    if (!seed) return [];
+    const parent = range.startContainer.parentElement;
+    const block = parent.closest('p,li,h1,h2,h3,h4,h5,h6,blockquote,td,pre,figcaption,dt,dd,div,section,article') ?? parent;
+    const style = doc.defaultView.getComputedStyle(doc.documentElement);
+    const vertical = /^(vertical|sideways)/.test(doc.defaultView.getComputedStyle(block).writingMode);
+    const columnWidth = parseFloat(style.columnWidth), gap = parseFloat(style.columnGap) || 0;
+    const padding = parseFloat(vertical ? style.paddingTop : style.paddingLeft) || 0;
+    const column = rect => Math.floor(((vertical ? rect.top + rect.height / 2 : rect.left + rect.width / 2) - padding) / (columnWidth + gap));
+    const sameLine = rect => {
+        if (!(rect.width > 0 && rect.height > 0)) return false;
+        if (Number.isFinite(columnWidth) && columnWidth > 0 && column(rect) !== column(seed)) return false;
+        const [a, b, size, other] = vertical
+            ? [seed.left, rect.left, seed.width, rect.width]
+            : [seed.top, rect.top, seed.height, rect.height];
+        return Math.min(a + size, b + other) - Math.max(a, b) > Math.min(size, other) / 2;
+    };
+    const walker = doc.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    const rects = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!readable(node)) continue;
+        const text = doc.createRange(); text.selectNodeContents(node);
+        rects.push(...[...text.getClientRects()].filter(sameLine));
+    }
+    if (!rects.length) return [seed];
+    const left = Math.min(...rects.map(r => r.left)), top = Math.min(...rects.map(r => r.top));
+    const right = Math.max(...rects.map(r => r.right)), bottom = Math.max(...rects.map(r => r.bottom));
+    return [new DOMRect(left, top, right - left, bottom - top)];
+}
+
+function isRenderedLineVisible(view, range) {
+    const frame = range.startContainer.ownerDocument.defaultView.frameElement;
+    if (!frame) return false;
+    const offset = frame.getBoundingClientRect(), viewport = view.getBoundingClientRect();
+    return spokenLineRects(range).some(rect => rect.left + offset.left >= viewport.left - 1
+        && rect.right + offset.left <= viewport.right + 1
+        && rect.top + offset.top >= viewport.top - 1
+        && rect.bottom + offset.top <= viewport.bottom + 1);
+}
 function clearPaint(view) {
     for (const content of view.renderer?.getContents?.() ?? []) content.overlayer?.remove(spokenKey);
 }
@@ -153,14 +198,15 @@ function paintSpokenRange(view, state) {
             ranges.push({ content, range });
         } catch { /* A stale/reloading document must not interrupt speech. */ }
     }
-    // A word can cross inline elements. One draw group owns all of its rects,
-    // keeping hit testing and persistent annotations completely independent.
+    // A callback can span inline elements or a line break. Its first rendered
+    // line is the current reading line; don't flash each character separately.
     for (const content of new Set(ranges.map(item => item.content))) {
         const matching = ranges.filter(item => item.content === content).map(item => item.range);
-        const range = { getClientRects: () => matching.flatMap(item => [...item.getClientRects()]) };
+        const range = { getClientRects: () => matching.map(spokenLineRects).find(rects => rects.length) ?? [] };
         content.overlayer.add(spokenKey, range, rects => {
             const group = Overlayer.highlight(rects, { color: '#F2B84B' });
             group.setAttribute('data-leaf-spoken-word', 'true');
+            group.setAttribute('data-leaf-spoken-line', 'true');
             group.setAttribute('data-leaf-spoken-text', passage.text.slice(location, location + length));
             group.style.opacity = '.42';
             group.style.pointerEvents = 'none';
@@ -208,21 +254,25 @@ export async function revealReadAloud(view, locator, offset = 0) {
         if (source.epoch !== epoch || source.latestReveal !== request || !view.book) return;
         const target = view.resolveNavigation(locator);
         if (!target) return;
-        if (offset > 0) {
-            const anchor = target.anchor;
-            target.anchor = doc => {
-                const range = anchor(doc); range.collapse(true);
-                if (range.startContainer.nodeType === Node.TEXT_NODE)
-                    range.setStart(range.startContainer, Math.min(range.startContainer.length, range.startOffset + offset));
-                return range;
-            };
-        }
+        const anchor = target.anchor;
+        target.anchor = doc => {
+            const range = anchor(doc); range.collapse(true);
+            if (range.startContainer.nodeType === Node.TEXT_NODE) {
+                const node = range.startContainer;
+                let start = Math.min(node.length, range.startOffset + offset);
+                if (start > 0 && /[\uDC00-\uDFFF]/.test(node.data[start])) --start;
+                range.setStart(node, start);
+                const length = /[\uD800-\uDBFF]/.test(node.data[start]) ? 2 : 1;
+                range.setEnd(node, Math.min(node.length, start + length));
+            }
+            return range;
+        };
         // Do not add every spoken passage to the reader's navigation history.
-        const visible = view.lastLocation?.range;
         const content = view.renderer.getContents?.().find(item => item.index === target.index);
         const range = content && target.anchor?.(content.doc);
-        if (visible && range && visible.startContainer.ownerDocument === range.startContainer.ownerDocument
-            && visible.comparePoint(range.startContainer, range.startOffset) === 0) return;
+        // Cached visible DOM endpoints can include text that moved off screen
+        // after reflow. Measure the actual line in the mounted iframe instead.
+        if (range && isRenderedLineVisible(view, range)) return;
         await view.renderer.goTo(target);
     });
     await source.navigation;

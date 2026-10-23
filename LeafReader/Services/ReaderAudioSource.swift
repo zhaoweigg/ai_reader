@@ -11,6 +11,7 @@ import PDFKit
                 pdfView.highlightedSelections = nil
                 return
             }
+            selection.extendForLineBoundaries()
             selection.color = UIColor.systemYellow.withAlphaComponent(0.48)
             pdfView.highlightedSelections = [selection]
             let bounds = selection.bounds(for: page)
