@@ -42,9 +42,10 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
     }
     let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view
-    actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder] in
+    actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder, weak presenter] in
         if let copiedText { UIPasteboard.general.string = copiedText }
         else { responder?.perform(#selector(UIResponderStandardEditActions.copy(_:)), with: nil) }
+        presenter?.observeCopiedSelection()
     })
     actions.append(ReaderSelectionAction(title: "iOS text actions", image: "ellipsis", id: "system") { [weak presenter] in presenter?.presentSystemMenu() })
     #if DEBUG
@@ -59,6 +60,15 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
 }
 
 private extension UIView {
+    var selectionCharacterRanges: [PDFAnnotationRange] {
+        guard let pdf = self as? PDFView, let document = pdf.document, let selection = pdf.currentSelection else { return [] }
+        return selection.pages.flatMap { page in
+            (0..<selection.numberOfTextRanges(on: page)).map { index in
+                let range = selection.range(at: index, on: page)
+                return PDFAnnotationRange(page: document.index(for: page), location: range.location, length: range.length)
+            }
+        }
+    }
     var selectionStatusBarOwner: UIViewController? {
         var responder: UIResponder? = self
         while let current = responder {
@@ -138,6 +148,7 @@ private struct ReaderSelectionAction {
     private var observers: [UIGestureRecognizer] = []
     private var deactivationObserver: NSObjectProtocol?
     private var pdfSelectionObserver: NSObjectProtocol?
+    private var pdfSelectionRanges: [PDFAnnotationRange] = []
     private var selectionRefreshTask: Task<Void, Never>?
     private var systemMenuUntil = Date.distantPast
     private var systemInteraction: UIEditMenuInteraction?
@@ -147,7 +158,7 @@ private struct ReaderSelectionAction {
     private var requestTask: Task<Void, Never>?
     private var revision = 0
     var showsSystemMenu: Bool { systemInteraction != nil || Date() < systemMenuUntil }
-    var usesExpandedMenu: Bool { requestTask != nil || controller != nil }
+    var usesExpandedMenu: Bool { requestTask != nil || selectionRefreshTask != nil || adjustingSelectionHandle || controller != nil }
     func observeSelection(on source: UIView, request: @escaping () async -> Void) {
         self.source = source; requestMenu = request
         guard selectionPress == nil else { return }
@@ -155,8 +166,15 @@ private struct ReaderSelectionAction {
         press.minimumPressDuration = 0.5; press.cancelsTouchesInView = false; press.delaysTouchesEnded = false
         press.delegate = self; source.addGestureRecognizer(press); selectionPress = press
         if let pdf = source as? PDFView {
-            pdfSelectionObserver = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdf, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.selectionDidChange() }
+            pdfSelectionRanges = pdf.selectionCharacterRanges
+            pdfSelectionObserver = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdf, queue: .main) { [weak self, weak pdf] _ in
+                Task { @MainActor in
+                    guard let self, let pdf else { return }
+                    let ranges = pdf.selectionCharacterRanges
+                    guard ranges != self.pdfSelectionRanges else { return }
+                    self.pdfSelectionRanges = ranges
+                    self.selectionDidChange()
+                }
             }
         }
         if let scene = source.window?.windowScene {
@@ -171,6 +189,14 @@ private struct ReaderSelectionAction {
         selectionPress = nil; requestMenu = nil; source = nil
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
         if let pdfSelectionObserver { NotificationCenter.default.removeObserver(pdfSelectionObserver) }; pdfSelectionObserver = nil
+    }
+    func observeCopiedSelection() {
+        guard let source, let window = source.window, window.windowScene?.activationState == .foregroundActive,
+              source.selectionText?.isEmpty == false else { return }
+        // Copy dismisses actions, while UIKit keeps its native range and grips.
+        // Keep watching that range until an outside gesture or reader teardown.
+        adjustingSelectionHandle = true
+        installOutsideObservers(on: window)
     }
     func selectionDidChange() {
         guard !showsSystemMenu, controller != nil || adjustingSelectionHandle else { return }
@@ -195,7 +221,7 @@ private struct ReaderSelectionAction {
             await request?()
             guard let self, self.revision == expectedRevision else { return }
             self.requestTask = nil
-            if self.controller == nil { self.removeOutsideObservers() }
+            if self.controller == nil { self.adjustingSelectionHandle = false; self.removeOutsideObservers() }
         }
         UIMenuSystem.context.setNeedsRebuild()
     }
@@ -294,7 +320,7 @@ private struct ReaderSelectionAction {
         readerSelectionMenuTrace(onHandle ? "handleTouch" : "outsideTouch", source: source, point: point, target: view)
         #endif
         if let controller { return !view.isDescendant(of: controller.view) }
-        return requestTask != nil
+        return requestTask != nil || adjustingSelectionHandle
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     func presentSystemMenu() {

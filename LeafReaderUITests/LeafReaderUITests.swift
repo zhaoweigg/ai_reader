@@ -425,9 +425,25 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertTrue(menu.waitForExistence(timeout: 4))
                 let extended = menu.value as? String ?? ""
                 XCTAssertGreaterThan(extended.count, initial.count, "Dragging the real native end handle must extend the passage in " + flow)
-                XCTAssertTrue(extended.hasPrefix(initial), "Handle drag must retain the original selected word")
                 let extendedLocator = app.buttons["selection-ask"].value as? String ?? ""
                 XCTAssertFalse(extendedLocator.isEmpty); XCTAssertNotEqual(extendedLocator, initialLocator, "Actions must use the changed native range locator")
+                if flow == "PDF" {
+                    // PDFKit can include adjacent whitespace while adjusting a
+                    // handle. Preserve the actual original characters, not an
+                    // assumption about leading whitespace in selection.string.
+                    func ranges(_ identity: String) -> [(Int, NSRange)] {
+                        identity.split(separator: "|", maxSplits: 1).last?.split(separator: ",").compactMap { value in
+                            let parts = value.split(separator: ":").compactMap { Int($0) }
+                            return parts.count == 3 ? (parts[0], NSRange(location: parts[1], length: parts[2])) : nil
+                        } ?? []
+                    }
+                    let oldRanges = ranges(initialLocator), newRanges = ranges(extendedLocator)
+                    XCTAssertFalse(oldRanges.isEmpty); XCTAssertFalse(newRanges.isEmpty)
+                    for (page, range) in oldRanges {
+                        XCTAssertTrue(newRanges.contains { $0.0 == page && $0.1.location <= range.location && NSMaxRange($0.1) >= NSMaxRange(range) }, "PDF handle adjustment must retain the exact original characters")
+                    }
+                    XCTAssertGreaterThan(newRanges.reduce(0) { $0 + $1.1.length }, oldRanges.reduce(0) { $0 + $1.1.length })
+                } else { XCTAssertTrue(extended.hasPrefix(initial), "Handle drag must retain the original selected word") }
                 capture(flow + (landscape ? " landscape" : " portrait") + " native selection extended with horizontal menu", app: app)
                 let startHandle = app.descendants(matching: .any)["selection-start-geometry"].firstMatch
                 XCTAssertTrue(startHandle.waitForExistence(timeout: 3))
@@ -439,12 +455,27 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertFalse(trimmed.isEmpty); XCTAssertNotEqual(trimmed, extended, "Native start handle must also remain draggable")
                 XCTAssertNotEqual(app.buttons["selection-ask"].value as? String, extendedLocator)
                 capture(flow + (landscape ? " landscape" : " portrait") + " native start handle adjusted", app: app)
+                let copiedStart = app.descendants(matching: .any)["selection-start-geometry"].firstMatch.frame
+                let copiedLocator = app.buttons["selection-ask"].value as? String
                 revealSelectionAction("copy", app: app).tap()
                 let lateCopyMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
                 lateCopyMenu.isInverted = true; waitForExpectations(timeout: 0.45)
+                // Copy intentionally retains UIKit's selection. Its real grip
+                // must still adjust that range and refresh actions afterward.
+                let retained = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: copiedStart.midX, dy: copiedStart.midY))
+                retained.press(forDuration: 0.7, thenDragTo: retained.withOffset(CGVector(dx: 18, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.2)
+                XCTAssertTrue(menu.waitForExistence(timeout: 5))
+                XCTAssertFalse((menu.value as? String ?? "").isEmpty)
+                XCTAssertNotEqual(menu.value as? String, trimmed)
+                XCTAssertNotEqual(app.buttons["selection-ask"].value as? String, copiedLocator)
+                capture(flow + (landscape ? " landscape" : " portrait") + " copied native selection remains adjustable", app: app)
+                // A tap explicitly finishes this range before starting another.
+                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+                if app.buttons["closeBook"].exists { readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
                 selectFixturePassage(flow, app: app)
                 XCTAssertTrue(menu.waitForExistence(timeout: 5))
                 readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+                if app.buttons["closeBook"].exists { readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
                 let lateDismissedMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
                 lateDismissedMenu.isInverted = true; waitForExpectations(timeout: 0.45)
             }
