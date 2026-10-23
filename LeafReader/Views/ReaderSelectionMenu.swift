@@ -86,28 +86,30 @@ private struct ReaderSelectionAction {
     private weak var source: UIView?
     private weak var window: UIWindow?
     private var controller: ReaderSelectionActionsController?
+    private var menuWindow: ReaderSelectionWindow?
     private var observers: [UIGestureRecognizer] = []
+    private var deactivationObserver: NSObjectProtocol?
     private var systemMenuUntil = Date.distantPast
     var showsSystemMenu: Bool { Date() < systemMenuUntil }
     func schedule(on source: UIView, actions: [ReaderSelectionAction], theme: ReadingTheme, selectedText: String) {
         self.source = source
         if let controller { controller.actions = actions; controller.tableView.accessibilityValue = selectedText; controller.tableView.reloadData(); controller.view.setNeedsLayout(); return }
         DispatchQueue.main.async { [weak self, weak source] in
-            guard let self, let source, let window = source.window, self.controller == nil,
-                  var parent = window.rootViewController else { return }
-            while let next = parent.presentedViewController { parent = next }
-            guard !parent.isBeingDismissed else { return }
+            guard let self, let source, let window = source.window, let scene = window.windowScene, self.controller == nil else { return }
             let controller = ReaderSelectionActionsController(actions: actions, theme: theme, source: source)
             controller.choose = { [weak self] action in self?.dismiss(); action() }
-            parent.addChild(controller)
-            controller.view.frame = window.bounds
-            controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            // UIHostingView performs SwiftUI hit testing independently of added
-            // UIKit children. Mount at this source window so the actions receive taps.
-            window.addSubview(controller.view)
-            controller.didMove(toParent: parent)
+            // Give UIKit its own root controller without presenting a modal or
+            // taking key-window status from the book/composer's native responder.
+            let menuWindow = ReaderSelectionWindow(windowScene: scene)
+            menuWindow.backgroundColor = .clear; menuWindow.windowLevel = window.windowLevel + 1
+            menuWindow.rootViewController = controller
+            menuWindow.isHidden = false
+            self.menuWindow = menuWindow
             controller.tableView.accessibilityValue = selectedText
             self.controller = controller; self.window = window
+            self.deactivationObserver = NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: scene, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.dismiss() }
+            }
             // A modal popover consumes the first outside tap and can resign the
             // native selection responder. Observe dismissal without intercepting
             // the book, composer, keyboard, or draggable chat launcher underneath.
@@ -121,9 +123,10 @@ private struct ReaderSelectionAction {
         }
     }
     func dismiss() {
+        if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
         for observer in observers { window?.removeGestureRecognizer(observer) }
         observers = []; window = nil
-        controller?.willMove(toParent: nil); controller?.view.removeFromSuperview(); controller?.removeFromParent()
+        menuWindow?.isHidden = true; menuWindow?.rootViewController = nil; menuWindow = nil
         controller = nil
     }
     @objc private func outsideGesture(_ gesture: UIGestureRecognizer) {
@@ -139,6 +142,13 @@ private struct ReaderSelectionAction {
         systemMenuUntil = Date().addingTimeInterval(2)
         let rect = source.selectionAnchor
         source.selectionEditMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.midY)))
+    }
+}
+
+private final class ReaderSelectionWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let root = rootViewController?.view else { return nil }
+        return root.hitTest(convert(point, to: root), with: event)
     }
 }
 

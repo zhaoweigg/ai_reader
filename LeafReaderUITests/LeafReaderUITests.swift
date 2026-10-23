@@ -406,6 +406,38 @@ final class LeafReaderUITests: XCTestCase {
             app.terminate()
         }
     }
+    @MainActor func testSelectionActionsReceiveTapsKeepComposerFocusAndLeaveNoWindowAfterClosing() {
+        continueAfterFailure = false
+        let app = launchApp(); app.buttons["featuredBook"].tap(); waitForBook(app)
+        app.buttons["openReaderChat"].tap(); selectFixturePassage("Pages", app: app)
+        let menu = app.tables["expandedSelectionMenu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 6))
+        for id in ["ask", "listen", "highlight", "note", "copy", "system"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable) }
+        capture("Selection overlay receives all six actions", app: app)
+        app.buttons["selection-copy"].tap(); XCTAssertFalse(menu.exists)
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Keep my menu question")
+        XCTAssertEqual(input.value as? String, "Keep my menu question")
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+        capture("Selection overlay preserves native composer focus", app: app)
+        app.buttons["Hide keyboard"].tap(); selectFixturePassage("Pages", app: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        input.tap(); input.typeText(" again")
+        XCTAssertFalse(menu.exists); XCTAssertEqual(input.value as? String, "Keep my menu question again")
+        app.buttons["Hide keyboard"].tap(); selectFixturePassage("Pages", app: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        XCUIDevice.shared.press(.home); app.activate()
+        XCTAssertFalse(menu.exists, "A backgrounded scene must release its selection window")
+        showReaderControls(app); selectFixturePassage("Pages", app: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        app.buttons["closeBook"].tap()
+        XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 5)); XCTAssertFalse(menu.exists)
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        XCTAssertFalse(menu.exists, "Reopening cannot retain an orphaned menu window")
+        app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(input.value as? String, "Keep my menu question again")
+        capture("Selection window cleared and question restored after reopening", app: app)
+    }
     @MainActor func testExpandedSelectionMenuKeepsNativeTextActionsInAllReaderFlows() {
         continueAfterFailure = false
         for flow in ["Pages", "Scroll", "PDF"] {
