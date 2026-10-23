@@ -112,6 +112,56 @@ final class FakeArchiveDownloader: KokoroArchiveDownloading, @unchecked Sendable
         let long = String(repeating: "很长的一段话没有任何标点符号一直写下去", count: 12)
         XCTAssertGreaterThan(KokoroSentenceSplitter.split(long).count, 2)
         XCTAssertTrue(KokoroSentenceSplitter.split(long).allSatisfy { $0.range.length <= KokoroSentenceSplitter.chineseLimit })
+        // A long mixed sentence is cut at its commas so the first chunk starts playing quickly.
+        let mixed = "我们昨天讨论了 Transformer 架构中的 attention 机制，会议定在下周三下午 3:30，地点是 Building B 的 Room 204。"
+        let clauses = KokoroSentenceSplitter.split(mixed)
+        XCTAssertEqual(clauses.map(\.text), ["我们昨天讨论了 Transformer 架构中的 attention 机制，", "会议定在下周三下午 3:30，", "地点是 Building B 的 Room 204。"])
+        for clause in clauses { XCTAssertEqual((mixed as NSString).substring(with: clause.range), clause.text) }
+    }
+
+    // Real model (only when LEAF_KOKORO_MODEL_DIR points at an unpacked kokoro-multi-lang-v1_1 pack)
+
+    func testRealKokoroModelProducesAudioThroughTheSpeakerWhenAPackIsAvailable() async throws {
+        guard let path = ProcessInfo.processInfo.environment["LEAF_KOKORO_MODEL_DIR"], !path.isEmpty else {
+            throw XCTSkip("Set LEAF_KOKORO_MODEL_DIR to an unpacked kokoro-multi-lang-v1_1 directory to run the real model")
+        }
+        let directory = URL(fileURLWithPath: path)
+        let started = Date()
+        let synthesizer = try SherpaKokoroSynthesizer(modelDirectory: directory)
+        let loadSeconds = Date().timeIntervalSince(started)
+        XCTAssertEqual(synthesizer.sampleRate, 24_000); XCTAssertEqual(synthesizer.speakerCount, KokoroVoiceCatalog.speakerCount)
+        let root = temporary()
+        let manifest = KokoroModelManifest(directoryName: directory.lastPathComponent, archiveURL: directory, archiveSize: 0, archiveSHA256: "real", requiredFiles: [])
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent(directory.lastPathComponent), withDestinationURL: directory)
+        try "real".write(to: root.appendingPathComponent(directory.lastPathComponent + ".installed"), atomically: true, encoding: .utf8)
+        let store = KokoroModelStore(manifest: manifest, root: root, downloader: FakeArchiveDownloader(source: nil), freeSpace: { _ in Int64.max })
+        XCTAssertEqual(store.state, .ready)
+        let player = FakeAudioPlayer()
+        let speaker = KokoroReadAloudSpeaker(store: store, player: player, makeSynthesizer: { _ in synthesizer })
+        var ranges: [NSRange] = [], finished = 0, firstAudioAt: Date?
+        speaker.progressed = { ranges.append($0); if firstAudioAt == nil { firstAudioAt = Date() } }; speaker.finished = { finished += 1 }
+        let text = "那是一个寒冷的冬夜，雪花悄无声息地落在青石板路上。Dr. Smith paid $3.50 at 9 a.m. 1999年12月31日，距离新世纪只剩下不到三个小时。"
+        let spoke = Date()
+        try speaker.speak(text, language: "zh", voice: "", speed: 1)
+        try await wait({ player.queued.count == KokoroSentenceSplitter.split(text).count }, timeout: 120)
+        let firstLatency = firstAudioAt.map { $0.timeIntervalSince(spoke) } ?? -1
+        for item in player.queued {
+            XCTAssertEqual(item.audio.sampleRate, 24_000)
+            XCTAssertGreaterThan(item.audio.duration, 0.5)
+            XCTAssertTrue(item.audio.samples.contains { abs($0) > 0.01 }, "Audio must not be silent")
+        }
+        let audioSeconds = player.queued.map(\.audio.duration).reduce(0, +)
+        XCTAssertEqual(ranges.first, KokoroSentenceSplitter.split(text).first?.range)
+        while finished == 0 { player.finishCurrent() }
+        XCTAssertEqual(ranges.map(\.location), KokoroSentenceSplitter.split(text).map(\.range.location))
+        // Cancellation while a chunk is being generated returns nothing for it.
+        var stopped = false
+        let cancelled = synthesizer.synthesize(text, speaker: KokoroVoiceCatalog.defaultChinese.speaker, speed: 1) { stopped.toggle(); return !stopped }
+        XCTAssertNil(cancelled)
+        let note = ["model_load_seconds": loadSeconds, "first_audio_latency_seconds": firstLatency, "audio_seconds": audioSeconds]
+        add(XCTAttachment(string: "Kokoro real-model run: \(note)"))
+        print("KOKORO_REAL_MODEL \(note)")
     }
     func testSplitterHandlesEnglishAbbreviationsQuotesAndLineBreaks() {
         let text = "Dr. Smith paid $3.50 at 9 a.m.! \"Really?\" she asked.\nThe next line has no terminator"

@@ -8,12 +8,16 @@ struct KokoroSentence: Equatable {
     let range: NSRange
 }
 
-/// Splits passage text into short sentences for streaming synthesis. Kokoro's
-/// Chinese front end spends roughly ten phoneme tokens per character, so
-/// Chinese chunks stay well under the English limit.
+/// Splits passage text into short chunks for streaming synthesis: whole
+/// sentences when they are short, otherwise clauses cut at commas or spaces.
+/// Chunk size bounds both first-audio latency (a chunk must finish synthesizing
+/// before it can play) and progress precision (ranges are exact only at chunk
+/// boundaries). Kokoro's Chinese front end spends roughly ten phoneme tokens per
+/// character, so Chinese chunks stay well under the English limit; 48 Chinese
+/// characters took about 3 s to synthesize on a 2-thread Mac run.
 enum KokoroSentenceSplitter {
-    static let englishLimit = 240
-    static let chineseLimit = 90
+    static let englishLimit = 160
+    static let chineseLimit = 48
     private static let terminators: Set<UInt16> = [0x2E, 0x21, 0x3F, 0x3B, 0x0A, 0x3002, 0xFF01, 0xFF1F, 0xFF1B, 0x2026]
     private static let softBreaks: Set<UInt16> = [0x2C, 0x3A, 0xFF0C, 0xFF1A, 0x3001, 0x2014, 0x2013]
     private static let closers: Set<UInt16> = [0x22, 0x27, 0x29, 0x5D, 0x201D, 0x2019, 0x300D, 0x300F, 0x300B, 0xFF09, 0x3011, 0x2026, 0x2E, 0x3002, 0xFF01, 0xFF1F, 0x21, 0x3F]
