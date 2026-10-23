@@ -578,7 +578,11 @@ final class ReaderEngineTests: XCTestCase {
             };
             await view.goTo(1); await ready([0,1,2]);
             const first = r.getContents().find(x=>x.index===1).doc;
-            const next = r.getContents().find(x=>x.index===2).doc;
+            const nextContent = r.getContents().find(x=>x.index===2),next = nextContent.doc;
+            const {Overlayer}=await import('./foliate/overlayer.js');
+            const marker=next.createRange(),node=next.querySelector('p').firstChild;
+            marker.setStart(node,2);marker.setEnd(node,12);
+            nextContent.overlayer.add('continuous-marker',marker,Overlayer.highlight);
             const container = first.defaultView.frameElement.parentElement.parentElement;
             const offset = doc=>doc.defaultView.frameElement.parentElement.getBoundingClientRect().top-container.getBoundingClientRect().top+container.scrollTop;
             const boundary = offset(next);
@@ -589,6 +593,10 @@ final class ReaderEngineTests: XCTestCase {
             container.scrollTop+=container.clientHeight/2+40;
             await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
             const forward = r.getContents()[0].index;
+            const glyph=marker.getClientRects()[0],highlight=nextContent.overlayer.element.querySelector('rect').getBoundingClientRect();
+            const overlayOffset=highlight.top-next.defaultView.frameElement.getBoundingClientRect().top-glyph.top;
+            const overlayHit=nextContent.overlayer.hitTest({x:glyph.left+1,y:glyph.top+1})[0];
+            const markerCFI=view.getCFI(2,marker),sameMarker=view.resolveCFI(markerCFI).anchor(next).toString()===marker.toString();
             const retained = r.getContents()[0].doc===next && first.defaultView.frameElement?.isConnected;
             const movement = before-next.defaultView.frameElement.getBoundingClientRect().top;
             const maxDocuments=r.getContents().length;
@@ -598,12 +606,15 @@ final class ReaderEngineTests: XCTestCase {
             await view.goTo(0);r.scrollToAnchor(0);await sleep(100);await r.prev();
             const beginning=r.getContents()[0].index;
             const last=view.book.sections.length-1;await view.goTo(last);r.scrollToAnchor(1);await sleep(100);await r.next();
-            return {overlap,forward,retained,movement,expected:container.clientHeight/2+40,maxDocuments,backward,restoredDocument,beginning,end:r.getContents()[0].index,last};
+            return {overlap,forward,retained,movement,overlayOffset,overlayHit,sameMarker,expected:container.clientHeight/2+40,maxDocuments,backward,restoredDocument,beginning,end:r.getContents()[0].index,last};
             """, arguments: [:], in: nil, contentWorld: .page)
         let metrics = try XCTUnwrap(result as? [String: Any])
         XCTAssertEqual(metrics["overlap"] as? Bool, true, "Both chapters must share a viewport before crossing")
         XCTAssertEqual(metrics["forward"] as? Int, 2)
         XCTAssertEqual(metrics["retained"] as? Bool, true, "Crossing must reuse the prepared document")
+        XCTAssertEqual(metrics["overlayOffset"] as? Double ?? 999,0,accuracy:1,"A prepared chapter’s highlight must align with its text")
+        XCTAssertEqual(metrics["overlayHit"] as? String,"continuous-marker")
+        XCTAssertEqual(metrics["sameMarker"] as? Bool,true)
         XCTAssertEqual(metrics["movement"] as? Double ?? 0, metrics["expected"] as? Double ?? 999, accuracy: 3)
         XCTAssertLessThanOrEqual(metrics["maxDocuments"] as? Int ?? 99, 3)
         XCTAssertEqual(metrics["backward"] as? Int, 1)

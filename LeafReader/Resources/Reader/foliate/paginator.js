@@ -431,6 +431,7 @@ class View {
     set overlayer(overlayer) {
         this.#overlayer = overlayer
         this.#element.append(overlayer.element)
+        if (this.ready) this.expand(false)
     }
     get overlayer() {
         return this.#overlayer
