@@ -383,11 +383,11 @@ final class ReaderEngineTests: XCTestCase {
             let model = try show(book,url:url,readerPreferences:value)
             try await assertOpened(model,contains:"窗外")
             let web = try XCTUnwrap(model.webView)
-            let metrics = try await waitForLayout(model, preferences: value)
-            XCTAssertEqual(metrics["scrolling"],scrolling ? 1 : 0)
+            let flow = try await web.evaluateJavaScript("document.querySelector('foliate-view').renderer.getAttribute('flow')") as? String
+            XCTAssertEqual(flow,scrolling ? "scrolled" : "paginated")
             let location = model.locator
             for index in 0..<4 {
-                let selected = try await web.evaluateJavaScript("""
+                let snapshot = try await web.evaluateJavaScript("""
                     (() => {
                         const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
                         const paragraphs = doc.querySelectorAll('p');
@@ -396,9 +396,10 @@ final class ReaderEngineTests: XCTestCase {
                         else if (\(index) === 3) { range.setStart(paragraphs[0],0); range.setEnd(paragraphs[1].firstChild,12); }
                         else range.selectNodeContents(paragraphs[\(index) === 2 ? 1 : 0]);
                         const selection = doc.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-                        return selection.toString();
+                        return { selectedText:selection.toString(), rangeText:range.toString() };
                     })()
-                    """) as? String
+                    """) as? [String:String]
+                let selected = try XCTUnwrap(snapshot?["selectedText"])
                 try await waitUntil { model.liveSelection?.text == selected }
                 XCTAssertEqual(model.liveSelection?.source, "selection")
                 let quoteLocator = try XCTUnwrap(model.liveSelection?.locator)
@@ -411,7 +412,9 @@ final class ReaderEngineTests: XCTestCase {
                         return resolved.anchor(doc).toString();
                     })()
                     """) as? String
-                XCTAssertEqual(anchored,selected,"The quote CFI must identify the selected range, not just the viewport")
+                // Selection.toString() adds visual paragraph breaks that Range.toString()
+                // does not. Validate the exact original DOM range as well as quoted text.
+                XCTAssertEqual(anchored,snapshot?["rangeText"],"The quote CFI must identify the selected range, not just the viewport")
                 XCTAssertEqual(model.locator, location, "Quoting must not navigate or change the viewport")
             }
             _ = try await web.evaluateJavaScript("window.Leaf.clearSelection()")
