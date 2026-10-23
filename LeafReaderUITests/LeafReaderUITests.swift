@@ -1014,8 +1014,11 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor func testChatDismissesOnlyWithCloseOrTopBarSwipeInBothFlows() {
+        XCUIDevice.shared.orientation = .portrait
         let app = launchApp()
         defer { XCUIDevice.shared.orientation = .portrait }
+        expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app)
+        waitForExpectations(timeout:5)
         app.buttons["featuredBook"].tap()
         waitForBook(app)
         for flow in ["Pages", "Scroll"] {
