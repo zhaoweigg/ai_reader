@@ -43,6 +43,7 @@ WebKit can terminate its separate renderer for reasons it does not disclose to L
 - Select text and choose **Ask Leaf** in the native edit menu to open chat directly with a removable quote attached. When chat is already open, selecting book text automatically attaches it above the composer in Pages, Scroll, and PDFs. Adjusting or making a new selection replaces that draft quote without changing your question. Focusing the keyboard or clearing the native highlight keeps the quote; remove it with its X. Closing chat finishes the native selection so reader taps work normally, while the saved quote remains attached when chat reopens. Type a question or use **Explain** and **Summarize** inside chat to prepare an editable draft; nothing is sent until you choose Send. Switching shortcuts replaces the prior preset while preserving your own question. Sent selections remain visible above their questions in saved history; tap a quote to expand or collapse it. Unsent quotes and drafts persist per book, and passage sharing settings still apply.
 - Swappable Anthropic and Chat Completions providers, editable model IDs/endpoints, and device-only Keychain credentials.
 - Persistent reading positions and per-book bookmarks, including a library-wide bookmarks tab.
+- Persistent text highlights in four colors and notes, with per-book and library-wide saved-passage lists.
 - Day, paper, and night themes; three typefaces; adjustable font size, line and paragraph spacing, and page margins; paginated or vertical flow.
 - Original short sample books in EPUB, PDF, FB2, and TXT.
 - Cover thumbnails and embedded title/author metadata load during import; existing books with missing covers are checked automatically on launch.
@@ -65,6 +66,14 @@ In vertical **Scroll**, adjacent chapters share the scrolling surface, so a swip
 Conversations, attached passage snapshots, and unsent drafts are saved locally for each book until the user clears them. Closing a book or restarting Leaf restores its discussion. History is stored in an indexed SQLite database under the library's `ChatHistory` directory with iOS file protection, atomic transactions, and a 256 KB database page cache. The reader loads 24-message pages rather than the entire archive; **Earlier**, **Newer**, and **Latest** browse saved history. History does not expire or truncate automatically. Book fingerprints identify conversations, so removing a book keeps its history and reimporting the exact same file restores it. Previously closed chats from versions before 1.4.0 were never saved and cannot be recovered.
 
 Sending dismisses the keyboard to show the streamed reply. A question is committed before a provider request starts. Active replies and drafts checkpoint at 500 ms intervals, with immediate saves on completion, Stop, backgrounding, and leaving the reader. Interrupted saved replies restore with Retry available; Retry replaces a failed or stopped answer while keeping the original question and passage snapshot. **Chat options → Clear conversation** asks for confirmation, cancels any active response, and removes that book's complete saved conversation and draft. Late stream events cannot recreate cleared messages. Storage failures are shown instead of silently discarding existing history or sending an unsaved question; unreadable stores are kept intact. Saved history is separate from the bounded recent context sent to the chosen provider. There are no sample answers in normal use.
+
+## Highlights and notes
+
+Select text while reading and choose **Highlight** for a yellow highlight, or **Add Note** to open an editor with the exact selected passage. The editor offers yellow, green, blue, and pink, plus **Save** and **Cancel**. Saving an empty note keeps the highlight. Cancel leaves a new selection unsaved.
+
+Tap a highlight to edit its color or note. **Saved → Highlights & notes** lists passages for the current book; the **Bookmarks** tab also has a **Highlights & notes** filter across books. Tap a saved passage to return to it, or its pencil to edit. Delete from the editor or swipe a saved row to remove the highlight and its note together.
+
+Annotations are local to the imported book and survive closing the book and app relaunches. Exact CFI ranges keep web-book highlights attached to text through reading-flow, font, margin, and theme changes. PDF highlights use saved character ranges and leave the imported PDF unchanged. Rendering uses overlays and a bounded page/chapter window; it does not wrap or rewrite book text. Older libraries without annotations remain readable. Annotation saves update the visible library only after an atomic disk write succeeds.
 
 ## AI chat setup and provider architecture
 
@@ -97,11 +106,17 @@ The request formats were checked against [Anthropic streaming documentation](htt
 
 ## Storage and privacy
 
-Library files live in `Documents/Leaf/Books`, cover images in `Documents/Leaf/Covers`, and the atomic JSON manifest in `Documents/Leaf/library.json`. The manifest holds metadata, favorites, reading positions, and bookmarks. Imported originals are never modified. Removing a book removes only Leaf's copy and saved places. Files can be shared through the book's context menu or copied using Finder file sharing. iOS may include Documents in device/iCloud backups; Leaf implements no cross-device sync, account, analytics, or server.
+Library files live in `Documents/Leaf/Books`, cover images in `Documents/Leaf/Covers`, and the atomic JSON manifest in `Documents/Leaf/library.json`. The manifest holds metadata, favorites, reading positions, bookmarks, highlights, and notes. Imported originals are never modified. Removing a book removes only Leaf's copy and saved places. Files can be shared through the book's context menu or copied using Finder file sharing. iOS may include Documents in device/iCloud backups; Leaf implements no cross-device sync, account, analytics, or server.
 
 The local `leaf-reader://` scheme exposes only bundled reader resources and the currently opened book. Reader website data is nonpersistent. The reader WebView’s CSP blocks outbound network loads and embedded scripts; an additional sanitizer removes active markup. External book links are not opened automatically. A damaged manifest is preserved and reported rather than replaced. Optional AI requests originate from the native chat service after the reader sends a question; they do not relax the book WebView’s network restrictions.
 
 ## Tests
+
+### Highlights and notes verification
+
+Highlight/note verification for **1.9.14 (43)** covers **37 distinct passing cases**: eight annotation units, five library checks, 17 chat-history units, four rendered/native engine checks, and three complete native UI workflows. The rendering sweep covers **126 states** across all 12–32 pt sizes, Pages and Scroll, three fonts, Day/Paper/Night, and margin settings. Exact text-range CFIs, lazy chapter overlays, chapter/book boundaries, saved-passage reopening, PDF visible-page/zoom rendering, original PDF bytes and cover artwork were checked.
+
+Native Pages, Scroll and PDF workflows passed selection-menu creation, Cancel, Highlight, note composition with the keyboard, color edits, Ask Leaf draft retention, actual landscape editing, app relaunch, library-wide saved-passage navigation and deletion. The landscape Form test now scrolls to offscreen controls. After a simulator reported landscape while the app stayed portrait, a device-only restart and an exclusive rotation-sensitive UI window restored actual landscape; geometry assertions were kept. All 24 named final screenshots were inspected, including actual landscape note fields. The three actual UI-test library manifests also confirmed the notes were deleted from disk. Evidence is `build/AnnotationsTargetedA.xcresult`, `build/AnnotationsNativeB.xcresult`, `build/AnnotationsRecoveredB.xcresult` and `build/annotations-verification-summary.json`. Physical-phone UI, iPad and live-provider requests were not exercised; phone installation is coordinated from clean merged main after explicit approval.
 
 ### Z-Library popular books
 
