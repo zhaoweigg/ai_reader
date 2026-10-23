@@ -1,7 +1,8 @@
 import XCTest
+import CoreFoundation
 
 final class LeafReaderUITests: XCTestCase {
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -10,6 +11,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
         app.launch()
         return app
     }
@@ -385,14 +387,45 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testHorizontalSelectionHandlesInPages() { verifyHorizontalSelectionHandles(flow: "Pages") }
     @MainActor func testHorizontalSelectionHandlesInScroll() { verifyHorizontalSelectionHandles(flow: "Scroll") }
     @MainActor func testHorizontalSelectionHandlesInPDF() { verifyHorizontalSelectionHandles(flow: "PDF") }
-    @MainActor private func verifyHorizontalSelectionHandles(flow: String) {
+    @MainActor func testHorizontalSelectionHandlesInScrollWithSceneGeometryFixture() { verifyHorizontalSelectionHandles(flow: "Scroll", geometryFixture: true) }
+    @MainActor private func setReaderOrientation(_ direction: UIDeviceOrientation, app: XCUIApplication) {
+        XCUIDevice.shared.orientation = direction
+        guard app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] == "1", let id = app.launchEnvironment["LEAF_UI_TEST_ID"] else { return }
+        // UIKit interface and physical device landscape names are inverted.
+        let name = direction == .landscapeLeft ? "landscapeRight" : direction == .landscapeRight ? "landscapeLeft" : "portrait"
+        let notification = CFNotificationName("com.leafreader.uitest.geometry.\(id).\(name)" as CFString)
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), notification, nil, nil, true)
+        let probe = app.otherElements["uitestSceneGeometry"]
+        let expected = direction == .landscapeLeft ? UIInterfaceOrientation.landscapeRight.rawValue : direction == .landscapeRight ? UIInterfaceOrientation.landscapeLeft.rawValue : UIInterfaceOrientation.portrait.rawValue
+        let applied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let value = probe.value as? String, let data = value.data(using: .utf8),
+                  let report = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+            return report["result"] as? String == "applied" && report["effectiveOrientation"] as? Int == expected
+        }, object: probe)
+        let result = XCTWaiter.wait(for: [applied], timeout: 8)
+        let evidence = XCTAttachment(string: "Explicit public scene-geometry fixture: \(probe.value as? String ?? "missing")\napp: \(app.frame), book: \(readingSurface(app).frame)")
+        evidence.name = "Public geometry fixture " + name; evidence.lifetime = .keepAlways; add(evidence)
+        XCTAssertEqual(result, .completed, "Public scene geometry must apply before physical selection checks")
+        if direction.isLandscape {
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            let surface = readingSurface(app)
+            XCTAssertGreaterThan(surface.frame.width, surface.frame.height, "Book must really render in landscape")
+        } else { XCTAssertGreaterThan(app.frame.height, app.frame.width) }
+    }
+    @MainActor private func verifyHorizontalSelectionHandles(flow: String, geometryFixture: Bool = false) {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }
         do {
-            let app = launchApp(); openSelectionFixture(flow, app: app)
+            let app = launchApp(geometryFixture: geometryFixture); openSelectionFixture(flow, app: app)
+            if geometryFixture {
+                addTeardownBlock { @MainActor in
+                    if app.state == .runningForeground { self.setReaderOrientation(.portrait, app: app) }
+                    app.terminate()
+                }
+            }
             for landscape in [false, true] {
-                XCUIDevice.shared.orientation = landscape ? .landscapeLeft : .portrait
+                setReaderOrientation(landscape ? .landscapeLeft : .portrait, app: app)
                 expectation(for: NSPredicate { _, _ in landscape ? app.frame.width > app.frame.height : app.frame.height > app.frame.width }, evaluatedWith: app)
                 waitForExpectations(timeout: 6)
                 selectFixturePassage(flow, app: app)
@@ -479,6 +512,7 @@ final class LeafReaderUITests: XCTestCase {
                 let lateDismissedMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
                 lateDismissedMenu.isInverted = true; waitForExpectations(timeout: 0.45)
             }
+            if geometryFixture { setReaderOrientation(.portrait, app: app) }
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
         }
