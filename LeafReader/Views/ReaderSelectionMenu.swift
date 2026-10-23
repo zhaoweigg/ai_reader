@@ -1,9 +1,6 @@
 import UIKit
 import WebKit
 import PDFKit
-import OSLog
-
-private let selectionMenuLog = Logger(subsystem: "com.weizhao.leafreader", category: "ReaderSelectionMenu")
 
 enum ReaderSelectionIntent: String, CaseIterable {
     case ask, explain, summarize
@@ -30,10 +27,10 @@ enum ReaderAnnotationIntent: Equatable { case highlight, note }
 struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String }
 
 @MainActor private func addSelectionMenu(to builder: UIMenuBuilder, view: UIView, presenter: ReaderSelectionMenuPresenter, theme: ReadingTheme, context: ReadingChatContext?, action: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?, annotation: BookAnnotationSelection?, annotate: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?, position: String?, listen: ((String) -> Void)?) {
-    guard let context, !context.isEmpty, let action else { return }
     #if DEBUG
-    selectionMenuLog.notice("Building book actions: sourceKey=\(view.window?.isKeyWindow ?? false), nativeInteraction=\(view.selectionEditMenu != nil)")
+    readerSelectionMenuTrace("build", source: view, context: context?.isEmpty == false)
     #endif
+    guard let context, !context.isEmpty, let action else { return }
     guard !presenter.showsSystemMenu else { return }
     var actions = [ReaderSelectionAction(title: "Ask Leaf", image: "leaf", id: "ask") { action(.ask, context) }]
     if let position, let listen {
@@ -64,13 +61,6 @@ private extension UIView {
     var selectionEditMenu: UIEditMenuInteraction? {
         interactions.compactMap { $0 as? UIEditMenuInteraction }.first
             ?? subviews.lazy.compactMap(\.selectionEditMenu).first
-    }
-    func dismissSelectionEditMenu() {
-        #if DEBUG
-        selectionMenuLog.notice("Native edit menu: interaction=\(self.selectionEditMenu != nil), legacyVisible=\(UIMenuController.shared.isMenuVisible), sourceKey=\(self.window?.isKeyWindow ?? false)")
-        #endif
-        if let interaction = selectionEditMenu { interaction.dismissMenu() }
-        else { UIMenuController.shared.hideMenu() }
     }
     var selectionText: String? {
         if let pdf = self as? PDFView { return pdf.currentSelection?.string }
@@ -109,9 +99,6 @@ private struct ReaderSelectionAction {
         if let controller { controller.actions = actions; controller.tableView.accessibilityValue = selectedText; controller.tableView.reloadData(); controller.view.setNeedsLayout(); return }
         DispatchQueue.main.async { [weak self, weak source] in
             guard let self, let source, let window = source.window, let scene = window.windowScene, self.controller == nil else { return }
-            // Finish UIKit's suppressed edit-menu presentation as well as our
-            // own overlay, so a later long press can start a new native session.
-            source.dismissSelectionEditMenu()
             let controller = ReaderSelectionActionsController(actions: actions, theme: theme, source: source)
             controller.choose = { [weak self] action in self?.dismiss(); action() }
             // Give UIKit its own root controller without presenting a modal or
@@ -123,6 +110,9 @@ private struct ReaderSelectionAction {
             self.menuWindow = menuWindow
             controller.tableView.accessibilityValue = selectedText
             self.controller = controller; self.window = window
+            #if DEBUG
+            readerSelectionMenuTrace("shown", source: source)
+            #endif
             self.deactivationObserver = NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: scene, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.dismiss() }
             }
@@ -139,7 +129,9 @@ private struct ReaderSelectionAction {
         }
     }
     func dismiss() {
-        source?.dismissSelectionEditMenu()
+        #if DEBUG
+        readerSelectionMenuTrace("dismiss", source: source)
+        #endif
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
         for observer in observers { window?.removeGestureRecognizer(observer) }
         observers = []; window = nil
@@ -266,3 +258,30 @@ final class ReaderPDFView: PDFView {
         addSelectionMenu(to: builder, view: self, presenter: selectionMenu, theme: selectionTheme?() ?? .day, context: selectionContext?(), action: onSelectionAction, annotation: annotationSelection?(), annotate: onAnnotationAction, position: listeningPosition?(), listen: onListen)
     }
 }
+
+#if DEBUG
+private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTrace", qos: .utility)
+@MainActor private var selectionMenuTraceStarted = false
+/// Bounded, boolean-only UI-test evidence. No book text, quotes, CFIs, or credentials.
+@MainActor func readerSelectionMenuTrace(_ event: String, source: UIView?, context: Bool? = nil) {
+    guard ProcessInfo.processInfo.arguments.contains("--ui-testing"),
+          let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+    let url = cache.appendingPathComponent("SelectionMenuUITestTrace.json")
+    let reset = !selectionMenuTraceStarted; selectionMenuTraceStarted = true
+    let input = source?.selectionFirstResponder as? UITextInput
+    var row: [String: Any] = ["event": event, "time": ProcessInfo.processInfo.systemUptime,
+        "sourceKey": source?.window?.isKeyWindow ?? false, "hasInputResponder": input != nil,
+        "hasNativeRange": input?.selectedTextRange != nil, "nativeEditInteraction": source?.selectionEditMenu != nil,
+        "legacyMenuVisible": UIMenuController.shared.isMenuVisible,
+        "visibleMenuWindow": source?.window?.windowScene?.windows.contains(where: { $0 is ReaderSelectionWindow && !$0.isHidden }) ?? false]
+    if let context { row["context"] = context }
+    guard let record = try? JSONSerialization.data(withJSONObject: row) else { return }
+    selectionMenuTraceQueue.async {
+        guard let row = try? JSONSerialization.jsonObject(with: record) as? [String: Any] else { return }
+        var rows = reset ? [] : ((try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? [])
+        rows.append(row)
+        if rows.count > 80 { rows.removeFirst(rows.count - 80) }
+        if let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: url, options: .atomic) }
+    }
+}
+#endif

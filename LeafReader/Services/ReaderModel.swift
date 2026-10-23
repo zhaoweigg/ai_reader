@@ -261,6 +261,9 @@ final class ReaderModel: NSObject, ObservableObject {
             selectionTooLong = message["tooLong"] as? Bool ?? false
             selectedWebLocator = (message["locator"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(2000)) }
             selectedWebChapter = (message["label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(300)) }
+            #if DEBUG
+            readerSelectionMenuTrace("selection", source: webView, context: !selectedWebText.isEmpty)
+            #endif
             updateLiveSelection()
         case "toggleControls": toggleControls()
         case "readingActivity": hideControls()
