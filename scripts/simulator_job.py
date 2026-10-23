@@ -71,6 +71,27 @@ def set_keyboard(device, snapshot):
         raise RuntimeError("Keyboard preference did not round-trip exactly")
 
 
+def wait_for_runner_exit(device, timeout=30):
+    """Do not restore device state while a native runner is still alive."""
+    deadline = time.monotonic() + timeout
+    while True:
+        processes = subprocess.check_output(["ps", "-axo", "pid=,command="], text=True).splitlines()
+        live = [line for line in processes if "/Devices/" + device + "/" in line
+                and "/LeafReaderUITests-Runner.app/" in line]
+        if not live:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Native runner still alive; retain the lease and investigate: " + str(live))
+        time.sleep(0.25)
+
+
+def clipboard_probe_token(spec):
+    """Opt-in check: Copy tests in normal jobs must be free to change the clipboard."""
+    if not spec.get("clipboard_probe", False):
+        return None
+    return (spec["slot"] + "-" + spec["test_runner_env"]["LEAF_ISOLATION_RUN"]).encode()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("spec", type=Path)
@@ -101,7 +122,9 @@ def main():
     process = None
     exit_code = 1
     def forward_signal(number, _frame):
-        if process is not None and process.poll() is None:
+        if process is None:
+            raise KeyboardInterrupt
+        if process.poll() is None:
             os.killpg(process.pid, number)
     previous_handlers = {number: signal.signal(number, forward_signal)
                          for number in (signal.SIGINT, signal.SIGTERM)}
@@ -112,11 +135,14 @@ def main():
             atomic_json(evidence, metadata)  # persist before the first preference mutation
             set_keyboard(spec["device_uuid"], {"present": True, "value": False})
         subprocess.run(guard + ["--require-idle"], check=True)
-        original_clipboard = subprocess.check_output(
-            ["xcrun", "simctl", "pbpaste", spec["device_uuid"]], timeout=10)
-        clipboard_token = (spec["slot"] + "-" + spec["test_runner_env"]["LEAF_ISOLATION_RUN"]).encode()
-        subprocess.run(["xcrun", "simctl", "pbcopy", spec["device_uuid"]],
-                       input=clipboard_token, timeout=10, check=True)
+        # Only the isolation experiment seeds/checks a clipboard token. Ordinary
+        # UI suites may intentionally Copy and must not have their clipboard replaced.
+        clipboard_token = clipboard_probe_token(spec)
+        if clipboard_token is not None:
+            original_clipboard = subprocess.check_output(
+                ["xcrun", "simctl", "pbpaste", spec["device_uuid"]], timeout=10)
+            subprocess.run(["xcrun", "simctl", "pbcopy", spec["device_uuid"]],
+                           input=clipboard_token, timeout=10, check=True)
         started = time.monotonic()
         with open(worktree / spec["log"], "w") as log:
             process = subprocess.Popen(command, cwd=worktree, env=env, stdout=log,
@@ -136,16 +162,25 @@ def main():
                         break
                     except subprocess.TimeoutExpired:
                         continue
-        clipboard = subprocess.check_output(["xcrun", "simctl", "pbpaste", spec["device_uuid"]], timeout=10)
-        metadata["clipboard_isolated"] = clipboard == clipboard_token
-        if not metadata["clipboard_isolated"]:
-            exit_code = exit_code or 1
+        if clipboard_token is not None:
+            clipboard = subprocess.check_output(["xcrun", "simctl", "pbpaste", spec["device_uuid"]], timeout=10)
+            metadata["clipboard_isolated"] = clipboard == clipboard_token
+            if not metadata["clipboard_isolated"]:
+                exit_code = exit_code or 1
         metadata.update(actual_exit=exit_code, finished_at=stamp(), seconds=time.monotonic() - started)
     finally:
         # An exception or interrupt must never restore preferences while our child still runs.
         if process is not None and process.poll() is None:
             os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=30)
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=10)
+        if process is not None:
+            metadata["actual_exit"] = process.returncode
+            wait_for_runner_exit(spec["device_uuid"])
+            metadata["runner_exit_verified"] = True
         if original_clipboard is not None:
             subprocess.run(guard, check=True)
             subprocess.run(["xcrun", "simctl", "pbcopy", spec["device_uuid"]],

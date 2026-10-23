@@ -40,6 +40,22 @@ class SimulatorJobTests(unittest.TestCase):
         self.assertEqual(values["A"], {"Scale": 0.75, "Window": "retained"})
         self.assertEqual(values["B"], peer)
 
+    def test_clipboard_probe_is_opt_in_so_copy_suites_can_change_it(self):
+        self.assertIsNone(job.clipboard_probe_token({}))
+        spec = {"slot": "A", "test_runner_env": {"LEAF_ISOLATION_RUN": "unique-run"}}
+        self.assertIsNone(job.clipboard_probe_token(spec))
+        spec["clipboard_probe"] = True
+        self.assertEqual(job.clipboard_probe_token(spec), b"A-unique-run")
+
+    def test_runner_exit_wait_is_scoped_to_the_assigned_uuid(self):
+        peer = "42 /Devices/B/data/LeafReaderUITests-Runner.app/LeafReaderUITests-Runner"
+        own = "43 /Devices/A/data/LeafReaderUITests-Runner.app/LeafReaderUITests-Runner"
+        with patch.object(job.subprocess, "check_output", return_value=peer):
+            job.wait_for_runner_exit("A", timeout=0)
+        with patch.object(job.subprocess, "check_output", return_value=own):
+            with self.assertRaisesRegex(RuntimeError, "retain the lease"):
+                job.wait_for_runner_exit("A", timeout=0)
+
     def test_boolean_and_integer_preference_types_restore_exactly(self):
         for original_value in (False, True, 0, 1):
             value = {"ConnectHardwareKeyboard": original_value}
