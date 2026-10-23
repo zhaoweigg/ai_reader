@@ -1306,6 +1306,10 @@ export class Paginator extends HTMLElement {
         // chapter while an awaited resource load is navigating elsewhere.
         ++this.#scrollNavigating
         try {
+            // A fast swipe/navigation can reach a neighbor before preparation
+            // finishes. Reuse that work instead of cancelling and loading twice.
+            const pending = this.#continuous && this.#scrollLoads.get(index)
+            if (pending) await pending.promise
             const prepared = this.#continuous && this.#scrollViews.get(index)
             if (prepared) {
                 this.#index = index

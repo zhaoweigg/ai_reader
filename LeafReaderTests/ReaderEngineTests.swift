@@ -667,6 +667,32 @@ final class ReaderEngineTests: XCTestCase {
         }
     }
 
+    func testNavigationReusesAnAdjacentChapterStillBeingPrepared() async throws {
+        let (book,url)=try prepare("The Art of Noticing.epub",format:.epub)
+        var prefs=preferences;prefs.scrolling=true
+        let model=try show(book,url:url,readerPreferences:prefs)
+        try await assertOpened(model,contains:"attention")
+        let result=try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            const ready=async index=>{const end=performance.now()+8000;while(!r.getContents().some(c=>c.index===index&&c.doc?.body)){if(performance.now()>end)throw new Error('Prepared chapter timed out');await sleep(10);}};
+            await view.goTo(3);await ready(2);
+            const section=view.book.sections[1],load=section.load;
+            let loads=0,preparedDoc;
+            section.load=async()=>{loads++;await sleep(150);return load();};
+            const loaded=({detail})=>{if(detail.index===1&&detail.preload)preparedDoc=detail.doc;};
+            r.addEventListener('load',loaded);
+            try {
+                await view.goTo(2);await sleep(20);await view.goTo(1);await ready(1);
+                return {loads,active:r.getContents()[0].index,reused:r.getContents()[0].doc===preparedDoc,documents:r.getContents().length};
+            } finally {section.load=load;r.removeEventListener('load',loaded);}
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let state=try XCTUnwrap(result as? [String:Any])
+        XCTAssertEqual(state["loads"] as? Int,1,"An in-flight neighbor must not be cancelled and read again")
+        XCTAssertEqual(state["active"] as? Int,1)
+        XCTAssertEqual(state["reused"] as? Bool,true)
+        XCTAssertLessThanOrEqual(state["documents"] as? Int ?? 99,3)
+    }
+
     func testSelectingVisibleNeighborKeepsItsOwnCFIWithoutMovingScrollPassage() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         var prefs=preferences; prefs.scrolling=true
