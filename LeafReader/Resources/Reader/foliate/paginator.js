@@ -1447,7 +1447,16 @@ export class Paginator extends HTMLElement {
             if (this.#view?.document)
                 this.#background.style.background = getBackground(this.#view.document)
         })
-        this.#view?.document?.fonts?.ready?.then(() => this.#view?.expand())
+        // Resize the whole mounted window before restoring its anchor. If the
+        // previous chapter shrinks first, WebKit clamps the old scrollTop and
+        // a later per-chapter correction can move into that previous chapter.
+        if (this.#continuous) this.render()
+        const view = this.#view
+        view?.document?.fonts?.ready?.then(() => {
+            if (this.#view !== view || this.#scrollNavigating) return
+            if (this.#continuous) this.render()
+            else view.expand()
+        })
     }
     #applyDocumentStyles(doc) {
         const styles = this.#styles
