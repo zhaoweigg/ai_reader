@@ -780,13 +780,13 @@ final class ReaderEngineTests: XCTestCase {
                 const valid=contents.every(({doc})=>{
                     const root=doc.defaultView.getComputedStyle(doc.documentElement);
                     return Math.abs(parseFloat(root.fontSize)-size)<0.1 && root.colorScheme===theme.colorScheme
-                        && Math.abs(doc.querySelector('p').getBoundingClientRect().width-(view.clientWidth-2*margin))<2;
+                        && [...doc.querySelector('p').getClientRects()].every(rect=>Math.abs(rect.width-(view.clientWidth-2*margin))<2);
                 });
                 rows.push({scrolling,size,font,margin,valid,initial,state:measure(),events:[...events],visible:window.Leaf.isLocationVisible(saved),documents:contents.length,
                     sameText:view.resolveNavigation(saved).anchor(doc).toString()===text,
                     actual:contents.map(({index,doc})=>({index,size:doc.defaultView.getComputedStyle(doc.documentElement).fontSize,
                         scheme:doc.defaultView.getComputedStyle(doc.documentElement).colorScheme,
-                        width:doc.querySelector('p').getBoundingClientRect().width,expectedWidth:view.clientWidth-2*margin,
+                        widths:[...doc.querySelector('p').getClientRects()].map(rect=>rect.width),expectedWidth:view.clientWidth-2*margin,
                         styles:[...doc.querySelectorAll('style')].map(s=>({namespace:s.namespaceURI,applied:!!s.sheet}))}))});
             }
             return rows;
