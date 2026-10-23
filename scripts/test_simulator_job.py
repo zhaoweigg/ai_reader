@@ -27,6 +27,33 @@ class SimulatorJobTests(unittest.TestCase):
                 preferences.assert_not_called()
                 self.assertEqual(run.call_count, 1)
                 self.assertIn("--require-idle", run.call_args.args[0])
+                self.assertEqual(Path(run.call_args.args[0][1]), Path(job.__file__).resolve().with_name("simulator_lease.py"))
+
+    def test_stale_lease_cannot_use_an_obsolete_permissive_worktree_guard(self):
+        # An older feature branch may have a different CLI or guard. Never copy
+        # into its frozen tracked tree or let its old guard bypass current leases.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", directory], check=True)
+            (root / "scripts").mkdir()
+            (root / "scripts/simulator_lease.py").write_text("raise SystemExit(0)\n")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                            "commit", "-qm", "old branch guard"], cwd=root, check=True)
+            head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+            registry = root / "registry.json"
+            registry.write_text(json.dumps({"slots": {"C": {"owner_thread": "new-owner",
+                "lease_id": "new-lease", "head": head, "device_uuid": "C-device", "state": "assigned"}}}))
+            spec = root / "spec.json"
+            spec.write_text(json.dumps(dict(worktree=directory, registry=str(registry), slot="C",
+                owner="stale-owner", lease_id="stale-lease", head=head, device_uuid="C-device")))
+            with patch.object(sys, "argv", ["simulator_job.py", str(spec)]), \
+                 patch.object(job, "keyboard_snapshot") as preferences:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    job.main()
+                preferences.assert_not_called()
+            self.assertEqual((root / "scripts/simulator_lease.py").read_text(), "raise SystemExit(0)\n")
+            self.assertEqual(subprocess.check_output(["git", "diff", "--name-only"], cwd=root, text=True), "")
 
     def test_absent_keyboard_restoration_preserves_own_other_keys_and_peer_device(self):
         values = {"A": {"Scale": 0.75}, "B": {"ConnectHardwareKeyboard": True, "Scale": 1.0}}
