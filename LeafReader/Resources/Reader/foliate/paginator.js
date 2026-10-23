@@ -209,7 +209,13 @@ const setStylesImportant = (el, styles) => {
 
 class View {
     #destroyed = false
-    #observer = new ResizeObserver(() => this.#column ? this.render(this.#layout) : this.expand(false))
+    #ready = false
+    #finishLoad
+    #loadEvents = new AbortController()
+    #observer = new ResizeObserver(() => {
+        if (this.#column) this.render(this.#layout)
+        else { this.expand(false); this.onResize?.() }
+    })
     #element = document.createElement('div')
     #iframe = document.createElement('iframe')
     #contentRange = document.createRange()
@@ -251,12 +257,22 @@ class View {
     get document() {
         return this.#iframe.contentDocument
     }
+    get ready() {
+        return this.#ready && !this.#destroyed
+    }
     async load(src, afterLoad, beforeRender) {
         if (typeof src !== 'string') throw new Error(`${src} is not string`)
         return new Promise(resolve => {
+            const finish = () => { this.#finishLoad = null; resolve() }
+            this.#finishLoad = finish
             this.#iframe.addEventListener('load', () => {
-                if (this.#destroyed) { resolve(); return }
+                if (this.#destroyed) { finish(); return }
                 const doc = this.document
+                // WebKit can deliver the initial about:blank event after a
+                // cached chapter URL was assigned. Its styles/ranges belong
+                // to a different document and must never mark the chapter ready.
+                if (!doc?.body || doc.URL === 'about:blank') return
+                this.#loadEvents.abort()
                 afterLoad?.(doc)
 
                 // it needs to be visible for Firefox to get computed style
@@ -272,6 +288,7 @@ class View {
                 const layout = beforeRender?.({ vertical, rtl, background })
                 this.#iframe.style.display = 'block'
                 this.render(layout)
+                this.#ready = true
                 this.#observer.observe(doc.body)
 
                 // the resize observer above doesn't work in Firefox
@@ -279,8 +296,8 @@ class View {
                 // until the bug is fixed we can at least account for font load
                 doc.fonts.ready.then(() => { if (!this.#destroyed) this.render(this.#layout) })
 
-                resolve()
-            }, { once: true })
+                finish()
+            }, { signal: this.#loadEvents.signal })
             this.#iframe.src = src
         })
     }
@@ -414,16 +431,20 @@ class View {
     set overlayer(overlayer) {
         this.#overlayer = overlayer
         this.#element.append(overlayer.element)
+        if (this.ready) this.expand(false)
     }
     get overlayer() {
         return this.#overlayer
     }
     destroy() {
         this.#destroyed = true
+        this.#loadEvents.abort()
+        this.#finishLoad?.()
         this.#observer.disconnect()
         this.#contentRange = document.createRange()
         this.#overlayer = null
         this.onExpand = () => {}
+        this.onResize = () => {}
         this.#iframe.src = 'about:blank'
     }
 }
@@ -459,6 +480,17 @@ export class Paginator extends HTMLElement {
     #lastVisibleRange
     #scrollFrame
     #scrollContinuation
+    // A bounded live window lets native vertical scrolling cross a chapter edge.
+    // Older content becomes a spacer so eviction does not reset scroll momentum.
+    #scrollViews = new Map()
+    #scrollLoads = new Map()
+    #scrollEpoch = 0
+    #scrollPrefix = 0
+    #scrollSpacer
+    #scrollLayout
+    #scrollRendering = false
+    #scrollNavigating = 0
+    #scrollLoadQueue = Promise.resolve()
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -523,6 +555,12 @@ export class Paginator extends HTMLElement {
             grid-row: 1 / -1;
             overflow: auto;
         }
+        :host([flow="scrolled"]) #container::after {
+            content: '';
+            display: block;
+            height: var(--leaf-book-end-space, 0px);
+            pointer-events: none;
+        }
         #header {
             grid-column: 3 / 4;
             grid-row: 1;
@@ -567,6 +605,7 @@ export class Paginator extends HTMLElement {
 
         this.#observer.observe(this.#container)
         this.#container.addEventListener('scroll', () => {
+            this.#activateScrolledView()
             this.dispatchEvent(new Event('scroll'))
             if (this.scrolled && !this.#scrollFrame) this.#scrollFrame = requestAnimationFrame(() => {
                 this.#scrollFrame = null
@@ -594,7 +633,11 @@ export class Paginator extends HTMLElement {
 
         this.addEventListener('relocate', ({ detail }) => {
             if (detail.reason === 'selection') setSelectionTo(this.#anchor, 0)
-            else if (detail.reason === 'navigation') {
+            // A synthetic caret in a scrolled iframe can make WebKit restore a
+            // stale parent offset after a neighboring frame becomes visible.
+            // Scroll navigation only changes the passage; explicit selection
+            // above still installs the range requested by the user.
+            else if (detail.reason === 'navigation' && !this.scrolled) {
                 if (this.#anchor === 1) setSelectionTo(detail.range, 1)
                 else if (typeof this.#anchor === 'number')
                     setSelectionTo(detail.range, -1)
@@ -688,10 +731,212 @@ export class Paginator extends HTMLElement {
         }
         this.#view = new View({
             container: this,
-            onExpand: () => this.#scrollToAnchor(this.#anchor),
+            onExpand: () => { if (!this.#scrollNavigating) this.#scrollToAnchor(this.#anchor) },
         })
         this.#container.append(this.#view.element)
         return this.#view
+    }
+    get #continuous() {
+        return this.scrolled && !this.#vertical && this.#scrollViews.size > 0
+    }
+    #viewOffset(view = this.#view) {
+        if (!this.#continuous || !view) return 0
+        return view.element.getBoundingClientRect().top
+            - this.#container.getBoundingClientRect().top + this.#container.scrollTop
+    }
+    #keepScrollPosition(change) {
+        const top = this.#container.scrollTop, offset = this.#viewOffset()
+        change()
+        const delta = this.#viewOffset() - offset
+        if (Math.abs(delta) > 0.5) this.#container.scrollTop = top + delta
+    }
+    #releaseScrollRecord(record) {
+        if (!record.released) {
+            record.cancelReady?.()
+            record.released = true
+            record.view.destroy()
+            record.view.element.remove()
+        }
+        if (record.loaded && !record.unloaded) {
+            record.unloaded = true
+            record.section.unload?.()
+        }
+    }
+    #clearScrollWindow() {
+        ++this.#scrollEpoch
+        for (const record of this.#scrollLoads.values()) {
+            record.cancelled = true
+            this.#releaseScrollRecord(record)
+        }
+        this.#scrollLoads.clear()
+        for (const record of this.#scrollViews.values()) {
+            // The legacy display path still owns/reuses the active chapter.
+            if (record.view !== this.#view) this.#releaseScrollRecord(record)
+        }
+        this.#scrollViews.clear()
+        this.#scrollSpacer?.remove()
+        this.#scrollSpacer = null
+        this.#scrollPrefix = 0
+        this.#container.style.removeProperty('--leaf-book-end-space')
+    }
+    #startScrollWindow() {
+        if (this.#scrollNavigating || !this.scrolled || this.#vertical || !this.#view?.ready || this.#scrollViews.size) return
+        this.#scrollSpacer = document.createElement('div')
+        this.#scrollSpacer.style.cssText = 'height:0;flex:none;pointer-events:none;overflow-anchor:none'
+        this.#container.prepend(this.#scrollSpacer)
+        const record = {
+            index: this.#index, section: this.sections[this.#index], view: this.#view, loaded: true,
+        }
+        record.view.onExpand = () => this.#scrollViewExpanded(record)
+        record.view.onResize = () => this.#scrollViewResized(record)
+        record.height = record.view.element.getBoundingClientRect().height
+        this.#scrollViews.set(this.#index, record)
+        this.#updateScrollEndSpace()
+        this.#warmScrollWindow()
+    }
+    #updateScrollEndSpace() {
+        const last = this.#scrollViews.get(this.sections.length - 1)
+        const space = last ? Math.max(0, this.size - last.view.element.getBoundingClientRect().height) : 0
+        // Only the final short chapter gets room to restore its own first line
+        // at the top; intermediate chapters never receive viewport-sized gaps.
+        this.#container.style.setProperty('--leaf-book-end-space', `${space}px`)
+    }
+    #scrollViewExpanded(record) {
+        if (this.#scrollNavigating || this.#scrollRendering || record.preparing || record.released) return
+        if (!this.#continuous) {
+            if (record.view === this.#view) this.#scrollToAnchor(this.#anchor)
+            return
+        }
+        const height = record.view.element.getBoundingClientRect().height
+        const delta = height - (record.height ?? height)
+        record.height = height
+        this.#updateScrollEndSpace()
+        if (record.index < this.#index && Math.abs(delta) > 0.5) this.#container.scrollTop += delta
+        else if (record.index === this.#index) this.#scrollToAnchor(this.#anchor)
+    }
+    #scrollViewResized(record) {
+        if (this.#scrollNavigating || this.#scrollRendering || record.preparing || record.released || !this.#continuous) return
+        const height = record.view.element.getBoundingClientRect().height
+        const delta = height - (record.height ?? height)
+        record.height = height
+        this.#updateScrollEndSpace()
+        // A passive body resize must not re-anchor a reader who is scrolling.
+        if (record.index < this.#index && Math.abs(delta) > 0.5) this.#container.scrollTop += delta
+    }
+    #wantedScrollIndexes() {
+        return new Set([this.#index, this.#adjacentIndex(1), this.#adjacentIndex(-1)].filter(x => x != null))
+    }
+    #warmScrollWindow() {
+        if (!this.#continuous) return
+        const wanted = this.#wantedScrollIndexes()
+        for (const [index, record] of this.#scrollLoads) if (!wanted.has(index)) {
+            record.cancelled = true
+            this.#releaseScrollRecord(record)
+            this.#scrollLoads.delete(index)
+        }
+        this.#keepScrollPosition(() => {
+            for (const [index, record] of this.#scrollViews) {
+                if (wanted.has(index)) continue
+                if (index < this.#index) this.#scrollPrefix += record.view.element.getBoundingClientRect().height
+                this.#scrollViews.delete(index)
+                this.#releaseScrollRecord(record)
+            }
+            this.#scrollSpacer.style.height = `${this.#scrollPrefix}px`
+            this.#updateScrollEndSpace()
+        })
+        // At most the current and two adjacent chapters, plus their in-flight loads.
+        for (const index of wanted) {
+            if (this.#scrollViews.has(index) || this.#scrollLoads.has(index)) continue
+            this.#loadScrollNeighbor(index)
+        }
+    }
+    async #loadScrollNeighbor(index) {
+        const epoch = this.#scrollEpoch, section = this.sections[index]
+        const record = { index, section, preparing: true, loaded: false, epoch }
+        record.cancelledReady = new Promise(resolve => { record.cancelReady = resolve })
+        record.view = new View({ container: this, onExpand: () => this.#scrollViewExpanded(record) })
+        record.view.onResize = () => this.#scrollViewResized(record)
+        // Reparenting an iframe reloads it in WebKit. Prepare it in its final
+        // DOM position, clipped out of flow, and reveal it without moving it.
+        Object.assign(record.view.element.style, {
+            position: 'absolute', left: '0', top: '0', maxHeight: '0',
+            visibility: 'hidden', pointerEvents: 'none', overflowAnchor: 'none',
+        })
+        const later = [...this.#scrollViews.values(), ...this.#scrollLoads.values()]
+            .filter(record => record.index > index).sort((a, b) => a.index - b.index)[0]
+        this.#container.insertBefore(record.view.element, later?.view.element ?? null)
+        this.#scrollLoads.set(index, record)
+        // EPUB resources share a reference-counted loader. Serial warm-ups avoid
+        // racing two uncached stylesheet/image loads and losing their URL lease.
+        record.promise = this.#scrollLoadQueue.then(async () => {
+            try {
+                if (record.cancelled || epoch !== this.#scrollEpoch) return
+                const src = await section.load()
+                record.loaded = true
+                if (record.cancelled || epoch !== this.#scrollEpoch) return
+                let vertical = false
+                await record.view.load(src, doc => {
+                    const before = doc.createElementNS('http://www.w3.org/1999/xhtml', 'style'), after = doc.createElementNS('http://www.w3.org/1999/xhtml', 'style')
+                    doc.head.prepend(before); doc.head.append(after)
+                    this.#styleMap.set(doc, [before, after])
+                    this.#applyDocumentStyles(doc)
+                    this.dispatchEvent(new CustomEvent('load', { detail: { doc, index, preload: true } }))
+                }, direction => {
+                    vertical = direction.vertical
+                    return vertical ? undefined : this.#scrollLayout
+                })
+                if (vertical || record.cancelled || epoch !== this.#scrollEpoch || !this.#continuous) return
+                await Promise.race([record.view.document.fonts.ready, record.cancelledReady])
+                if (record.cancelled || epoch !== this.#scrollEpoch || !this.#wantedScrollIndexes().has(index)) return
+                record.view.render(this.#scrollLayout)
+                this.#keepScrollPosition(() => {
+                    Object.assign(record.view.element.style, {
+                        position: 'relative', left: '', top: '', maxHeight: '',
+                        visibility: '', pointerEvents: '', overflowAnchor: '',
+                    })
+                    if (index < this.#index) {
+                        this.#scrollPrefix = Math.max(0, this.#scrollPrefix - record.view.element.getBoundingClientRect().height)
+                        if (index === 0) this.#scrollPrefix = 0
+                        this.#scrollSpacer.style.height = `${this.#scrollPrefix}px`
+                    }
+                    record.preparing = false
+                    record.height = record.view.element.getBoundingClientRect().height
+                    this.#scrollViews.set(index, record)
+                    this.#updateScrollEndSpace()
+                })
+                this.dispatchEvent(new CustomEvent('create-overlayer', { detail: {
+                    doc: record.view.document, index, attach: overlayer => record.view.overlayer = overlayer,
+                } }))
+                // A frame's parent scroll layer can commit after its DOM layout.
+                // Keep the load pending until that commit before navigation reuses it.
+                await Promise.race([
+                    new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+                    record.cancelledReady,
+                ])
+            } catch (error) {
+                if (!record.cancelled && epoch === this.#scrollEpoch) console.warn('Could not prepare adjacent chapter', error)
+            } finally {
+                if (this.#scrollLoads.get(index) === record) this.#scrollLoads.delete(index)
+                if (this.#scrollViews.get(index) !== record) this.#releaseScrollRecord(record)
+                else this.#activateScrolledView()
+            }
+        })
+        this.#scrollLoadQueue = record.promise.catch(() => {})
+    }
+    #activateScrolledView() {
+        if (!this.#continuous || this.#locked || this.#scrollNavigating || this.#scrollRendering) return
+        const top = this.#container.scrollTop + this.#margin + 1
+        const records = [...this.#scrollViews.values()]
+            .filter(record => !this.#scrollLoads.has(record.index))
+            .sort((a, b) => a.index - b.index)
+        const record = records.find(record => this.#viewOffset(record.view) + record.view.element.getBoundingClientRect().height > top)
+            ?? records.at(-1)
+        if (!record || record.index === this.#index) return
+        this.#index = record.index
+        this.#view = record.view
+        this.#justAnchored = false
+        this.#afterScroll('scroll')
+        this.#warmScrollWindow()
     }
     #beforeRender({ vertical, rtl, background }) {
         this.#vertical = vertical
@@ -743,7 +988,7 @@ export class Paginator extends HTMLElement {
             this.#header.replaceChildren()
             this.#footer.replaceChildren()
 
-            return { flow, margin, gap, columnWidth }
+            return this.#scrollLayout = { flow, margin, gap, columnWidth }
         }
 
         const divisor = Math.min(maxColumnCount, Math.ceil(size / maxInlineSize))
@@ -770,12 +1015,21 @@ export class Paginator extends HTMLElement {
         return { height, width, margin, gap, columnWidth }
     }
     render() {
-        if (!this.#view) return
+        if (!this.#view?.ready || this.#scrollNavigating) return
+        if (!this.scrolled && this.#scrollViews.size) this.#clearScrollWindow()
+        this.#scrollRendering = true
         this.#view.render(this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
         }))
+        if (this.#continuous) for (const record of this.#scrollViews.values()) {
+            if (record.view !== this.#view) record.view.render(this.#scrollLayout)
+            record.height = record.view.element.getBoundingClientRect().height
+        }
+        this.#scrollRendering = false
+        if (this.#continuous) this.#updateScrollEndSpace()
         this.#scrollToAnchor(this.#anchor)
+        this.#startScrollWindow()
     }
     get scrolled() {
         return this.getAttribute('flow') === 'scrolled'
@@ -797,7 +1051,7 @@ export class Paginator extends HTMLElement {
         return this.#view.element.getBoundingClientRect()[this.sideProp]
     }
     get start() {
-        return Math.abs(this.#container[this.scrollProp])
+        return Math.max(0, Math.abs(this.#container[this.scrollProp]) - this.#viewOffset())
     }
     get end() {
         return this.start + this.size
@@ -942,6 +1196,7 @@ export class Paginator extends HTMLElement {
     async #scrollTo(offset, reason, smooth) {
         const element = this.#container
         const { scrollProp, size } = this
+        if (this.#continuous) offset += this.#viewOffset()
         if (element[scrollProp] === offset) {
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
@@ -977,15 +1232,19 @@ export class Paginator extends HTMLElement {
         if (rects) {
             // when the start of the range is immediately after a hyphen in the
             // previous column, there is an extra zero width rect in that column
-            const rect = Array.from(rects)
-                .find(r => r.width > 0 && r.height > 0) || rects[0]
+            // A scrolled CFI can start at a zero-width line break. Its line
+            // still needs to remain visible; only Pages skips previous-column
+            // hyphen/caret rectangles when selecting the destination column.
+            const rect = Array.from(rects).find(r => this.scrolled
+                ? (this.#vertical ? r.width > 0 : r.height > 0)
+                : r.width > 0 && r.height > 0) || rects[0]
             if (!rect) return
             await this.#scrollToRect(rect, reason)
             return
         }
         // if anchor is a fraction
         if (this.scrolled) {
-            await this.#scrollTo(anchor * this.viewSize, reason)
+            await this.#scrollTo(this.#continuous ? Math.min(anchor * this.viewSize, Math.max(0, this.viewSize - this.size)) : anchor * this.viewSize, reason)
             return
         }
         const { pages } = this
@@ -1028,9 +1287,9 @@ export class Paginator extends HTMLElement {
             const view = this.#createView()
             const afterLoad = doc => {
                 if (doc.head) {
-                    const $styleBefore = doc.createElement('style')
+                    const $styleBefore = doc.createElementNS('http://www.w3.org/1999/xhtml', 'style')
                     doc.head.prepend($styleBefore)
-                    const $style = doc.createElement('style')
+                    const $style = doc.createElementNS('http://www.w3.org/1999/xhtml', 'style')
                     doc.head.append($style)
                     this.#styleMap.set(doc, [$styleBefore, $style])
                 }
@@ -1048,7 +1307,7 @@ export class Paginator extends HTMLElement {
         }
         await this.scrollToAnchor((typeof anchor === 'function'
             ? anchor(this.#view.document) : anchor) ?? 0, select)
-        if (hasFocus) this.focusView()
+        if (hasFocus && !this.scrolled) this.focusView()
     }
     #canGoToIndex(index) {
         return index >= 0 && index <= this.sections.length - 1
@@ -1056,23 +1315,62 @@ export class Paginator extends HTMLElement {
     async #goTo({ index, anchor, select}) {
         // At a book edge, Scroll's page command can have no adjacent section.
         if (index == null || !this.#canGoToIndex(index)) return
-        if (index === this.#index) await this.#display({ index, anchor, select })
-        else {
-            const oldIndex = this.#index
-            const onLoad = detail => {
-                this.sections[oldIndex]?.unload?.()
-                this.setStyles(this.#styles)
-                this.dispatchEvent(new CustomEvent('load', { detail }))
+        // A late layout callback must not start a new window for the old
+        // chapter while an awaited resource load is navigating elsewhere.
+        ++this.#scrollNavigating
+        let reused = false
+        try {
+            // A fast swipe/navigation can reach a neighbor before preparation
+            // finishes. Reuse that work instead of cancelling and loading twice.
+            const pending = this.#continuous && this.#scrollLoads.get(index)
+            if (pending) await pending.promise
+            const prepared = this.#continuous && this.#scrollViews.get(index)
+            if (prepared) {
+                reused = true
+                this.#index = index
+                this.#view = prepared.view
+                await this.#display({ index, anchor, select })
+                return
             }
-            await this.#display(Promise.resolve(this.sections[index].load())
-                .then(src => ({ index, src, anchor, onLoad, select }))
-                .catch(e => {
-                    console.warn(e)
-                    console.warn(new Error(`Failed to load section ${index}`))
-                    return {}
-                }))
+            if (this.#scrollViews.size) this.#clearScrollWindow()
+            // Do not load the same EPUB resource concurrently with a cancelled warm-up.
+            await this.#scrollLoadQueue
+            if (index === this.#index) await this.#display({ index, anchor, select })
+            else {
+                const oldIndex = this.#index
+                const onLoad = detail => {
+                    this.sections[oldIndex]?.unload?.()
+                    this.setStyles(this.#styles)
+                    this.dispatchEvent(new CustomEvent('load', { detail }))
+                }
+                await this.#display(Promise.resolve(this.sections[index].load())
+                    .then(src => ({ index, src, anchor, onLoad, select }))
+                    .catch(e => {
+                        console.warn(e)
+                        console.warn(new Error(`Failed to load section ${index}`))
+                        return {}
+                    }))
+            }
+        } finally {
+            --this.#scrollNavigating
+            if (!this.#scrollNavigating) {
+                this.#startScrollWindow()
+                this.#warmScrollWindow()
+                const previous = !reused && this.#scrollLoads.get(this.#adjacentIndex(-1))
+                if (previous) {
+                    const target = this.#view, anchor = this.#anchor?.cloneRange?.() ?? this.#anchor
+                    ++this.#scrollNavigating
+                    try {
+                        // A cold jump must finish prepending its previous chapter
+                        // before reporting the requested CFI as restored.
+                        await previous.promise
+                        if (this.#view === target && target.ready) await this.#scrollToAnchor(anchor)
+                    } finally { --this.#scrollNavigating }
+                }
+            }
         }
     }
+
     async goTo(target) {
         if (this.#locked) return
         const resolved = await target
@@ -1131,6 +1429,7 @@ export class Paginator extends HTMLElement {
         return this.#turnPage(1, distance)
     }
     #continueScrollAtEdge() {
+        if (this.#continuous && this.#scrollViews.has(this.#adjacentIndex(this.#scrollContinuation?.direction ?? 1))) return
         const intent = this.#scrollContinuation
         if (!intent || !this.scrolled || this.#locked) return
         if (performance.now() > intent.until) { this.#scrollContinuation = null; return }
@@ -1164,6 +1463,8 @@ export class Paginator extends HTMLElement {
         return this.goTo({ index })
     }
     getContents() {
+        if (this.#continuous) return [this.#scrollViews.get(this.#index), ...[...this.#scrollViews.values()].filter(record => record.index !== this.#index)]
+            .filter(Boolean).map(({ index, view }) => ({ index, overlayer: view.overlayer, doc: view.document }))
         if (this.#view) return [{
             index: this.#index,
             overlayer: this.#view.overlayer,
@@ -1173,7 +1474,29 @@ export class Paginator extends HTMLElement {
     }
     setStyles(styles) {
         this.#styles = styles
-        const $$styles = this.#styleMap.get(this.#view?.document)
+        for (const record of [...this.#scrollViews.values(), ...this.#scrollLoads.values()]) this.#applyDocumentStyles(record.view.document)
+        this.#applyDocumentStyles(this.#view?.document)
+
+        // NOTE: needs `requestAnimationFrame` in Chromium
+        requestAnimationFrame(() => {
+            if (this.#view?.document)
+                this.#background.style.background = getBackground(this.#view.document)
+        })
+        // Resize the whole mounted window before restoring its anchor. If the
+        // previous chapter shrinks first, WebKit clamps the old scrollTop and
+        // a later per-chapter correction can move into that previous chapter.
+        if (this.#continuous) this.render()
+        const view = this.#view
+        view?.document?.fonts?.ready?.then(() => {
+            if (this.#view !== view || this.#scrollNavigating) return
+            if (this.#continuous) this.render()
+            else view.expand()
+        })
+    }
+    #applyDocumentStyles(doc) {
+        const styles = this.#styles
+        if (styles == null) return
+        const $$styles = this.#styleMap.get(doc)
         if (!$$styles) return
         const [$beforeStyle, $style] = $$styles
         if (Array.isArray(styles)) {
@@ -1182,20 +1505,16 @@ export class Paginator extends HTMLElement {
             $style.textContent = style
         } else $style.textContent = styles
 
-        // NOTE: needs `requestAnimationFrame` in Chromium
-        requestAnimationFrame(() => {
-            if (this.#view?.document)
-                this.#background.style.background = getBackground(this.#view.document)
-        })
-
-        // needed because the resize observer doesn't work in Firefox
-        this.#view?.document?.fonts?.ready?.then(() => this.#view?.expand())
     }
     focusView() {
         this.#view.document.defaultView.focus()
     }
     destroy() {
         this.#observer.disconnect()
+        this.#scrollContinuation = null
+        if (this.#scrollFrame) cancelAnimationFrame(this.#scrollFrame)
+        this.#scrollFrame = null
+        this.#clearScrollWindow()
         this.#view?.destroy()
         this.#view?.element.remove()
         this.#view = null

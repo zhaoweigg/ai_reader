@@ -88,8 +88,8 @@ final class ReaderModel: NSObject, ObservableObject {
         guard isReady, !isLocked, error == nil else { throw ChatError.configuration("Wait for the book to finish opening before asking about it.") }
         let title = book?.title ?? ""
         let author = book?.author ?? ""
-        let chapter = chapterTitle
-        let location = locator
+        var chapter = chapterTitle
+        var location = locator
         var text = ""
         var source = "page"
         if let pdfView {
@@ -99,6 +99,8 @@ final class ReaderModel: NSObject, ObservableObject {
         } else if let webView {
             let result = try await webView.evaluateJavaScript("window.Leaf.chatContext()") as? [String: String]
             text = result?["text"] ?? ""; source = result?["source"] ?? "page"
+            if let selectedLocator = result?["locator"], !selectedLocator.isEmpty { location = selectedLocator }
+            if let selectedChapter = result?["label"], !selectedChapter.isEmpty { chapter = selectedChapter }
         }
         return ReadingChatContext(title: title, author: author, chapter: chapter, text: text,
                                   source: source, locator: location).bounded()

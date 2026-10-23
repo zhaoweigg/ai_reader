@@ -88,6 +88,7 @@ final class ReaderEngineTests: XCTestCase {
             let result = try await model.webView?.callAsyncJavaScript("""
                 const view = document.querySelector('foliate-view'), r = view.renderer;
                 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+                const snapshot=()=>{const contents=r.getContents(),doc=contents[0]?.doc,container=doc?.defaultView?.frameElement?.parentElement?.parentElement;return {active:contents[0]?.index,top:container?.scrollTop,max:container?container.scrollHeight-container.clientHeight:0,endSpace:container?.style.getPropertyValue('--leaf-book-end-space'),frames:contents.map(x=>({index:x.index,y:x.doc?.defaultView?.frameElement?.parentElement?.getBoundingClientRect().top,height:x.doc?.defaultView?.frameElement?.parentElement?.getBoundingClientRect().height}))};};
                 await view.goTo(1); r.scrollToAnchor(1); await sleep(100); await r.next(); await sleep(100);
                 const forward = r.getContents()[0].index;
                 r.scrollToAnchor(0); await sleep(100); await r.prev(); await sleep(100);
@@ -96,16 +97,17 @@ final class ReaderEngineTests: XCTestCase {
                 const beginning = r.getContents()[0].index;
                 const last = view.book.sections.length - 1;
                 await view.goTo(last); r.scrollToAnchor(1); await sleep(100); await r.next();
-                const end = r.getContents()[0].index;
+                const end = r.getContents()[0].index,endState=snapshot();
                 await view.goTo(1); r.scrollToAnchor(0.35); await sleep(100);
-                return {forward,backward,beginning,end,last,documents:r.getContents().length};
+                return {forward,backward,beginning,end,last,documents:r.getContents().length,endState};
                 """, arguments: [:], in: nil, contentWorld: .page)
-            let metrics = try XCTUnwrap(result as? [String: Int])
-            XCTAssertEqual(metrics["forward"], 2, "scrolling=\(scrolling)")
-            XCTAssertEqual(metrics["backward"], 1, "scrolling=\(scrolling)")
-            XCTAssertEqual(metrics["beginning"], 0)
-            XCTAssertEqual(metrics["end"], metrics["last"])
-            XCTAssertEqual(metrics["documents"], 1)
+            let metrics = try XCTUnwrap(result as? [String: Any])
+            let attachment=XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json");attachment.name="Boundary trace scrolling=\(scrolling)";attachment.lifetime = .keepAlways;add(attachment)
+            XCTAssertEqual(metrics["forward"] as? Int, 2, "scrolling=\(scrolling)")
+            XCTAssertEqual(metrics["backward"] as? Int, 1, "scrolling=\(scrolling)")
+            XCTAssertEqual(metrics["beginning"] as? Int, 0)
+            XCTAssertEqual(metrics["end"] as? Int, metrics["last"] as? Int, "scrolling=\(scrolling), \(metrics)")
+            XCTAssertLessThanOrEqual(metrics["documents"] as? Int ?? 99, scrolling ? 3 : 1)
             let locator = model.locator
             model.toggleBookmark(); store?.flush()
             model.webView?.stopLoading(); window?.isHidden = true; window = nil
@@ -114,11 +116,62 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertNil(reopened.error)
             let encoded = String(decoding: try JSONEncoder().encode(locator), as: UTF8.self)
             let visible = try await reopened.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
-            XCTAssertEqual(visible, true, "scrolling=\(scrolling)")
+            if visible != true {
+                let diagnostic=try await reopened.webView?.evaluateJavaScript("""
+                    (()=>{const view=document.querySelector('foliate-view'),r=view.renderer,target=view.resolveCFI(\(encoded)),content=r.getContents().find(c=>c.index===target.index),doc=content?.doc,range=doc&&target.anchor(doc),current=view.lastLocation?.range;
+                    const rects=value=>[...(value?.getClientRects()??[])].slice(0,4).map(({x,y,width,height})=>({x,y,width,height}));
+                    const point=range?.cloneRange();point?.collapse(true);
+                    if(point?.startContainer.nodeType===3&&point.startOffset<point.startContainer.length)point.setEnd(point.startContainer,point.startOffset+1);
+                    const frame=doc?.defaultView.frameElement,container=frame?.parentElement.parentElement;
+                    return JSON.stringify({saved:\(encoded),current:view.lastLocation?.cfi,index:r.getContents()[0]?.index,targetIndex:target.index,top:container?.scrollTop,frameY:frame?.getBoundingClientRect().top,
+                        margin:r.getAttribute('margin'),font:doc&&doc.defaultView.getComputedStyle(doc.documentElement).fontSize,
+                        savedStart:range&&{node:range.startContainer.nodeName,offset:range.startOffset},currentStart:current&&{node:current.startContainer.nodeName,offset:current.startOffset},
+                        savedRects:rects(range),pointRects:rects(point),currentRects:rects(current)});})()
+                    """) as? String
+                let attachment=XCTAttachment(string:diagnostic ?? "No reopened geometry")
+                attachment.name="Reopened CFI failure geometry scrolling=\(scrolling)";attachment.lifetime = .keepAlways;add(attachment)
+            }
+            XCTAssertEqual(visible, true, "scrolling=\(scrolling), locator=\(locator)")
             XCTAssertTrue(store?.book(book.id)?.bookmarks.contains { $0.locator == locator } == true)
             reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
         }
     }
+    func testScrollRestoresCFIStartingAtAZeroWidthLineBreak() async throws {
+        let (book,url)=try prepare("The Art of Noticing.epub",format:.epub)
+        var prefs=preferences;prefs.scrolling=true
+        let model=try show(book,url:url,readerPreferences:prefs)
+        try await assertOpened(model,contains:"attention")
+        let result=try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view');await view.goTo(1);
+            const doc=view.renderer.getContents()[0].doc,walker=doc.createTreeWalker(doc.body,NodeFilter.SHOW_TEXT);
+            for(let node=walker.nextNode();node;node=walker.nextNode())for(let offset=1;offset<node.length-1;offset++){
+                const point=doc.createRange();point.setStart(node,offset);point.setEnd(node,offset+1);
+                const rect=point.getClientRects()[0];
+                if(!rect||rect.width!==0||rect.height<=0)continue;
+                const next=doc.createRange();next.setStart(node,offset+1);next.setEnd(node,offset+2);
+                const following=next.getClientRects()[0];
+                if(!following||following.width<=0||following.top<rect.top+rect.height/2)continue;
+                point.setEnd(node,Math.min(node.length,offset+60));
+                return {locator:view.getCFI(1,point),text:point.toString()};
+            }
+            throw new Error('Fixture has no zero-width line-break CFI');
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let state=try XCTUnwrap(result as? [String:String]),locator=try XCTUnwrap(state["locator"])
+        model.webView?.stopLoading();window?.isHidden=true;window=nil
+        let reopened=try show(book,url:url,locator:locator,readerPreferences:prefs)
+        try await waitUntil {reopened.isReady||reopened.error != nil}
+        XCTAssertNil(reopened.error)
+        let encoded=String(decoding:try JSONEncoder().encode(locator),as:UTF8.self)
+        let restored=try await reopened.webView?.evaluateJavaScript("""
+            (()=>{const view=document.querySelector('foliate-view'),target=view.resolveCFI(\(encoded)),doc=view.renderer.getContents().find(c=>c.index===target.index).doc,range=target.anchor(doc),rect=range.getClientRects()[0];
+            return {visible:window.Leaf.isLocationVisible(\(encoded)),text:range.toString(),width:rect.width,top:rect.top+doc.defaultView.frameElement.getBoundingClientRect().top};})()
+            """) as? [String:Any]
+        XCTAssertEqual(restored?["visible"] as? Bool,true,"\(restored ?? [:])")
+        XCTAssertEqual(restored?["text"] as? String,state["text"])
+        XCTAssertEqual(restored?["width"] as? Double,0)
+        XCTAssertGreaterThanOrEqual(restored?["top"] as? Double ?? -999,0)
+    }
+
     func testHeadingRangeCFIRestoresInBothFlows() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         // The first visible range starts at an element boundary, not a text offset.
@@ -732,65 +785,297 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertGreaterThan(rows.count, 12)
         for row in rows { XCTAssertLessThan(abs(row["drift"] ?? 999), 2, "\(row)") }
     }
-    func testScrollGesturesContinueAcrossChapterEdgesAndKeepOneDocumentLoaded() async throws {
+    func testScrollWindowCrossesReadyChapterEdgesWithoutReplacingDocuments() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
-        let model = try show(book, url: url)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
         try await assertOpened(model, contains: "attention")
         let result = try await model.webView?.callAsyncJavaScript("""
-            const view = document.querySelector('foliate-view');
+            const view = document.querySelector('foliate-view'), r = view.renderer;
             const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-            window.Leaf.applyPreferences({...base, scrolling:true}); await sleep(150);
-            await view.goTo(1); await sleep(100);
-            const renderer = view.renderer;
-            const waitForChapter = async index => {
-                const deadline = performance.now() + 8000;
-                while (performance.now() < deadline) {
-                    const content = renderer.getContents()[0];
-                    if (content?.index === index && content.doc?.readyState === 'complete'
-                        && view.lastLocation?.range?.startContainer.ownerDocument === content.doc) {
-                        await sleep(80); return;
-                    }
-                    await sleep(25);
+            const ready = async indices => {
+                const until = performance.now()+8000;
+                while(performance.now()<until) {
+                    if(indices.every(i=>r.getContents().some(x=>x.index===i && x.doc.readyState==='complete' && x.doc.URL!=='about:blank'))) { await sleep(60);return; }
+                    await sleep(20);
                 }
-                throw new Error(`Chapter ${index} did not finish rendering`);
+                throw new Error('Nearby chapter window not ready: '+JSON.stringify(r.getContents().map(x=>x.index)));
             };
-            const touch = (type,y) => {
-                const doc = renderer.getContents()[0].doc;
-                const event = new Event(type, {bubbles:true,cancelable:true});
-                const point = {screenX:150,screenY:y,clientX:150,clientY:y};
-                Object.defineProperties(event,{changedTouches:{value:[point]},touches:{value:type==='touchend'||type==='touchcancel'?[]:[point]}});
-                doc.dispatchEvent(event);
-            };
-            const edge = end => {
-                const doc = renderer.getContents()[0].doc;
-                const container = doc.defaultView.frameElement.parentElement.parentElement;
-                container.scrollTop = end ? container.scrollHeight : 0;
-            };
-            edge(true); await sleep(100);
-            touch('touchstart',350); touch('touchmove',200); touch('touchend',200); await waitForChapter(2);
-            const next = renderer.getContents()[0].index;
-            edge(false); await sleep(80);
-            touch('touchstart',200); touch('touchmove',350); touch('touchend',350); await waitForChapter(1);
-            const previous = renderer.getContents()[0].index;
-            await view.goTo(1); edge(false); await sleep(100);
-            touch('touchstart',350); touch('touchmove',200); touch('touchend',200);
-            edge(true); await waitForChapter(2); // A flick reaches the edge after the finger lifts.
-            const momentumNext = renderer.getContents()[0].index;
-            await view.goTo(0); edge(false); await sleep(100);
-            touch('touchstart',200); touch('touchmove',350); touch('touchend',350); await sleep(100);
-            const start = renderer.getContents()[0].index;
-            await view.goTo(view.book.sections.length-1); edge(true); await sleep(100);
-            touch('touchstart',350); touch('touchmove',200); touch('touchend',200); await sleep(100);
-            return {next,previous,momentumNext,start,end:renderer.getContents()[0].index,last:view.book.sections.length-1,documents:renderer.getContents().length};
-            """, arguments: ["base": preferences.payload], in: nil, contentWorld: .page)
-        let metrics = try XCTUnwrap(result as? [String: Int])
-        XCTAssertEqual(metrics["next"], 2)
-        XCTAssertEqual(metrics["previous"], 1)
-        XCTAssertEqual(metrics["momentumNext"], 2)
-        XCTAssertEqual(metrics["start"], 0)
-        XCTAssertEqual(metrics["end"], metrics["last"])
-        XCTAssertEqual(metrics["documents"], 1)
+            await view.goTo(1); await ready([0,1,2]);
+            const first = r.getContents().find(x=>x.index===1).doc;
+            const nextContent = r.getContents().find(x=>x.index===2),next = nextContent.doc;
+            const {Overlayer}=await import('./foliate/overlayer.js');
+            const marker=next.createRange(),node=next.querySelector('p').firstChild;
+            marker.setStart(node,2);marker.setEnd(node,12);
+            nextContent.overlayer.add('continuous-marker',marker,Overlayer.highlight);
+            const container = first.defaultView.frameElement.parentElement.parentElement;
+            const offset = doc=>doc.defaultView.frameElement.parentElement.getBoundingClientRect().top-container.getBoundingClientRect().top+container.scrollTop;
+            const boundary = offset(next);
+            container.scrollTop=boundary-container.clientHeight/2;await sleep(80);
+            const overlap = first.defaultView.frameElement.getBoundingClientRect().bottom>container.getBoundingClientRect().top
+                && next.defaultView.frameElement.getBoundingClientRect().top<container.getBoundingClientRect().bottom;
+            const before = next.defaultView.frameElement.getBoundingClientRect().top;
+            container.scrollTop+=container.clientHeight/2+40;
+            await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
+            const forward = r.getContents()[0].index;
+            const glyph=marker.getClientRects()[0],highlight=nextContent.overlayer.element.querySelector('rect').getBoundingClientRect();
+            const overlayOffset=highlight.top-next.defaultView.frameElement.getBoundingClientRect().top-glyph.top;
+            const overlayHit=nextContent.overlayer.hitTest({x:glyph.left+1,y:glyph.top+1})[0];
+            const markerCFI=view.getCFI(2,marker),sameMarker=view.resolveCFI(markerCFI).anchor(next).toString()===marker.toString();
+            const retained = r.getContents()[0].doc===next && first.defaultView.frameElement?.isConnected;
+            const movement = before-next.defaultView.frameElement.getBoundingClientRect().top;
+            const maxDocuments=r.getContents().length;
+            container.scrollTop=offset(first)+40;await sleep(100);
+            const backward=r.getContents()[0].index;
+            const restoredDocument=r.getContents()[0].doc===first;
+            await view.goTo(0);r.scrollToAnchor(0);await sleep(100);await r.prev();
+            const beginning=r.getContents()[0].index;
+            const last=view.book.sections.length-1;await view.goTo(last);r.scrollToAnchor(1);await sleep(100);await r.next();
+            return {overlap,forward,retained,movement,overlayOffset,overlayHit,sameMarker,expected:container.clientHeight/2+40,maxDocuments,backward,restoredDocument,beginning,end:r.getContents()[0].index,last};
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let metrics = try XCTUnwrap(result as? [String: Any])
+        XCTAssertEqual(metrics["overlap"] as? Bool, true, "Both chapters must share a viewport before crossing")
+        XCTAssertEqual(metrics["forward"] as? Int, 2)
+        XCTAssertEqual(metrics["retained"] as? Bool, true, "Crossing must reuse the prepared document")
+        XCTAssertEqual(metrics["overlayOffset"] as? Double ?? 999,0,accuracy:1,"A prepared chapter’s highlight must align with its text")
+        XCTAssertEqual(metrics["overlayHit"] as? String,"continuous-marker")
+        XCTAssertEqual(metrics["sameMarker"] as? Bool,true)
+        XCTAssertEqual(metrics["movement"] as? Double ?? 0, metrics["expected"] as? Double ?? 999, accuracy: 3)
+        XCTAssertLessThanOrEqual(metrics["maxDocuments"] as? Int ?? 99, 3)
+        XCTAssertEqual(metrics["backward"] as? Int, 1)
+        XCTAssertEqual(metrics["restoredDocument"] as? Bool, true)
+        XCTAssertEqual(metrics["beginning"] as? Int, 0)
+        XCTAssertEqual(metrics["end"] as? Int, metrics["last"] as? Int)
         XCTAssertNil(model.error)
+        let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json")
+        attachment.name="Continuous chapter boundary geometry";attachment.lifetime = .keepAlways;add(attachment)
+    }
+    func testDelayedPreviousChapterKeepsFinalPassageDuringEndNavigation() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            const last=view.book.sections.length-1,previous=view.book.sections[last-1],load=previous.load,rows=[];
+            const ready=async indices=>{const end=performance.now()+8000;while(performance.now()<end){if(indices.every(i=>r.getContents().some(c=>c.index===i&&c.doc?.body)))return;await sleep(10);}throw new Error('Delayed neighbor not ready');};
+            try {
+                for(const delay of [40,90,130,210]){
+                    previous.load=load;
+                    await view.goTo(0);await ready([0,1]);
+                    previous.load=async()=>{await sleep(delay);return load();};
+                    await view.goTo(last);await r.scrollToAnchor(1);
+                    const doc=r.getContents()[0].doc,frame=doc.defaultView.frameElement;
+                    const marker=view.lastLocation.range.cloneRange();
+                    if(marker.startContainer.nodeType===3)marker.setStart(marker.startContainer,Math.min(marker.startContainer.length,marker.startOffset+40));
+                    marker.collapse(true);
+                    const saved=view.getCFI(last,marker),before=frame.getBoundingClientRect().top,caretRanges=doc.getSelection().rangeCount;
+                    await sleep(80);await r.next();await ready([last-1,last]);await sleep(300);
+                    rows.push({delay,caretRanges,active:r.getContents()[0].index,savedVisible:window.Leaf.isLocationVisible(saved),before,after:frame.getBoundingClientRect().top,
+                        saved,current:view.lastLocation.cfi});
+                }
+                const doc=r.getContents()[0].doc,node=doc.querySelector('p').firstChild,range=doc.createRange();
+                range.setStart(node,2);range.setEnd(node,12);await r.scrollToAnchor(range,true);
+                rows.at(-1).explicitSelection=doc.getSelection().toString()===range.toString();
+                return rows;
+            } finally {previous.load=load;}
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let rows=try XCTUnwrap(result as? [[String:Any]])
+        let attachment=XCTAttachment(data:try JSONSerialization.data(withJSONObject:rows),uniformTypeIdentifier:"public.json")
+        attachment.name="Delayed previous chapter with final-page navigation";attachment.lifetime = .keepAlways;add(attachment)
+        for row in rows {
+            XCTAssertEqual(row["active"] as? Int,3,"\(row)")
+            XCTAssertEqual(row["caretRanges"] as? Int,0,"Scroll navigation must not create a synthetic caret: \(row)")
+            if let selected=row["explicitSelection"] as? Bool { XCTAssertTrue(selected,"Explicit selection still installs its range") }
+            XCTAssertEqual(row["savedVisible"] as? Bool,true,"\(row)")
+            XCTAssertEqual(row["before"] as? Double ?? 0,row["after"] as? Double ?? 999,accuracy:3,"\(row)")
+        }
+    }
+
+    func testBackwardWarmUpKeepsPassageWhenOlderChaptersWereNeverLoaded() async throws {
+        let (book,url)=try prepare("The Art of Noticing.epub",format:.epub)
+        var prefs=preferences;prefs.scrolling=true
+        let model=try show(book,url:url,readerPreferences:prefs)
+        try await assertOpened(model,contains:"attention")
+        let result=try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            await view.goTo(3);
+            const section=view.book.sections[1],load=section.load;
+            section.load=async()=>{await sleep(150);return load();};
+            try {
+                await view.goTo(2);
+                const frame=r.getContents()[0].doc.defaultView.frameElement,before=frame.getBoundingClientRect().top;
+                await sleep(450);
+                return {before,after:frame.getBoundingClientRect().top,active:r.getContents()[0].index,indices:r.getContents().map(c=>c.index)};
+            } finally {section.load=load;}
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let state=try XCTUnwrap(result as? [String:Any])
+        XCTAssertEqual(state["active"] as? Int,2,"\(state)")
+        XCTAssertEqual(state["before"] as? Double ?? 0,state["after"] as? Double ?? 999,accuracy:2,"\(state)")
+        XCTAssertEqual(Set(state["indices"] as? [Int] ?? []),Set([1,2,3]))
+    }
+
+    func testNavigationReusesAnAdjacentChapterStillBeingPrepared() async throws {
+        let (book,url)=try prepare("The Art of Noticing.epub",format:.epub)
+        var prefs=preferences;prefs.scrolling=true
+        let model=try show(book,url:url,readerPreferences:prefs)
+        try await assertOpened(model,contains:"attention")
+        let result=try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            const ready=async index=>{const end=performance.now()+8000;while(!r.getContents().some(c=>c.index===index&&c.doc?.body)){if(performance.now()>end)throw new Error('Prepared chapter timed out');await sleep(10);}};
+            await view.goTo(3);await ready(2);
+            const section=view.book.sections[1],load=section.load;
+            let loads=0,preparedDoc;const events=[];
+            const state=()=>r.getContents().map(c=>c.index);
+            section.load=async()=>{loads++;events.push({type:'read',loads,state:state(),stack:new Error().stack});await sleep(150);return load();};
+            const loaded=({detail})=>{events.push({type:'load',index:detail.index,preload:!!detail.preload,state:state()});if(detail.index===1&&detail.preload)preparedDoc=detail.doc;};
+            r.addEventListener('load',loaded);
+            try {
+                await view.goTo(2);events.push({type:'at2',state:state()});await sleep(20);events.push({type:'before1',state:state()});await view.goTo(1);await ready(1);
+                return {loads,events,active:r.getContents()[0].index,reused:r.getContents()[0].doc===preparedDoc,documents:r.getContents().length};
+            } finally {section.load=load;r.removeEventListener('load',loaded);}
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let state=try XCTUnwrap(result as? [String:Any])
+        XCTAssertEqual(state["loads"] as? Int,1,"An in-flight neighbor must not be cancelled and read again: \(state)")
+        XCTAssertEqual(state["active"] as? Int,1)
+        XCTAssertEqual(state["reused"] as? Bool,true)
+        XCTAssertLessThanOrEqual(state["documents"] as? Int ?? 99,3)
+    }
+
+    func testSelectingVisibleNeighborKeepsItsOwnCFIWithoutMovingScrollPassage() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        var prefs=preferences; prefs.scrolling=true
+        let model=try show(book,url:url,readerPreferences:prefs)
+        try await assertOpened(model,contains:"attention")
+        let web=try XCTUnwrap(model.webView)
+        let passage=try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            await view.goTo(1);
+            const end=performance.now()+8000;
+            while(!r.getContents().some(c=>c.index===2&&c.doc?.body)) {if(performance.now()>end)throw new Error('Neighbor not ready');await sleep(10);}
+            const next=r.getContents().find(c=>c.index===2).doc,frame=next.defaultView.frameElement,container=frame.parentElement.parentElement;
+            const offset=frame.parentElement.getBoundingClientRect().top-container.getBoundingClientRect().top+container.scrollTop;
+            container.scrollTop=offset-container.clientHeight*0.45;await sleep(300);
+            return view.lastLocation.cfi;
+            """,arguments:[:],in:nil,contentWorld:.page) as? String
+        let locator=try XCTUnwrap(passage)
+        try await waitUntil {model.locator==locator}
+        let result=try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,doc=r.getContents().find(c=>c.index===2).doc;
+            const container=doc.defaultView.frameElement.parentElement.parentElement,top=container.scrollTop,active=r.getContents()[0].index;
+            const range=doc.createRange(),node=doc.querySelector('p').firstChild;
+            range.setStart(node,2);range.setEnd(node,12);
+            const selection=doc.getSelection();selection.removeAllRanges();selection.addRange(range);
+            const expected=view.getCFI(2,range),chapter=view.getProgressOf(2,range).tocItem?.label;
+            await new Promise(resolve=>setTimeout(resolve,100));
+            return {text:selection.toString(),expected,chapter,active,afterActive:r.getContents()[0].index,top,afterTop:container.scrollTop};
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let state=try XCTUnwrap(result as? [String:Any]),text=try XCTUnwrap(state["text"] as? String)
+        try await waitUntil {model.selectedReadingContext()?.text==text}
+        let context=try XCTUnwrap(model.selectedReadingContext())
+        XCTAssertEqual(context.locator,state["expected"] as? String,"The quote belongs to the selected neighboring chapter")
+        XCTAssertEqual(context.chapter,state["chapter"] as? String)
+        XCTAssertEqual(model.locator,locator,"Selecting an already visible neighbor must preserve the reading passage")
+        XCTAssertEqual(state["active"] as? Int,1)
+        XCTAssertEqual(state["afterActive"] as? Int,1)
+        XCTAssertEqual(state["top"] as? Double ?? 0,state["afterTop"] as? Double ?? 999,accuracy:1)
+        let snapshot=try await model.readingChatContext()
+        XCTAssertEqual(snapshot?.locator,context.locator)
+        XCTAssertEqual(snapshot?.text,text)
+    }
+
+    func testContinuousScrollEvictsDistantChaptersAndReleasesQueuedResourcesOnClose() async throws {
+        let (book, url) = try prepare("MemoryStress.epub", format: .epub, fixtures: true)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await waitUntil { model.isReady || model.error != nil }
+        let web = try XCTUnwrap(model.webView)
+        let result = try await web.callAsyncJavaScript("""
+            const active=new Map(),create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL);
+            let peakCount=0,peakBytes=0,maxDocuments=0,maxFrames=0;
+            const errors=[],error=console.error;console.error=(...args)=>{errors.push(args.map(String).join(' '));error(...args);};
+            URL.createObjectURL=blob=>{const url=create(blob);active.set(url,blob.size);peakCount=Math.max(peakCount,active.size);peakBytes=Math.max(peakBytes,[...active.values()].reduce((a,b)=>a+b,0));return url;};
+            URL.revokeObjectURL=url=>{active.delete(url);revoke(url);};
+            const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            try {
+                await window.Leaf.open(config);
+                const view=document.querySelector('foliate-view'),r=view.renderer,count=view.book.sections.length;
+                const ready=async()=>{
+                    const until=performance.now()+8000;
+                    while(performance.now()<until){
+                        if(r.getContents().some(x=>!x.doc))throw new Error('Null mounted document: '+JSON.stringify(r.getContents().map(x=>({index:x.index,doc:!!x.doc,connected:x.doc?.defaultView?.frameElement?.isConnected})))+' errors='+JSON.stringify(errors));
+                        if(r.getContents().length===3 && r.getContents().every(x=>x.doc.URL!=='about:blank' && x.doc.body.textContent.trim())){await sleep(20);return;}
+                        await sleep(10);
+                    }
+                    throw new Error('Bounded nearby chapters did not finish');
+                };
+                for(let n=0;n<48;n++){
+                    await view.goTo(1+(n*37)%(count-2));await ready();
+                    const contents=r.getContents();
+                    maxDocuments=Math.max(maxDocuments,contents.length);
+                    maxFrames=Math.max(maxFrames,contents[0].doc.defaultView.frameElement.getRootNode().querySelectorAll('iframe').length);
+                    const current=contents[0].index;
+                    if(contents.some(x=>Math.abs(x.index-current)>1))throw new Error('Distant chapter retained');
+                }
+                // Close with an adjacent chapter read still queued/in flight.
+                await view.goTo(20);window.Leaf.close();await sleep(350);
+                return {count,peakCount,peakBytes,maxDocuments,maxFrames,afterClose:active.size};
+            } finally { URL.createObjectURL=create;URL.revokeObjectURL=revoke;console.error=error; }
+            """, arguments: ["config": ["name":"MemoryStress.epub","format":"epub","locator":"","preferences":prefs.payload]], in:nil,contentWorld:.page)
+        let metrics = try XCTUnwrap(result as? [String:Int])
+        XCTAssertGreaterThanOrEqual(metrics["count"] ?? 0,128)
+        XCTAssertEqual(metrics["maxDocuments"],3)
+        XCTAssertLessThanOrEqual(metrics["maxFrames"] ?? 99,5)
+        XCTAssertLessThanOrEqual(metrics["peakCount"] ?? 99,24)
+        XCTAssertLessThanOrEqual(metrics["peakBytes"] ?? .max,16*1024*1024)
+        XCTAssertEqual(metrics["afterClose"],0)
+        let attachment = XCTAttachment(data:try JSONEncoder().encode(metrics),uniformTypeIdentifier:"public.json")
+        attachment.name="Scroll chapter-window resource bounds and queued-close cleanup";attachment.lifetime = .keepAlways;add(attachment)
+    }
+    func testContinuousScrollWindowStylesAndSavedCFIAcrossEveryTextSizeAndFlowSwitch() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            await view.goTo(1);await sleep(250);
+            const doc=r.getContents()[0].doc,range=doc.createRange(),p=doc.querySelector('p').firstChild;
+            range.setStart(p,8);range.setEnd(p,20);
+            const saved=view.getCFI(1,range),text=range.toString(),rows=[],events=[];
+            const measure=()=>{const current=r.getContents()[0],frame=current.doc.defaultView.frameElement,container=frame.parentElement.parentElement;return {index:current.index,top:container.scrollTop,frameY:frame.getBoundingClientRect().top,start:r.start,locator:view.lastLocation?.cfi};};
+            r.addEventListener('relocate',({detail})=>{events.push({reason:detail.reason,...measure()});if(events.length>16)events.shift();});
+            await view.goTo(saved);
+            const initial={...measure(),visible:window.Leaf.isLocationVisible(saved)};
+            for(const scrolling of [true,false,true])for(let size=12;size<=32;size++){
+                const font=['Georgia','Palatino','System'][(size-12)%3],margin=[8,20,48][(size-12)%3],theme=themes[(size-12)%themes.length];
+                window.Leaf.applyPreferences({...base,...theme,scrolling,font,fontSize:size,horizontalMargin:margin});
+                await sleep(70);
+                const contents=r.getContents();
+                const valid=contents.every(({doc})=>{
+                    const root=doc.defaultView.getComputedStyle(doc.documentElement);
+                    return Math.abs(parseFloat(root.fontSize)-size)<0.1 && root.colorScheme===theme.colorScheme
+                        && [...doc.querySelector('p').getClientRects()].every(rect=>Math.abs(rect.width-(view.clientWidth-2*margin))<2);
+                });
+                rows.push({scrolling,size,font,margin,valid,initial,state:measure(),events:[...events],visible:window.Leaf.isLocationVisible(saved),documents:contents.length,
+                    sameText:view.resolveNavigation(saved).anchor(doc).toString()===text,
+                    actual:contents.map(({index,doc})=>({index,size:doc.defaultView.getComputedStyle(doc.documentElement).fontSize,
+                        scheme:doc.defaultView.getComputedStyle(doc.documentElement).colorScheme,
+                        widths:[...doc.querySelector('p').getClientRects()].map(rect=>rect.width),expectedWidth:view.clientWidth-2*margin,
+                        styles:[...doc.querySelectorAll('style')].map(s=>({namespace:s.namespaceURI,applied:!!s.sheet}))}))});
+            }
+            return rows;
+            """, arguments:["base":prefs.payload,"themes":[ReadingTheme.day,ReadingTheme.paper,ReadingTheme.night].map { ReaderPreferences(fontSize:19,lineHeight:1.65,font:"Georgia",theme:$0,scrolling:true).payload }],in:nil,contentWorld:.page)
+        let rows = try XCTUnwrap(result as? [[String:Any]])
+        XCTAssertEqual(rows.count,63)
+        for row in rows {
+            XCTAssertEqual(row["valid"] as? Bool,true,"\(row)")
+            XCTAssertEqual(row["visible"] as? Bool,true,"\(row)")
+            XCTAssertEqual(row["sameText"] as? Bool,true,"\(row)")
+            XCTAssertLessThanOrEqual(row["documents"] as? Int ?? 99,(row["scrolling"] as? Bool) == true ? 3 : 1)
+        }
+        let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:rows),uniformTypeIdentifier:"public.json")
+        attachment.name="Nearby chapter styles and saved CFI at 12–32 pt in both flows";attachment.lifetime = .keepAlways;add(attachment)
     }
     func testPlainTextRenders() async throws {
         let (book, url) = try prepare("A Field Guide to Slow Days.txt", format: .txt)

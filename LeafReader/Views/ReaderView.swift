@@ -262,7 +262,7 @@ struct ReaderContent: View {
                 Button { library.flush(); dismiss() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.accessibilityLabel("Close book").accessibilityIdentifier("closeBook")
                 VStack(spacing: 3) {
                     Text(library.book(book.id)?.title ?? book.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text(model.chapterTitle.isEmpty ? book.author : model.chapterTitle).font(.caption).foregroundStyle(theme.foreground.opacity(0.65)).lineLimit(1)
+                    Text(model.chapterTitle.isEmpty ? book.author : model.chapterTitle).font(.caption).foregroundStyle(theme.foreground.opacity(0.65)).lineLimit(1).accessibilityIdentifier("readerChapterTitle")
                 }.frame(maxWidth: .infinity)
                 Button { model.toggleBookmark() } label: { Image(systemName: model.isBookmarked ? "bookmark.fill" : "bookmark").frame(width: 44, height: 44) }
                     .disabled(!model.isReady).accessibilityLabel(model.isBookmarked ? "Remove bookmark" : "Add bookmark").accessibilityIdentifier("toggleBookmark")

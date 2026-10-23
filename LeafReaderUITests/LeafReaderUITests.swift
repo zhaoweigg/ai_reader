@@ -590,6 +590,11 @@ final class LeafReaderUITests: XCTestCase {
             } else { app.buttons["featuredBook"].tap() }
             waitForBook(app)
         }
+        func hideKeyboardAndWait() {
+            app.buttons["Hide keyboard"].tap()
+            expectation(for:NSPredicate(format:"exists == false"),evaluatedWith:app.keyboards.firstMatch)
+            waitForExpectations(timeout:5)
+        }
         openBook(); showReaderControls(app)
         if flow == "PDF" { app.buttons["nextPage"].tap() }
         else {
@@ -647,12 +652,13 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists, "Expanded typing can show the conversation")
         capture(flow + " expanded chat above keyboard", app: app)
         let typingHeight = panel.frame.height
-        app.buttons["Hide keyboard"].tap()
+        hideKeyboardAndWait()
         XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
         input.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout:5))
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
-        app.buttons["Hide keyboard"].tap()
+        hideKeyboardAndWait()
         XCUIDevice.shared.orientation = .landscapeLeft
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
@@ -666,7 +672,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
         XCTAssertTrue(input.isHittable)
         capture(flow + " landscape resize with keyboard", app: app)
-        app.buttons["Hide keyboard"].tap()
+        hideKeyboardAndWait()
         XCUIDevice.shared.orientation = .portrait
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
@@ -1002,14 +1008,22 @@ final class LeafReaderUITests: XCTestCase {
         let surface = readingSurface(app)
         let nextChapter = surface.staticTexts["The ordinary world"]
         for _ in 0..<9 {
-            if nextChapter.exists { break }
+            if nextChapter.exists && nextChapter.isHittable { break }
             surface.swipeUp(velocity: .slow)
         }
-        XCTAssertTrue(nextChapter.waitForExistence(timeout: 5))
+        XCTAssertTrue(nextChapter.exists && nextChapter.isHittable, "A preloaded offscreen chapter does not count as crossing")
         capture("Scroll continues into the next chapter", app: app)
-        surface.swipeDown(velocity: .slow)
         showReaderControls(app)
-        XCTAssertTrue(app.staticTexts["Begin where you are"].waitForExistence(timeout: 5))
+        let chapterTitle = app.staticTexts["readerChapterTitle"]
+        for _ in 0..<4 where chapterTitle.label != "The ordinary world" {
+            surface.swipeUp(velocity: .slow); showReaderControls(app)
+        }
+        XCTAssertEqual(chapterTitle.label,"The ordinary world")
+        for _ in 0..<4 where chapterTitle.label != "Begin where you are" {
+            surface.swipeDown(velocity: .slow); showReaderControls(app)
+        }
+        showReaderControls(app)
+        XCTAssertEqual(chapterTitle.label,"Begin where you are")
         capture("Scroll returns to previous chapter", app: app)
     }
 
