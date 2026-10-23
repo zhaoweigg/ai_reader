@@ -200,7 +200,7 @@ struct LibraryView: View {
         chat = ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true),
             conversation: book?.fingerprint ?? "leaf.library.general.v1")
     }
-    private func closeChat() { chat?.close(); chat = nil }
+    private func closeChat() { chat?.close(); chat = nil; chatBook = nil }
     private func openBook(_ id: UUID) { closeChat(); onOpen(id) }
     private func featuredBook(_ book: Book) -> some View {
         Button { openBook(book.id) } label: {

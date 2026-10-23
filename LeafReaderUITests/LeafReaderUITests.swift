@@ -808,11 +808,12 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(slider.value as? String,"20%")
         slider.adjust(toNormalizedSliderPosition:1)
         if slider.value as? String != "95%" {
-            // XCTest's normalized gesture can stop short on the stepped native slider.
-            // Finish at the physical track endpoint, retaining the exact maximum assertion.
-            slider.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).press(
+            // Start on the thumb, rather than the track beyond it. XCTest can
+            // stop short on stepped sliders; cross the track end with the thumb.
+            slider.adjust(toNormalizedSliderPosition:0.5)
+            slider.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).press(
                 forDuration:0.05,
-                thenDragTo:slider.coordinate(withNormalizedOffset:CGVector(dx:1,dy:0.5)),
+                thenDragTo:slider.coordinate(withNormalizedOffset:CGVector(dx:1,dy:0.5)).withOffset(CGVector(dx:16,dy:0)),
                 withVelocity:.slow,
                 thenHoldForDuration:0.1
             )

@@ -2,7 +2,6 @@ import XCTest
 
 final class LibraryChatUITests: XCTestCase {
     @MainActor private func launch(empty: Bool = false, mock: Bool = true) -> XCUIApplication {
-        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -59,7 +58,6 @@ final class LibraryChatUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Remember my Library question"].exists)
         // Opening the book underneath the panel must synchronously save and stop
         // Library's owner before the reader creates a session for the same history.
-        app.buttons["closeReaderChat"].tap()
         app.buttons["featuredBook"].tap()
         XCTAssertTrue(app.buttons["Appearance"].waitForExistence(timeout: 15))
         let loading = app.staticTexts["Opening your book…"]
@@ -106,6 +104,22 @@ final class LibraryChatUITests: XCTestCase {
         app.terminate(); app.launch(); app.buttons["openLibraryChat"].tap()
         XCTAssertFalse(app.staticTexts.matching(identifier: "chatQuestion").firstMatch.exists)
     }
+    @MainActor func testRemovingClosedChatBookKeepsChatClosedAndFallsBackToGeneral() {
+        let app = launch()
+        app.buttons["openLibraryChat"].tap()
+        input(app).tap(); input(app).typeText("Keep this book draft separate")
+        app.buttons["closeReaderChat"].tap()
+        let card = app.buttons["book-The Art of Noticing"]
+        for _ in 0..<3 where !card.isHittable { app.swipeUp() }
+        card.press(forDuration: 1)
+        app.buttons["Remove book"].tap(); app.buttons["Remove from library"].tap()
+        XCTAssertTrue(app.buttons["openLibraryChat"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists, "Removing a previously chatted book must not open chat")
+        app.buttons["openLibraryChat"].tap()
+        XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "General chat")
+        XCTAssertEqual(input(app).value as? String, "Ask Leaf…")
+        capture("Removed book falls back to General only when requested")
+    }
     @MainActor func testLibraryConversationPickerKeepsDraftsSeparateAndSettingsReachable() {
         let app = launch()
         app.buttons["openLibraryChat"].tap()
@@ -142,6 +156,7 @@ final class LibraryChatUITests: XCTestCase {
         capture("Library search retains chosen book chat")
     }
     @MainActor func testLibraryLauncherMovementThemesRotationAndPanelSizing() {
+        XCUIDevice.shared.orientation = .portrait
         let app = launch()
         defer { XCUIDevice.shared.orientation = .portrait }
         let launcher = app.buttons["openLibraryChat"]
