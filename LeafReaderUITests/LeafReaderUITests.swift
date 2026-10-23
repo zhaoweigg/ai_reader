@@ -975,6 +975,13 @@ final class LeafReaderUITests: XCTestCase {
                            flow + ": the real engine spoke every passage")
             app.buttons["Stop listening"].tap()
             XCTAssertFalse(app.buttons["audioPlayPause"].waitForExistence(timeout: 3))
+            // Stop removes the player, but intentionally leaves Listen settings
+            // open. Dismiss that sheet before accessing controls behind it.
+            let done = app.navigationBars["Listen"].buttons["Done"]
+            XCTAssertTrue(done.isHittable); done.tap()
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.descendants(matching: .any)["listeningForm"].firstMatch)
+            waitForExpectations(timeout: 5)
+            capture(flow + " stopped listening settings dismissed", app: app)
             // The saved cursor resumes with the natural voice and the engine choice is retained.
             showReaderControls(app); app.buttons["Listen"].tap()
             XCTAssertTrue(app.buttons["resumeSavedListening"].waitForExistence(timeout: 5), flow + ": saved position offered")
