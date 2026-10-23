@@ -15,7 +15,7 @@ struct LeafReaderApp: App {
         var chatProvider: (any ChatProvider)?
         var chatGPT: ChatGPTAccountStore?
         var chatCredentials = KeychainChatCredentials()
-        var catalogClient: any ZLibraryServing = ZLibraryClient()
+        var catalogClient: (any ZLibraryServing)?
         #if DEBUG
         let process = ProcessInfo.processInfo
         if process.arguments.contains("--ui-testing"),
@@ -30,7 +30,12 @@ struct LeafReaderApp: App {
             if process.environment["LEAF_UI_CHATGPT_CONNECTED"] == "1" {
                 chatGPT = ChatGPTAccountStore.uiTestConnected(defaults: defaults, credentials: chatCredentials)
             }
-            if process.environment["LEAF_UI_ZLIB_MOCK"] == "1" { catalogClient = UITestZLibraryClient() }
+            if process.environment["LEAF_UI_ZLIB_MOCK"] == "1" {
+                catalogClient = UITestZLibraryClient()
+                if process.environment["LEAF_UI_ZLIB_WEBSITE_FIXTURE"] == "1" {
+                    defaults.set("https://catalog.example", forKey: "zlibrary.origin")
+                }
+            }
         } else if NSClassFromString("XCTestCase") != nil {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUnitTests/\(UUID().uuidString)", isDirectory: true)
             seedSamples = false

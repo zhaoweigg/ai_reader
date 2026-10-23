@@ -24,6 +24,18 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var importedID: UUID?
     @Published private(set) var importError: String?
     private var signInData: WKWebsiteDataStore?
+    private var browserSession: ZLibraryBrowserSession?
+    var websiteBrowser: ZLibraryBrowserSession {
+        if let browserSession { return browserSession }
+        let browser = ZLibraryBrowserSession(origin: origin, dataStore: websiteData)
+        browser.contextChanged = { [weak self] userAgent in
+            guard let self else { return }
+            if let userAgent { self.captureWebsiteUserAgent(userAgent) }
+            try? await self.saveWebsiteContext()
+        }
+        browserSession = browser
+        return browser
+    }
     private var seedingWebsite = false
     private var websiteUserAgent: String?
     var websiteData: WKWebsiteDataStore {
@@ -38,7 +50,8 @@ final class ZLibraryStore: ObservableObject {
     }
     private let defaults: UserDefaults
     private let credentials: any ChatCredentialStore
-    private let client: any ZLibraryServing
+    private let clientOverride: (any ZLibraryServing)?
+    private var client: any ZLibraryServing { clientOverride ?? ZLibraryClient(transport: websiteBrowser) }
     private var session: ZLibrarySession?
     private var generation = UUID()
     private var downloadTask: Task<Void, Never>?
@@ -84,12 +97,12 @@ final class ZLibraryStore: ObservableObject {
     #else
     let isPreview = false
     #endif
-    init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(service: "com.weizhao.leafreader.zlibrary"), client: any ZLibraryServing = ZLibraryClient()) {
-        self.defaults = defaults; self.credentials = credentials; self.client = client
+    init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(service: "com.weizhao.leafreader.zlibrary"), client: (any ZLibraryServing)? = nil) {
+        self.defaults = defaults; self.credentials = credentials; self.clientOverride = client
         searchOrder = ZLibrarySearchOrder(rawValue: defaults.string(forKey: "zlibrary.searchOrder") ?? "") ?? .popular
         origin = (try? ZLibraryOrigin(defaults.string(forKey: "zlibrary.origin") ?? "https://z-library.sk")) ?? (try! ZLibraryOrigin("https://z-library.sk"))
         #if DEBUG
-        isPreview = client is UITestZLibraryClient
+        isPreview = client.map { $0 is UITestZLibraryClient } ?? false
         #endif
         do { session = try credentials.read(account: origin.url.absoluteString).flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode(ZLibrarySession.self, from: $0) }
             if session?.valid != true { session = nil }
@@ -108,6 +121,7 @@ final class ZLibraryStore: ObservableObject {
         websiteUserAgent = session?.userAgent
     }
     func clearWebsite() async {
+        browserSession?.invalidate(); browserSession = nil
         websiteUserAgent = nil
         // Disconnect must clear disk-backed data even if no browser was opened
         // during this launch.
