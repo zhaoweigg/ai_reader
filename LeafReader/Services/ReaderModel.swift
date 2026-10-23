@@ -325,11 +325,11 @@ final class ReaderModel: NSObject, ObservableObject {
         if !locator.isEmpty { navigatePDF(locator) }
         else if let first = doc.page(at: 0) { view.go(to: first) }
         isReady = true
-        synchronizeAnnotations()
         if let cover = doc.page(at: 0)?.thumbnail(of: CGSize(width: 300, height: 440), for: .cropBox).pngData() {
             library.setMetadata(bookID, title: nil, author: nil, cover: cover)
         }
         pdfPageChanged()
+        synchronizeAnnotations()
     }
     private func navigatePDF(_ target: String) {
         guard target.hasPrefix("pdf:"), let index = Int(target.dropFirst(4)), let page = pdfView?.document?.page(at: index) else { return }

@@ -101,6 +101,14 @@ The local `leaf-reader://` scheme exposes only bundled reader resources and the 
 
 ## Tests
 
+### Highlights and notes
+
+Select text while reading and choose **Highlight** for a yellow highlight, or **Add Note** to open an editor with the exact selected passage. The editor offers yellow, green, blue, and pink, plus **Save** and **Cancel**. Saving an empty note keeps the highlight. Cancel leaves a new selection unsaved.
+
+Tap a highlight to edit its color or note. **Saved → Highlights & notes** lists passages for the current book; the **Bookmarks** tab also has a **Highlights & notes** filter across books. Tap a saved passage to return to it, or its pencil to edit. Delete from the editor or swipe a saved row to remove the highlight and its note together.
+
+Annotations are local to the imported book and survive closing the book and app relaunches. Exact CFI ranges keep web-book highlights attached to text through reading-flow, font, margin, and theme changes. PDF highlights use saved character ranges and leave the imported PDF unchanged. Rendering uses overlays and a bounded page/chapter window; it does not wrap or rewrite book text. Older libraries without annotations remain readable. Annotation saves update the visible library only after an atomic disk write succeeds.
+
 ### Z-Library popular books
 
 Popular results may contain only ID, hash, title, author, and cover. Opening a book with no format loads that selected edition through `GET /eapi/book/{id}/{hash}` before showing **Add to library**. The feed does not fan out into per-book requests. Resolved metadata updates the current feed and is reused when reopening the same entry. A lookup failure or still-missing format offers **Try again**; only a known unsupported format shows the unsupported-edition message. Full details retain the same edition identity, summary cover/title, and available rating metadata. The download client also resolves sparse inputs and preserves its existing supported-format, file-byte, size, session, quota, and credential checks.
