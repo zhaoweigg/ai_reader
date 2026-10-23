@@ -109,6 +109,8 @@ def audit(root, registry, handoffs, is_ancestor):
                         "merge_commit": merge, "sources": item["sources"]})
 
     for request in registry.get("slot_requests", []):
+        if request.get("state", "queued") not in ("queued", "ready"):
+            continue
         slot = registry.get("slots", {}).get(request.get("requested_slot"), {})
         if slot.get("state") == "available" and not slot.get("owner_thread"):
             actions.append({"action": "coordinate_slot_handoff", "slot": request.get("requested_slot"),
