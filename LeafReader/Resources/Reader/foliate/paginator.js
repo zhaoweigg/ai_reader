@@ -918,6 +918,7 @@ export class Paginator extends HTMLElement {
             } finally {
                 if (this.#scrollLoads.get(index) === record) this.#scrollLoads.delete(index)
                 if (this.#scrollViews.get(index) !== record) this.#releaseScrollRecord(record)
+                else this.#activateScrolledView()
             }
         })
         this.#scrollLoadQueue = record.promise.catch(() => {})
@@ -925,7 +926,9 @@ export class Paginator extends HTMLElement {
     #activateScrolledView() {
         if (!this.#continuous || this.#locked || this.#scrollNavigating || this.#scrollRendering) return
         const top = this.#container.scrollTop + this.#margin + 1
-        const records = [...this.#scrollViews.values()].sort((a, b) => a.index - b.index)
+        const records = [...this.#scrollViews.values()]
+            .filter(record => !this.#scrollLoads.has(record.index))
+            .sort((a, b) => a.index - b.index)
         const record = records.find(record => this.#viewOffset(record.view) + record.view.element.getBoundingClientRect().height > top)
             ?? records.at(-1)
         if (!record || record.index === this.#index) return
