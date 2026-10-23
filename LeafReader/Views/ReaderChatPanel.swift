@@ -278,7 +278,7 @@ struct ReaderChatPanel: View {
                             HStack(spacing: 4) {
                                 Text(context == .general ? "General chat" : bookTitle).lineLimit(1)
                                 Image(systemName: "chevron.down")
-                            }.font(.caption).frame(minHeight: 44)
+                            }.font(.caption).frame(minWidth: 44, minHeight: 44)
                         }.accessibilityLabel("Choose conversation").accessibilityValue(context == .general ? "General chat" : bookTitle)
                             .accessibilityIdentifier("chooseLibraryConversation")
                     }
