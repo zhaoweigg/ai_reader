@@ -184,6 +184,9 @@ private struct ReaderSelectionAction {
         requestCurrentMenu()
     }
     @objc private func selectionHandleDragged(_ drag: UIPanGestureRecognizer) {
+        #if DEBUG
+        if drag.state == .began || drag.state == .ended { readerSelectionMenuTrace(drag.state == .began ? "handleBegan" : "handleEnded", source: source) }
+        #endif
         if drag.state == .began { dismiss() }
         if drag.state == .ended {
             Task { @MainActor [weak self] in
@@ -257,9 +260,15 @@ private struct ReaderSelectionAction {
                 && !source.selectionRectangles.contains { $0.contains(point) }
             // A second long press must not compete with UIKit's existing handle
             // interaction. A simultaneous pan only observes its completion.
+            #if DEBUG
+            if gestureRecognizer === handleDrag { readerSelectionMenuTrace(onHandle ? "handleAccepted" : "handleRejected", source: source, point: point, target: touch.view) }
+            #endif
             return gestureRecognizer === handleDrag ? onHandle : !onHandle
         }
         guard let view = touch.view else { return false }
+        #if DEBUG
+        readerSelectionMenuTrace("outsideTouch", source: source, point: source.map { touch.location(in: $0) }, target: view)
+        #endif
         if let controller { return !view.isDescendant(of: controller.view) }
         return requestTask != nil
     }
@@ -560,7 +569,7 @@ final class ReaderPDFView: PDFView {
 private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTrace", qos: .utility)
 @MainActor private var selectionMenuTraceStarted = false
 /// Bounded, boolean-only UI-test evidence. No book text, quotes, CFIs, or credentials.
-@MainActor func readerSelectionMenuTrace(_ event: String, source: UIView?, context: Bool? = nil) {
+@MainActor func readerSelectionMenuTrace(_ event: String, source: UIView?, context: Bool? = nil, point: CGPoint? = nil, target: UIView? = nil) {
     guard ProcessInfo.processInfo.arguments.contains("--ui-testing"),
           let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
     let url = cache.appendingPathComponent("SelectionMenuUITestTrace.json")
@@ -572,6 +581,8 @@ private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTr
         "legacyMenuVisible": UIMenuController.shared.isMenuVisible,
         "visibleMenuWindow": source?.window?.windowScene?.windows.contains(where: { $0 is ReaderSelectionWindow && !$0.isHidden }) ?? false]
     if let context { row["context"] = context }
+    if let point { row["x"] = point.x; row["y"] = point.y }
+    if let target { row["touchView"] = String(describing: type(of: target)); row["touchInBook"] = source.map { target.isDescendant(of: $0) } ?? false }
     guard let record = try? JSONSerialization.data(withJSONObject: row) else { return }
     selectionMenuTraceQueue.async {
         guard let row = try? JSONSerialization.jsonObject(with: record) as? [String: Any] else { return }

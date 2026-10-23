@@ -413,7 +413,7 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertTrue(handle.waitForExistence(timeout: 3))
                 XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(handle.frame), "Toolbar must leave the native handle clear")
                 capture(flow + (landscape ? " landscape" : " portrait") + " compact menu before native handle drag", app: app)
-                let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: handle.frame.midX, dy: handle.frame.midY))
                 start.press(forDuration: 0.7, thenDragTo: start.withOffset(CGVector(dx: 80, dy: landscape ? 0 : 35)), withVelocity: .slow, thenHoldForDuration: 0.2)
                 if !menu.waitForExistence(timeout: 4) {
                     let leaf = app.menuItems["Leaf actions"].exists ? app.menuItems["Leaf actions"] : app.buttons["Leaf actions"]
@@ -429,7 +429,7 @@ final class LeafReaderUITests: XCTestCase {
                 let startHandle = app.descendants(matching: .any)["selection-start-geometry"].firstMatch
                 XCTAssertTrue(startHandle.waitForExistence(timeout: 3))
                 XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(startHandle.frame))
-                let trim = startHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                let trim = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: startHandle.frame.midX, dy: startHandle.frame.midY))
                 trim.press(forDuration: 0.7, thenDragTo: trim.withOffset(CGVector(dx: 36, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.2)
                 XCTAssertTrue(menu.waitForExistence(timeout: 5))
                 let trimmed = menu.value as? String ?? ""
