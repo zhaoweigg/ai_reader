@@ -50,7 +50,11 @@ final class SimulatorIsolationUITests: XCTestCase {
     }
 
     @MainActor private func controls(_ app: XCUIApplication) {
-        if !app.buttons["closeBook"].exists {
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                              object: app.staticTexts["Opening your book…"])
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 20), .completed)
+        for _ in 0..<2 {
+            if app.buttons["closeBook"].waitForExistence(timeout: 1) { return }
             let web = app.webViews["bookWebView"]
             let surface = web.exists ? web : app.descendants(matching: .any)["bookPDFView"].firstMatch
             surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
@@ -68,10 +72,14 @@ final class SimulatorIsolationUITests: XCTestCase {
         } else {
             app.buttons["featuredBook"].tap()
             XCTAssertTrue(app.webViews["bookWebView"].waitForExistence(timeout: 15))
+            let paragraph = app.webViews["bookWebView"].staticTexts.containing(
+                NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
+            XCTAssertTrue(paragraph.waitForExistence(timeout: 15), "Wait for the rendered book, not the web-view shell")
             if flow == "Scroll" {
                 controls(app); app.buttons["Appearance"].tap()
                 app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
                 app.segmentedControls["readingFlow"].buttons[flow].tap()
+                XCTAssertTrue(app.segmentedControls["readingFlow"].buttons[flow].isSelected)
                 app.navigationBars["Appearance"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
                     .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
                 XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
