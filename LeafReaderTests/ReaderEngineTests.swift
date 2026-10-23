@@ -149,6 +149,28 @@ final class ReaderEngineTests: XCTestCase {
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: expected), uniformTypeIdentifier: "public.json")
         attachment.name = "Latest neighboring selection and retained prior range"; attachment.lifetime = .keepAlways; add(attachment)
     }
+    func testSpeechRevealPreservesChapterHrefAndElementAnchorsInBothFlows() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let result = try await model.webView?.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view');
+                await window.Leaf.readAloudChunk({locator:'section:0'});
+                const href=view.book.sections[2].id;
+                await window.Leaf.revealReadAloud({locator:href});
+                const chapter=view.renderer.getContents()[0],heading=chapter.doc.querySelector('h1');
+                heading.id='speech-reveal-heading';
+                const numeric=view.renderer.getContents()[0].index;
+                await window.Leaf.revealReadAloud({locator:href+'#speech-reveal-heading'});
+                return {numeric,element:view.renderer.getContents()[0].index,heading:heading.textContent,source:await window.Leaf.readAloudChunk({locator:'section:2'})};
+                """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+            XCTAssertEqual(result?["numeric"] as? Int, 2); XCTAssertEqual(result?["element"] as? Int, 2)
+            XCTAssertFalse((result?["heading"] as? String ?? "").isEmpty)
+            XCTAssertNotNil(result?["source"]); XCTAssertNil(model.error)
+        }
+    }
     func testSpokenPositionFollowsInsideLongChineseParagraphInBothFlows() async throws {
         let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
         for scrolling in [false, true] {

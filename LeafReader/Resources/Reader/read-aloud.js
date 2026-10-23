@@ -255,8 +255,12 @@ export async function revealReadAloud(view, locator, offset = 0) {
         const target = view.resolveNavigation(locator);
         if (!target) return;
         const anchor = target.anchor;
-        target.anchor = doc => {
-            const range = anchor(doc); range.collapse(true);
+        if (typeof anchor === 'function') target.anchor = doc => {
+            const range = anchor(doc);
+            // Chapter hrefs can resolve to an element or a numeric fraction.
+            // Preserve those renderer anchors; speech offset mapping uses CFIs.
+            if (!range?.cloneRange) return range;
+            range.collapse(true);
             if (range.startContainer.nodeType === Node.TEXT_NODE) {
                 const node = range.startContainer;
                 let start = Math.min(node.length, range.startOffset + offset);
@@ -272,7 +276,7 @@ export async function revealReadAloud(view, locator, offset = 0) {
         const range = content && target.anchor?.(content.doc);
         // Cached visible DOM endpoints can include text that moved off screen
         // after reflow. Measure the actual line in the mounted iframe instead.
-        if (range && isRenderedLineVisible(view, range)) return;
+        if (range?.startContainer && isRenderedLineVisible(view, range)) return;
         await view.renderer.goTo(target);
     });
     await source.navigation;
