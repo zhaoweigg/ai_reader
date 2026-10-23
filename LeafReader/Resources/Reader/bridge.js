@@ -321,7 +321,7 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, close, command, applyPreferences, search, tap,
-    readAloudChunk: ({ locator }) => readAloudChunk(view, locator),
+    readAloudChunk: ({ locator }) => readAloudChunk(view, locator, sanitize),
     revealReadAloud: ({ locator }) => revealReadAloud(view, locator),
     clearReadAloud: () => { if (view) clearReadAloud(view); },
     setAnnotations: ({ items }) => annotationLayer?.set(items),

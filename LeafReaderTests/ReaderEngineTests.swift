@@ -189,6 +189,27 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertTrue(text.contains(String(repeating: "中😀", count: 600)), "No characters may disappear between chunks")
         }
     }
+    func testDetachedSpeechDocumentUsesTheSameSanitizedCFIPositionsAsRenderedText() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'); await view.goTo(2);
+            const content=view.renderer.getContents()[0],doc=content.doc,p=doc.querySelector('p');
+            const walker=doc.createTreeWalker(p,NodeFilter.SHOW_TEXT);const node=walker.nextNode();
+            const range=doc.createRange();range.setStart(node,5);range.setEnd(node,10);
+            const locator=view.getCFI(content.index,range),expected=node.data.slice(5);
+            await view.goTo(0);window.Leaf.clearReadAloud();
+            const section=view.book.sections[content.index],create=section.createDocument;
+            section.createDocument=async()=>{const raw=await create();const script=raw.createElement('script');
+                script.textContent='DO NOT READ';raw.body.prepend(script);return raw;};
+            const chunk=await window.Leaf.readAloudChunk({locator});
+            return {expected,text:chunk.text,index:chunk.index,active:view.renderer.getContents()[0].index};
+            """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        let value = try XCTUnwrap(result)
+        XCTAssertEqual(value["text"] as? String, (value["expected"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertEqual(value["index"] as? Int, 2); XCTAssertEqual(value["active"] as? Int, 0)
+    }
     func testEPUBRendersSearchesAndRestoresPosition() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         let model = try show(book, url: url)

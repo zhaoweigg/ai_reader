@@ -34,7 +34,7 @@ function passageEnd(text, start) {
     return end;
 }
 
-export async function readAloudChunk(view, locator) {
+export async function readAloudChunk(view, locator, sanitize = doc => doc) {
     if (!view?.book) throw new Error('Open a book before listening.');
     let source = sources.get(view);
     if (!source) { source = { epoch: 0 }; sources.set(view, source); }
@@ -48,8 +48,10 @@ export async function readAloudChunk(view, locator) {
         const section = book.sections[index];
         if (index !== resolved.index && section.linear === 'no') continue;
         const mounted = view.renderer.getContents?.().find(item => item.index === index)?.doc;
-        const doc = mounted ?? (source.index === index ? source.doc : null) ?? await section.createDocument?.();
+        const cached = source.index === index ? source.doc : null;
+        const doc = mounted ?? cached ?? await section.createDocument?.();
         if (view.book !== book || source.epoch !== epoch) throw new Error('Listening was stopped.');
+        if (doc && !mounted && !cached) sanitize(doc);
         // Keep at most one detached text document. Never retain mounted iframe
         // documents: their lifetime belongs to the reader's bounded window.
         source.doc = mounted ? null : doc; source.index = index;
