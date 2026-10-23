@@ -12,7 +12,13 @@ final class AnnotationUITests: XCTestCase {
         XCTAssertTrue(surface(app).waitForExistence(timeout: 15))
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Opening your book…"])
         waitForExpectations(timeout: 20)
-        if !app.buttons["closeBook"].exists { surface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        if !app.buttons["closeBook"].exists {
+            surface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            if !app.buttons["closeBook"].waitForExistence(timeout: 2) {
+                capture("Reader controls setup after rotation")
+                surface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+            }
+        }
         XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
     }
     @MainActor private func appearance(_ app: XCUIApplication, theme: String, flow: String? = nil) {
@@ -23,8 +29,10 @@ final class AnnotationUITests: XCTestCase {
         }
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
         app.buttons[theme + " theme"].tap()
-        app.buttons["dismissAppearance"].tap()
-        XCTAssertFalse(app.segmentedControls["appearanceTabs"].exists)
+        app.navigationBars["Appearance"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.segmentedControls["appearanceTabs"])
+        waitForExpectations(timeout: 5)
     }
     @MainActor private func select(_ action: String, app: XCUIApplication, pdf: Bool) {
         let paragraph = surface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", pdf ? "Before the town" : "Attention is a way")).firstMatch
