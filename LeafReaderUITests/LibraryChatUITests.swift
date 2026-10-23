@@ -28,7 +28,14 @@ final class LibraryChatUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
         waitForExpectations(timeout: 5)
     }
+    @MainActor private func hideKeyboard(_ app: XCUIApplication) {
+        // Composing intentionally replaces the conversation chooser with the
+        // keyboard controls; finish composing before changing conversation.
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+        XCTAssertTrue(app.buttons["chooseLibraryConversation"].waitForExistence(timeout: 5))
+    }
     @MainActor private func chooseBook(_ app: XCUIApplication) {
+        hideKeyboard(app)
         app.buttons["chooseLibraryConversation"].tap()
         app.buttons["chatBook-The Art of Noticing"].tap()
         XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "The Art of Noticing")
@@ -106,8 +113,7 @@ final class LibraryChatUITests: XCTestCase {
         XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "General chat")
         send("My general conversation", app: app)
         input(app).tap(); input(app).typeText("General draft")
-        app.buttons["chooseLibraryConversation"].tap()
-        app.buttons["chatBook-The Art of Noticing"].tap()
+        chooseBook(app)
         XCTAssertEqual(input(app).value as? String, "Ask about this book…")
         XCTAssertFalse(app.staticTexts["My general conversation"].exists)
         send("My book conversation", app: app)
@@ -206,6 +212,7 @@ final class LibraryChatUITests: XCTestCase {
         XCTAssertTrue(app.buttons["book-Notes from the Coast"].exists)
         XCTAssertFalse(app.buttons["book-The Art of Noticing"].exists)
         app.buttons["openLibraryChat"].tap()
+        hideKeyboard(app)
         XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "General chat")
         XCTAssertTrue(app.staticTexts["A separate general question"].exists)
         chooseBook(app)
