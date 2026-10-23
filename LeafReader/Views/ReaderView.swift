@@ -207,6 +207,7 @@ struct ReaderContent: View {
                 return try await model.readAloudPassage(at: locator)
             }
             audio.reveal = { [weak model] locator in await model?.revealReadAloud(at: locator) }
+            audio.highlight = { [weak model] passage, range, follow in model?.highlightReadAloud(passage, range: range, follow: follow) }
             audio.clearSource = { [weak model] in model?.webView?.evaluateJavaScript("window.Leaf?.clearReadAloud()", completionHandler: nil) }
             library.open(book.id)
         }

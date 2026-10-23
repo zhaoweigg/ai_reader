@@ -3,6 +3,39 @@ import WebKit
 import PDFKit
 
 @MainActor extension ReaderModel {
+    func highlightReadAloud(_ passage: ReadAloudPassage?, range: NSRange, follow: Bool) {
+        if let pdfView {
+            guard let passage, let cursor = PDFReadAloudSource.cursor(passage.locator),
+                  let page = pdfView.document?.page(at: cursor.page), range.location != NSNotFound,
+                  let selection = page.selection(for: NSRange(location: cursor.offset + range.location, length: range.length)) else {
+                pdfView.highlightedSelections = nil
+                return
+            }
+            selection.color = UIColor.systemYellow.withAlphaComponent(0.48)
+            pdfView.highlightedSelections = [selection]
+            let bounds = selection.bounds(for: page)
+            if follow, !pdfView.bounds.insetBy(dx: 0, dy: 8).contains(pdfView.convert(bounds, from: page)) {
+                pdfView.go(to: bounds, on: page)
+            }
+            return
+        }
+        guard let webView else { spokenHighlightLocator = nil; spokenHighlightView = nil; return }
+        guard let passage else {
+            spokenHighlightLocator = nil; spokenHighlightView = nil
+            webView.evaluateJavaScript("window.Leaf?.clearSpokenRange()", completionHandler: nil)
+            return
+        }
+        var arguments: [String: Any] = ["passage": NSNull(), "locator": passage.locator, "location": range.location, "length": range.length, "follow": follow]
+        if spokenHighlightLocator != passage.locator || spokenHighlightView != ObjectIdentifier(webView) {
+            guard let data = try? JSONEncoder().encode(passage), let packet = try? JSONSerialization.jsonObject(with: data) else { return }
+            arguments["passage"] = packet
+            spokenHighlightLocator = passage.locator; spokenHighlightView = ObjectIdentifier(webView)
+        }
+        // Only the bounded passage map crosses the bridge once; subsequent word
+        // callbacks send offsets. The renderer retains no detached DOM ranges.
+        webView.callAsyncJavaScript("await window.Leaf.setSpokenRange({passage,locator,location,length,follow});",
+            arguments: arguments, in: nil, in: .page, completionHandler: nil)
+    }
     func readAloudPassage(at position: String?) async throws -> ReadAloudPassage? {
         guard isReady, !isLocked, error == nil else { throw ReadAloudError.unavailable }
         if let pdfView, let document = pdfView.document {

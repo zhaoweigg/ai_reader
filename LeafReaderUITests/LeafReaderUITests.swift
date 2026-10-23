@@ -352,6 +352,162 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    @MainActor private func openSelectionFixture(_ flow: String, app: XCUIApplication) {
+        if flow == "PDF" {
+            let field = app.textFields["librarySearch"]; XCTAssertTrue(field.waitForExistence(timeout: 10))
+            field.tap(); field.typeText("Coast"); app.buttons["book-Notes from the Coast"].tap()
+            showReaderControls(app); app.buttons["nextPage"].tap()
+        } else {
+            app.buttons["featuredBook"].tap(); showReaderControls(app); app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+            dismissAppearance(app)
+        }
+    }
+    @MainActor private func selectFixturePassage(_ flow: String, app: XCUIApplication) {
+        let pdf = flow == "PDF", paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", pdf ? "Before the town" : "Attention is a way")).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
+        paragraph.coordinate(withNormalizedOffset: CGVector(dx: pdf ? 0.15 : 0.3, dy: pdf ? 0.25 : 0.1)).press(forDuration: 1.2)
+    }
+    @MainActor func testExpandedSelectionMenuShowsAllPrimaryActionsAndCopiesInPagesScrollAndPDF() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            app.buttons["openReaderChat"].tap()
+            selectFixturePassage(flow, app: app)
+            let menu = app.tables["expandedSelectionMenu"]
+            if !menu.waitForExistence(timeout: 6) {
+                capture(flow + " missing expanded selection menu", app: app)
+                let state = XCTAttachment(string: app.debugDescription); state.name = "Expanded selection menu hierarchy"; state.lifetime = .keepAlways; add(state)
+                XCTFail("Expanded selection menu did not appear in " + flow); return
+            }
+            let selected = menu.value as? String ?? ""
+            XCTAssertFalse(selected.isEmpty)
+            for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " " + id) }
+            capture(flow + " expanded selection menu all actions", app: app)
+            XCUIDevice.shared.orientation = .landscapeLeft
+            expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " landscape " + id) }
+            capture(flow + " expanded selection menu landscape", app: app)
+            XCUIDevice.shared.orientation = .portrait
+            expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            app.buttons["selection-copy"].tap()
+            XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.press(forDuration: 1.2)
+            let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+            XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+            XCTAssertEqual(input.value as? String, selected, "Copy must retain the actual native selection")
+            capture(flow + " copied selection pasted into chat", app: app)
+            app.terminate()
+        }
+    }
+    @MainActor func testSelectionActionsReceiveTapsKeepComposerFocusAndLeaveNoWindowAfterClosing() {
+        continueAfterFailure = false
+        let app = launchApp(); app.buttons["featuredBook"].tap(); waitForBook(app)
+        app.buttons["openReaderChat"].tap()
+        capture("Reading before the selection menu", app: app)
+        selectFixturePassage("Pages", app: app)
+        let menu = app.tables["expandedSelectionMenu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 6))
+        for id in ["ask", "listen", "highlight", "note", "copy", "system"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable) }
+        XCTAssertFalse(app.menuItems["Leaf actions"].exists || app.buttons["Leaf actions"].exists, "The native toolbar must not cover the expanded actions")
+        let firstSelection = menu.value as? String ?? ""
+        XCTAssertFalse(firstSelection.isEmpty)
+        capture("Selection overlay receives all six actions", app: app)
+        app.buttons["selection-copy"].tap(); XCTAssertFalse(menu.exists)
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Keep my menu question")
+        XCTAssertEqual(input.value as? String, "Keep my menu question")
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+        capture("Selection overlay preserves native composer focus", app: app)
+        app.buttons["Hide keyboard"].tap(); selectFixturePassage("Pages", app: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        XCTAssertEqual(menu.value as? String, firstSelection, "Requesting the same selected word must reopen its actions")
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap(); input.typeText(" again")
+        XCTAssertFalse(menu.exists); XCTAssertEqual(input.value as? String, "Keep my menu question again")
+        app.buttons["Hide keyboard"].tap()
+        let paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
+        paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.1)).press(forDuration: 1.2)
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        let changedSelection = menu.value as? String ?? ""
+        XCTAssertFalse(changedSelection.isEmpty); XCTAssertNotEqual(changedSelection, firstSelection, "Actions must use the newly selected word")
+        capture("Repeated and changed selections use fresh menu snapshots", app: app)
+        XCUIDevice.shared.press(.home); app.activate()
+        XCTAssertFalse(menu.exists, "A backgrounded scene must release its selection window")
+        // Reader chrome stays hidden while chat is open; close chat through its
+        // normal control before exercising book-close with a new active menu.
+        app.buttons["closeReaderChat"].tap()
+        showReaderControls(app); selectFixturePassage("Pages", app: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        app.buttons["closeBook"].tap()
+        XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 5)); XCTAssertFalse(menu.exists)
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        XCTAssertFalse(menu.exists, "Reopening cannot retain an orphaned menu window")
+        app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(input.value as? String, "Keep my menu question again")
+        XCTAssertEqual(app.staticTexts["chatSelectedPassage"].label, changedSelection)
+        capture("Selection window cleared and question restored after reopening", app: app)
+    }
+    @MainActor func testExpandedSelectionMenuKeepsNativeTextActionsInAllReaderFlows() {
+        continueAfterFailure = false
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            selectFixturePassage(flow, app: app)
+            XCTAssertTrue(app.buttons["selection-system"].waitForExistence(timeout: 6))
+            let selected = app.tables["expandedSelectionMenu"].value as? String ?? ""
+            XCTAssertFalse(selected.isEmpty)
+            app.buttons["selection-system"].tap()
+            let expanded = app.tables["expandedSelectionMenu"]
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: expanded); waitForExpectations(timeout: 5)
+            let nativeCopy = app.menuItems["Copy"].exists ? app.menuItems["Copy"] : app.buttons["Copy"]
+            XCTAssertTrue(nativeCopy.waitForExistence(timeout: 5), "Native text actions must remain available in " + flow)
+            capture(flow + " standard iOS text actions remain available", app: app)
+            nativeCopy.tap(); app.buttons["openReaderChat"].tap()
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.press(forDuration: 1.2)
+            let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+            XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+            XCTAssertEqual(input.value as? String, selected, "Standard Copy must use the current native selection in " + flow)
+            capture(flow + " standard iOS Copy retains selected text", app: app)
+            app.terminate()
+        }
+    }
+    @MainActor func testSpeechProgressHighlightsVisibleTextInPagesScrollAndPDF() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            selectFixturePassage(flow, app: app)
+            XCTAssertTrue(app.buttons["selection-listen"].waitForExistence(timeout: 6)); app.buttons["selection-listen"].tap()
+            let status = app.buttons["listeningSettings"], pause = app.buttons["audioPlayPause"]
+            expectation(for: NSPredicate { _, _ in !(status.value as? String ?? "").isEmpty }, evaluatedWith: status); waitForExpectations(timeout: 15)
+            pause.tap(); let word = status.value as? String ?? ""
+            XCTAssertFalse(word.isEmpty); XCTAssertEqual(pause.label, "Resume listening")
+            capture(flow + " actual spoken text highlighted while paused", app: app)
+            XCUIDevice.shared.orientation = .landscapeLeft
+            expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            XCTAssertEqual(status.value as? String, word)
+            capture(flow + " spoken highlight retained after rotation", app: app)
+            XCUIDevice.shared.orientation = .portrait
+            expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            app.buttons["openReaderChat"].tap()
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.typeText("Keep my listening question")
+            XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+            XCTAssertTrue(pause.isHittable); XCTAssertEqual(status.value as? String, word)
+            capture(flow + " spoken highlight with actual chat keyboard", app: app)
+            app.buttons["closeReaderChat"].tap(); app.buttons["stopListening"].tap()
+            XCTAssertFalse(status.exists)
+            capture(flow + " stopping clears spoken highlight", app: app)
+            app.terminate()
+        }
+    }
     @MainActor func testListeningFromNativeSelectionInBothFlows() {
         let app = launchApp(); app.buttons["featuredBook"].tap()
         for flow in ["Pages", "Scroll"] {
@@ -510,22 +666,24 @@ final class LeafReaderUITests: XCTestCase {
                 let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
                 XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
                 let point = paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.1))
+                let selectionAsk = app.buttons["selection-ask"]
                 for _ in 0..<2 {
                     point.press(forDuration: 1.2)
-                    // Retry a missed native long press, but never mask a missing Ask Leaf action when Copy is present.
-                    if app.menuItems["Copy"].waitForExistence(timeout: 2) || app.menuItems["Ask Leaf"].exists { break }
+                    // An expanded row is a button. Never dismiss a successful
+                    // selection or fall back to a hidden library/chat launcher.
+                    if selectionAsk.waitForExistence(timeout: 3) { break }
+                    if app.menuItems["Copy"].exists || app.buttons["Copy"].exists { break }
                     point.tap()
                 }
-                capture(flow + " native selection menu", app: app)
+                capture(flow + " expanded selection menu", app: app)
                 let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.name = flow + " selection menu hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
-                let menuItem = app.menuItems["Ask Leaf"]
-                if menuItem.waitForExistence(timeout: 2) { menuItem.tap() }
-                else {
-                    let candidates = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat"))
-                    XCTAssertTrue(candidates.firstMatch.waitForExistence(timeout: 3)); candidates.firstMatch.tap()
-                }
+                XCTAssertTrue(selectionAsk.waitForExistence(timeout: 3)); XCTAssertTrue(selectionAsk.isHittable)
+                let selected = app.tables["expandedSelectionMenu"].value as? String ?? ""
+                XCTAssertFalse(selected.isEmpty)
+                selectionAsk.tap()
                 let passage = app.staticTexts["chatSelectedPassage"]
                 XCTAssertTrue(passage.waitForExistence(timeout: 5)); XCTAssertFalse(passage.label.isEmpty)
+                XCTAssertEqual(passage.label, selected, "Ask Leaf must attach the exact currently selected passage")
                 let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
                 XCTAssertFalse(app.menuItems["Ask a question"].exists, "Ask Leaf must open chat directly")
                 XCTAssertFalse(app.buttons["Ask a question"].exists)

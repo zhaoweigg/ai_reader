@@ -1,7 +1,7 @@
 import { makeBook } from './foliate/view.js';
 import { openBookSource } from './book-source.js';
 import { createAnnotations } from './annotations.js';
-import { readAloudChunk, revealReadAloud, clearReadAloud } from './read-aloud.js';
+import { readAloudChunk, revealReadAloud, clearReadAloud, setSpokenRange, clearSpokenRange } from './read-aloud.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -15,6 +15,9 @@ let preferences;
 let fixedIndex = 0;
 let lastLinkActivation = 0;
 const observedDocuments = new WeakSet();
+// Remember the current selection owner without retaining an evicted chapter.
+// An empty current selection must never resurrect an older iframe range.
+let selectedDocument;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 reducedMotion.addEventListener('change', () => { if (preferences) applyPreferences(preferences); });
 
@@ -45,9 +48,12 @@ function observeReadingTouches(doc, index) {
     if (observedDocuments.has(doc)) return;
     observedDocuments.add(doc);
     doc.addEventListener('selectionchange', () => {
+        if (!view?.renderer?.getContents?.().some(content => content.doc === doc)) return;
         const selection = doc.getSelection();
         const text = selection && !selection.isCollapsed ? selection.toString().slice(0,12000) : '';
+        if (!text && selectedDocument && selectedDocument.deref() !== doc) return;
         const detail = { text, tooLong: (selection?.toString().length ?? 0) > 12000 };
+        if (text || selectedDocument?.deref() === doc) selectedDocument = new WeakRef(doc);
         if (text && selection.rangeCount && view) {
             const range = textBoundedSelection(selection.getRangeAt(0));
             // A selected range can belong to a neighboring visible chapter.
@@ -265,6 +271,7 @@ async function open(config) {
 }
 
 function close() {
+    selectedDocument = undefined;
     if (view) clearReadAloud(view);
     post('selection', {text:''});
     searchGeneration = null;
@@ -321,6 +328,8 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, close, command, applyPreferences, search, tap,
+    setSpokenRange: config => setSpokenRange(view, config),
+    clearSpokenRange: () => { if (view) clearSpokenRange(view); },
     readAloudChunk: ({ locator }) => readAloudChunk(view, locator, sanitize),
     revealReadAloud: ({ locator }) => revealReadAloud(view, locator),
     clearReadAloud: () => { if (view) clearReadAloud(view); },
@@ -331,7 +340,12 @@ window.Leaf = { open, close, command, applyPreferences, search, tap,
     },
     chatContext: () => {
         const contents = view?.renderer?.getContents?.() ?? [];
-        for (const {doc, index} of contents) {
+        const owner = selectedDocument?.deref();
+        const current = selectedDocument
+            ? contents.find(({doc}) => doc === owner)
+            : contents.find(({doc}) => doc?.hasFocus() && !doc.getSelection()?.isCollapsed)
+                ?? contents.find(({doc}) => doc?.getSelection()?.isCollapsed === false);
+        for (const {doc, index} of current ? [current] : []) {
             const selection = doc?.getSelection();
             if (selection && !selection.isCollapsed && selection.toString().trim()) {
                 const range = textBoundedSelection(selection.getRangeAt(0));

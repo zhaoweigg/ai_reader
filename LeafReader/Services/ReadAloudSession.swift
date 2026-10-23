@@ -2,12 +2,24 @@ import AVFoundation
 import Combine
 import NaturalLanguage
 
+struct ReadAloudSegment: Codable, Equatable {
+    let offset: Int
+    let length: Int
+    let locator: String
+}
+
 struct ReadAloudPassage: Codable, Equatable {
     let text: String
     let locator: String
     let nextLocator: String
     let language: String
     let label: String
+    let segments: [ReadAloudSegment]?
+
+    init(text: String, locator: String, nextLocator: String, language: String, label: String, segments: [ReadAloudSegment] = []) {
+        self.text = text; self.locator = locator; self.nextLocator = nextLocator
+        self.language = language; self.label = label; self.segments = segments
+    }
 }
 
 struct ReadAloudBookmark: Codable, Equatable {
@@ -86,13 +98,18 @@ enum ReadAloudError: LocalizedError {
     @Published private(set) var passage: ReadAloudPassage?
     @Published private(set) var error: String?
     @Published private(set) var bookmark: ReadAloudBookmark?
+    @Published private(set) var spokenText = ""
     @Published var isPresented = false
-    @Published var followsText: Bool { didSet { defaults.set(followsText, forKey: "audio.followsText") } }
+    @Published var followsText: Bool { didSet {
+        defaults.set(followsText, forKey: "audio.followsText")
+        if let passage, let spokenRange { highlight?(passage, spokenRange, followsText) }
+    } }
     @Published var speed: Double { didSet { defaults.set(speed, forKey: "audio.speed"); restartVoice() } }
     @Published var voice: String { didSet { defaults.set(voice, forKey: "audio.voice"); restartVoice() } }
     var source: ((String?) async throws -> ReadAloudPassage?)?
     var reveal: ((String) async -> Void)?
     var clearSource: (() -> Void)?
+    var highlight: ((ReadAloudPassage?, NSRange, Bool) -> Void)?
     private let speaker: any ReadAloudSpeaking
     private let defaults: UserDefaults
     private let bookmarkURL: URL?
@@ -102,6 +119,7 @@ enum ReadAloudError: LocalizedError {
     private var generation = UUID()
     private var offset = 0
     private var utteranceOffset = 0
+    private var spokenRange: NSRange?
     private var history: [String] = []
     private var isLoading = false
     private var lastSavedAt = Date.distantPast
@@ -122,8 +140,14 @@ enum ReadAloudError: LocalizedError {
         }
         self.speaker.finished = { [weak self] in self?.advance() }
         self.speaker.progressed = { [weak self] range in
-            guard let self, self.state == .playing else { return }
-            self.offset = self.utteranceOffset + range.location
+            guard let self, self.state == .playing, let passage = self.passage,
+                  range.location != NSNotFound, range.length > 0 else { return }
+            let count = (passage.text as NSString).length
+            self.offset = min(count, self.utteranceOffset + range.location)
+            let spoken = NSRange(location: self.offset, length: min(range.length, count - self.offset))
+            self.spokenRange = spoken
+            self.spokenText = (passage.text as NSString).substring(with: spoken)
+            self.highlight?(passage, spoken, self.followsText)
             if Date().timeIntervalSince(self.lastSavedAt) > 1 { self.saveBookmark() }
         }
         notificationTokens.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
@@ -170,6 +194,7 @@ enum ReadAloudError: LocalizedError {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
     private func cancelWork() {
+        clearHighlight()
         generation = UUID(); loadTask?.cancel(); loadTask = nil
         isLoading = false
         prefetch?.cancel(); prefetch = nil; revealTask?.cancel(); revealTask = nil; speaker.stop()
@@ -190,6 +215,7 @@ enum ReadAloudError: LocalizedError {
                 guard let next else {
                     if passage == nil { throw ReadAloudError.noText }
                     state = .finished; bookmark = nil
+                    clearHighlight()
                     clearSource?()
                     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
                     if let bookmarkURL { try? FileManager.default.removeItem(at: bookmarkURL) }
@@ -203,6 +229,7 @@ enum ReadAloudError: LocalizedError {
             } catch {
                 guard !Task.isCancelled, generation == token else { return }
                 self.error = error.localizedDescription; state = .failed
+                clearHighlight()
             }
         }
     }
@@ -220,10 +247,11 @@ enum ReadAloudError: LocalizedError {
                 let locator = passage.locator
                 revealTask = Task { [weak self] in guard !Task.isCancelled else { return }; await self?.reveal?(locator) }
             }
-        } catch { self.error = error.localizedDescription; state = .failed }
+        } catch { self.error = error.localizedDescription; state = .failed; clearHighlight() }
     }
     private func advance() {
         guard let passage else { return }
+        clearHighlight()
         let paused = state == .paused
         history.append(passage.locator); if history.count > 50 { history.removeFirst() }
         let prepared = prefetch; prefetch = nil
@@ -235,6 +263,11 @@ enum ReadAloudError: LocalizedError {
         guard passage != nil else { return }
         let playing = state == .playing
         speaker.stop(); if playing { speakCurrent() }
+    }
+    private func clearHighlight() {
+        spokenRange = nil
+        spokenText = ""
+        highlight?(nil, NSRange(location: 0, length: 0), false)
     }
     private func saveBookmark() {
         guard let passage, state != .finished else { return }

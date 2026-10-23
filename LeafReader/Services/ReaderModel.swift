@@ -35,6 +35,8 @@ final class ReaderModel: NSObject, ObservableObject {
     weak var webView: WKWebView?
     weak var pdfView: PDFView?
     var preferences: ReaderPreferences?
+    var spokenHighlightLocator: String?
+    var spokenHighlightView: ObjectIdentifier?
     private var searchGeneration = UUID().uuidString
     private var lastAutomaticRecovery: Date?
     private var memoryWarningObserver: NSObjectProtocol?
@@ -105,6 +107,15 @@ final class ReaderModel: NSObject, ObservableObject {
         }
         return ReadingChatContext(title: title, author: author, chapter: chapter, text: text,
                                   source: source, locator: location).bounded()
+    }
+    func refreshSelectedWebContext() async {
+        guard isReady, let view = webView else { return }
+        let epoch = reloadID
+        guard let value = try? await view.evaluateJavaScript("window.Leaf.chatContext()") as? [String: String],
+              !Task.isCancelled, webView === view, reloadID == epoch, isReady else { return }
+        let text = value["source"] == "selection" ? value["text"] ?? "" : ""
+        receive(["type": "selection", "text": text, "locator": value["locator"] ?? "", "label": value["label"] ?? "",
+                 "tooLong": text.utf16.count > 12000])
     }
     func selectedReadingContext() -> ReadingChatContext? {
         let text = pdfView?.currentSelection?.string ?? selectedWebText
@@ -259,6 +270,9 @@ final class ReaderModel: NSObject, ObservableObject {
             selectionTooLong = message["tooLong"] as? Bool ?? false
             selectedWebLocator = (message["locator"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(2000)) }
             selectedWebChapter = (message["label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(300)) }
+            #if DEBUG
+            readerSelectionMenuTrace("selection", source: webView, context: !selectedWebText.isEmpty)
+            #endif
             updateLiveSelection()
         case "toggleControls": toggleControls()
         case "readingActivity": hideControls()
