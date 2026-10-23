@@ -575,13 +575,22 @@ final class LeafReaderUITests: XCTestCase {
         func reveal(_ element: XCUIElement, _ label: String, up: Bool = true) {
             // Short, slow drags in the needed direction: a flick overshoots the
             // 402 pt landscape sheet and scrolls the target off the other edge.
+            // Start in the inset gutter left of the grouped cells: a press on a
+            // row can act on it (a press at the centre landed on the engine picker
+            // and switched it back to the iPhone voice, hiding the download row).
+            // A row the Form has recycled is absent from the tree: scroll in the
+            // intended direction (`up` = the row lies further down) until it appears.
             for _ in 0..<8 {
-                guard element.exists else { break }
-                let target = element.frame
-                if frame.contains(target) { break }
-                let downward = target.minY < frame.minY
-                let from = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: downward ? 0.35 : 0.65))
-                let to = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: downward ? 0.65 : 0.35))
+                let dragUp: Bool
+                if element.exists {
+                    let target = element.frame
+                    if frame.contains(target) { break }
+                    dragUp = target.minY >= frame.minY
+                } else {
+                    dragUp = up
+                }
+                let from = form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: dragUp ? 0.65 : 0.35))
+                let to = form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: dragUp ? 0.35 : 0.65))
                 from.press(forDuration: 0.1, thenDragTo: to)
             }
             XCTAssertTrue(element.exists, label)
