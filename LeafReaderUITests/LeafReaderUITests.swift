@@ -371,6 +371,65 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
         paragraph.coordinate(withNormalizedOffset: CGVector(dx: pdf ? 0.15 : 0.3, dy: pdf ? 0.25 : 0.1)).press(forDuration: 1.2)
     }
+    @MainActor private func revealSelectionAction(_ id: String, app: XCUIApplication) -> XCUIElement {
+        let menu = app.scrollViews["expandedSelectionMenu"], button = app.buttons["selection-" + id]
+        XCTAssertTrue(menu.waitForExistence(timeout: 6))
+        for _ in 0..<4 {
+            if button.isHittable && menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame) { return button }
+            if button.frame.midX < menu.frame.midX { menu.swipeRight() } else { menu.swipeLeft() }
+        }
+        XCTAssertTrue(button.isHittable, "Selection action must be reachable: " + id)
+        XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame), "Action must scroll fully into view: " + id)
+        return button
+    }
+    @MainActor func testHorizontalSelectionMenuScrollsAndLeavesNativeHandlesDraggableInAllFlows() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            for landscape in [false, true] {
+                XCUIDevice.shared.orientation = landscape ? .landscapeLeft : .portrait
+                expectation(for: NSPredicate { _, _ in landscape ? app.frame.width > app.frame.height : app.frame.height > app.frame.width }, evaluatedWith: app)
+                waitForExpectations(timeout: 6)
+                selectFixturePassage(flow, app: app)
+                let menu = app.scrollViews["expandedSelectionMenu"]
+                XCTAssertTrue(menu.waitForExistence(timeout: 6))
+                XCTAssertLessThanOrEqual(menu.frame.height, 48, "Selection actions must occupy one compact row")
+                let initial = menu.value as? String ?? ""
+                XCTAssertFalse(initial.isEmpty)
+                let firstVisible = ["ask", "listen", "highlight", "note", "copy", "system"].filter { id in
+                    let button = app.buttons["selection-" + id]
+                    return button.isHittable && menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame)
+                }
+                XCTAssertGreaterThanOrEqual(firstVisible.count, 4, "Pack at least four labelled actions in a phone row")
+                let askX = app.buttons["selection-ask"].frame.minX
+                _ = revealSelectionAction("system", app: app)
+                if !landscape { XCTAssertLessThan(app.buttons["selection-ask"].frame.minX, askX, "Hidden actions must be reached by sliding the row") }
+                _ = revealSelectionAction("ask", app: app)
+                XCTAssertEqual(menu.value as? String, initial, "Sliding the toolbar cannot change the selected text")
+                let handle = app.descendants(matching: .any)["selection-end-geometry"].firstMatch
+                XCTAssertTrue(handle.waitForExistence(timeout: 3))
+                XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(handle.frame), "Toolbar must leave the native handle clear")
+                capture(flow + (landscape ? " landscape" : " portrait") + " compact menu before native handle drag", app: app)
+                let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                start.press(forDuration: 0.7, thenDragTo: start.withOffset(CGVector(dx: 80, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.2)
+                if !menu.waitForExistence(timeout: 4) {
+                    let leaf = app.menuItems["Leaf actions"].exists ? app.menuItems["Leaf actions"] : app.buttons["Leaf actions"]
+                    XCTAssertTrue(leaf.waitForExistence(timeout: 3)); leaf.tap()
+                }
+                XCTAssertTrue(menu.waitForExistence(timeout: 4))
+                let extended = menu.value as? String ?? ""
+                XCTAssertGreaterThan(extended.count, initial.count, "Dragging the real native end handle must extend the passage in " + flow)
+                XCTAssertTrue(extended.hasPrefix(initial), "Handle drag must retain the original selected word")
+                capture(flow + (landscape ? " landscape" : " portrait") + " native selection extended with horizontal menu", app: app)
+                _ = revealSelectionAction("copy", app: app)
+                revealSelectionAction("copy", app: app).tap()
+            }
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+    }
     @MainActor func testExpandedSelectionMenuShowsAllPrimaryActionsAndCopiesInPagesScrollAndPDF() {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
@@ -379,7 +438,7 @@ final class LeafReaderUITests: XCTestCase {
             let app = launchApp(); openSelectionFixture(flow, app: app)
             app.buttons["openReaderChat"].tap()
             selectFixturePassage(flow, app: app)
-            let menu = app.tables["expandedSelectionMenu"]
+            let menu = app.scrollViews["expandedSelectionMenu"]
             if !menu.waitForExistence(timeout: 6) {
                 capture(flow + " missing expanded selection menu", app: app)
                 let state = XCTAttachment(string: app.debugDescription); state.name = "Expanded selection menu hierarchy"; state.lifetime = .keepAlways; add(state)
@@ -387,15 +446,15 @@ final class LeafReaderUITests: XCTestCase {
             }
             let selected = menu.value as? String ?? ""
             XCTAssertFalse(selected.isEmpty)
-            for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " " + id) }
+            for id in ["ask", "listen", "highlight", "note", "copy"] { _ = revealSelectionAction(id, app: app) }
             capture(flow + " expanded selection menu all actions", app: app)
             XCUIDevice.shared.orientation = .landscapeLeft
             expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
-            for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " landscape " + id) }
+            for id in ["ask", "listen", "highlight", "note", "copy"] { _ = revealSelectionAction(id, app: app) }
             capture(flow + " expanded selection menu landscape", app: app)
             XCUIDevice.shared.orientation = .portrait
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
-            app.buttons["selection-copy"].tap()
+            revealSelectionAction("copy", app: app).tap()
             XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
             let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
             input.tap(); input.press(forDuration: 1.2)
@@ -412,14 +471,14 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["openReaderChat"].tap()
         capture("Reading before the selection menu", app: app)
         selectFixturePassage("Pages", app: app)
-        let menu = app.tables["expandedSelectionMenu"]
+        let menu = app.scrollViews["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
-        for id in ["ask", "listen", "highlight", "note", "copy", "system"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable) }
+        for id in ["ask", "listen", "highlight", "note", "copy", "system"] { _ = revealSelectionAction(id, app: app) }
         XCTAssertFalse(app.menuItems["Leaf actions"].exists || app.buttons["Leaf actions"].exists, "The native toolbar must not cover the expanded actions")
         let firstSelection = menu.value as? String ?? ""
         XCTAssertFalse(firstSelection.isEmpty)
         capture("Selection overlay receives all six actions", app: app)
-        app.buttons["selection-copy"].tap(); XCTAssertFalse(menu.exists)
+        revealSelectionAction("copy", app: app).tap(); XCTAssertFalse(menu.exists)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.typeText("Keep my menu question")
         XCTAssertEqual(input.value as? String, "Keep my menu question")
@@ -459,10 +518,10 @@ final class LeafReaderUITests: XCTestCase {
             let app = launchApp(); openSelectionFixture(flow, app: app)
             selectFixturePassage(flow, app: app)
             XCTAssertTrue(app.buttons["selection-system"].waitForExistence(timeout: 6))
-            let selected = app.tables["expandedSelectionMenu"].value as? String ?? ""
+            let selected = app.scrollViews["expandedSelectionMenu"].value as? String ?? ""
             XCTAssertFalse(selected.isEmpty)
-            app.buttons["selection-system"].tap()
-            let expanded = app.tables["expandedSelectionMenu"]
+            revealSelectionAction("system", app: app).tap()
+            let expanded = app.scrollViews["expandedSelectionMenu"]
             expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: expanded); waitForExpectations(timeout: 5)
             let nativeCopy = app.menuItems["Copy"].exists ? app.menuItems["Copy"] : app.buttons["Copy"]
             XCTAssertTrue(nativeCopy.waitForExistence(timeout: 5), "Native text actions must remain available in " + flow)
@@ -678,7 +737,7 @@ final class LeafReaderUITests: XCTestCase {
                 capture(flow + " expanded selection menu", app: app)
                 let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.name = flow + " selection menu hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
                 XCTAssertTrue(selectionAsk.waitForExistence(timeout: 3)); XCTAssertTrue(selectionAsk.isHittable)
-                let selected = app.tables["expandedSelectionMenu"].value as? String ?? ""
+                let selected = app.scrollViews["expandedSelectionMenu"].value as? String ?? ""
                 XCTAssertFalse(selected.isEmpty)
                 selectionAsk.tap()
                 let passage = app.staticTexts["chatSelectedPassage"]

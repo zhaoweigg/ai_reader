@@ -54,6 +54,8 @@ final class AnnotationUITests: XCTestCase {
             capture("Missing " + action + " selection action")
             let state = XCTAttachment(string: app.debugDescription); state.name = "Selection hierarchy"; state.lifetime = .keepAlways; add(state)
         }
+        let row = app.scrollViews["expandedSelectionMenu"]
+        for _ in 0..<3 where row.exists && (!button.isHittable || !row.frame.insetBy(dx: -1, dy: 0).contains(button.frame)) { row.swipeLeft() }
         let target = menu.exists ? menu : button
         XCTAssertTrue(target.waitForExistence(timeout: 3)); target.tap()
     }
