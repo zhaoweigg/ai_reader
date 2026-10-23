@@ -425,7 +425,7 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["Hide keyboard"].tap(); selectFixturePassage("Pages", app: app)
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
         XCTAssertEqual(menu.value as? String, firstSelection, "Requesting the same selected word must reopen its actions")
-        input.tap(); input.typeText(" again")
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap(); input.typeText(" again")
         XCTAssertFalse(menu.exists); XCTAssertEqual(input.value as? String, "Keep my menu question again")
         app.buttons["Hide keyboard"].tap()
         let paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
