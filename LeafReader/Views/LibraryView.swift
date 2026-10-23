@@ -10,6 +10,7 @@ struct LibraryView: View {
     let onImport: () -> Void
     let onOpen: (UUID) -> Void
     @State private var query = ""
+    @FocusState private var searchFocused: Bool
     @State private var filter: LibraryFilter = .all
     @State private var sort: LibrarySort = .recent
     @State private var format: BookFormat?
@@ -19,7 +20,7 @@ struct LibraryView: View {
     @State private var chatButtonIsMoving = false
     @State private var choosingConversation = false
     @State private var viewportHeight: CGFloat = 0
-    @AppStorage("library.chatConversation") private var conversation = ""
+    @State private var conversation = "general"
 
     private var visible: [Book] {
         library.books.filter { book in
@@ -74,7 +75,7 @@ struct LibraryView: View {
                         }
                         HStack(spacing: 9) {
                             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                            TextField("Find a title or author", text: $query).accessibilityIdentifier("librarySearch")
+                            TextField("Find a title or author", text: $query).focused($searchFocused).accessibilityIdentifier("librarySearch")
                             if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.accessibilityLabel("Clear search") }
                         }.padding(13).background(theme.surface, in: .rect(cornerRadius: 12))
                         Picker("Library filter", selection: $filter) {
@@ -172,8 +173,7 @@ struct LibraryView: View {
                         .accessibilityAction { chatButtonIsMoving = false }
                 }
                 ReaderChatLauncher(isMoving: $chatButtonIsMoving, location: .library) {
-                    let book = conversation.isEmpty ? featured : library.books.first { $0.fingerprint == conversation }
-                    openChat(book)
+                    openChat(nil)
                 }
             } else if let chat {
                 LibraryChatOverlay(session: chat, book: chatBook, fullHeight: viewportHeight,
@@ -195,6 +195,7 @@ struct LibraryView: View {
     private func openChat(_ book: Book?) {
         // Close the previous owner before creating a second session for its database.
         guard chat?.flush() != false else { return }
+        searchFocused = false
         chat?.close()
         chatBook = book; conversation = book?.fingerprint ?? "general"
         chat = ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true),

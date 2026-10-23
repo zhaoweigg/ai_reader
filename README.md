@@ -114,6 +114,14 @@ The local `leaf-reader://` scheme exposes only bundled reader resources and the 
 
 ## Tests
 
+### Read-aloud verification
+
+Read-aloud verification covers **103 distinct passing cases**: 44 rendered reader-engine cases, 12 speech/session/PDF cases, 19 chat-history cases, eight annotation units and 20 native UI workflows. Pages and Scroll were exercised with rendered books, forward/back chapter boundaries, book ends, saved-passage reopening, all 12–32 pt sizes, three fonts, margins and Day/Paper/Night. Native checks also cover all six themes, actual portrait/landscape, translucent launcher dragging/restoration, chat resizing, selection and composing with the software keyboard. Pages, Scroll and PDF retain highlights, notes and chat drafts after the selection menu gains **Listen from here**; native menu pagination is covered.
+
+Real English and Chinese system voices produced PCM audio; a number-only passage without language metadata also completed with the device voice. Speech extraction keeps CFI offsets and the original DOM intact, skips empty/nonlinear chapters lazily, limits each passage to 800 UTF-16 units and retains one prefetched passage and at most one detached chapter document. Source/session regressions cover cancellation, pause during loading, rapid navigation, hard line breaks, saved word offsets, speed/voice changes and interruption/disconnection pauses. Native listening checks cover both entry points, pause/resume, speed, actual keyboard geometry, unchanged book viewport, background pausing and saved resume. Evidence and source provenance are recorded locally in `build/read-aloud-verification-summary.json` and the `ReadAloud*.xcresult` bundles.
+
+Playback is foreground only. Physical-phone/iPad UI, physical voice quality/Bluetooth routes and total resident memory were not measured. Image-only books/scans need extractable text. Phone delivery uses a clean merged-main build and the coordinator's build-specific installation approval.
+
 ### Highlights and notes verification
 
 Highlight/note verification for **1.9.14 (43)** covers **37 distinct passing cases**: eight annotation units, five library checks, 17 chat-history units, four rendered/native engine checks, and three complete native UI workflows. The rendering sweep covers **126 states** across all 12–32 pt sizes, Pages and Scroll, three fonts, Day/Paper/Night, and margin settings. Exact text-range CFIs, lazy chapter overlays, chapter/book boundaries, saved-passage reopening, PDF visible-page/zoom rendering, original PDF bytes and cover artwork were checked.
