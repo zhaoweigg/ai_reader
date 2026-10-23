@@ -573,25 +573,28 @@ final class LeafReaderUITests: XCTestCase {
         let form = app.descendants(matching: .any)["listeningForm"].firstMatch
         XCTAssertTrue(form.waitForExistence(timeout: 5), "Listening form is reachable in landscape")
         func reveal(_ element: XCUIElement, _ label: String, up: Bool = true) {
-            // Short, slow drags in the needed direction: a flick overshoots the
-            // 402 pt landscape sheet and scrolls the target off the other edge.
-            // Start in the inset gutter left of the grouped cells: a press on a
-            // row can act on it (a press at the centre landed on the engine picker
-            // and switched it back to the iPhone voice, hiding the download row).
-            // A row the Form has recycled is absent from the tree: scroll in the
-            // intended direction (`up` = the row lies further down) until it appears.
+            // Slow swipes in the needed direction. Press-then-drag gestures never
+            // scrolled this Form in the landscape sheet (every row kept its frame,
+            // from the gutter and from a cell alike) while swipes do; a default
+            // velocity flick overshoots the 402 pt sheet. Swipe from an inert text
+            // inside the frame so no row receives the touch (a press on the engine
+            // picker switched it back to the iPhone voice), with the form as the
+            // fallback. A row the Form has recycled is absent from the tree: scroll
+            // in the intended direction (`up` = the row lies further down) until it
+            // appears.
+            let inert = [form.staticTexts["Voice and speed"], form.staticTexts["Voice pack not downloaded"], form.staticTexts["Speed"],
+                         form.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Select any text")).firstMatch]
             for _ in 0..<8 {
-                let dragUp: Bool
+                let scrollDown: Bool
                 if element.exists {
                     let target = element.frame
                     if frame.contains(target) { break }
-                    dragUp = target.minY >= frame.minY
+                    scrollDown = target.minY >= frame.minY
                 } else {
-                    dragUp = up
+                    scrollDown = up
                 }
-                let from = form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: dragUp ? 0.65 : 0.35))
-                let to = form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: dragUp ? 0.35 : 0.65))
-                from.press(forDuration: 0.1, thenDragTo: to)
+                let handle = inert.first { $0.exists && frame.insetBy(dx: 0, dy: 24).contains($0.frame) } ?? form
+                if scrollDown { handle.swipeUp(velocity: .slow) } else { handle.swipeDown(velocity: .slow) }
             }
             XCTAssertTrue(element.exists, label)
             XCTAssertTrue(frame.contains(element.frame), label + " inside the landscape frame: \(element.frame) in \(frame)")
