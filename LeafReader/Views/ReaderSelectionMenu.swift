@@ -142,7 +142,7 @@ private struct ReaderSelectionAction {
             self.requestTask = nil
             if self.controller == nil { self.removeOutsideObservers() }
         }
-        UIMenuSystem.main.setNeedsRebuild()
+        UIMenuSystem.context.setNeedsRebuild()
     }
     @objc private func selectionPressed(_ press: UILongPressGestureRecognizer) {
         guard press.state == .ended, let source = press.view, !showsSystemMenu else { return }
@@ -203,7 +203,7 @@ private struct ReaderSelectionAction {
         removeOutsideObservers()
         menuWindow?.isHidden = true; menuWindow?.rootViewController = nil; menuWindow = nil
         controller = nil
-        UIMenuSystem.main.setNeedsRebuild()
+        UIMenuSystem.context.setNeedsRebuild()
     }
     @objc private func outsideGesture(_ gesture: UIGestureRecognizer) {
         if gesture.state == .ended || gesture.state == .began { dismiss() }
@@ -218,8 +218,13 @@ private struct ReaderSelectionAction {
     func presentSystemMenu() {
         guard let source else { return }
         systemMenuUntil = Date().addingTimeInterval(2)
-        let rect = source.selectionAnchor
-        source.selectionEditMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.midY)))
+        #if DEBUG
+        readerSelectionMenuTrace("systemRequested", source: source, context: source.selectionText?.isEmpty == false)
+        #endif
+        UIMenuSystem.context.setNeedsRebuild()
+        guard let interaction = source.selectionEditMenu, let view = interaction.view else { return }
+        let rect = view.convert(source.selectionAnchor, from: source)
+        interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.midY)))
     }
 }
 
@@ -332,7 +337,7 @@ final class ReaderWebView: WKWebView {
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
         #if DEBUG
-        readerSelectionMenuTrace("build", source: self, context: selectionContext?()?.isEmpty == false)
+        readerSelectionMenuTrace(selectionMenu.showsSystemMenu ? "systemBuild" : "build", source: self, context: selectionContext?()?.isEmpty == false)
         #endif
         if selectionMenu.usesExpandedMenu && !selectionMenu.showsSystemMenu {
             builder.replaceChildren(ofMenu: .root) { _ in [] }; return
@@ -369,7 +374,7 @@ final class ReaderPDFView: PDFView {
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
         #if DEBUG
-        readerSelectionMenuTrace("build", source: self, context: selectionContext?()?.isEmpty == false)
+        readerSelectionMenuTrace(selectionMenu.showsSystemMenu ? "systemBuild" : "build", source: self, context: selectionContext?()?.isEmpty == false)
         #endif
         if selectionMenu.usesExpandedMenu && !selectionMenu.showsSystemMenu {
             builder.replaceChildren(ofMenu: .root) { _ in [] }; return
