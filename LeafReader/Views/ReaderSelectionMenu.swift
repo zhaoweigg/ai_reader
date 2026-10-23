@@ -1,4 +1,5 @@
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 import WebKit
 import PDFKit
 
@@ -140,6 +141,38 @@ private struct ReaderSelectionAction {
     #endif
 }
 
+/// Observes completion without recognizing a gesture. WebKit/PDFKit keep sole
+/// ownership of their long press, selection grips, scrolling, and cancellation.
+private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
+    enum Phase { case began, moved, ended, cancelled }
+    var observe: ((Phase, CGPoint, TimeInterval) -> Void)?
+    private var tracking = false
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard !tracking, touches.count == 1, event.allTouches?.count == 1, let touch = touches.first else {
+            cancelObservation(); return
+        }
+        tracking = true; observe?(.began, touch.location(in: view), touch.timestamp)
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard tracking, let touch = touches.first else { return }
+        guard event.allTouches?.count == 1 else { cancelObservation(); return }
+        observe?(.moved, touch.location(in: view), touch.timestamp)
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard tracking, let touch = touches.first else { state = .failed; return }
+        tracking = false; observe?(.ended, touch.location(in: view), touch.timestamp)
+        state = .failed
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { cancelObservation() }
+    private func cancelObservation() {
+        if tracking { observe?(.cancelled, .zero, 0) }
+        tracking = false; state = .failed
+    }
+    override func reset() { tracking = false; super.reset() }
+}
+
 @MainActor private final class ReaderSelectionMenuPresenter: NSObject, UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate {
     private weak var source: UIView?
     private weak var window: UIWindow?
@@ -152,7 +185,15 @@ private struct ReaderSelectionAction {
     private var selectionRefreshTask: Task<Void, Never>?
     private var systemMenuUntil = Date.distantPast
     private var systemInteraction: UIEditMenuInteraction?
-    private var selectionPress: UILongPressGestureRecognizer?
+    private var selectionTouch: ReaderSelectionTouchObserver?
+    private struct BookTouch {
+        let start: CGPoint
+        let timestamp: TimeInterval
+        let beganInSelection: Bool
+        var distance: CGFloat = 0
+        var selectionChanged = false
+    }
+    private var bookTouch: BookTouch?
     private var adjustingSelectionHandle = false
     private var requestMenu: (() async -> Void)?
     private var requestTask: Task<Void, Never>?
@@ -160,11 +201,14 @@ private struct ReaderSelectionAction {
     var showsSystemMenu: Bool { systemInteraction != nil || Date() < systemMenuUntil }
     var usesExpandedMenu: Bool { requestTask != nil || selectionRefreshTask != nil || adjustingSelectionHandle || controller != nil }
     func observeSelection(on source: UIView, request: @escaping () async -> Void) {
+        if self.source !== source { detach() }
         self.source = source; requestMenu = request
-        guard selectionPress == nil else { return }
-        let press = UILongPressGestureRecognizer(target: self, action: #selector(selectionPressed(_:)))
-        press.minimumPressDuration = 0.5; press.cancelsTouchesInView = false; press.delaysTouchesEnded = false
-        press.delegate = self; source.addGestureRecognizer(press); selectionPress = press
+        guard selectionTouch == nil else { return }
+        let touch = ReaderSelectionTouchObserver(target: nil, action: nil)
+        touch.cancelsTouchesInView = false; touch.delaysTouchesBegan = false; touch.delaysTouchesEnded = false
+        touch.requiresExclusiveTouchType = false; touch.delegate = self
+        touch.observe = { [weak self] phase, point, timestamp in self?.observeBookTouch(phase, point: point, timestamp: timestamp) }
+        source.addGestureRecognizer(touch); selectionTouch = touch
         if let pdf = source as? PDFView {
             pdfSelectionRanges = pdf.selectionCharacterRanges
             pdfSelectionObserver = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdf, queue: .main) { [weak self, weak pdf] _ in
@@ -185,8 +229,8 @@ private struct ReaderSelectionAction {
     }
     func detach() {
         dismiss()
-        if let selectionPress { selectionPress.view?.removeGestureRecognizer(selectionPress) }
-        selectionPress = nil; requestMenu = nil; source = nil
+        if let selectionTouch { selectionTouch.observe = nil; selectionTouch.view?.removeGestureRecognizer(selectionTouch) }
+        selectionTouch = nil; requestMenu = nil; source = nil
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
         if let pdfSelectionObserver { NotificationCenter.default.removeObserver(pdfSelectionObserver) }; pdfSelectionObserver = nil
     }
@@ -199,6 +243,14 @@ private struct ReaderSelectionAction {
         installOutsideObservers(on: window)
     }
     func selectionDidChange() {
+        if bookTouch != nil {
+            bookTouch?.selectionChanged = true
+            if controller != nil || adjustingSelectionHandle {
+                adjustingSelectionHandle = true
+                dismiss(keepingHandleObserver: true)
+            }
+            return
+        }
         guard !showsSystemMenu, controller != nil || adjustingSelectionHandle else { return }
         adjustingSelectionHandle = true
         dismiss(keepingHandleObserver: true)
@@ -225,15 +277,33 @@ private struct ReaderSelectionAction {
         }
         UIMenuSystem.context.setNeedsRebuild()
     }
-    @objc private func selectionPressed(_ press: UILongPressGestureRecognizer) {
-        guard press.state == .ended, let source = press.view, !showsSystemMenu else { return }
-        if source.selectionFirstResponder == nil { source.becomeFirstResponder() }
-        let withinSelection = source.selectionContains(press.location(in: source))
-        #if DEBUG
-        readerSelectionMenuTrace("press", source: source, context: withinSelection)
-        #endif
-        guard withinSelection else { return }
-        requestCurrentMenu()
+    private func observeBookTouch(_ phase: ReaderSelectionTouchObserver.Phase, point: CGPoint, timestamp: TimeInterval) {
+        guard let source, !showsSystemMenu else { bookTouch = nil; return }
+        switch phase {
+        case .began:
+            let inSelection = source.selectionContains(point) || source.selectionHandles.contains { $0.contains(point) }
+            bookTouch = BookTouch(start: point, timestamp: timestamp, beganInSelection: inSelection)
+        case .moved:
+            guard var touch = bookTouch else { return }
+            touch.distance = max(touch.distance, hypot(point.x - touch.start.x, point.y - touch.start.y))
+            bookTouch = touch
+            if touch.beganInSelection, touch.distance > 3, controller != nil {
+                adjustingSelectionHandle = true; dismiss(keepingHandleObserver: true)
+            }
+        case .ended:
+            guard let touch = bookTouch else { return }
+            bookTouch = nil
+            let longPress = timestamp - touch.timestamp >= 0.45 && touch.distance <= 20
+            let adjusted = touch.beganInSelection && (touch.selectionChanged || touch.distance > 3)
+            #if DEBUG
+            readerSelectionMenuTrace("bookTouchEnded", source: source, context: longPress || adjusted, point: point)
+            #endif
+            // Native selection can move/scroll under the finger. Snapshot its
+            // current range after completion, never gate on the old touch rect.
+            if longPress || adjusted { requestCurrentMenu() }
+        case .cancelled:
+            bookTouch = nil; dismiss()
+        }
     }
     func schedule(on source: UIView, actions: [ReaderSelectionAction], theme: ReadingTheme, selectedText: String) {
         guard !Task.isCancelled, let window = source.window, let scene = window.windowScene, scene.activationState == .foregroundActive else { return }
@@ -285,7 +355,7 @@ private struct ReaderSelectionAction {
         #if DEBUG
         readerSelectionMenuTrace("dismiss", source: source)
         #endif
-        if !keepingHandleObserver { adjustingSelectionHandle = false; removeOutsideObservers() }
+        if !keepingHandleObserver { bookTouch = nil; adjustingSelectionHandle = false; removeOutsideObservers() }
         menuWindow?.isHidden = true; menuWindow?.rootViewController = nil; menuWindow = nil
         controller = nil
         UIMenuSystem.context.setNeedsRebuild()
@@ -314,7 +384,13 @@ private struct ReaderSelectionAction {
         let point = touch.location(in: source)
         let onHandle = source.selectionHandles.contains { $0.contains(point) }
             && !source.selectionRectangles.contains { $0.contains(point) }
-        if gestureRecognizer === selectionPress { return !onHandle }
+        if gestureRecognizer === selectionTouch {
+            var ancestor: UIView? = view
+            while let current = ancestor, current !== source {
+                if current is UIControl { return false }; ancestor = current.superview
+            }
+            return view.isDescendant(of: source)
+        }
         if gestureRecognizer is UIPanGestureRecognizer { adjustingSelectionHandle = onHandle }
         #if DEBUG
         readerSelectionMenuTrace(onHandle ? "handleTouch" : "outsideTouch", source: source, point: point, target: view)
