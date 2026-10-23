@@ -101,13 +101,23 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
 }
 
 export async function revealReadAloud(view, locator) {
-    const target = view.resolveNavigation(locator);
-    if (!target) return;
-    // Do not add every spoken passage to the reader's navigation history.
-    const visible = view.lastLocation?.range;
-    const content = view.renderer.getContents?.().find(item => item.index === target.index);
-    const range = content && target.anchor?.(content.doc);
-    if (visible && range && visible.startContainer.ownerDocument === range.startContainer.ownerDocument
-        && visible.comparePoint(range.startContainer, range.startOffset) === 0) return;
-    await view.renderer.goTo(target);
+    const source = sources.get(view);
+    if (!source) return;
+    const epoch = source.epoch;
+    source.latestReveal = locator;
+    // Rapid Next/Previous actions must finish at the newest passage, even if an
+    // earlier reveal is still waiting for a cold chapter document to load.
+    source.navigation = (source.navigation ?? Promise.resolve()).catch(() => {}).then(async () => {
+        if (source.epoch !== epoch || source.latestReveal !== locator || !view.book) return;
+        const target = view.resolveNavigation(locator);
+        if (!target) return;
+        // Do not add every spoken passage to the reader's navigation history.
+        const visible = view.lastLocation?.range;
+        const content = view.renderer.getContents?.().find(item => item.index === target.index);
+        const range = content && target.anchor?.(content.doc);
+        if (visible && range && visible.startContainer.ownerDocument === range.startContainer.ownerDocument
+            && visible.comparePoint(range.startContainer, range.startOffset) === 0) return;
+        await view.renderer.goTo(target);
+    });
+    await source.navigation;
 }
