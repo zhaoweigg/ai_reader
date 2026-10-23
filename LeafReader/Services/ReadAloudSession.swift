@@ -271,7 +271,13 @@ extension ReadAloudSpeaking {
         do {
             try speaker.speak(text.substring(from: offset), language: passage.language, voice: effectiveVoice, speed: speed)
             state = .playing
-            if followsText {
+            // Start/resume at the saved speech offset, not at the beginning of
+            // its up-to-800-character passage while waiting for a voice callback.
+            let length = CFStringIsSurrogateHighCharacter(text.character(at: offset)) ? 2 : 1
+            let range = NSRange(location: offset, length: min(length, text.length - offset))
+            spokenRange = range
+            if let highlight { highlight(passage, range, followsText) }
+            else if followsText {
                 revealTask?.cancel()
                 let locator = passage.locator
                 revealTask = Task { [weak self] in guard !Task.isCancelled else { return }; await self?.reveal?(locator) }

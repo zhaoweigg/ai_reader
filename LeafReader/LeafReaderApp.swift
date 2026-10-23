@@ -50,7 +50,12 @@ struct LeafReaderApp: App {
     }
 
     var body: some Scene {
-        WindowGroup { AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).defaultAppStorage(readingDefaults).tint(LeafStyle.accent) }
+        WindowGroup {
+            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
+                #if DEBUG
+                .background(UITestSceneGeometryBridge())
+                #endif
+        }
     }
 }
 
