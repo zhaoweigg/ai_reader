@@ -149,6 +149,67 @@ final class ReaderEngineTests: XCTestCase {
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: expected), uniformTypeIdentifier: "public.json")
         attachment.name = "Latest neighboring selection and retained prior range"; attachment.lifetime = .keepAlways; add(attachment)
     }
+    func testSpeechRevealPreservesChapterHrefAndElementAnchorsInBothFlows() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let result = try await model.webView?.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view');
+                await window.Leaf.readAloudChunk({locator:'section:0'});
+                const href=view.book.sections[2].id;
+                await window.Leaf.revealReadAloud({locator:href});
+                const chapter=view.renderer.getContents()[0],heading=chapter.doc.querySelector('h1');
+                heading.id='speech-reveal-heading';
+                const numeric=view.renderer.getContents()[0].index;
+                await window.Leaf.revealReadAloud({locator:href+'#speech-reveal-heading'});
+                return {numeric,element:view.renderer.getContents()[0].index,heading:heading.textContent,source:await window.Leaf.readAloudChunk({locator:'section:2'})};
+                """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+            XCTAssertEqual(result?["numeric"] as? Int, 2); XCTAssertEqual(result?["element"] as? Int, 2)
+            XCTAssertFalse((result?["heading"] as? String ?? "").isEmpty)
+            XCTAssertNotNil(result?["source"]); XCTAssertNil(model.error)
+        }
+    }
+    func testSpokenPositionFollowsInsideLongChineseParagraphInBothFlows() async throws {
+        let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "窗外")
+            let rows = try await model.webView?.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'),content=view.renderer.getContents()[0],doc=content.doc,p=doc.querySelector('p');
+                const whole=doc.createRange();whole.selectNodeContents(p);
+                const packet=await window.Leaf.readAloudChunk({locator:view.getCFI(0,whole)}),rows=[];
+                for(const [location,length] of [[3,1],[300,180],[650,60],[12,1]]){
+                    // Simulate a cached semantic snapshot spanning the paragraph.
+                    // Navigation must use physical line visibility, even if layout
+                    // has changed since this snapshot was recorded.
+                    view.lastLocation.range=whole.cloneRange();
+                    await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location,length,follow:true});
+                    await new Promise(r=>setTimeout(r,80));
+                    const segment=packet.segments.find(s=>location>=s.offset&&location<s.offset+s.length),word=view.resolveCFI(segment.locator).anchor(doc);
+                    word.setStart(word.startContainer,word.startOffset+location-segment.offset);word.setEnd(word.startContainer,word.startOffset+1);
+                    const rect=[...word.getClientRects()].find(r=>r.width>0&&r.height>0),frame=doc.defaultView.frameElement.getBoundingClientRect();
+                    const x=frame.left+rect.left,y=frame.top+rect.top;
+                    rows.push({location,x,y,width:rect.width,height:rect.height,viewport:[innerWidth,innerHeight],
+                        visible:x>=-1&&y>=-1&&x+rect.width<=innerWidth+1&&y+rect.height<=innerHeight+1,
+                        locator:view.lastLocation.cfi,paint:[...content.overlayer.element.querySelectorAll('[data-leaf-spoken-word] rect')].map(r=>['x','y','width','height'].map(k=>Number(r.getAttribute(k))))});
+                }
+                return rows;
+                """, arguments: [:], in: nil, contentWorld: .page) as? [[String: Any]]
+            let value = try XCTUnwrap(rows)
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: value), uniformTypeIdentifier: "public.json")
+            attachment.name = "Long Chinese speech follow scrolling=\(scrolling)"; attachment.lifetime = .keepAlways; add(attachment)
+            for row in value {
+                XCTAssertEqual(row["visible"] as? Bool, true, "scrolling=\(scrolling) \(row)")
+                let paint = row["paint"] as? [[Double]] ?? []
+                XCTAssertEqual(paint.count, 1)
+                XCTAssertGreaterThan(paint.first?[2] ?? 0, (row["width"] as? Double ?? 0) * 3, "Highlight the rendered line, not a character")
+            }
+            XCTAssertNil(model.error)
+        }
+    }
     func testSpokenRangeMapsTrimmedInlineRubyBreaksAndLeavesSavedHighlightsInteractiveInBothFlows() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         for scrolling in [false, true] {
@@ -185,6 +246,99 @@ final class ReaderEngineTests: XCTestCase {
             for key in ["mapped", "html", "selection", "samePlace", "cleared", "savedStillPresent"] { XCTAssertEqual(value[key] as? Bool, true, "\(key): \(value)") }
             XCTAssertGreaterThan(value["rectangles"] as? Int ?? 0, 0)
         }
+    }
+    func testActualChineseSpeechRestoresAnOffscreenOffsetAndKeepsItsWholeLineVisible() async throws {
+        let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "窗外")
+            let web = try XCTUnwrap(model.webView)
+            let loaded = try await model.readAloudPassage(at: "section:0")
+            let passage = try XCTUnwrap(loaded)
+            let name = "RealChineseLine.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: name)!
+            let session = ReadAloudSession(defaults: defaults)
+            defer { session.stop(); defaults.removePersistentDomain(forName: name) }
+            session.followsText = true; session.speed = 2
+            session.source = { [weak model] locator in try await model?.readAloudPassage(at: locator) }
+            session.highlight = { [weak model] passage, range, follow in model?.highlightReadAloud(passage, range: range, follow: follow) }
+            session.start(at: passage.locator, offset: 650)
+            try await waitUntil({ !session.spokenText.isEmpty || session.error != nil }, timeout: 20)
+            XCTAssertNil(session.error); XCTAssertFalse(session.spokenText.isEmpty)
+            session.pause()
+            let offset = try XCTUnwrap(session.bookmark?.offset)
+            XCTAssertGreaterThanOrEqual(offset, 650)
+            try await Task.sleep(for: .milliseconds(150))
+            let value = try await web.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'),content=view.renderer.getContents()[0],doc=content.doc;
+                const segment=packet.segments.find(s=>offset>=s.offset&&offset<s.offset+s.length),word=view.resolveCFI(segment.locator).anchor(doc);
+                word.setStart(word.startContainer,word.startOffset+offset-segment.offset);word.setEnd(word.startContainer,word.startOffset+1);
+                const seed=word.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect();
+                const rect=content.overlayer.element.querySelector('[data-leaf-spoken-line] rect');
+                return {x:seed.left+frame.left,y:seed.top+frame.top,visible:seed.left+frame.left>=-1&&seed.right+frame.left<=innerWidth+1&&seed.top+frame.top>=-1&&seed.bottom+frame.top<=innerHeight+1,
+                    width:Number(rect?.getAttribute('width')),wordWidth:seed.width,spoken:content.overlayer.element.querySelector('[data-leaf-spoken-line]')?.getAttribute('data-leaf-spoken-text')};
+                """, arguments: ["packet": try JSONSerialization.jsonObject(with: JSONEncoder().encode(passage)), "offset": offset], in: nil, contentWorld: .page) as? [String: Any]
+            XCTAssertEqual(value?["visible"] as? Bool, true, "\(value ?? [:])")
+            XCTAssertGreaterThan(value?["width"] as? Double ?? 0, (value?["wordWidth"] as? Double ?? 0) * 3)
+            let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
+            let screenshot = XCTAttachment(image: try XCTUnwrap(image)); screenshot.name = "Actual Chinese speech full line scrolling=\(scrolling) offset=\(offset)"; screenshot.lifetime = .keepAlways; add(screenshot)
+        }
+    }
+    func testSpokenLinesReflowAtEverySizeInBothViewportOrientationsAndFlows() async throws {
+        let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        let web = try XCTUnwrap(model.webView)
+        let loaded = try await model.readAloudPassage(at: "section:0")
+        let packet = try JSONSerialization.jsonObject(with: JSONEncoder().encode(try XCTUnwrap(loaded)))
+        var rows: [[String: Any]] = []
+        for viewport in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
+            window?.frame.size = viewport
+            try await Task.sleep(for: .milliseconds(250))
+            for scrolling in [false, true] {
+                for (variant, font) in ["Georgia", "Palatino", "System"].enumerated() {
+                    for size in 12...32 {
+                        var prefs = preferences
+                        prefs.scrolling = scrolling; prefs.font = font; prefs.fontSize = Double(size)
+                        prefs.horizontalMargin = [12, 20, 36][variant]; prefs.verticalMargin = [4, 12, 24][variant]
+                        prefs.lineHeight = [1.2, 1.65, 2.1][variant]; prefs.theme = [.day, .paper, .night][variant]
+                        let result = try await web.callAsyncJavaScript("""
+                            const sleep=ms=>new Promise(r=>setTimeout(r,ms)),view=document.querySelector('foliate-view');
+                            window.Leaf.applyPreferences(settings);await sleep(100);
+                            await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location:650,length:1,follow:true});await sleep(50);
+                            const content=view.renderer.getContents()[0],doc=content.doc,segment=packet.segments.find(s=>650>=s.offset&&650<s.offset+s.length);
+                            const range=view.resolveCFI(segment.locator).anchor(doc),node=range.startContainer;
+                            range.setStart(node,range.startOffset+650-segment.offset);range.setEnd(node,range.startOffset+1);
+                            // WebKit can include a zero-width caret on the previous
+                            // line/column. Its bounding union is not the glyph box.
+                            const glyphRects=[...range.getClientRects()],word=glyphRects.find(r=>r.width>0&&r.height>0),frame=doc.defaultView.frameElement.getBoundingClientRect(),whole=doc.createRange();whole.selectNodeContents(node);
+                            const expected=[...whole.getClientRects()].find(r=>Math.abs(r.top-word.top)<1&&r.left<=word.left&&r.right>=word.right);
+                            const actual=[...content.overlayer.element.querySelectorAll('[data-leaf-spoken-line] rect')];
+                            return {font:settings.font,size:settings.fontSize,scrolling:settings.scrolling,theme:settings.background,viewport:[innerWidth,innerHeight],
+                                visible:word.left+frame.left>=-1&&word.right+frame.left<=innerWidth+1&&word.top+frame.top>=-1&&word.bottom+frame.top<=innerHeight+1,
+                                exactLine:!!expected&&actual.length===1&&['x','y','width','height'].every((key,i)=>Math.abs(Number(actual[0].getAttribute(key))-expected[['left','top','width','height'][i]])<.8),
+                                unchanged:view.resolveCFI(packet.locator).anchor(doc).toString()===packet.text,
+                                caret:glyphRects.some(r=>!r.width||!r.height),glyphRects:glyphRects.map(r=>[r.left,r.top,r.width,r.height]),
+                                expectedLine:expected&&[expected.left,expected.top,expected.width,expected.height],
+                                word:[word.left,word.top,word.width,word.height],paint:actual.map(r=>['x','y','width','height'].map(k=>Number(r.getAttribute(k))))};
+                            """, arguments: ["settings": prefs.payload, "packet": packet], in: nil, contentWorld: .page) as? [String: Any]
+                        let row = try XCTUnwrap(result); rows.append(row)
+                        for key in ["visible", "exactLine", "unchanged"] { XCTAssertEqual(row[key] as? Bool, true, "\(key): \(row)") }
+                        let dimensions = row["viewport"] as? [Double] ?? []
+                        XCTAssertEqual((dimensions.first ?? 0) > (dimensions.last ?? 0), viewport.width > viewport.height)
+                        if [12, 22, 32].contains(size) || (size == 23 && viewport.width > viewport.height && !scrolling && variant == 2) {
+                            let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
+                            let screenshot = XCTAttachment(image: try XCTUnwrap(image)); screenshot.name = "Spoken line \(Int(viewport.width))x\(Int(viewport.height)) scroll=\(scrolling) \(font) \(size)pt \(prefs.theme)"; screenshot.lifetime = .keepAlways; add(screenshot)
+                        }
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(rows.count, 252); XCTAssertNil(model.error)
+        XCTAssertTrue(rows.contains { $0["caret"] as? Bool == true }, "Exercise actual WebKit caret rectangles at wrapping boundaries")
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows), uniformTypeIdentifier: "public.json")
+        attachment.name = "Spoken line 252 viewport-flow-font-size-theme measurements"; attachment.lifetime = .keepAlways; add(attachment)
     }
     func testSpokenRangeOnlyLoadsColdChaptersWhenFollowingAndLatestRangeWins() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
@@ -225,7 +379,10 @@ final class ReaderEngineTests: XCTestCase {
         let original = try Data(contentsOf: url)
         let passage = ReadAloudPassage(text: text as String, locator: "pdf:1:0", nextLocator: "pdf:2:0", language: "en", label: "Page 2")
         model.highlightReadAloud(passage, range: town, follow: false)
-        XCTAssertEqual(view.highlightedSelections?.first?.string, "town")
+        let line = try XCTUnwrap(view.highlightedSelections?.first?.string)
+        XCTAssertTrue(line.contains("town")); XCTAssertGreaterThan(line.count, 4)
+        model.highlightReadAloud(passage, range: NSRange(location: town.location, length: min(200, text.length - town.location)), follow: false)
+        XCTAssertEqual(view.highlightedSelections?.first?.string, line, "A sentence callback spanning lines must still highlight only its leading line")
         XCTAssertEqual(view.currentSelection?.string, selected)
         XCTAssertEqual(page.annotations.count, annotations)
         model.highlightReadAloud(nil, range: NSRange(location: 0, length: 0), follow: false)
@@ -795,9 +952,11 @@ final class ReaderEngineTests: XCTestCase {
                         ['x','y','width','height'].every((name,j) => Math.abs(Number(rect.getAttribute(name)) - expected[i][['left','top','width','height'][j]]) < 0.75));
                     const spokenRange=view.resolveCFI(speech.segments[0].locator).anchor(content.doc);
                     spokenRange.setEnd(spokenRange.startContainer,spokenRange.startOffset+6);
-                    const spokenExpected=[...spokenRange.getClientRects()],spokenActual=[...content.overlayer.element.querySelectorAll('[data-leaf-spoken-word] rect')];
-                    const spokenBounds=spokenActual.length===spokenExpected.length&&spokenActual.every((rect,i)=>
-                        ['x','y','width','height'].every((name,j)=>Math.abs(Number(rect.getAttribute(name))-spokenExpected[i][['left','top','width','height'][j]])<0.75));
+                    const seed=spokenRange.getClientRects()[0],all=content.doc.createRange();all.selectNodeContents(spokenRange.startContainer);
+                    const fragments=[...all.getClientRects()].filter(r=>Math.abs(r.top-seed.top)<1&&r.left<=seed.right&&r.right>=seed.left);
+                    const expectedLine=fragments[0],spokenActual=[...content.overlayer.element.querySelectorAll('[data-leaf-spoken-line] rect')];
+                    const spokenBounds=!!expectedLine&&spokenActual.length===1&&
+                        ['x','y','width','height'].every((name,j)=>Math.abs(Number(spokenActual[0].getAttribute(name))-expectedLine[['left','top','width','height'][j]])<0.75);
                     rows.push({font, scrolling, size, quote:range.toString() === quote,
                         text:content.doc.body.textContent === originalText, sameBounds, spokenBounds, rectangles:actual.length});
                 }

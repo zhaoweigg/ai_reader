@@ -115,6 +115,23 @@ import PDFKit
         reopened.resumeSaved(); try await wait { reopened.state == .playing }
         XCTAssertEqual(reopenedSpeaker.spoken.first, "beta gamma"); reopened.stop()
     }
+    func testInitialHighlightUsesSavedOffsetWithoutACompetingParagraphReveal() async throws {
+        let (session, speaker, _, _) = setup()
+        let value = passage(0, text: "Alpha 😀 beta gamma")
+        session.source = { locator in locator == "position:1" ? nil : value }
+        var ranges: [NSRange] = [], reveals: [String] = []
+        session.highlight = { passage, range, _ in if passage != nil { ranges.append(range) } }
+        session.reveal = { reveals.append($0) }
+        session.start(at: value.locator, offset: 10)
+        try await wait { session.state == .playing }
+        XCTAssertEqual(ranges.last, NSRange(location: 10, length: 1))
+        XCTAssertEqual(speaker.spoken.last, "eta gamma")
+        XCTAssertTrue(reveals.isEmpty, "The line-following bridge owns navigation; a delayed paragraph reveal must not move it back")
+        session.start(at: value.locator, offset: 7) // Low surrogate of the emoji.
+        try await wait { session.state == .playing }
+        XCTAssertEqual(ranges.last, NSRange(location: 6, length: 2))
+        XCTAssertEqual(speaker.spoken.last, "😀 beta gamma")
+    }
     func testPreviousAndNextWhilePausedKeepAudioPaused() async throws {
         let (session, speaker, _, _) = setup()
         session.source = { [self] locator in passage(Int(locator?.split(separator: ":").last ?? "0") ?? 0) }

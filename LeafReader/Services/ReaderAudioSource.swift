@@ -7,10 +7,11 @@ import PDFKit
         if let pdfView {
             guard let passage, let cursor = PDFReadAloudSource.cursor(passage.locator),
                   let page = pdfView.document?.page(at: cursor.page), range.location != NSNotFound,
-                  let selection = page.selection(for: NSRange(location: cursor.offset + range.location, length: range.length)) else {
+                  let selection = page.selection(for: NSRange(location: cursor.offset + range.location, length: min(1, range.length))) else {
                 pdfView.highlightedSelections = nil
                 return
             }
+            selection.extendForLineBoundaries()
             selection.color = UIColor.systemYellow.withAlphaComponent(0.48)
             pdfView.highlightedSelections = [selection]
             let bounds = selection.bounds(for: page)
