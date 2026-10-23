@@ -1,6 +1,7 @@
 import { makeBook } from './foliate/view.js';
 import { openBookSource } from './book-source.js';
 import { createAnnotations } from './annotations.js';
+import { readAloudChunk, revealReadAloud, clearReadAloud } from './read-aloud.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -264,6 +265,7 @@ async function open(config) {
 }
 
 function close() {
+    if (view) clearReadAloud(view);
     post('selection', {text:''});
     searchGeneration = null;
     annotationLayer = null;
@@ -319,6 +321,9 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, close, command, applyPreferences, search, tap,
+    readAloudChunk: ({ locator }) => readAloudChunk(view, locator, sanitize),
+    revealReadAloud: ({ locator }) => revealReadAloud(view, locator),
+    clearReadAloud: () => { if (view) clearReadAloud(view); },
     setAnnotations: ({ items }) => annotationLayer?.set(items),
     clearSelection: () => {
         for (const {doc} of view?.renderer?.getContents?.() ?? []) doc?.getSelection()?.removeAllRanges();

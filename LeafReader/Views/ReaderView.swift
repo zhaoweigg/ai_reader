@@ -11,12 +11,13 @@ struct ReaderView: View {
     }
 }
 
-private enum ReaderPanel: String, Identifiable { case contents, appearance, search, bookmarks, aiSettings, buttonAppearance, annotation; var id: String { rawValue } }
+private enum ReaderPanel: String, Identifiable { case contents, appearance, search, bookmarks, aiSettings, buttonAppearance, annotation, audio; var id: String { rawValue } }
 
 struct ReaderContent: View {
     let book: Book
     let url: URL
     @StateObject private var model: ReaderModel
+    @StateObject private var audio: ReadAloudSession
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -56,6 +57,13 @@ struct ReaderContent: View {
     init(book: Book, url: URL, library: LibraryStore, initialLocator: String?) {
         self.book = book; self.url = url
         _model = StateObject(wrappedValue: ReaderModel(bookID: book.id, library: library, initialLocator: initialLocator))
+        var defaults = UserDefaults.standard
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing"), let id = ProcessInfo.processInfo.environment["LEAF_UI_TEST_ID"] {
+            defaults = UserDefaults(suiteName: "com.leafreader.uitests.\(id)") ?? .standard
+        }
+        #endif
+        _audio = StateObject(wrappedValue: ReadAloudSession(bookmarkURL: library.disk?.root.appendingPathComponent("Audio/\(book.id.uuidString).json"), defaults: defaults))
         _chat = StateObject(wrappedValue: ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true), conversation: book.fingerprint))
     }
     var body: some View {
@@ -96,6 +104,16 @@ struct ReaderContent: View {
                         .accessibilityIdentifier("dismissAppearance")
                     }
                 }
+            if audio.isPresented, panel == nil {
+                VStack {
+                    if !chatIsPresented { Spacer(minLength: 0) }
+                    ReaderAudioPlayer(session: audio) { panel = .audio }
+                        .padding(.horizontal, 12)
+                        .padding(.top, chatIsPresented ? (showsControls ? 68 : 8) : 0)
+                        .padding(.bottom, chatIsPresented ? 0 : (showsControls ? 112 : 12))
+                    if chatIsPresented { Spacer(minLength: 0) }
+                }.environment(\.leafTheme, theme)
+            }
             if showsControls {
                 VStack(spacing: 0) {
                     readerHeader
@@ -180,8 +198,19 @@ struct ReaderContent: View {
         .statusBarHidden(!showsControls)
         .persistentSystemOverlays(showsControls ? .automatic : .hidden)
         .accessibilityAction(.escape) { library.flush(); dismiss() }
-        .task { library.open(book.id) }
-        .onDisappear { chat.close(); library.flush() }
+        .task {
+            // Configure the retained StateObjects after installation. Creating
+            // them eagerly in init would allocate new readers/synthesizers on
+            // every parent refresh as reading progress changes.
+            audio.source = { [weak model] locator in
+                guard let model else { throw ReadAloudError.unavailable }
+                return try await model.readAloudPassage(at: locator)
+            }
+            audio.reveal = { [weak model] locator in await model?.revealReadAloud(at: locator) }
+            audio.clearSource = { [weak model] in model?.webView?.evaluateJavaScript("window.Leaf?.clearReadAloud()", completionHandler: nil) }
+            library.open(book.id)
+        }
+        .onDisappear { audio.stop(); chat.close(); library.flush() }
         .onChange(of: library.book(book.id)?.annotations ?? []) { _, _ in model.synchronizeAnnotations() }
         .onChange(of: model.annotationDraft) { _, draft in if draft != nil { panel = .annotation } }
         .alert("Could not save highlight", isPresented: Binding(get: { model.annotationError != nil }, set: { if !$0 { model.annotationError = nil } })) {
@@ -190,6 +219,12 @@ struct ReaderContent: View {
         .onChange(of: model.liveSelection) { _, selection in
             chat.attachLiveSelection(selection, chatIsPresented: chatIsPresented)
         }
+        .onChange(of: model.listeningRequest) { _, request in
+            guard let request else { return }
+            audio.start(at: request.locator)
+            model.clearNativeSelection(); model.hideControls(); panel = nil
+        }
+        .onChange(of: model.reloadID) { _, _ in audio.stop() }
         .onChange(of: model.selectionRequest) { _, request in
             guard let request else { return }
             chatButtonIsMoving = false
@@ -197,13 +232,23 @@ struct ReaderContent: View {
             model.hideControls()
             chatIsPresented = true
         }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { chatButtonIsMoving = false; chat.flush() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { chatButtonIsMoving = false; chat.flush() }
+            if phase == .background { audio.pause() }
+        }
         .sheet(item: $panel, onDismiss: { model.hideControls() }) { panel in
             NavigationStack {
                 Group {
                     switch panel {
                     case .appearance: ReaderAppearancePanel()
                     case .aiSettings: AISettingsView()
+                    case .audio:
+                        ReaderAudioSettings(session: audio, onStart: {
+                            audio.start(at: book.format == .pdf ? model.visiblePDFListeningPosition() : model.locator)
+                            self.panel = nil; model.hideControls()
+                        }, onResume: {
+                            audio.resumeSaved(); self.panel = nil; model.hideControls()
+                        })
                     case .buttonAppearance: ReaderChatButtonSettings()
                     case .annotation:
                         if let annotation = model.annotationDraft {
@@ -289,6 +334,8 @@ struct ReaderContent: View {
                     panelButton("Search", "magnifyingglass", .search)
                     Spacer()
                     panelButton("Saved", "bookmark", .bookmarks)
+                    Spacer()
+                    panelButton("Listen", "headphones", .audio)
                     Spacer()
                     panelButton("Appearance", "textformat.size", .appearance)
                 }.padding(.horizontal, 16)

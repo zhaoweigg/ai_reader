@@ -41,6 +41,15 @@ final class AnnotationUITests: XCTestCase {
         point.press(forDuration: 1.2)
         let menu = app.menuItems[action]
         let button = app.buttons.matching(NSPredicate(format: "label == %@", action)).firstMatch
+        // The native selection menu paginates when Listen from here is added.
+        // Follow its actual Forward control rather than assuming every action
+        // fits on the first page on every device/flow.
+        for _ in 0..<3 where !menu.exists && !button.exists {
+            let forward = app.buttons["Forward"]
+            guard forward.waitForExistence(timeout: 2), forward.isHittable else { break }
+            forward.tap()
+            _ = menu.waitForExistence(timeout: 2)
+        }
         if !menu.waitForExistence(timeout: 2) && !button.exists {
             capture("Missing " + action + " selection action")
             let state = XCTAttachment(string: app.debugDescription); state.name = "Selection hierarchy"; state.lifetime = .keepAlways; add(state)

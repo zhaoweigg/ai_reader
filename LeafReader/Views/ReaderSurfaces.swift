@@ -32,6 +32,8 @@ struct WebBookSurface: UIViewRepresentable {
         let view = ReaderWebView(frame: .zero, configuration: configuration)
         view.selectionContext = { [weak model] in model?.selectedReadingContext() }
         view.onSelectionAction = { [weak model] intent, snapshot in model?.askAboutSelection(intent, context: snapshot) }
+        view.listeningPosition = { [weak model] in model?.listeningSelectionPosition() }
+        view.onListen = { [weak model] locator in model?.listeningRequest = ReaderListeningRequest(locator: locator) }
         view.annotationSelection = { [weak model] in model?.selectedAnnotationSelection() }
         view.onAnnotationAction = { [weak model] intent, snapshot in model?.annotateSelection(intent, selection: snapshot) }
         view.isOpaque = false
@@ -60,6 +62,8 @@ struct WebBookSurface: UIViewRepresentable {
         view.navigationDelegate = nil
         view.scrollView.delegate = nil
         coordinator.onReaderTap = nil
+        (view as? ReaderWebView)?.listeningPosition = nil
+        (view as? ReaderWebView)?.onListen = nil
         (view as? ReaderWebView)?.selectionContext = nil
         (view as? ReaderWebView)?.onSelectionAction = nil
         (view as? ReaderWebView)?.annotationSelection = nil
@@ -116,6 +120,8 @@ struct PDFBookSurface: UIViewRepresentable {
         let view = ReaderPDFView()
         view.selectionContext = { [weak model] in model?.selectedReadingContext() }
         view.onSelectionAction = { [weak model] intent, snapshot in model?.askAboutSelection(intent, context: snapshot) }
+        view.listeningPosition = { [weak model] in model?.listeningSelectionPosition() }
+        view.onListen = { [weak model] locator in model?.listeningRequest = ReaderListeningRequest(locator: locator) }
         view.annotationSelection = { [weak model] in model?.selectedAnnotationSelection() }
         view.onAnnotationAction = { [weak model] intent, snapshot in model?.annotateSelection(intent, selection: snapshot) }
         view.autoScales = true
@@ -134,6 +140,8 @@ struct PDFBookSurface: UIViewRepresentable {
     }
     static func dismantleUIView(_ view: PDFView, coordinator: Coordinator) {
         coordinator.onReaderTap = nil
+        (view as? ReaderPDFView)?.listeningPosition = nil
+        (view as? ReaderPDFView)?.onListen = nil
         (view as? ReaderPDFView)?.selectionContext = nil
         (view as? ReaderPDFView)?.onSelectionAction = nil
         (view as? ReaderPDFView)?.annotationSelection = nil
