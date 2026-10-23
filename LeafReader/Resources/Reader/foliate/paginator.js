@@ -745,7 +745,6 @@ export class Paginator extends HTMLElement {
             record.released = true
             record.view.destroy()
             record.view.element.remove()
-            record.stage?.remove()
         }
         if (record.loaded && !record.unloaded) {
             record.unloaded = true
@@ -792,7 +791,7 @@ export class Paginator extends HTMLElement {
         this.#container.style.setProperty('--leaf-book-end-space', `${space}px`)
     }
     #scrollViewExpanded(record) {
-        if (this.#scrollRendering || record.stage || record.released) return
+        if (this.#scrollRendering || record.preparing || record.released) return
         if (!this.#continuous) {
             if (record.view === this.#view) this.#scrollToAnchor(this.#anchor)
             return
@@ -805,7 +804,7 @@ export class Paginator extends HTMLElement {
         else if (record.index === this.#index) this.#scrollToAnchor(this.#anchor)
     }
     #scrollViewResized(record) {
-        if (this.#scrollRendering || record.stage || record.released || !this.#continuous) return
+        if (this.#scrollRendering || record.preparing || record.released || !this.#continuous) return
         const height = record.view.element.getBoundingClientRect().height
         const delta = height - (record.height ?? height)
         record.height = height
@@ -842,15 +841,19 @@ export class Paginator extends HTMLElement {
     }
     async #loadScrollNeighbor(index) {
         const epoch = this.#scrollEpoch, section = this.sections[index]
-        const stage = document.createElement('div')
-        const { width, height } = this.#container.getBoundingClientRect()
-        stage.style.cssText = `position:absolute;left:-100000px;top:0;width:${width}px;height:${height}px;visibility:hidden;pointer-events:none`
-        const record = { index, section, stage, loaded: false, epoch }
+        const record = { index, section, preparing: true, loaded: false, epoch }
         record.cancelledReady = new Promise(resolve => { record.cancelReady = resolve })
         record.view = new View({ container: this, onExpand: () => this.#scrollViewExpanded(record) })
         record.view.onResize = () => this.#scrollViewResized(record)
-        stage.append(record.view.element)
-        this.#top.append(stage)
+        // Reparenting an iframe reloads it in WebKit. Prepare it in its final
+        // DOM position, clipped out of flow, and reveal it without moving it.
+        Object.assign(record.view.element.style, {
+            position: 'absolute', left: '0', top: '0', maxHeight: '0',
+            visibility: 'hidden', pointerEvents: 'none', overflowAnchor: 'none',
+        })
+        const later = [...this.#scrollViews.values(), ...this.#scrollLoads.values()]
+            .filter(record => record.index > index).sort((a, b) => a.index - b.index)[0]
+        this.#container.insertBefore(record.view.element, later?.view.element ?? null)
         this.#scrollLoads.set(index, record)
         // EPUB resources share a reference-counted loader. Serial warm-ups avoid
         // racing two uncached stylesheet/image loads and losing their URL lease.
@@ -876,14 +879,16 @@ export class Paginator extends HTMLElement {
                 if (record.cancelled || epoch !== this.#scrollEpoch || !this.#wantedScrollIndexes().has(index)) return
                 record.view.render(this.#scrollLayout)
                 this.#keepScrollPosition(() => {
-                    const later = [...this.#scrollViews].sort(([a], [b]) => a - b).find(([i]) => i > index)?.[1]
-                    this.#container.insertBefore(record.view.element, later?.view.element ?? null)
+                    Object.assign(record.view.element.style, {
+                        position: 'relative', left: '', top: '', maxHeight: '',
+                        visibility: '', pointerEvents: '', overflowAnchor: '',
+                    })
                     if (index < this.#index) {
                         this.#scrollPrefix = Math.max(0, this.#scrollPrefix - record.view.element.getBoundingClientRect().height)
                         if (index === 0) this.#scrollPrefix = 0
                         this.#scrollSpacer.style.height = `${this.#scrollPrefix}px`
                     }
-                    stage.remove(); record.stage = null
+                    record.preparing = false
                     record.height = record.view.element.getBoundingClientRect().height
                     this.#scrollViews.set(index, record)
                     this.#updateScrollEndSpace()
