@@ -209,7 +209,10 @@ const setStylesImportant = (el, styles) => {
 
 class View {
     #destroyed = false
-    #observer = new ResizeObserver(() => this.#column ? this.render(this.#layout) : this.expand(false))
+    #observer = new ResizeObserver(() => {
+        if (this.#column) this.render(this.#layout)
+        else { this.expand(false); this.onResize?.() }
+    })
     #element = document.createElement('div')
     #iframe = document.createElement('iframe')
     #contentRange = document.createRange()
@@ -755,6 +758,7 @@ export class Paginator extends HTMLElement {
             index: this.#index, section: this.sections[this.#index], view: this.#view, loaded: true,
         }
         record.view.onExpand = () => this.#scrollViewExpanded(record)
+        record.view.onResize = () => this.#scrollViewResized(record)
         record.height = record.view.element.getBoundingClientRect().height
         this.#scrollViews.set(this.#index, record)
         this.#warmScrollWindow()
@@ -769,7 +773,15 @@ export class Paginator extends HTMLElement {
         const delta = height - (record.height ?? height)
         record.height = height
         if (record.index < this.#index && Math.abs(delta) > 0.5) this.#container.scrollTop += delta
-        else if (record.index === this.#index && Math.abs(delta) > 0.5) this.#scrollToAnchor(this.#anchor)
+        else if (record.index === this.#index) this.#scrollToAnchor(this.#anchor)
+    }
+    #scrollViewResized(record) {
+        if (this.#scrollRendering || record.stage || record.released || !this.#continuous) return
+        const height = record.view.element.getBoundingClientRect().height
+        const delta = height - (record.height ?? height)
+        record.height = height
+        // A passive body resize must not re-anchor a reader who is scrolling.
+        if (record.index < this.#index && Math.abs(delta) > 0.5) this.#container.scrollTop += delta
     }
     #wantedScrollIndexes() {
         return new Set([this.#index, this.#adjacentIndex(1), this.#adjacentIndex(-1)].filter(x => x != null))
@@ -804,6 +816,7 @@ export class Paginator extends HTMLElement {
         stage.style.cssText = `position:absolute;left:-100000px;top:0;width:${width}px;height:${height}px;visibility:hidden;pointer-events:none`
         const record = { index, section, stage, loaded: false, epoch }
         record.view = new View({ container: this, onExpand: () => this.#scrollViewExpanded(record) })
+        record.view.onResize = () => this.#scrollViewResized(record)
         stage.append(record.view.element)
         this.#top.append(stage)
         this.#scrollLoads.set(index, record)

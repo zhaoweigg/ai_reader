@@ -658,6 +658,43 @@ final class ReaderEngineTests: XCTestCase {
         let attachment = XCTAttachment(data:try JSONEncoder().encode(metrics),uniformTypeIdentifier:"public.json")
         attachment.name="Scroll chapter-window resource bounds and queued-close cleanup";attachment.lifetime = .keepAlways;add(attachment)
     }
+    func testContinuousScrollWindowStylesAndSavedCFIAcrossEveryTextSizeAndFlowSwitch() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            await view.goTo(1);await sleep(250);
+            const doc=r.getContents()[0].doc,range=doc.createRange(),p=doc.querySelector('p').firstChild;
+            range.setStart(p,8);range.setEnd(p,20);
+            const saved=view.getCFI(1,range),text=range.toString(),rows=[];
+            await view.goTo(saved);
+            for(const scrolling of [true,false,true])for(let size=12;size<=32;size++){
+                const font=['Georgia','Palatino','System'][(size-12)%3],margin=[8,20,48][(size-12)%3],theme=themes[(size-12)%themes.length];
+                window.Leaf.applyPreferences({...base,...theme,scrolling,font,fontSize:size,horizontalMargin:margin});
+                await sleep(70);
+                const contents=r.getContents();
+                const valid=contents.every(({doc})=>{
+                    const root=doc.defaultView.getComputedStyle(doc.documentElement);
+                    return Math.abs(parseFloat(root.fontSize)-size)<0.1 && root.colorScheme===theme.colorScheme;
+                });
+                rows.push({scrolling,size,font,margin,valid,visible:window.Leaf.isLocationVisible(saved),documents:contents.length,
+                    sameText:view.resolveNavigation(saved).anchor(doc).toString()===text});
+            }
+            return rows;
+            """, arguments:["base":prefs.payload,"themes":[ReadingTheme.day,ReadingTheme.paper,ReadingTheme.night].map { ReaderPreferences(fontSize:19,lineHeight:1.65,font:"Georgia",theme:$0,scrolling:true).payload }],in:nil,contentWorld:.page)
+        let rows = try XCTUnwrap(result as? [[String:Any]])
+        XCTAssertEqual(rows.count,63)
+        for row in rows {
+            XCTAssertEqual(row["valid"] as? Bool,true,"\(row)")
+            XCTAssertEqual(row["visible"] as? Bool,true,"\(row)")
+            XCTAssertEqual(row["sameText"] as? Bool,true,"\(row)")
+            XCTAssertLessThanOrEqual(row["documents"] as? Int ?? 99,(row["scrolling"] as? Bool) == true ? 3 : 1)
+        }
+        let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:rows),uniformTypeIdentifier:"public.json")
+        attachment.name="Nearby chapter styles and saved CFI at 12–32 pt in both flows";attachment.lifetime = .keepAlways;add(attachment)
+    }
     func testPlainTextRenders() async throws {
         let (book, url) = try prepare("A Field Guide to Slow Days.txt", format: .txt)
         try await assertOpened(show(book, url: url), contains: "morning")
