@@ -17,10 +17,16 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var hasSearched = false
     @Published var controlsVisible = false
     @Published var selectionRequest: ReaderSelectionRequest?
+    @Published var annotationDraft: BookAnnotation?
+    @Published var annotationError: String?
     @Published private(set) var liveSelection: ReadingChatContext?
     private var selectedWebText = ""
     private var selectedWebLocator: String?
     private var selectedWebChapter: String?
+    private var selectionTooLong = false
+    private var renderedPDFAnnotations: [(PDFPage, PDFAnnotation)] = []
+    private var renderedPDFPages: Set<Int> = []
+    private var renderedPDFValues: [BookAnnotation] = []
     @Published private(set) var reloadID = UUID()
     let bookID: UUID
     let library: LibraryStore
@@ -116,6 +122,83 @@ final class ReaderModel: NSObject, ObservableObject {
             webView.evaluateJavaScript("window.Leaf.clearSelection()") { [weak webView] _, _ in webView?.endEditing(true) }
         }
     }
+    func selectedAnnotationSelection() -> BookAnnotationSelection? {
+        guard isReady, !isLocked, error == nil else { return nil }
+        if let pdfView, let document = pdfView.document, let selected = pdfView.currentSelection, let text = selected.string {
+            var ranges: [PDFAnnotationRange] = []
+            for page in selected.pages {
+                for index in 0..<selected.numberOfTextRanges(on: page) {
+                    let range = selected.range(at: index, on: page)
+                    ranges.append(PDFAnnotationRange(page: document.index(for: page), location: range.location, length: range.length))
+                }
+            }
+            guard let first = ranges.first else { return nil }
+            let selection = BookAnnotationSelection(text: text, locator: "pdf:\(first.page)", chapter: "Page \(first.page + 1)", fraction: document.pageCount > 1 ? Double(first.page) / Double(document.pageCount - 1) : 0, pdfRanges: ranges)
+            return selection.annotation().valid ? selection : nil
+        }
+        guard !selectionTooLong, let selectedWebLocator else { return nil }
+        let selection = BookAnnotationSelection(text: selectedWebText, locator: selectedWebLocator, chapter: selectedWebChapter ?? chapterTitle, fraction: fraction)
+        return selection.annotation().valid ? selection : nil
+    }
+    func annotateSelection(_ intent: ReaderAnnotationIntent, selection: BookAnnotationSelection) {
+        let existing = book?.annotations.first { $0.matches(selection) }
+        let draft = existing ?? selection.annotation()
+        guard draft.valid else { annotationError = BookAnnotationError.selection.localizedDescription; return }
+        if intent == .note { annotationDraft = draft }
+        else if existing == nil {
+            do { try library.saveAnnotation(draft, bookID: bookID); synchronizeAnnotations() }
+            catch { annotationError = error.localizedDescription; return }
+        }
+        hideControls()
+        pdfView?.clearSelection()
+        webView?.evaluateJavaScript("window.Leaf.clearSelection()", completionHandler: nil)
+    }
+    func editAnnotation(_ id: UUID) {
+        guard let annotation = book?.annotations.first(where: { $0.id == id }) else { return }
+        if annotationDraft?.id != id { annotationDraft = annotation }
+    }
+    func saveAnnotation(_ annotation: BookAnnotation) throws {
+        try library.saveAnnotation(annotation, bookID: bookID)
+        synchronizeAnnotations()
+    }
+    func removeAnnotation(_ id: UUID) throws {
+        try library.removeAnnotation(id, bookID: bookID)
+        synchronizeAnnotations()
+    }
+    func synchronizeAnnotations() {
+        guard isReady else { return }
+        if let pdfView, let document = pdfView.document {
+            let proposed = pdfView.currentPage.map { document.index(for: $0) } ?? 0
+            let current = (0..<document.pageCount).contains(proposed) ? proposed : 0
+            let pages = Set(max(0, current - 1)...min(max(0, document.pageCount - 1), current + 1))
+            let values = book?.annotations ?? []
+            guard pages != renderedPDFPages || values != renderedPDFValues else { return }
+            renderedPDFPages = pages; renderedPDFValues = values
+            for (page, annotation) in renderedPDFAnnotations { page.removeAnnotation(annotation) }
+            renderedPDFAnnotations = []
+            for saved in values where saved.valid {
+                // Avoid materializing annotated pages throughout a large PDF.
+                for range in saved.pdfRanges where pages.contains(range.page) {
+                    guard let page = document.page(at: range.page), range.location <= (page.string as NSString?)?.length ?? 0,
+                          range.length <= ((page.string as NSString?)?.length ?? 0) - range.location,
+                          let selection = page.selection(for: NSRange(location: range.location, length: range.length)) else { continue }
+                    for line in selection.selectionsByLine() {
+                        let bounds = line.bounds(for: page)
+                        guard !bounds.isEmpty, !bounds.isInfinite else { continue }
+                        let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
+                        annotation.color = UIColor(saved.color.color).withAlphaComponent(0.4)
+                        annotation.userName = "Leaf:\(saved.id.uuidString)"
+                        annotation.contents = saved.note
+                        page.addAnnotation(annotation); renderedPDFAnnotations.append((page, annotation))
+                    }
+                }
+            }
+        } else { evaluate("setAnnotations", ["items": (book?.annotations ?? []).filter { $0.valid && $0.pdfRanges.isEmpty }.map(\.webPayload)]) }
+    }
+    func openPDFAnnotation(_ annotation: PDFAnnotation) {
+        guard let name = annotation.userName, name.hasPrefix("Leaf:"), let id = UUID(uuidString: String(name.dropFirst(5))) else { return }
+        editAnnotation(id)
+    }
     func toggleControls() {
         guard isReady, !isLocked, error == nil else { return }
         controlsVisible.toggle()
@@ -154,7 +237,8 @@ final class ReaderModel: NSObject, ObservableObject {
     func openWebBook() {
         guard let book, let preferences else { return }
         evaluate("open", ["name": book.title + "." + book.format.rawValue, "format": book.format.rawValue,
-                          "locator": locator, "preferences": preferences.payload])
+                          "locator": locator, "preferences": preferences.payload,
+                          "annotations": book.annotations.filter { $0.valid && $0.pdfRanges.isEmpty }.map(\.webPayload)])
     }
     func applyPreferences(_ value: ReaderPreferences) {
         guard value != preferences else { return }
@@ -166,13 +250,15 @@ final class ReaderModel: NSObject, ObservableObject {
         switch type {
         case "selection":
             selectedWebText = String((message["text"] as? String ?? "").prefix(12000))
+            selectionTooLong = message["tooLong"] as? Bool ?? false
             selectedWebLocator = (message["locator"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(2000)) }
             selectedWebChapter = (message["label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(300)) }
             updateLiveSelection()
         case "toggleControls": toggleControls()
         case "readingActivity": hideControls()
         case "bridgeReady": openWebBook()
-        case "ready": isReady = true; error = nil
+        case "ready": isReady = true; error = nil; synchronizeAnnotations()
+        case "annotationSelected": if let value = message["id"] as? String, let id = UUID(uuidString: value) { editAnnotation(id) }
         case "error": error = message["message"] as? String ?? "This book could not be opened. Try importing a fresh copy."; isSearching = false
         case "relocate":
             locator = message["locator"] as? String ?? locator
@@ -214,6 +300,8 @@ final class ReaderModel: NSObject, ObservableObject {
     }
     func configurePDF(_ view: PDFView, url: URL) {
         if let pdfSelectionObserver { NotificationCenter.default.removeObserver(pdfSelectionObserver) }
+        for (page, annotation) in renderedPDFAnnotations { page.removeAnnotation(annotation) }
+        renderedPDFAnnotations = []; renderedPDFPages = []; renderedPDFValues = []
         pdfView = view
         pdfSelectionObserver = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: view, queue: .main) { [weak self, weak view] _ in
             Task { @MainActor [weak self, weak view] in
@@ -237,6 +325,7 @@ final class ReaderModel: NSObject, ObservableObject {
         if !locator.isEmpty { navigatePDF(locator) }
         else if let first = doc.page(at: 0) { view.go(to: first) }
         isReady = true
+        synchronizeAnnotations()
         if let cover = doc.page(at: 0)?.thumbnail(of: CGSize(width: 300, height: 440), for: .cropBox).pngData() {
             library.setMetadata(bookID, title: nil, author: nil, cover: cover)
         }
@@ -254,5 +343,6 @@ final class ReaderModel: NSObject, ObservableObject {
         locator = "pdf:\(index)"; fraction = doc.pageCount > 1 ? Double(index) / Double(doc.pageCount - 1) : 0
         chapterTitle = "Page \(index + 1) of \(doc.pageCount)"
         library.setPosition(bookID, locator: locator, fraction: fraction)
+        synchronizeAnnotations()
     }
 }

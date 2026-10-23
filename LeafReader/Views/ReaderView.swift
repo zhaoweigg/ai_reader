@@ -11,7 +11,7 @@ struct ReaderView: View {
     }
 }
 
-private enum ReaderPanel: String, Identifiable { case contents, appearance, search, bookmarks, aiSettings, buttonAppearance; var id: String { rawValue } }
+private enum ReaderPanel: String, Identifiable { case contents, appearance, search, bookmarks, aiSettings, buttonAppearance, annotation; var id: String { rawValue } }
 
 struct ReaderContent: View {
     let book: Book
@@ -181,6 +181,11 @@ struct ReaderContent: View {
         .accessibilityAction(.escape) { library.flush(); dismiss() }
         .task { library.open(book.id) }
         .onDisappear { chat.close(); library.flush() }
+        .onChange(of: library.book(book.id)?.annotations ?? []) { _, _ in model.synchronizeAnnotations() }
+        .onChange(of: model.annotationDraft) { _, draft in if draft != nil { panel = .annotation } }
+        .alert("Could not save highlight", isPresented: Binding(get: { model.annotationError != nil }, set: { if !$0 { model.annotationError = nil } })) {
+            Button("OK") { model.annotationError = nil }
+        } message: { Text(model.annotationError ?? "") }
         .onChange(of: model.liveSelection) { _, selection in
             chat.attachLiveSelection(selection, chatIsPresented: chatIsPresented)
         }
@@ -199,6 +204,14 @@ struct ReaderContent: View {
                     case .appearance: ReaderAppearancePanel()
                     case .aiSettings: AISettingsView()
                     case .buttonAppearance: ReaderChatButtonSettings()
+                    case .annotation:
+                        if let annotation = model.annotationDraft {
+                            let saved = library.book(book.id)?.annotations.contains { $0.id == annotation.id } == true
+                            AnnotationEditorView(annotation: annotation, isSaved: saved, onSave: { try model.saveAnnotation($0) },
+                                onDelete: saved ? { try model.removeAnnotation(annotation.id) } : nil,
+                                onClose: { model.annotationDraft = nil; self.panel = nil })
+                                .id(annotation.id)
+                        }
                     case .contents:
                         List(model.chapters) { chapter in
                             Button { model.send("navigate", value: chapter.href); self.panel = nil } label: {
@@ -206,16 +219,15 @@ struct ReaderContent: View {
                             }.listRowBackground(theme.surface)
                         }.leafFormStyle().overlay { if model.chapters.isEmpty { ContentUnavailableView("No table of contents", systemImage: "list.bullet", description: Text("Use the progress slider to move through this book.")) } }.navigationTitle("Contents")
                     case .bookmarks:
-                        List(library.book(book.id)?.bookmarks ?? []) { bookmark in
-                            Button { model.send("navigate", value: bookmark.locator); self.panel = nil } label: {
-                                VStack(alignment: .leading, spacing: 4) { Text(bookmark.label); Text("\(Int(bookmark.fraction * 100))% through the book").font(.caption).foregroundStyle(.secondary) }
-                            }.swipeActions { Button("Delete", role: .destructive) { library.removeBookmark(book.id, bookmarkID: bookmark.id) } }
-                            .listRowBackground(theme.surface)
-                        }.leafFormStyle().overlay { if (library.book(book.id)?.bookmarks ?? []).isEmpty { ContentUnavailableView("No saved places yet", systemImage: "bookmark", description: Text("Tap the bookmark at the top of the page to save your place.")) } }.navigationTitle("Saved places")
+                        if let current = library.book(book.id) {
+                            ReaderSavedPassagesView(book: current, onNavigate: { model.send("navigate", value: $0); self.panel = nil },
+                                onEdit: { model.annotationDraft = $0 }, onDelete: { try model.removeAnnotation($0) },
+                                onRemoveBookmark: { library.removeBookmark(book.id, bookmarkID: $0) })
+                        }
                     case .search: ReaderSearchView(model: model) { self.panel = nil; model.hideControls() }
                     }
                 }.navigationBarTitleDisplayMode(.inline).toolbar {
-                    if panel != .appearance {
+                    if panel != .appearance && panel != .annotation {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") { self.panel = nil; model.hideControls() }
                         }

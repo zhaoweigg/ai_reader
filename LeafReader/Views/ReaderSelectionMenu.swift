@@ -23,28 +23,39 @@ struct ReaderSelectionRequest: Identifiable, Equatable {
     let context: ReadingChatContext
 }
 
-@MainActor private func addSelectionMenu(to builder: UIMenuBuilder, context: ReadingChatContext?, action: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?) {
+enum ReaderAnnotationIntent: Equatable { case highlight, note }
+
+@MainActor private func addSelectionMenu(to builder: UIMenuBuilder, context: ReadingChatContext?, action: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?, annotation: BookAnnotationSelection?, annotate: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?) {
     guard let context, !context.isEmpty, let action else { return }
     let group = UIMenu.Identifier("com.leafreader.selection")
     builder.remove(menu: group)
     let ask = UIAction(title: "Ask Leaf", image: UIImage(systemName: "leaf")) { _ in action(.ask, context) }
-    builder.insertChild(UIMenu(title: "", identifier: group, options: .displayInline, children: [ask]), atStartOfMenu: .root)
+    var actions = [ask]
+    if let annotation, let annotate {
+        actions.append(UIAction(title: "Highlight", image: UIImage(systemName: "highlighter")) { _ in annotate(.highlight, annotation) })
+        actions.append(UIAction(title: "Add Note", image: UIImage(systemName: "square.and.pencil")) { _ in annotate(.note, annotation) })
+    }
+    builder.insertChild(UIMenu(title: "", identifier: group, options: .displayInline, children: actions), atStartOfMenu: .root)
 }
 
 final class ReaderWebView: WKWebView {
     var selectionContext: (() -> ReadingChatContext?)?
     var onSelectionAction: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?
+    var annotationSelection: (() -> BookAnnotationSelection?)?
+    var onAnnotationAction: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
-        addSelectionMenu(to: builder, context: selectionContext?(), action: onSelectionAction)
+        addSelectionMenu(to: builder, context: selectionContext?(), action: onSelectionAction, annotation: annotationSelection?(), annotate: onAnnotationAction)
     }
 }
 
 final class ReaderPDFView: PDFView {
     var selectionContext: (() -> ReadingChatContext?)?
     var onSelectionAction: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?
+    var annotationSelection: (() -> BookAnnotationSelection?)?
+    var onAnnotationAction: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
-        addSelectionMenu(to: builder, context: selectionContext?(), action: onSelectionAction)
+        addSelectionMenu(to: builder, context: selectionContext?(), action: onSelectionAction, annotation: annotationSelection?(), annotate: onAnnotationAction)
     }
 }

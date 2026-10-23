@@ -32,6 +32,8 @@ struct WebBookSurface: UIViewRepresentable {
         let view = ReaderWebView(frame: .zero, configuration: configuration)
         view.selectionContext = { [weak model] in model?.selectedReadingContext() }
         view.onSelectionAction = { [weak model] intent, snapshot in model?.askAboutSelection(intent, context: snapshot) }
+        view.annotationSelection = { [weak model] in model?.selectedAnnotationSelection() }
+        view.onAnnotationAction = { [weak model] intent, snapshot in model?.annotateSelection(intent, selection: snapshot) }
         view.isOpaque = false
         view.backgroundColor = UIColor(preferences.theme.background)
         view.clipsToBounds = true
@@ -60,6 +62,8 @@ struct WebBookSurface: UIViewRepresentable {
         coordinator.onReaderTap = nil
         (view as? ReaderWebView)?.selectionContext = nil
         (view as? ReaderWebView)?.onSelectionAction = nil
+        (view as? ReaderWebView)?.annotationSelection = nil
+        (view as? ReaderWebView)?.onAnnotationAction = nil
         if coordinator.model.webView === view { coordinator.model.webView = nil }
         view.stopLoading()
         view.evaluateJavaScript("window.Leaf?.close()") { [weak view] _, _ in
@@ -112,6 +116,8 @@ struct PDFBookSurface: UIViewRepresentable {
         let view = ReaderPDFView()
         view.selectionContext = { [weak model] in model?.selectedReadingContext() }
         view.onSelectionAction = { [weak model] intent, snapshot in model?.askAboutSelection(intent, context: snapshot) }
+        view.annotationSelection = { [weak model] in model?.selectedAnnotationSelection() }
+        view.onAnnotationAction = { [weak model] intent, snapshot in model?.annotateSelection(intent, selection: snapshot) }
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
@@ -130,6 +136,8 @@ struct PDFBookSurface: UIViewRepresentable {
         coordinator.onReaderTap = nil
         (view as? ReaderPDFView)?.selectionContext = nil
         (view as? ReaderPDFView)?.onSelectionAction = nil
+        (view as? ReaderPDFView)?.annotationSelection = nil
+        (view as? ReaderPDFView)?.onAnnotationAction = nil
         view.document = nil
         if coordinator.model.pdfView === view { coordinator.model.pdfView = nil }
     }
@@ -143,7 +151,10 @@ struct PDFBookSurface: UIViewRepresentable {
             if onReaderTap?() == true { return }
             guard let view = gesture.view as? PDFView, view.currentSelection?.string?.isEmpty != false else { return }
             let point = gesture.location(in: view)
-            if let page = view.page(for: point, nearest: false), page.annotation(at: view.convert(point, to: page)) != nil { return }
+            if let page = view.page(for: point, nearest: false), let annotation = page.annotation(at: view.convert(point, to: page)) {
+                model.openPDFAnnotation(annotation)
+                return
+            }
             let fraction = point.x / max(1, view.bounds.width)
             if fraction < 0.3 { model.send("previous") }
             else if fraction > 0.7 { model.send("next") }

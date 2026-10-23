@@ -1,5 +1,6 @@
 import { makeBook } from './foliate/view.js';
 import { openBookSource } from './book-source.js';
+import { createAnnotations } from './annotations.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -7,6 +8,7 @@ const languageText = value => typeof value === 'string' ? value : value ? langua
 const contributor = value => Array.isArray(value) ? value.map(contributor).filter(Boolean).join(', ')
     : typeof value === 'string' ? value : languageText(value?.name);
 let view;
+let annotationLayer;
 let searchGeneration;
 let preferences;
 let fixedIndex = 0;
@@ -21,7 +23,7 @@ function observeReadingTouches(doc, index) {
     doc.addEventListener('selectionchange', () => {
         const selection = doc.getSelection();
         const text = selection && !selection.isCollapsed ? selection.toString().slice(0,12000) : '';
-        const detail = { text };
+        const detail = { text, tooLong: (selection?.toString().length ?? 0) > 12000 };
         if (text && selection.rangeCount && view) {
             const range = selection.getRangeAt(0);
             // A selected range can belong to a neighboring visible chapter.
@@ -47,12 +49,14 @@ function observeReadingTouches(doc, index) {
 function tap({ x, y }) {
     if (!view?.renderer || Date.now() - lastLinkActivation < 500) return;
     const point = { x:x * innerWidth, y:y * innerHeight };
-    for (const { doc } of view.renderer.getContents?.() ?? []) {
+    for (const content of view.renderer.getContents?.() ?? []) {
+        const { doc } = content;
         if (doc.getSelection()?.isCollapsed === false) return;
         const frame = doc.defaultView.frameElement?.getBoundingClientRect();
         if (!frame?.width || !frame.height) continue;
         const localX = (point.x - frame.left) * doc.defaultView.innerWidth / frame.width;
         const localY = (point.y - frame.top) * doc.defaultView.innerHeight / frame.height;
+        if (annotationLayer?.hit(content, { x: localX, y: localY })) return;
         if (doc.elementFromPoint(localX, localY)?.closest('a,button,input,select,textarea,audio,video,[role="button"]')) return;
     }
     if (!preferences.scrolling && (x < 0.3 || x > 0.7)) {
@@ -196,6 +200,7 @@ async function open(config) {
         });
         view = document.createElement('foliate-view');
         document.body.append(view);
+        annotationLayer = createAnnotations(view, config.annotations, post);
         view.addEventListener('load', ({ detail }) => {
             post('selection', {text:''});
             observeReadingTouches(detail.doc, detail.index);
@@ -238,6 +243,7 @@ async function open(config) {
 function close() {
     post('selection', {text:''});
     searchGeneration = null;
+    annotationLayer = null;
     const previous = view;
     view = null;
     previous?.close();
@@ -290,6 +296,7 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, close, command, applyPreferences, search, tap,
+    setAnnotations: ({ items }) => annotationLayer?.set(items),
     clearSelection: () => {
         for (const {doc} of view?.renderer?.getContents?.() ?? []) doc?.getSelection()?.removeAllRanges();
         post('selection', {text:''});

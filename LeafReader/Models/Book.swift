@@ -42,9 +42,37 @@ struct Book: Identifiable, Codable, Equatable {
     var catalogSource: String?
     var isFavorite = false
     var bookmarks: [BookBookmark] = []
+    var annotations: [BookAnnotation] = []
     var isFinished: Bool { progress >= 0.995 }
     var progressLabel: String { isFinished ? "Finished" : "\(Int(progress * 100))% read" }
     var paletteIndex: Int { Int(fingerprint.prefix(4), radix: 16).map { $0 % 5 } ?? 0 }
+}
+
+extension Book {
+    // New annotations must not make libraries saved by earlier versions unreadable.
+    private enum CodingKeys: String, CodingKey {
+        case id, title, author, fileName, format, fingerprint, importedAt, lastOpenedAt
+        case progress, locator, coverFileName, metadataVersion, catalogSource, isFavorite, bookmarks, annotations
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        title = try values.decode(String.self, forKey: .title)
+        author = try values.decode(String.self, forKey: .author)
+        fileName = try values.decode(String.self, forKey: .fileName)
+        format = try values.decode(BookFormat.self, forKey: .format)
+        fingerprint = try values.decode(String.self, forKey: .fingerprint)
+        importedAt = try values.decode(Date.self, forKey: .importedAt)
+        lastOpenedAt = try values.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
+        progress = try values.decode(Double.self, forKey: .progress)
+        locator = try values.decode(String.self, forKey: .locator)
+        coverFileName = try values.decodeIfPresent(String.self, forKey: .coverFileName)
+        metadataVersion = try values.decodeIfPresent(Int.self, forKey: .metadataVersion)
+        catalogSource = try values.decodeIfPresent(String.self, forKey: .catalogSource)
+        isFavorite = try values.decode(Bool.self, forKey: .isFavorite)
+        bookmarks = try values.decode([BookBookmark].self, forKey: .bookmarks)
+        annotations = try values.decodeIfPresent([BookAnnotation].self, forKey: .annotations) ?? []
+    }
 }
 
 struct Chapter: Identifiable, Equatable {
