@@ -131,7 +131,7 @@ private struct ReaderSelectionAction {
     private var systemMenuUntil = Date.distantPast
     private var systemInteraction: UIEditMenuInteraction?
     private var selectionPress: UILongPressGestureRecognizer?
-    private var handleDrag: UIPanGestureRecognizer?
+    private var adjustingSelectionHandle = false
     private var requestMenu: (() async -> Void)?
     private var requestTask: Task<Void, Never>?
     private var revision = 0
@@ -143,9 +143,6 @@ private struct ReaderSelectionAction {
         let press = UILongPressGestureRecognizer(target: self, action: #selector(selectionPressed(_:)))
         press.minimumPressDuration = 0.5; press.cancelsTouchesInView = false; press.delaysTouchesEnded = false
         press.delegate = self; source.addGestureRecognizer(press); selectionPress = press
-        let drag = UIPanGestureRecognizer(target: self, action: #selector(selectionHandleDragged(_:)))
-        drag.cancelsTouchesInView = false; drag.delaysTouchesEnded = false; drag.delegate = self
-        source.addGestureRecognizer(drag); handleDrag = drag
         if let scene = source.window?.windowScene {
             deactivationObserver = NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: scene, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.dismiss() }
@@ -155,8 +152,7 @@ private struct ReaderSelectionAction {
     func detach() {
         dismiss()
         if let selectionPress { selectionPress.view?.removeGestureRecognizer(selectionPress) }
-        if let handleDrag { handleDrag.view?.removeGestureRecognizer(handleDrag) }
-        selectionPress = nil; handleDrag = nil; requestMenu = nil; source = nil
+        selectionPress = nil; requestMenu = nil; source = nil
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
     }
     func requestCurrentMenu() {
@@ -182,19 +178,6 @@ private struct ReaderSelectionAction {
         #endif
         guard withinSelection else { return }
         requestCurrentMenu()
-    }
-    @objc private func selectionHandleDragged(_ drag: UIPanGestureRecognizer) {
-        #if DEBUG
-        if drag.state == .began || drag.state == .ended { readerSelectionMenuTrace(drag.state == .began ? "handleBegan" : "handleEnded", source: source) }
-        #endif
-        if drag.state == .began { dismiss() }
-        if drag.state == .ended {
-            Task { @MainActor [weak self] in
-                // Let the native text interaction commit its final range first.
-                await Task.yield()
-                self?.requestCurrentMenu()
-            }
-        }
     }
     func schedule(on source: UIView, actions: [ReaderSelectionAction], theme: ReadingTheme, selectedText: String) {
         guard !Task.isCancelled, let window = source.window, let scene = window.windowScene, scene.activationState == .foregroundActive else { return }
@@ -235,7 +218,7 @@ private struct ReaderSelectionAction {
         for observer in observers { window?.removeGestureRecognizer(observer) }
         observers = []; window = nil
     }
-    func dismiss() {
+    func dismiss(keepingHandleObserver: Bool = false) {
         if let interaction = systemInteraction {
             systemInteraction = nil; interaction.dismissMenu(); interaction.view?.removeInteraction(interaction)
         }
@@ -244,30 +227,39 @@ private struct ReaderSelectionAction {
         #if DEBUG
         readerSelectionMenuTrace("dismiss", source: source)
         #endif
-        removeOutsideObservers()
+        if !keepingHandleObserver { adjustingSelectionHandle = false; removeOutsideObservers() }
         menuWindow?.isHidden = true; menuWindow?.rootViewController = nil; menuWindow = nil
         controller = nil
         UIMenuSystem.context.setNeedsRebuild()
     }
     @objc private func outsideGesture(_ gesture: UIGestureRecognizer) {
+        if gesture is UIPanGestureRecognizer && adjustingSelectionHandle {
+            if gesture.state == .began { dismiss(keepingHandleObserver: true) }
+            if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
+                let completed = gesture.state == .ended
+                dismiss()
+                let expectedRevision = revision
+                if completed {
+                    Task { @MainActor [weak self] in
+                        await Task.yield()
+                        guard let self, self.revision == expectedRevision else { return }
+                        self.requestCurrentMenu()
+                    }
+                }
+            }
+            return
+        }
         if gesture.state == .ended || gesture.state == .began { dismiss() }
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        if gestureRecognizer === selectionPress || gestureRecognizer === handleDrag {
-            guard let source else { return false }
-            let point = touch.location(in: source)
-            let onHandle = source.selectionHandles.contains { $0.contains(point) }
-                && !source.selectionRectangles.contains { $0.contains(point) }
-            // A second long press must not compete with UIKit's existing handle
-            // interaction. A simultaneous pan only observes its completion.
-            #if DEBUG
-            if gestureRecognizer === handleDrag { readerSelectionMenuTrace(onHandle ? "handleAccepted" : "handleRejected", source: source, point: point, target: touch.view) }
-            #endif
-            return gestureRecognizer === handleDrag ? onHandle : !onHandle
-        }
-        guard let view = touch.view else { return false }
+        guard let source, let view = touch.view else { return false }
+        let point = touch.location(in: source)
+        let onHandle = source.selectionHandles.contains { $0.contains(point) }
+            && !source.selectionRectangles.contains { $0.contains(point) }
+        if gestureRecognizer === selectionPress { return !onHandle }
+        if gestureRecognizer is UIPanGestureRecognizer { adjustingSelectionHandle = onHandle }
         #if DEBUG
-        readerSelectionMenuTrace("outsideTouch", source: source, point: source.map { touch.location(in: $0) }, target: view)
+        readerSelectionMenuTrace(onHandle ? "handleTouch" : "outsideTouch", source: source, point: point, target: view)
         #endif
         if let controller { return !view.isDescendant(of: controller.view) }
         return requestTask != nil

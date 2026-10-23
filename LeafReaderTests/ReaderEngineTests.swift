@@ -960,6 +960,59 @@ final class ReaderEngineTests: XCTestCase {
             model.webView?.stopLoading();window?.isHidden = true;window = nil
         }
     }
+    func testNativeSelectionTouchesYieldWithoutTurningPagesAndClearRestoresNavigationInBothFlows() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "窗外")
+            _ = try await waitForLayout(model, preferences: prefs)
+            let web = try XCTUnwrap(model.webView)
+            let value = try await web.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'),renderer=view.renderer;
+                const doc=renderer.getContents()[0].doc, node=doc.querySelector('p').firstChild;
+                const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+                const select=()=>{const range=doc.createRange();range.setStart(node,2);range.setEnd(node,12);const selection=doc.getSelection();selection.removeAllRanges();selection.addRange(range);return range.toString()};
+                const touch=(type,x)=>{
+                    const event=new Event(type,{bubbles:true,cancelable:true});
+                    const point={screenX:x,screenY:220,clientX:x,clientY:220};
+                    Object.defineProperties(event,{changedTouches:{value:[point]},touches:{value:type==='touchend'?[]:[point]}});
+                    doc.dispatchEvent(event);return event.defaultPrevented;
+                };
+                const rows=[];
+                for(const atStart of [true,false]) {
+                    doc.getSelection().removeAllRanges();
+                    if(atStart)select();
+                    const origin=renderer.start,place=view.lastLocation.cfi;
+                    touch('touchstart',280);
+                    // A native long press can create its range after touchstart.
+                    const text=atStart?doc.getSelection().toString():select();
+                    const cfi=view.getCFI(renderer.getContents()[0].index,doc.getSelection().getRangeAt(0));
+                    await sleep(40);const prevented=touch('touchmove',50);touch('touchend',50);await sleep(500);
+                    rows.push({atStart,prevented,stableOffset:Math.abs(renderer.start-origin)<1,stablePlace:view.lastLocation.cfi===place,stableText:doc.getSelection().toString()===text,stableRange:view.getCFI(renderer.getContents()[0].index,doc.getSelection().getRangeAt(0))===cfi});
+                    await view.goTo(place);
+                }
+                window.Leaf.clearSelection();
+                const place=view.lastLocation.cfi;
+                touch('touchstart',280);await sleep(50);const clearedPrevented=touch('touchmove',40);touch('touchend',40);await sleep(500);
+                const pageSwipeWorks=scrolled||view.lastLocation.cfi!==place;
+                const beforeCommand=view.lastLocation.cfi;await view.next();
+                return {rows,clearedPrevented,pageSwipeWorks,commandWorks:view.lastLocation.cfi!==beforeCommand};
+                """, arguments: ["scrolled": scrolling], in: nil, contentWorld: .page)
+            let result = try XCTUnwrap(value as? [String: Any])
+            let rows = try XCTUnwrap(result["rows"] as? [[String: Any]])
+            for row in rows {
+                XCTAssertEqual(row["prevented"] as? Bool, false, "Native selection gestures must retain browser default handling, scrolling=\(scrolling)")
+                for key in ["stableOffset", "stablePlace", "stableText", "stableRange"] { XCTAssertEqual(row[key] as? Bool, true, "\(key), scrolling=\(scrolling)") }
+            }
+            XCTAssertEqual(result["clearedPrevented"] as? Bool, !scrolling, "Page swipes resume once selection clears; Scroll stays native")
+            XCTAssertEqual(result["pageSwipeWorks"] as? Bool, true)
+            XCTAssertEqual(result["commandWorks"] as? Bool, true)
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: result, options: .prettyPrinted), uniformTypeIdentifier: "public.json")
+            attachment.name = scrolling ? "Scroll selection-touch geometry" : "Pages selection-touch geometry"; attachment.lifetime = .keepAlways; add(attachment)
+            web.stopLoading(); window?.isHidden = true; window = nil
+        }
+    }
     func testPageTurnsAnimateAndCancelledSwipesKeepThePassage() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         let model = try show(book, url: url)
