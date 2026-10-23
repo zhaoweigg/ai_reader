@@ -887,32 +887,44 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor func testMissingVoiceDownloadsGiveGuidanceAndPreserveTheListeningPosition() {
-        let app = launchApp(); app.buttons["featuredBook"].tap()
-        showReaderControls(app); app.buttons["Listen"].tap()
-        let engine = app.segmentedControls["listeningEngine"]
-        XCTAssertTrue(engine.waitForExistence(timeout: 5))
-        XCTAssertTrue(engine.buttons["Natural voice"].isSelected, "New installs default to Natural")
-        XCTAssertTrue(app.buttons["kokoroDownload"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["kokoroRemove"].exists)
-        capture("Natural voice download required", app: app)
-        engine.buttons["Apple voices"].tap()
-        let noAppleVoices = app.descendants(matching: .any)["appleVoiceDownloadGuidance"].firstMatch.waitForExistence(timeout: 3)
-        if noAppleVoices {
-            capture("No Enhanced or Premium voice installed", app: app)
-            engine.buttons["Natural voice"].tap()
-            app.buttons["listenFromPage"].tap()
-            let player = app.otherElements["readerAudioPlayer"]
-            expectation(for: NSPredicate(format: "value == %@", "Could not start audio"), evaluatedWith: player)
-            waitForExpectations(timeout: 15)
-            XCTAssertTrue(app.buttons["audioPlayPause"].isEnabled == false)
-            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No Enhanced or Premium Apple voice")).firstMatch.exists)
-            capture("No basic voice fallback and no passage skipped", app: app)
-            app.buttons["listeningSettings"].tap()
-            XCTAssertTrue(app.buttons["resumeSavedListening"].waitForExistence(timeout: 5))
-            capture("Failed voice start keeps saved listening position", app: app)
-        } else {
-            XCTAssertTrue(app.buttons["listeningVoice"].exists || app.otherElements["listeningVoice"].exists)
-            capture("Actual downloaded high-quality voice choices", app: app)
+        defer { orient(.portrait) }
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            showReaderControls(app); app.buttons["Listen"].tap()
+            let engine = app.segmentedControls["listeningEngine"]
+            XCTAssertTrue(engine.waitForExistence(timeout: 5))
+            XCTAssertTrue(engine.buttons["Natural voice"].isSelected, "New installs default to Natural")
+            XCTAssertTrue(app.buttons["kokoroDownload"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.buttons["kokoroRemove"].exists)
+            capture(flow + " Natural voice download required", app: app)
+            engine.buttons["Apple voices"].tap()
+            let noAppleVoices = app.descendants(matching: .any)["appleVoiceDownloadGuidance"].firstMatch.waitForExistence(timeout: 3)
+            if noAppleVoices {
+                capture(flow + " No Enhanced or Premium voice installed", app: app)
+                engine.buttons["Natural voice"].tap()
+                app.buttons["listenFromPage"].tap()
+                let player = app.otherElements["readerAudioPlayer"]
+                expectation(for: NSPredicate(format: "value == %@", "Could not start audio"), evaluatedWith: player)
+                waitForExpectations(timeout: 15)
+                XCTAssertFalse(app.buttons["audioPlayPause"].isEnabled)
+                XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No Enhanced or Premium Apple voice")).firstMatch.exists)
+                XCTAssertTrue(app.frame.contains(player.frame), flow + " failed player fits portrait")
+                capture(flow + " No basic voice fallback and no passage skipped", app: app)
+                orient(.landscapeLeft)
+                XCTAssertGreaterThan(app.frame.width, app.frame.height)
+                XCTAssertTrue(app.frame.contains(player.frame), flow + " error player fits landscape")
+                XCTAssertTrue(app.buttons["listeningSettings"].isHittable)
+                XCTAssertTrue(app.buttons["stopListening"].isHittable)
+                capture(flow + " Missing voice error player landscape", app: app)
+                orient(.portrait)
+                app.buttons["listeningSettings"].tap()
+                XCTAssertTrue(app.buttons["resumeSavedListening"].waitForExistence(timeout: 5))
+                capture(flow + " Failed voice start keeps saved listening position", app: app)
+            } else {
+                XCTAssertTrue(app.buttons["listeningVoice"].exists || app.otherElements["listeningVoice"].exists)
+                capture(flow + " Actual downloaded high-quality voice choices", app: app)
+            }
+            app.terminate()
         }
     }
 
@@ -922,12 +934,8 @@ final class LeafReaderUITests: XCTestCase {
         guard let root = ProcessInfo.processInfo.environment["LEAF_UI_KOKORO_ROOT"], !root.isEmpty else {
             throw XCTSkip("Set TEST_RUNNER_LEAF_UI_KOKORO_ROOT to a prepared voice-pack root to exercise the real engine")
         }
-        let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing"]
-        app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
-        app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"; app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = "1"
-        app.launchEnvironment["LEAF_UI_KOKORO_ROOT"] = root
-        app.launch()
+        let app = launchApp(naturalVoicePack: true)
+        defer { orient(.portrait) }
         let player = app.otherElements["readerAudioPlayer"], pause = app.buttons["audioPlayPause"]
         func waitForVoice(_ label: String) {
             // The player's value is "Generating voice…" until the first chunk is audible, then "Listening".
@@ -952,6 +960,12 @@ final class LeafReaderUITests: XCTestCase {
             waitForVoice(flow + " first passage")
             capture(flow + " natural voice listening", app: app)
             pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+            orient(.landscapeLeft)
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            XCTAssertTrue(app.frame.contains(player.frame), flow + " natural player fits landscape")
+            XCTAssertTrue(pause.isHittable); XCTAssertTrue(app.buttons["stopListening"].isHittable)
+            capture(flow + " natural voice player landscape", app: app)
+            orient(.portrait)
             pause.tap(); XCTAssertEqual(pause.label, "Pause listening")
             app.buttons["audioNext"].tap()
             waitForVoice(flow + " next passage")
@@ -978,6 +992,13 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["listenFromPage"].tap()
         waitForVoice("PDF")
         capture("PDF natural voice listening", app: app)
+        pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+        orient(.landscapeLeft)
+        XCTAssertGreaterThan(app.frame.width, app.frame.height)
+        XCTAssertTrue(app.frame.contains(player.frame), "PDF natural player fits landscape")
+        XCTAssertTrue(pause.isHittable); XCTAssertTrue(app.buttons["stopListening"].isHittable)
+        capture("PDF natural voice player landscape", app: app)
+        orient(.portrait)
         app.buttons["stopListening"].tap()
     }
 
