@@ -13,6 +13,7 @@
   .slots{display:grid;gap:13px}.slot{display:grid;grid-template-columns:54px 1fr;overflow:hidden;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
   .slot-letter{display:flex;justify-content:center;padding-top:22px;background:var(--wash);color:var(--leaf);font-size:24px;font-weight:500}.slot-body{padding:18px 21px}.slot-top{display:flex;align-items:center;justify-content:space-between;gap:10px}.status{color:var(--leaf);font-size:12px}.purpose{font-size:18px;font-weight:500;line-height:1.4;margin:9px 0 14px;max-width:54ch}.details{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--secondary)}.device{margin-top:9px;overflow-wrap:anywhere;font-size:11px;color:var(--secondary)}
   .queue{margin-top:28px}.queue-heading{display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid var(--line)}#queue-count{color:var(--secondary);font-size:12px}ol{margin:0;padding:0;list-style:none}li{display:grid;grid-template-columns:26px 1fr;gap:10px;padding:15px 0;border-bottom:1px solid var(--line)}.queue-position{color:var(--leaf)}.queue-purpose{font-weight:500}.empty{padding:17px 0;color:var(--secondary)}footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:13px;border-top:1px solid var(--line);color:var(--secondary);font-size:11px}#error{display:none;color:var(--warn);font-size:13px;margin-bottom:16px}
+  .runtime{margin-top:10px;font-size:12px;color:var(--secondary)}.runtime-value{font-variant-numeric:tabular-nums;color:var(--ink)}
   @media(max-width:480px){main{padding:22px 16px}.slot-body{padding:16px}.slot{grid-template-columns:42px 1fr}.purpose{font-size:17px}h1{font-size:27px}header{gap:10px}#connection{padding-top:4px}}
 </style>
 <main>
@@ -20,23 +21,61 @@
   <p id="error" role="alert"></p>
   <section id="slots" class="slots" aria-label="Simulator assignments" aria-live="polite"></section>
   <section class="queue"><div class="queue-heading"><h2>Waiting queue</h2><span id="queue-count"></span></div><ol id="queue" aria-live="polite"></ol></section>
-  <footer><span id="updated">Waiting for the assignment record</span><span>Refreshes every 2 seconds</span></footer>
+  <footer><span id="updated">Waiting for the assignment record</span><span>Assignments refresh every 2 seconds · Timers every second</span></footer>
 </main>
 <script>
   const byId=id=>document.getElementById(id);
   let lastPayload=null;
+  let runtimes=[];
   function node(tag,text,className){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;}
   function worker(id,agents){return !id?'Unassigned':agents[id]?.label||'Worker '+id.slice(-6);}
+  function utcTime(value){
+    if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|\+00:00)$/.test(value))return null;
+    const time=Date.parse(value);
+    return Number.isFinite(time)&&new Date(time).toISOString().slice(0,19)===value.slice(0,19)?time:null;
+  }
+  function formatRuntime(seconds){
+    const whole=Math.floor(seconds);
+    return [Math.floor(whole/3600),Math.floor(whole/60)%60,whole%60].map(value=>String(value).padStart(2,'0')).join(':');
+  }
+  function runtimeDisplay(slot,now=Date.now()){
+    const historical=['available','released'].includes(slot.state)&&slot.last_run;
+    const run=historical?slot.last_run:slot,label=historical?'Last job runtime':'Job runtime';
+    const unknown=note=>({label,value:'—',note});
+    if(['assigned','reserved'].includes(slot.state))return unknown('Not started');
+    const start=utcTime(run.started_at);
+    if(start===null)return unknown(slot.state==='testing'||historical||run.finished_at?'Start time unavailable':'Not started');
+    if(run.finished_at!==undefined&&run.finished_at!==null){
+      const finish=utcTime(run.finished_at);
+      if(finish===null||finish<start)return unknown('Timing unavailable');
+      const seconds=typeof run.elapsed_seconds==='number'&&Number.isFinite(run.elapsed_seconds)&&run.elapsed_seconds>=0&&run.elapsed_seconds<=Number.MAX_SAFE_INTEGER?run.elapsed_seconds:(finish-start)/1000;
+      return {label,value:formatRuntime(seconds),note:'Finished'};
+    }
+    if(historical||slot.state!=='testing')return unknown('Completion time unavailable');
+    if(!Number.isFinite(now)||now<start)return unknown('Start time unavailable');
+    return {label,value:formatRuntime((now-start)/1000),note:''};
+  }
+  function updateRuntimes(){
+    const now=Date.now();
+    runtimes.forEach(({slot,label,value,note})=>{
+      const display=runtimeDisplay(slot,now);
+      label.textContent=display.label+' ';value.textContent=display.value;note.textContent=display.note?' · '+display.note:'';
+    });
+  }
   function render(state){
     const agents=state.agents||{},slots=state.slots||{};
     byId('slot-summary').textContent=Object.keys(slots).length+' devices, one owner per device.';
     byId('slots').replaceChildren();
+    runtimes=[];
     Object.entries(slots).sort(([a],[b])=>a.localeCompare(b)).forEach(([name,slot])=>{
       const article=node('article',undefined,'slot'),body=node('div',undefined,'slot-body'),top=node('div',undefined,'slot-top');
-      article.append(node('div',name,'slot-letter'),body);top.append(node('h2','Slot '+name),node('span',({assigned:'Reserved',testing:'Testing',available:'Available'})[slot.state]||slot.state||'Unknown','status'));
+      article.append(node('div',name,'slot-letter'),body);top.append(node('h2','Slot '+name),node('span',({assigned:'Reserved',reserved:'Reserved',testing:'Testing',finalizing:'Finalizing',completed:'Completed',available:'Available',released:'Released'})[slot.state]||slot.state||'Unknown','status'));
       const details=node('div',undefined,'details');details.append(node('span',worker(slot.owner_thread,agents)),node('span','iPhone 17 Pro · iOS 26.5'));
-      body.append(top,node('p',slot.purpose||'Available for the next worker','purpose'),details,node('p',slot.device_uuid||'','device'));byId('slots').append(article);
+      const runtime=node('p',undefined,'runtime'),label=node('span'),value=node('span',undefined,'runtime-value'),note=node('span');
+      runtime.setAttribute('aria-live','off');runtime.append(label,value,note);runtimes.push({slot,label,value,note});
+      body.append(top,node('p',slot.purpose||'Available for the next worker','purpose'),details,runtime,node('p',slot.device_uuid||'','device'));byId('slots').append(article);
     });
+    updateRuntimes();
     const queue=state.slot_requests||[];byId('queue-count').textContent=queue.length?queue.length+' waiting':'Empty';byId('queue').replaceChildren();
     if(!queue.length){const li=node('li','No workers waiting.','empty');li.style.display='block';byId('queue').append(li);}
     queue.forEach((item,i)=>{const li=node('li'),content=node('div');content.append(node('p',item.purpose||'Waiting for a simulator','queue-purpose'),node('p',worker(item.requester,agents)+' · '+(item.slot||'Next available slot'),'muted small'));li.append(node('span',String(i+1),'queue-position'),content);byId('queue').append(li);});
@@ -47,6 +86,7 @@
     catch{byId('connection').textContent='Disconnected';byId('connection').classList.add('disconnected');byId('error').textContent=lastPayload?'Updates paused. Showing the last received assignments.':'The assignment record is unavailable. Retrying automatically.';byId('error').style.display='block';}
     finally{setTimeout(refresh,2000);}
   }
+  setInterval(updateRuntimes,1000);
   refresh();
 </script>
 </html>
