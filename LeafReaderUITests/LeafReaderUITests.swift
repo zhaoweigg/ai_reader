@@ -582,15 +582,17 @@ final class LeafReaderUITests: XCTestCase {
         let header = app.descendants(matching: .any)["readerChatHeader"].firstMatch
         let handle = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
         let close = app.buttons["closeReaderChat"]
+        // Accessibility's screen-coordinate conversion can round a 44 pt target down.
+        let minimumTarget: CGFloat = 44 - 0.01
         XCTAssertTrue(header.waitForExistence(timeout: 5))
         XCTAssertEqual(header.frame.height, 44, accuracy: 1)
-        XCTAssertGreaterThanOrEqual(close.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(close.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(close.frame.width, minimumTarget)
+        XCTAssertGreaterThanOrEqual(close.frame.height, minimumTarget)
         XCTAssertGreaterThanOrEqual(header.frame.minY, handle.frame.maxY - 1, "Resize and dismiss gesture regions must stay separate")
         XCTAssertLessThanOrEqual(header.frame.maxY - handle.frame.minY, 57, "The grabber and title row must leave room for the conversation")
         if app.buttons["chatOptions"].exists {
-            XCTAssertGreaterThanOrEqual(app.buttons["chatOptions"].frame.width, 44)
-            XCTAssertGreaterThanOrEqual(app.buttons["chatOptions"].frame.height, 44)
+            XCTAssertGreaterThanOrEqual(app.buttons["chatOptions"].frame.width, minimumTarget)
+            XCTAssertGreaterThanOrEqual(app.buttons["chatOptions"].frame.height, minimumTarget)
         }
     }
 
