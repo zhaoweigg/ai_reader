@@ -188,9 +188,9 @@ async function open(config) {
         view = document.createElement('foliate-view');
         document.body.append(view);
         view.addEventListener('load', ({ detail }) => {
-            post('selection', {text:''});
+            if (!detail.preload) post('selection', {text:''});
             observeReadingTouches(detail.doc);
-            requestAnimationFrame(() => { if (preferences) applyPreferences(preferences); });
+            if (!detail.preload) requestAnimationFrame(() => { if (preferences) applyPreferences(preferences); });
         });
         view.addEventListener('link', () => { lastLinkActivation = Date.now(); });
         view.addEventListener('external-link', event => { lastLinkActivation = Date.now(); event.preventDefault(); });

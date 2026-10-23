@@ -459,6 +459,16 @@ export class Paginator extends HTMLElement {
     #lastVisibleRange
     #scrollFrame
     #scrollContinuation
+    // A bounded live window lets native vertical scrolling cross a chapter edge.
+    // Older content becomes a spacer so eviction does not reset scroll momentum.
+    #scrollViews = new Map()
+    #scrollLoads = new Map()
+    #scrollEpoch = 0
+    #scrollPrefix = 0
+    #scrollSpacer
+    #scrollLayout
+    #scrollRendering = false
+    #scrollLoadQueue = Promise.resolve()
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -567,6 +577,7 @@ export class Paginator extends HTMLElement {
 
         this.#observer.observe(this.#container)
         this.#container.addEventListener('scroll', () => {
+            this.#activateScrolledView()
             this.dispatchEvent(new Event('scroll'))
             if (this.scrolled && !this.#scrollFrame) this.#scrollFrame = requestAnimationFrame(() => {
                 this.#scrollFrame = null
@@ -693,6 +704,169 @@ export class Paginator extends HTMLElement {
         this.#container.append(this.#view.element)
         return this.#view
     }
+    get #continuous() {
+        return this.scrolled && !this.#vertical && this.#scrollViews.size > 0
+    }
+    #viewOffset(view = this.#view) {
+        if (!this.#continuous || !view) return 0
+        return view.element.getBoundingClientRect().top
+            - this.#container.getBoundingClientRect().top + this.#container.scrollTop
+    }
+    #keepScrollPosition(change) {
+        const top = this.#container.scrollTop, offset = this.#viewOffset()
+        change()
+        const delta = this.#viewOffset() - offset
+        if (Math.abs(delta) > 0.5) this.#container.scrollTop = top + delta
+    }
+    #releaseScrollRecord(record) {
+        if (!record.released) {
+            record.released = true
+            record.view.destroy()
+            record.view.element.remove()
+            record.stage?.remove()
+        }
+        if (record.loaded && !record.unloaded) {
+            record.unloaded = true
+            record.section.unload?.()
+        }
+    }
+    #clearScrollWindow() {
+        ++this.#scrollEpoch
+        for (const record of this.#scrollLoads.values()) {
+            record.cancelled = true
+            this.#releaseScrollRecord(record)
+        }
+        this.#scrollLoads.clear()
+        for (const record of this.#scrollViews.values()) {
+            // The legacy display path still owns/reuses the active chapter.
+            if (record.view !== this.#view) this.#releaseScrollRecord(record)
+        }
+        this.#scrollViews.clear()
+        this.#scrollSpacer?.remove()
+        this.#scrollSpacer = null
+        this.#scrollPrefix = 0
+    }
+    #startScrollWindow() {
+        if (!this.scrolled || this.#vertical || !this.#view || this.#scrollViews.size) return
+        this.#scrollSpacer = document.createElement('div')
+        this.#scrollSpacer.style.cssText = 'height:0;flex:none;pointer-events:none;overflow-anchor:none'
+        this.#container.prepend(this.#scrollSpacer)
+        const record = {
+            index: this.#index, section: this.sections[this.#index], view: this.#view, loaded: true,
+        }
+        record.view.onExpand = () => this.#scrollViewExpanded(record)
+        record.height = record.view.element.getBoundingClientRect().height
+        this.#scrollViews.set(this.#index, record)
+        this.#warmScrollWindow()
+    }
+    #scrollViewExpanded(record) {
+        if (this.#scrollRendering || record.stage || record.released) return
+        if (!this.#continuous) {
+            if (record.view === this.#view) this.#scrollToAnchor(this.#anchor)
+            return
+        }
+        const height = record.view.element.getBoundingClientRect().height
+        const delta = height - (record.height ?? height)
+        record.height = height
+        if (record.index < this.#index && Math.abs(delta) > 0.5) this.#container.scrollTop += delta
+        else if (record.index === this.#index && Math.abs(delta) > 0.5) this.#scrollToAnchor(this.#anchor)
+    }
+    #wantedScrollIndexes() {
+        return new Set([this.#index, this.#adjacentIndex(1), this.#adjacentIndex(-1)].filter(x => x != null))
+    }
+    #warmScrollWindow() {
+        if (!this.#continuous) return
+        const wanted = this.#wantedScrollIndexes()
+        for (const [index, record] of this.#scrollLoads) if (!wanted.has(index)) {
+            record.cancelled = true
+            this.#releaseScrollRecord(record)
+            this.#scrollLoads.delete(index)
+        }
+        this.#keepScrollPosition(() => {
+            for (const [index, record] of this.#scrollViews) {
+                if (wanted.has(index)) continue
+                if (index < this.#index) this.#scrollPrefix += record.view.element.getBoundingClientRect().height
+                this.#scrollViews.delete(index)
+                this.#releaseScrollRecord(record)
+            }
+            this.#scrollSpacer.style.height = `${this.#scrollPrefix}px`
+        })
+        // At most the current and two adjacent chapters, plus their in-flight loads.
+        for (const index of wanted) {
+            if (this.#scrollViews.has(index) || this.#scrollLoads.has(index)) continue
+            this.#loadScrollNeighbor(index)
+        }
+    }
+    async #loadScrollNeighbor(index) {
+        const epoch = this.#scrollEpoch, section = this.sections[index]
+        const stage = document.createElement('div')
+        const { width, height } = this.#container.getBoundingClientRect()
+        stage.style.cssText = `position:absolute;left:-100000px;top:0;width:${width}px;height:${height}px;visibility:hidden;pointer-events:none`
+        const record = { index, section, stage, loaded: false, epoch }
+        record.view = new View({ container: this, onExpand: () => this.#scrollViewExpanded(record) })
+        stage.append(record.view.element)
+        this.#top.append(stage)
+        this.#scrollLoads.set(index, record)
+        // EPUB resources share a reference-counted loader. Serial warm-ups avoid
+        // racing two uncached stylesheet/image loads and losing their URL lease.
+        record.promise = this.#scrollLoadQueue.then(async () => {
+            try {
+                if (record.cancelled || epoch !== this.#scrollEpoch) return
+                const src = await section.load()
+                record.loaded = true
+                if (record.cancelled || epoch !== this.#scrollEpoch) return
+                let vertical = false
+                await record.view.load(src, doc => {
+                    const before = doc.createElement('style'), after = doc.createElement('style')
+                    doc.head.prepend(before); doc.head.append(after)
+                    this.#styleMap.set(doc, [before, after])
+                    this.#applyDocumentStyles(doc)
+                    this.dispatchEvent(new CustomEvent('load', { detail: { doc, index, preload: true } }))
+                }, direction => {
+                    vertical = direction.vertical
+                    return vertical ? undefined : this.#scrollLayout
+                })
+                if (vertical || record.cancelled || epoch !== this.#scrollEpoch || !this.#continuous) return
+                await record.view.document.fonts.ready
+                if (record.cancelled || epoch !== this.#scrollEpoch || !this.#wantedScrollIndexes().has(index)) return
+                record.view.render(this.#scrollLayout)
+                this.#keepScrollPosition(() => {
+                    const later = [...this.#scrollViews].sort(([a], [b]) => a - b).find(([i]) => i > index)?.[1]
+                    this.#container.insertBefore(record.view.element, later?.view.element ?? null)
+                    if (index < this.#index) {
+                        this.#scrollPrefix = Math.max(0, this.#scrollPrefix - record.view.element.getBoundingClientRect().height)
+                        if (index === 0) this.#scrollPrefix = 0
+                        this.#scrollSpacer.style.height = `${this.#scrollPrefix}px`
+                    }
+                    stage.remove(); record.stage = null
+                    record.height = record.view.element.getBoundingClientRect().height
+                    this.#scrollViews.set(index, record)
+                })
+                this.dispatchEvent(new CustomEvent('create-overlayer', { detail: {
+                    doc: record.view.document, index, attach: overlayer => record.view.overlayer = overlayer,
+                } }))
+            } catch (error) {
+                if (!record.cancelled && epoch === this.#scrollEpoch) console.warn('Could not prepare adjacent chapter', error)
+            } finally {
+                if (this.#scrollLoads.get(index) === record) this.#scrollLoads.delete(index)
+                if (this.#scrollViews.get(index) !== record) this.#releaseScrollRecord(record)
+            }
+        })
+        this.#scrollLoadQueue = record.promise.catch(() => {})
+    }
+    #activateScrolledView() {
+        if (!this.#continuous || this.#locked || this.#scrollRendering) return
+        const top = this.#container.scrollTop + this.#margin + 1
+        const records = [...this.#scrollViews.values()].sort((a, b) => a.index - b.index)
+        const record = records.find(record => this.#viewOffset(record.view) + record.view.element.getBoundingClientRect().height > top)
+            ?? records.at(-1)
+        if (!record || record.index === this.#index) return
+        this.#index = record.index
+        this.#view = record.view
+        this.#justAnchored = false
+        this.#afterScroll('scroll')
+        this.#warmScrollWindow()
+    }
     #beforeRender({ vertical, rtl, background }) {
         this.#vertical = vertical
         this.#rtl = rtl
@@ -743,7 +917,7 @@ export class Paginator extends HTMLElement {
             this.#header.replaceChildren()
             this.#footer.replaceChildren()
 
-            return { flow, margin, gap, columnWidth }
+            return this.#scrollLayout = { flow, margin, gap, columnWidth, width, height }
         }
 
         const divisor = Math.min(maxColumnCount, Math.ceil(size / maxInlineSize))
@@ -771,11 +945,19 @@ export class Paginator extends HTMLElement {
     }
     render() {
         if (!this.#view) return
+        if (!this.scrolled && this.#scrollViews.size) this.#clearScrollWindow()
+        this.#scrollRendering = true
         this.#view.render(this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
         }))
+        if (this.#continuous) for (const record of this.#scrollViews.values()) {
+            if (record.view !== this.#view) record.view.render(this.#scrollLayout)
+            record.height = record.view.element.getBoundingClientRect().height
+        }
+        this.#scrollRendering = false
         this.#scrollToAnchor(this.#anchor)
+        this.#startScrollWindow()
     }
     get scrolled() {
         return this.getAttribute('flow') === 'scrolled'
@@ -797,7 +979,7 @@ export class Paginator extends HTMLElement {
         return this.#view.element.getBoundingClientRect()[this.sideProp]
     }
     get start() {
-        return Math.abs(this.#container[this.scrollProp])
+        return Math.max(0, Math.abs(this.#container[this.scrollProp]) - this.#viewOffset())
     }
     get end() {
         return this.start + this.size
@@ -942,6 +1124,7 @@ export class Paginator extends HTMLElement {
     async #scrollTo(offset, reason, smooth) {
         const element = this.#container
         const { scrollProp, size } = this
+        if (this.#continuous) offset += this.#viewOffset()
         if (element[scrollProp] === offset) {
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
@@ -985,7 +1168,7 @@ export class Paginator extends HTMLElement {
         }
         // if anchor is a fraction
         if (this.scrolled) {
-            await this.#scrollTo(anchor * this.viewSize, reason)
+            await this.#scrollTo(this.#continuous ? Math.min(anchor * this.viewSize, Math.max(0, this.viewSize - this.size)) : anchor * this.viewSize, reason)
             return
         }
         const { pages } = this
@@ -1056,6 +1239,17 @@ export class Paginator extends HTMLElement {
     async #goTo({ index, anchor, select}) {
         // At a book edge, Scroll's page command can have no adjacent section.
         if (index == null || !this.#canGoToIndex(index)) return
+        const prepared = this.#continuous && this.#scrollViews.get(index)
+        if (prepared) {
+            this.#index = index
+            this.#view = prepared.view
+            await this.#display({ index, anchor, select })
+            this.#warmScrollWindow()
+            return
+        }
+        if (this.#scrollViews.size) this.#clearScrollWindow()
+        // Do not load the same EPUB resource concurrently with a cancelled warm-up.
+        await this.#scrollLoadQueue
         if (index === this.#index) await this.#display({ index, anchor, select })
         else {
             const oldIndex = this.#index
@@ -1072,6 +1266,7 @@ export class Paginator extends HTMLElement {
                     return {}
                 }))
         }
+        this.#startScrollWindow()
     }
     async goTo(target) {
         if (this.#locked) return
@@ -1131,6 +1326,7 @@ export class Paginator extends HTMLElement {
         return this.#turnPage(1, distance)
     }
     #continueScrollAtEdge() {
+        if (this.#continuous && this.#scrollViews.has(this.#adjacentIndex(this.#scrollContinuation?.direction ?? 1))) return
         const intent = this.#scrollContinuation
         if (!intent || !this.scrolled || this.#locked) return
         if (performance.now() > intent.until) { this.#scrollContinuation = null; return }
@@ -1164,6 +1360,8 @@ export class Paginator extends HTMLElement {
         return this.goTo({ index })
     }
     getContents() {
+        if (this.#continuous) return [this.#scrollViews.get(this.#index), ...[...this.#scrollViews.values()].filter(record => record.index !== this.#index)]
+            .filter(Boolean).map(({ index, view }) => ({ index, overlayer: view.overlayer, doc: view.document }))
         if (this.#view) return [{
             index: this.#index,
             overlayer: this.#view.overlayer,
@@ -1173,7 +1371,20 @@ export class Paginator extends HTMLElement {
     }
     setStyles(styles) {
         this.#styles = styles
-        const $$styles = this.#styleMap.get(this.#view?.document)
+        for (const record of [...this.#scrollViews.values(), ...this.#scrollLoads.values()]) this.#applyDocumentStyles(record.view.document)
+        this.#applyDocumentStyles(this.#view?.document)
+
+        // NOTE: needs `requestAnimationFrame` in Chromium
+        requestAnimationFrame(() => {
+            if (this.#view?.document)
+                this.#background.style.background = getBackground(this.#view.document)
+        })
+        this.#view?.document?.fonts?.ready?.then(() => this.#view?.expand())
+    }
+    #applyDocumentStyles(doc) {
+        const styles = this.#styles
+        if (styles == null) return
+        const $$styles = this.#styleMap.get(doc)
         if (!$$styles) return
         const [$beforeStyle, $style] = $$styles
         if (Array.isArray(styles)) {
@@ -1182,20 +1393,13 @@ export class Paginator extends HTMLElement {
             $style.textContent = style
         } else $style.textContent = styles
 
-        // NOTE: needs `requestAnimationFrame` in Chromium
-        requestAnimationFrame(() => {
-            if (this.#view?.document)
-                this.#background.style.background = getBackground(this.#view.document)
-        })
-
-        // needed because the resize observer doesn't work in Firefox
-        this.#view?.document?.fonts?.ready?.then(() => this.#view?.expand())
     }
     focusView() {
         this.#view.document.defaultView.focus()
     }
     destroy() {
         this.#observer.disconnect()
+        this.#clearScrollWindow()
         this.#view?.destroy()
         this.#view?.element.remove()
         this.#view = null

@@ -105,7 +105,7 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertEqual(metrics["backward"], 1, "scrolling=\(scrolling)")
             XCTAssertEqual(metrics["beginning"], 0)
             XCTAssertEqual(metrics["end"], metrics["last"])
-            XCTAssertEqual(metrics["documents"], 1)
+            XCTAssertLessThanOrEqual(metrics["documents"] ?? 99, scrolling ? 3 : 1)
             let locator = model.locator
             model.toggleBookmark(); store?.flush()
             model.webView?.stopLoading(); window?.isHidden = true; window = nil
@@ -558,65 +558,59 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertGreaterThan(rows.count, 12)
         for row in rows { XCTAssertLessThan(abs(row["drift"] ?? 999), 2, "\(row)") }
     }
-    func testScrollGesturesContinueAcrossChapterEdgesAndKeepOneDocumentLoaded() async throws {
+    func testScrollWindowCrossesReadyChapterEdgesWithoutReplacingDocuments() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
-        let model = try show(book, url: url)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
         try await assertOpened(model, contains: "attention")
         let result = try await model.webView?.callAsyncJavaScript("""
-            const view = document.querySelector('foliate-view');
+            const view = document.querySelector('foliate-view'), r = view.renderer;
             const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-            window.Leaf.applyPreferences({...base, scrolling:true}); await sleep(150);
-            await view.goTo(1); await sleep(100);
-            const renderer = view.renderer;
-            const waitForChapter = async index => {
-                const deadline = performance.now() + 8000;
-                while (performance.now() < deadline) {
-                    const content = renderer.getContents()[0];
-                    if (content?.index === index && content.doc?.readyState === 'complete'
-                        && view.lastLocation?.range?.startContainer.ownerDocument === content.doc) {
-                        await sleep(80); return;
-                    }
-                    await sleep(25);
+            const ready = async indices => {
+                const until = performance.now()+8000;
+                while(performance.now()<until) {
+                    if(indices.every(i=>r.getContents().some(x=>x.index===i && x.doc.readyState==='complete'))) { await sleep(60);return; }
+                    await sleep(20);
                 }
-                throw new Error(`Chapter ${index} did not finish rendering`);
+                throw new Error('Nearby chapter window not ready: '+JSON.stringify(r.getContents().map(x=>x.index)));
             };
-            const touch = (type,y) => {
-                const doc = renderer.getContents()[0].doc;
-                const event = new Event(type, {bubbles:true,cancelable:true});
-                const point = {screenX:150,screenY:y,clientX:150,clientY:y};
-                Object.defineProperties(event,{changedTouches:{value:[point]},touches:{value:type==='touchend'||type==='touchcancel'?[]:[point]}});
-                doc.dispatchEvent(event);
-            };
-            const edge = end => {
-                const doc = renderer.getContents()[0].doc;
-                const container = doc.defaultView.frameElement.parentElement.parentElement;
-                container.scrollTop = end ? container.scrollHeight : 0;
-            };
-            edge(true); await sleep(100);
-            touch('touchstart',350); touch('touchmove',200); touch('touchend',200); await waitForChapter(2);
-            const next = renderer.getContents()[0].index;
-            edge(false); await sleep(80);
-            touch('touchstart',200); touch('touchmove',350); touch('touchend',350); await waitForChapter(1);
-            const previous = renderer.getContents()[0].index;
-            await view.goTo(1); edge(false); await sleep(100);
-            touch('touchstart',350); touch('touchmove',200); touch('touchend',200);
-            edge(true); await waitForChapter(2); // A flick reaches the edge after the finger lifts.
-            const momentumNext = renderer.getContents()[0].index;
-            await view.goTo(0); edge(false); await sleep(100);
-            touch('touchstart',200); touch('touchmove',350); touch('touchend',350); await sleep(100);
-            const start = renderer.getContents()[0].index;
-            await view.goTo(view.book.sections.length-1); edge(true); await sleep(100);
-            touch('touchstart',350); touch('touchmove',200); touch('touchend',200); await sleep(100);
-            return {next,previous,momentumNext,start,end:renderer.getContents()[0].index,last:view.book.sections.length-1,documents:renderer.getContents().length};
-            """, arguments: ["base": preferences.payload], in: nil, contentWorld: .page)
-        let metrics = try XCTUnwrap(result as? [String: Int])
-        XCTAssertEqual(metrics["next"], 2)
-        XCTAssertEqual(metrics["previous"], 1)
-        XCTAssertEqual(metrics["momentumNext"], 2)
-        XCTAssertEqual(metrics["start"], 0)
-        XCTAssertEqual(metrics["end"], metrics["last"])
-        XCTAssertEqual(metrics["documents"], 1)
+            await view.goTo(1); await ready([0,1,2]);
+            const first = r.getContents().find(x=>x.index===1).doc;
+            const next = r.getContents().find(x=>x.index===2).doc;
+            const container = first.defaultView.frameElement.parentElement.parentElement;
+            const offset = doc=>doc.defaultView.frameElement.parentElement.getBoundingClientRect().top-container.getBoundingClientRect().top+container.scrollTop;
+            const boundary = offset(next);
+            container.scrollTop=boundary-container.clientHeight/2;await sleep(80);
+            const overlap = first.defaultView.frameElement.getBoundingClientRect().bottom>container.getBoundingClientRect().top
+                && next.defaultView.frameElement.getBoundingClientRect().top<container.getBoundingClientRect().bottom;
+            const before = next.defaultView.frameElement.getBoundingClientRect().top;
+            container.scrollTop+=container.clientHeight/2+40;
+            await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
+            const forward = r.getContents()[0].index;
+            const retained = r.getContents()[0].doc===next && first.defaultView.frameElement?.isConnected;
+            const movement = before-next.defaultView.frameElement.getBoundingClientRect().top;
+            const maxDocuments=r.getContents().length;
+            container.scrollTop=offset(first)+40;await sleep(100);
+            const backward=r.getContents()[0].index;
+            const restoredDocument=r.getContents()[0].doc===first;
+            await view.goTo(0);r.scrollToAnchor(0);await sleep(100);await r.prev();
+            const beginning=r.getContents()[0].index;
+            const last=view.book.sections.length-1;await view.goTo(last);r.scrollToAnchor(1);await sleep(100);await r.next();
+            return {overlap,forward,retained,movement,expected:container.clientHeight/2+40,maxDocuments,backward,restoredDocument,beginning,end:r.getContents()[0].index,last};
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let metrics = try XCTUnwrap(result as? [String: Any])
+        XCTAssertEqual(metrics["overlap"] as? Bool, true, "Both chapters must share a viewport before crossing")
+        XCTAssertEqual(metrics["forward"] as? Int, 2)
+        XCTAssertEqual(metrics["retained"] as? Bool, true, "Crossing must reuse the prepared document")
+        XCTAssertEqual(metrics["movement"] as? Double ?? 0, metrics["expected"] as? Double ?? 999, accuracy: 3)
+        XCTAssertLessThanOrEqual(metrics["maxDocuments"] as? Int ?? 99, 3)
+        XCTAssertEqual(metrics["backward"] as? Int, 1)
+        XCTAssertEqual(metrics["restoredDocument"] as? Bool, true)
+        XCTAssertEqual(metrics["beginning"] as? Int, 0)
+        XCTAssertEqual(metrics["end"] as? Int, metrics["last"] as? Int)
         XCTAssertNil(model.error)
+        let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json")
+        attachment.name="Continuous chapter boundary geometry";attachment.lifetime = .keepAlways;add(attachment)
     }
     func testPlainTextRenders() async throws {
         let (book, url) = try prepare("A Field Guide to Slow Days.txt", format: .txt)
