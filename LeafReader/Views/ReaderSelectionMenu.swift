@@ -316,6 +316,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         guard let source, !showsSystemMenu else { bookTouch = nil; return }
         switch phase {
         case .began:
+            completedSelectionTouchUntil = 0
             bookTouch = BookTouch(start: point, timestamp: timestamp, beganOnHandle: source.selectionHandleContains(point))
         case .moved:
             guard var touch = bookTouch else { return }
@@ -329,7 +330,9 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
             bookTouch = nil
             let longPress = timestamp - touch.timestamp >= 0.45 && touch.distance <= 20
             let adjusted = touch.beganOnHandle && (touch.selectionChanged || touch.distance > 3)
-            if longPress || adjusted { completedSelectionTouchUntil = ProcessInfo.processInfo.systemUptime + 0.3 }
+            // The reader's single tap waits for double-tap failure and can arrive
+            // >350ms later. A fresh book touch clears this grace immediately.
+            if longPress || adjusted { completedSelectionTouchUntil = ProcessInfo.processInfo.systemUptime + 0.6 }
             #if DEBUG
             readerSelectionMenuTrace("bookTouchEnded", source: source, context: longPress || adjusted, point: point)
             #endif

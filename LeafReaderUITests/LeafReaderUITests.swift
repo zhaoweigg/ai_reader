@@ -368,10 +368,10 @@ final class LeafReaderUITests: XCTestCase {
             dismissAppearance(app)
         }
     }
-    @MainActor private func selectFixturePassage(_ flow: String, app: XCUIApplication) {
+    @MainActor private func selectFixturePassage(_ flow: String, app: XCUIApplication, pdfWordOffset: CGFloat = 0.15) {
         let pdf = flow == "PDF", paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", pdf ? "Before the town" : "Attention is a way")).firstMatch
         XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
-        paragraph.coordinate(withNormalizedOffset: CGVector(dx: pdf ? 0.15 : 0.3, dy: pdf ? 0.25 : 0.1)).press(forDuration: 1.2)
+        paragraph.coordinate(withNormalizedOffset: CGVector(dx: pdf ? pdfWordOffset : 0.3, dy: pdf ? 0.25 : 0.1)).press(forDuration: 1.2)
     }
     @MainActor private func revealSelectionAction(_ id: String, app: XCUIApplication) -> XCUIElement {
         let menu = app.scrollViews["expandedSelectionMenu"], button = app.buttons["selection-" + id]
@@ -404,7 +404,9 @@ final class LeafReaderUITests: XCTestCase {
                 setReaderOrientation(landscape ? .landscapeLeft : .portrait, app: app)
                 expectation(for: NSPredicate { _, _ in landscape ? app.frame.width > app.frame.height : app.frame.height > app.frame.width }, evaluatedWith: app)
                 waitForExpectations(timeout: 6)
-                selectFixturePassage(flow, app: app)
+                // PDFKit retains native grips after menu dismissal. Select a
+                // different word after rotation, not the old grip itself.
+                selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
                 let menu = app.scrollViews["expandedSelectionMenu"]
                 XCTAssertTrue(menu.waitForExistence(timeout: 6))
                 XCTAssertLessThanOrEqual(menu.frame.height, 48, "Selection actions must occupy one compact row")
@@ -491,7 +493,7 @@ final class LeafReaderUITests: XCTestCase {
             if flow == "PDF" {
                 // Leaving a selection must not permanently disable ordinary
                 // reader edge taps after the native gesture-completion grace.
-                selectFixturePassage(flow, app: app)
+                selectFixturePassage(flow, app: app, pdfWordOffset: 0.55)
                 XCTAssertTrue(app.scrollViews["expandedSelectionMenu"].waitForExistence(timeout: 5))
                 revealSelectionAction("ask", app: app).tap()
                 XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
