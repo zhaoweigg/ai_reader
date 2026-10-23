@@ -907,6 +907,12 @@ export class Paginator extends HTMLElement {
                 this.dispatchEvent(new CustomEvent('create-overlayer', { detail: {
                     doc: record.view.document, index, attach: overlayer => record.view.overlayer = overlayer,
                 } }))
+                // A frame's parent scroll layer can commit after its DOM layout.
+                // Keep the load pending until that commit before navigation reuses it.
+                await Promise.race([
+                    new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+                    record.cancelledReady,
+                ])
             } catch (error) {
                 if (!record.cancelled && epoch === this.#scrollEpoch) console.warn('Could not prepare adjacent chapter', error)
             } finally {
@@ -1305,6 +1311,7 @@ export class Paginator extends HTMLElement {
         // A late layout callback must not start a new window for the old
         // chapter while an awaited resource load is navigating elsewhere.
         ++this.#scrollNavigating
+        let reused = false
         try {
             // A fast swipe/navigation can reach a neighbor before preparation
             // finishes. Reuse that work instead of cancelling and loading twice.
@@ -1312,6 +1319,7 @@ export class Paginator extends HTMLElement {
             if (pending) await pending.promise
             const prepared = this.#continuous && this.#scrollViews.get(index)
             if (prepared) {
+                reused = true
                 this.#index = index
                 this.#view = prepared.view
                 await this.#display({ index, anchor, select })
@@ -1341,6 +1349,17 @@ export class Paginator extends HTMLElement {
             if (!this.#scrollNavigating) {
                 this.#startScrollWindow()
                 this.#warmScrollWindow()
+                const previous = !reused && this.#scrollLoads.get(this.#adjacentIndex(-1))
+                if (previous) {
+                    const target = this.#view, anchor = this.#anchor?.cloneRange?.() ?? this.#anchor
+                    ++this.#scrollNavigating
+                    try {
+                        // A cold jump must finish prepending its previous chapter
+                        // before reporting the requested CFI as restored.
+                        await previous.promise
+                        if (this.#view === target && target.ready) await this.#scrollToAnchor(anchor)
+                    } finally { --this.#scrollNavigating }
+                }
             }
         }
     }

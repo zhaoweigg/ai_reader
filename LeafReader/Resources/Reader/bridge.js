@@ -319,10 +319,13 @@ window.Leaf = { open, close, command, applyPreferences, search, tap,
     },
     chatContext: () => {
         const contents = view?.renderer?.getContents?.() ?? [];
-        for (const {doc} of contents) {
+        for (const {doc, index} of contents) {
             const selection = doc?.getSelection();
-            if (selection && !selection.isCollapsed && selection.toString().trim())
-                return {text: selection.toString().slice(0, 24000), source: 'selection'};
+            if (selection && !selection.isCollapsed && selection.toString().trim()) {
+                const range = textBoundedSelection(selection.getRangeAt(0));
+                return {text: selection.toString().slice(0, 24000), source: 'selection',
+                    locator:view.getCFI(index, range), label:languageText(view.getProgressOf(index, range).tocItem?.label)};
+            }
         }
         // visibleText() below is a diagnostic for the whole loaded document.
         // Chat must use only the visible range, never the entire chapter.
