@@ -488,6 +488,7 @@ export class Paginator extends HTMLElement {
     #scrollSpacer
     #scrollLayout
     #scrollRendering = false
+    #scrollNavigating = 0
     #scrollLoadQueue = Promise.resolve()
     constructor() {
         super()
@@ -725,7 +726,7 @@ export class Paginator extends HTMLElement {
         }
         this.#view = new View({
             container: this,
-            onExpand: () => this.#scrollToAnchor(this.#anchor),
+            onExpand: () => { if (!this.#scrollNavigating) this.#scrollToAnchor(this.#anchor) },
         })
         this.#container.append(this.#view.element)
         return this.#view
@@ -774,7 +775,7 @@ export class Paginator extends HTMLElement {
         this.#container.style.removeProperty('--leaf-book-end-space')
     }
     #startScrollWindow() {
-        if (!this.scrolled || this.#vertical || !this.#view?.ready || this.#scrollViews.size) return
+        if (this.#scrollNavigating || !this.scrolled || this.#vertical || !this.#view?.ready || this.#scrollViews.size) return
         this.#scrollSpacer = document.createElement('div')
         this.#scrollSpacer.style.cssText = 'height:0;flex:none;pointer-events:none;overflow-anchor:none'
         this.#container.prepend(this.#scrollSpacer)
@@ -796,7 +797,7 @@ export class Paginator extends HTMLElement {
         this.#container.style.setProperty('--leaf-book-end-space', `${space}px`)
     }
     #scrollViewExpanded(record) {
-        if (this.#scrollRendering || record.preparing || record.released) return
+        if (this.#scrollNavigating || this.#scrollRendering || record.preparing || record.released) return
         if (!this.#continuous) {
             if (record.view === this.#view) this.#scrollToAnchor(this.#anchor)
             return
@@ -809,7 +810,7 @@ export class Paginator extends HTMLElement {
         else if (record.index === this.#index) this.#scrollToAnchor(this.#anchor)
     }
     #scrollViewResized(record) {
-        if (this.#scrollRendering || record.preparing || record.released || !this.#continuous) return
+        if (this.#scrollNavigating || this.#scrollRendering || record.preparing || record.released || !this.#continuous) return
         const height = record.view.element.getBoundingClientRect().height
         const delta = height - (record.height ?? height)
         record.height = height
@@ -911,7 +912,7 @@ export class Paginator extends HTMLElement {
         this.#scrollLoadQueue = record.promise.catch(() => {})
     }
     #activateScrolledView() {
-        if (!this.#continuous || this.#locked || this.#scrollRendering) return
+        if (!this.#continuous || this.#locked || this.#scrollNavigating || this.#scrollRendering) return
         const top = this.#container.scrollTop + this.#margin + 1
         const records = [...this.#scrollViews.values()].sort((a, b) => a.index - b.index)
         const record = records.find(record => this.#viewOffset(record.view) + record.view.element.getBoundingClientRect().height > top)
@@ -1000,7 +1001,7 @@ export class Paginator extends HTMLElement {
         return { height, width, margin, gap, columnWidth }
     }
     render() {
-        if (!this.#view?.ready) return
+        if (!this.#view?.ready || this.#scrollNavigating) return
         if (!this.scrolled && this.#scrollViews.size) this.#clearScrollWindow()
         this.#scrollRendering = true
         this.#view.render(this.#beforeRender({
@@ -1296,35 +1297,45 @@ export class Paginator extends HTMLElement {
     async #goTo({ index, anchor, select}) {
         // At a book edge, Scroll's page command can have no adjacent section.
         if (index == null || !this.#canGoToIndex(index)) return
-        const prepared = this.#continuous && this.#scrollViews.get(index)
-        if (prepared) {
-            this.#index = index
-            this.#view = prepared.view
-            await this.#display({ index, anchor, select })
-            this.#warmScrollWindow()
-            return
-        }
-        if (this.#scrollViews.size) this.#clearScrollWindow()
-        // Do not load the same EPUB resource concurrently with a cancelled warm-up.
-        await this.#scrollLoadQueue
-        if (index === this.#index) await this.#display({ index, anchor, select })
-        else {
-            const oldIndex = this.#index
-            const onLoad = detail => {
-                this.sections[oldIndex]?.unload?.()
-                this.setStyles(this.#styles)
-                this.dispatchEvent(new CustomEvent('load', { detail }))
+        // A late layout callback must not start a new window for the old
+        // chapter while an awaited resource load is navigating elsewhere.
+        ++this.#scrollNavigating
+        try {
+            const prepared = this.#continuous && this.#scrollViews.get(index)
+            if (prepared) {
+                this.#index = index
+                this.#view = prepared.view
+                await this.#display({ index, anchor, select })
+                return
             }
-            await this.#display(Promise.resolve(this.sections[index].load())
-                .then(src => ({ index, src, anchor, onLoad, select }))
-                .catch(e => {
-                    console.warn(e)
-                    console.warn(new Error(`Failed to load section ${index}`))
-                    return {}
-                }))
+            if (this.#scrollViews.size) this.#clearScrollWindow()
+            // Do not load the same EPUB resource concurrently with a cancelled warm-up.
+            await this.#scrollLoadQueue
+            if (index === this.#index) await this.#display({ index, anchor, select })
+            else {
+                const oldIndex = this.#index
+                const onLoad = detail => {
+                    this.sections[oldIndex]?.unload?.()
+                    this.setStyles(this.#styles)
+                    this.dispatchEvent(new CustomEvent('load', { detail }))
+                }
+                await this.#display(Promise.resolve(this.sections[index].load())
+                    .then(src => ({ index, src, anchor, onLoad, select }))
+                    .catch(e => {
+                        console.warn(e)
+                        console.warn(new Error(`Failed to load section ${index}`))
+                        return {}
+                    }))
+            }
+        } finally {
+            --this.#scrollNavigating
+            if (!this.#scrollNavigating) {
+                this.#startScrollWindow()
+                this.#warmScrollWindow()
+            }
         }
-        this.#startScrollWindow()
     }
+
     async goTo(target) {
         if (this.#locked) return
         const resolved = await target

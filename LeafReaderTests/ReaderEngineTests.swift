@@ -88,6 +88,9 @@ final class ReaderEngineTests: XCTestCase {
             let result = try await model.webView?.callAsyncJavaScript("""
                 const view = document.querySelector('foliate-view'), r = view.renderer;
                 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+                const trace=[];
+                const snapshot=()=>{const contents=r.getContents(),doc=contents[0]?.doc,container=doc?.defaultView?.frameElement?.parentElement?.parentElement;return {active:contents[0]?.index,top:container?.scrollTop,max:container?container.scrollHeight-container.clientHeight:0,endSpace:container?.style.getPropertyValue('--leaf-book-end-space'),frames:contents.map(x=>({index:x.index,y:x.doc?.defaultView?.frameElement?.parentElement?.getBoundingClientRect().top,height:x.doc?.defaultView?.frameElement?.parentElement?.getBoundingClientRect().height}))};};
+                r.addEventListener('relocate',({detail})=>{trace.push({reason:detail.reason,...snapshot()});if(trace.length>30)trace.shift();});
                 await view.goTo(1); r.scrollToAnchor(1); await sleep(100); await r.next(); await sleep(100);
                 const forward = r.getContents()[0].index;
                 r.scrollToAnchor(0); await sleep(100); await r.prev(); await sleep(100);
@@ -96,16 +99,17 @@ final class ReaderEngineTests: XCTestCase {
                 const beginning = r.getContents()[0].index;
                 const last = view.book.sections.length - 1;
                 await view.goTo(last); r.scrollToAnchor(1); await sleep(100); await r.next();
-                const end = r.getContents()[0].index;
+                const end = r.getContents()[0].index,endState=snapshot();
                 await view.goTo(1); r.scrollToAnchor(0.35); await sleep(100);
-                return {forward,backward,beginning,end,last,documents:r.getContents().length};
+                return {forward,backward,beginning,end,last,documents:r.getContents().length,endState,trace};
                 """, arguments: [:], in: nil, contentWorld: .page)
-            let metrics = try XCTUnwrap(result as? [String: Int])
-            XCTAssertEqual(metrics["forward"], 2, "scrolling=\(scrolling)")
-            XCTAssertEqual(metrics["backward"], 1, "scrolling=\(scrolling)")
-            XCTAssertEqual(metrics["beginning"], 0)
-            XCTAssertEqual(metrics["end"], metrics["last"], "scrolling=\(scrolling), \(metrics)")
-            XCTAssertLessThanOrEqual(metrics["documents"] ?? 99, scrolling ? 3 : 1)
+            let metrics = try XCTUnwrap(result as? [String: Any])
+            let attachment=XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json");attachment.name="Boundary trace scrolling=\(scrolling)";attachment.lifetime = .keepAlways;add(attachment)
+            XCTAssertEqual(metrics["forward"] as? Int, 2, "scrolling=\(scrolling)")
+            XCTAssertEqual(metrics["backward"] as? Int, 1, "scrolling=\(scrolling)")
+            XCTAssertEqual(metrics["beginning"] as? Int, 0)
+            XCTAssertEqual(metrics["end"] as? Int, metrics["last"] as? Int, "scrolling=\(scrolling), \(metrics)")
+            XCTAssertLessThanOrEqual(metrics["documents"] as? Int ?? 99, scrolling ? 3 : 1)
             let locator = model.locator
             model.toggleBookmark(); store?.flush()
             model.webView?.stopLoading(); window?.isHidden = true; window = nil
