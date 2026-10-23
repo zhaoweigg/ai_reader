@@ -177,4 +177,13 @@ import PDFKit
         }
         await fulfillment(of: [complete], timeout: 20); synthesizer.stopSpeaking(at: .immediate)
     }
+    func testSystemSpeakerReadsNumberOnlyPassageWithoutLanguageMetadata() async throws {
+        let speaker = SystemReadAloudSpeaker()
+        defer { speaker.stop(); try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+        let finished = expectation(description: "Default device voice reads a page number")
+        speaker.finished = { finished.fulfill() }
+        do { try speaker.speak("419", language: "", voice: "", speed: 1) }
+        catch { XCTFail("A number-only page must use the device voice instead of blocking the rest of the book: \(error)"); return }
+        await fulfillment(of: [finished], timeout: 15)
+    }
 }

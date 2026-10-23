@@ -227,6 +227,27 @@ final class ReaderEngineTests: XCTestCase {
             """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
         XCTAssertEqual(result?["active"] as? Int, 3); XCTAssertEqual(result?["visible"] as? Bool, true)
     }
+    func testReadAloudKeepsHardLineBreaksWithoutChangingInlineWordsOrCFIsInBothFlows() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "窗外")
+            let result = try await model.webView?.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'),doc=view.renderer.getContents()[0].doc,p=doc.querySelector('p');
+                p.innerHTML='Before<br>after <em>inline</em> text.';
+                const range=doc.createRange();range.selectNodeContents(p);
+                const locator=view.getCFI(0,range),chunk=await window.Leaf.readAloudChunk({locator});
+                const repeated=await window.Leaf.readAloudChunk({locator:chunk.locator});
+                return {spoken:chunk.text,repeated:repeated.text,original:p.textContent,
+                    rangeText:view.resolveCFI(chunk.locator).anchor(doc).toString()};
+                """, arguments: [:], in: nil, contentWorld: .page) as? [String: String]
+            XCTAssertEqual(result?["spoken"], "Before\nafter inline text.", "Hard line breaks must not glue neighboring words")
+            XCTAssertEqual(result?["repeated"], result?["spoken"])
+            XCTAssertEqual(result?["original"], "Beforeafter inline text.")
+            XCTAssertEqual(result?["rangeText"], result?["original"], "The original DOM and CFI character offsets must stay intact")
+        }
+    }
     func testEPUBRendersSearchesAndRestoresPosition() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         let model = try show(book, url: url)
