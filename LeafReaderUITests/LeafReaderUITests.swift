@@ -838,6 +838,23 @@ final class LeafReaderUITests: XCTestCase {
             let trace = XCTAttachment(string: "Attempt \(attempt): \(slider.value as? String ?? "nil"); frame \(slider.frame)")
             trace.name = flow + " transparency endpoint gesture"; trace.lifetime = .keepAlways; add(trace)
         }
+        if slider.value as? String != "95%" {
+            let value = Double((slider.value as? String ?? "").replacingOccurrences(of: "%", with: ""))
+            let frame = slider.frame
+            XCTAssertNotNil(value)
+            if let value, frame.width > frame.height {
+                // Begin on the measured thumb, allow Form's delayed touch to
+                // reach the control, and release inside the track's endpoint.
+                let inset = frame.height / 2 / frame.width
+                let progress = min(1, max(0, (value - 20) / 75))
+                let thumb = inset + (1 - 2 * inset) * progress
+                slider.coordinate(withNormalizedOffset: CGVector(dx: thumb, dy: 0.5)).press(forDuration: 0.35,
+                    thenDragTo: slider.coordinate(withNormalizedOffset: CGVector(dx: 1 - 1 / frame.width, dy: 0.5)),
+                    withVelocity: .slow, thenHoldForDuration: 0.2)
+                let trace = XCTAttachment(string: "Measured thumb \(thumb); result \(slider.value as? String ?? "nil"); frame \(frame)")
+                trace.name = flow + " measured endpoint drag"; trace.lifetime = .keepAlways; add(trace)
+            }
+        }
         XCTAssertEqual(slider.value as? String,"95%")
         capture(flow + " faint button live preview",app:app)
         app.buttons["Done"].tap()
