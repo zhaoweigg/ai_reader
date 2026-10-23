@@ -116,6 +116,9 @@ final class ReaderModel: NSObject, ObservableObject {
     func askAboutSelection(_ intent: ReaderSelectionIntent, context: ReadingChatContext) {
         guard !context.isEmpty else { return }
         selectionRequest = ReaderSelectionRequest(intent: intent, context: context.bounded())
+        clearNativeSelection()
+    }
+    func clearNativeSelection() {
         pdfView?.clearSelection()
         pdfView?.endEditing(true)
         if let webView {

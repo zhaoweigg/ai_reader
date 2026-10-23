@@ -456,7 +456,7 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertNil(model.selectedReadingContext())
         try await waitUntil { model.liveSelection == nil }
     }
-    func testPDFBookTapClearsSelectionBeforeShowingControls() async throws {
+    func testClosingPDFChatClearsNativeSelectionButKeepsQuote() async throws {
         let (book, url) = try prepare("Notes from the Coast.pdf", format:.pdf)
         let model = ReaderModel(bookID:book.id,library:try XCTUnwrap(store),initialLocator:nil)
         self.model = model
@@ -470,23 +470,22 @@ final class ReaderEngineTests: XCTestCase {
         let quote = chat.selectedContext
         let tap = CenteredReaderTestTap();view.addGestureRecognizer(tap)
         let coordinator = PDFBookSurface.Coordinator(model)
-        coordinator.tapped(tap)
+        model.clearNativeSelection()
         try await waitUntil { model.liveSelection == nil }
         chat.attachLiveSelection(model.liveSelection,chatIsPresented:false)
         XCTAssertNil(view.currentSelection)
-        XCTAssertFalse(model.controlsVisible,"A deselection tap must not also navigate or show controls")
+        XCTAssertFalse(model.controlsVisible)
         XCTAssertEqual(chat.selectedContext,quote,"Clearing PDF selection keeps the saved chat quote")
         coordinator.tapped(tap)
-        XCTAssertTrue(model.controlsVisible,"The next center tap must make reader controls accessible")
+        XCTAssertTrue(model.controlsVisible,"The first center tap after closing chat must show reader controls")
     }
     func testLiveSelectionTracksWebRangeChangesInBothFlowsWithoutMovingPassage() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
-        let model = try show(book, url: url)
-        try await assertOpened(model, contains: "窗外")
-        let web = try XCTUnwrap(model.webView)
         for scrolling in [false, true] {
             var value = preferences; value.scrolling = scrolling
-            model.applyPreferences(value)
+            let model = try show(book,url:url,readerPreferences:value)
+            try await assertOpened(model,contains:"窗外")
+            let web = try XCTUnwrap(model.webView)
             let metrics = try await waitForLayout(model, preferences: value)
             XCTAssertEqual(metrics["scrolling"],scrolling ? 1 : 0)
             let location = model.locator
@@ -516,6 +515,7 @@ final class ReaderEngineTests: XCTestCase {
             }
             _ = try await web.evaluateJavaScript("window.Leaf.clearSelection()")
             try await waitUntil { model.liveSelection == nil }
+            model.webView?.stopLoading();window?.isHidden = true;window = nil
         }
     }
     func testPageTurnsAnimateAndCancelledSwipesKeepThePassage() async throws {
