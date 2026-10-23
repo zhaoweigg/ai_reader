@@ -841,6 +841,29 @@ final class ReaderEngineTests: XCTestCase {
         }
     }
 
+    func testBackwardWarmUpKeepsPassageWhenOlderChaptersWereNeverLoaded() async throws {
+        let (book,url)=try prepare("The Art of Noticing.epub",format:.epub)
+        var prefs=preferences;prefs.scrolling=true
+        let model=try show(book,url:url,readerPreferences:prefs)
+        try await assertOpened(model,contains:"attention")
+        let result=try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            await view.goTo(3);
+            const section=view.book.sections[1],load=section.load;
+            section.load=async()=>{await sleep(150);return load();};
+            try {
+                await view.goTo(2);
+                const frame=r.getContents()[0].doc.defaultView.frameElement,before=frame.getBoundingClientRect().top;
+                await sleep(450);
+                return {before,after:frame.getBoundingClientRect().top,active:r.getContents()[0].index,indices:r.getContents().map(c=>c.index)};
+            } finally {section.load=load;}
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let state=try XCTUnwrap(result as? [String:Any])
+        XCTAssertEqual(state["active"] as? Int,2,"\(state)")
+        XCTAssertEqual(state["before"] as? Double ?? 0,state["after"] as? Double ?? 999,accuracy:2,"\(state)")
+        XCTAssertEqual(Set(state["indices"] as? [Int] ?? []),Set([1,2,3]))
+    }
+
     func testNavigationReusesAnAdjacentChapterStillBeingPrepared() async throws {
         let (book,url)=try prepare("The Art of Noticing.epub",format:.epub)
         var prefs=preferences;prefs.scrolling=true
