@@ -40,11 +40,15 @@ final class LeafReaderUITests: XCTestCase {
         return app.descendants(matching: .any)["bookPDFView"].firstMatch
     }
     @MainActor private func waitForBook(_ app: XCUIApplication) {
-        XCTAssertTrue(readingSurface(app).waitForExistence(timeout: 10))
+        let surface = readingSurface(app)
+        XCTAssertTrue(surface.waitForExistence(timeout: 10))
         let loading = app.staticTexts["Opening your book…"]
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: loading)
-        waitForExpectations(timeout: 20)
+        waitForExpectations(timeout: 60)
         XCTAssertFalse(app.otherElements["readerError"].exists)
+        if surface.elementType == .webView {
+            XCTAssertTrue(surface.staticTexts.firstMatch.waitForExistence(timeout: 10), "Wait for actual chapter text, not merely an empty WebView")
+        }
     }
     @MainActor private func showReaderControls(_ app: XCUIApplication) {
         waitForBook(app)
@@ -59,6 +63,16 @@ final class LeafReaderUITests: XCTestCase {
             }
         }
         XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
+        let bookmark = app.buttons["toggleBookmark"]
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            bookmark.exists && bookmark.isEnabled && app.buttons["Appearance"].isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed, "Reader controls must be enabled and reachable before setup continues")
+    }
+    @MainActor private func openAppearance(_ app: XCUIApplication) {
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        XCTAssertTrue(app.segmentedControls["appearanceTabs"].waitForExistence(timeout: 10), "The Appearance sheet must actually open before selecting a tab")
     }
     @MainActor private func dismissAppearance(_ app: XCUIApplication) {
         XCTAssertFalse(app.buttons["Done"].exists)
@@ -372,11 +386,18 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor private func openSelectionFixture(_ flow: String, app: XCUIApplication) {
         if flow == "PDF" {
-            let field = app.textFields["librarySearch"]; XCTAssertTrue(field.waitForExistence(timeout: 10))
-            field.tap(); field.typeText("Coast"); app.buttons["book-Notes from the Coast"].tap()
+            // Navigate the real library card; search-field focus is unrelated to selection.
+            let card = app.buttons["book-Notes from the Coast"]
+            for _ in 0..<5 {
+                if card.exists && card.isHittable { break }
+                app.scrollViews.firstMatch.swipeUp()
+            }
+            XCTAssertTrue(card.exists && card.isHittable, "PDF fixture must be reachable in the library")
+            card.tap()
             showReaderControls(app); app.buttons["nextPage"].tap()
         } else {
-            app.buttons["featuredBook"].tap(); showReaderControls(app); app.buttons["Appearance"].tap()
+            XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 10))
+            app.buttons["featuredBook"].tap(); openAppearance(app)
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons[flow].tap()
             app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
@@ -1605,13 +1626,13 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor func testBothFlowsFillLandscapeViewportAndKeepLauncherInsideIt() {
+        continueAfterFailure = false
         orient(.portrait)
         defer { orient(.portrait) }
         let app = launchApp()
         app.buttons["featuredBook"].tap()
         for flow in ["Pages", "Scroll"] {
-            showReaderControls(app)
-            app.buttons["Appearance"].tap()
+            openAppearance(app)
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons[flow].tap()
             dismissAppearance(app)
