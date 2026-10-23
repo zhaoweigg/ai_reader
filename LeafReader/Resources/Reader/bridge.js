@@ -15,12 +15,44 @@ const observedDocuments = new WeakSet();
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 reducedMotion.addEventListener('change', () => { if (preferences) applyPreferences(preferences); });
 
-function observeReadingTouches(doc) {
+function textBoundedSelection(range) {
+    if (range.startContainer.nodeType === Node.TEXT_NODE && range.endContainer.nodeType === Node.TEXT_NODE)
+        return range;
+    // EPUB CFI character offsets belong to text nodes. Whole-element selections
+    // need equivalent text endpoints rather than element child offsets.
+    const doc = range.startContainer.ownerDocument;
+    const walker = doc.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT);
+    let first, last, node;
+    while ((node = walker.nextNode())) {
+        if (!range.intersectsNode(node)) continue;
+        const start = node === range.startContainer ? range.startOffset : 0;
+        const end = node === range.endContainer ? range.endOffset : node.length;
+        if (end <= start) continue;
+        first ??= { node, offset:start };
+        last = { node, offset:end };
+    }
+    if (!first) return range;
+    const textRange = doc.createRange();
+    textRange.setStart(first.node, first.offset);
+    textRange.setEnd(last.node, last.offset);
+    return textRange;
+}
+
+function observeReadingTouches(doc, index) {
     if (observedDocuments.has(doc)) return;
     observedDocuments.add(doc);
     doc.addEventListener('selectionchange', () => {
         const selection = doc.getSelection();
-        post('selection', {text:selection && !selection.isCollapsed ? selection.toString().slice(0,12000) : ''});
+        const text = selection && !selection.isCollapsed ? selection.toString().slice(0,12000) : '';
+        const detail = { text };
+        if (text && selection.rangeCount && view) {
+            const range = textBoundedSelection(selection.getRangeAt(0));
+            // A selected range can belong to a neighboring visible chapter.
+            // Snapshot its own CFI/label without navigating the reading viewport.
+            detail.locator = view.getCFI(index, range);
+            detail.label = languageText(view.getProgressOf(index, range).tocItem?.label);
+        }
+        post('selection', detail);
     });
     let start;
     doc.addEventListener('touchstart', event => {
@@ -189,7 +221,7 @@ async function open(config) {
         document.body.append(view);
         view.addEventListener('load', ({ detail }) => {
             post('selection', {text:''});
-            observeReadingTouches(detail.doc);
+            observeReadingTouches(detail.doc, detail.index);
             requestAnimationFrame(() => { if (preferences) applyPreferences(preferences); });
         });
         view.addEventListener('link', () => { lastLinkActivation = Date.now(); });

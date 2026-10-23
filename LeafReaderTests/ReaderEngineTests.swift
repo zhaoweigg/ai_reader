@@ -348,8 +348,79 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(selection.source, "selection")
         XCTAssertFalse(selection.isEmpty)
         XCTAssertEqual(model.selectedReadingContext()?.text, selection.text)
+        try await waitUntil { model.liveSelection == selection }
         view.clearSelection()
         XCTAssertNil(model.selectedReadingContext())
+        try await waitUntil { model.liveSelection == nil }
+    }
+    func testClosingPDFChatClearsNativeSelectionButKeepsQuote() async throws {
+        let (book, url) = try prepare("Notes from the Coast.pdf", format:.pdf)
+        let model = ReaderModel(bookID:book.id,library:try XCTUnwrap(store),initialLocator:nil)
+        self.model = model
+        let view = PDFView(frame:CGRect(x:0,y:0,width:390,height:700))
+        model.configurePDF(view,url:url)
+        let page = try XCTUnwrap(view.currentPage)
+        view.currentSelection = page.selection(for:page.bounds(for:.cropBox))
+        try await waitUntil { model.liveSelection != nil }
+        let chat = ReaderChatSession()
+        chat.attachLiveSelection(model.liveSelection,chatIsPresented:true)
+        let quote = chat.selectedContext
+        let tap = CenteredReaderTestTap();view.addGestureRecognizer(tap)
+        let coordinator = PDFBookSurface.Coordinator(model)
+        model.clearNativeSelection()
+        try await waitUntil { model.liveSelection == nil }
+        chat.attachLiveSelection(model.liveSelection,chatIsPresented:false)
+        XCTAssertNil(view.currentSelection)
+        XCTAssertFalse(model.controlsVisible)
+        XCTAssertEqual(chat.selectedContext,quote,"Clearing PDF selection keeps the saved chat quote")
+        coordinator.tapped(tap)
+        XCTAssertTrue(model.controlsVisible,"The first center tap after closing chat must show reader controls")
+    }
+    func testLiveSelectionTracksWebRangeChangesInBothFlowsWithoutMovingPassage() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var value = preferences; value.scrolling = scrolling
+            let model = try show(book,url:url,readerPreferences:value)
+            try await assertOpened(model,contains:"窗外")
+            let web = try XCTUnwrap(model.webView)
+            let flow = try await web.evaluateJavaScript("document.querySelector('foliate-view').renderer.getAttribute('flow')") as? String
+            XCTAssertEqual(flow,scrolling ? "scrolled" : "paginated")
+            let location = model.locator
+            for index in 0..<4 {
+                let snapshot = try await web.evaluateJavaScript("""
+                    (() => {
+                        const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+                        const paragraphs = doc.querySelectorAll('p');
+                        const range = doc.createRange();
+                        if (\(index) === 1) { range.setStart(paragraphs[0].firstChild,5); range.setEnd(paragraphs[0].firstChild,20); }
+                        else if (\(index) === 3) { range.setStart(paragraphs[0],0); range.setEnd(paragraphs[1].firstChild,12); }
+                        else range.selectNodeContents(paragraphs[\(index) === 2 ? 1 : 0]);
+                        const selection = doc.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+                        return { selectedText:selection.toString(), rangeText:range.toString() };
+                    })()
+                    """) as? [String:String]
+                let selected = try XCTUnwrap(snapshot?["selectedText"])
+                try await waitUntil { model.liveSelection?.text == selected }
+                XCTAssertEqual(model.liveSelection?.source, "selection")
+                let quoteLocator = try XCTUnwrap(model.liveSelection?.locator)
+                let encoded = String(decoding:try JSONEncoder().encode(quoteLocator),as:UTF8.self)
+                let anchored = try await web.evaluateJavaScript("""
+                    (() => {
+                        const view = document.querySelector('foliate-view');
+                        const resolved = view.resolveCFI(\(encoded));
+                        const doc = view.renderer.getContents().find(item => item.index === resolved.index).doc;
+                        return resolved.anchor(doc).toString();
+                    })()
+                    """) as? String
+                // Selection.toString() adds visual paragraph breaks that Range.toString()
+                // does not. Validate the exact original DOM range as well as quoted text.
+                XCTAssertEqual(anchored,snapshot?["rangeText"],"The quote CFI must identify the selected range, not just the viewport")
+                XCTAssertEqual(model.locator, location, "Quoting must not navigate or change the viewport")
+            }
+            _ = try await web.evaluateJavaScript("window.Leaf.clearSelection()")
+            try await waitUntil { model.liveSelection == nil }
+            model.webView?.stopLoading();window?.isHidden = true;window = nil
+        }
     }
     func testPageTurnsAnimateAndCancelledSwipesKeepThePassage() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
@@ -889,6 +960,12 @@ final class ReaderEngineTests: XCTestCase {
         model.pdfPageChanged()
         XCTAssertEqual(model.locator, "pdf:2")
         XCTAssertEqual(model.fraction, 2.0 / 3.0, accuracy: 0.001)
+    }
+}
+
+@MainActor private final class CenteredReaderTestTap: UITapGestureRecognizer {
+    override func location(in view: UIView?) -> CGPoint {
+        CGPoint(x:(view?.bounds.width ?? 0)/2,y:(view?.bounds.height ?? 0)/2)
     }
 }
 
