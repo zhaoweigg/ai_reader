@@ -84,7 +84,7 @@ enum ReadAloudError: LocalizedError {
     @Published private(set) var error: String?
     @Published private(set) var bookmark: ReadAloudBookmark?
     @Published var isPresented = false
-    @Published var followsText = true
+    @Published var followsText: Bool { didSet { defaults.set(followsText, forKey: "audio.followsText") } }
     @Published var speed: Double { didSet { defaults.set(speed, forKey: "audio.speed"); restartVoice() } }
     @Published var voice: String { didSet { defaults.set(voice, forKey: "audio.voice"); restartVoice() } }
     var source: ((String?) async throws -> ReadAloudPassage?)?
@@ -113,6 +113,7 @@ enum ReadAloudError: LocalizedError {
         let savedSpeed = defaults.double(forKey: "audio.speed")
         speed = savedSpeed.isFinite && (0.5...2).contains(savedSpeed) ? savedSpeed : 1
         voice = defaults.string(forKey: "audio.voice") ?? ""
+        followsText = defaults.object(forKey: "audio.followsText") == nil || defaults.bool(forKey: "audio.followsText")
         if let bookmarkURL, let data = try? Data(contentsOf: bookmarkURL) {
             bookmark = try? JSONDecoder().decode(ReadAloudBookmark.self, from: data)
         }

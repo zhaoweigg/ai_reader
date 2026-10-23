@@ -60,6 +60,12 @@ enum PDFReadAloudSource {
             while offset < text.length {
                 var end = min(text.length, offset + 800)
                 if end < text.length, CFStringIsSurrogateLowCharacter(text.character(at: end)) { end -= 1 }
+                if end < text.length, end - offset > 400 {
+                    let breaks = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".!?。！？"))
+                    let boundary = text.rangeOfCharacter(from: breaks, options: .backwards,
+                        range: NSRange(location: offset + 400, length: end - offset - 400))
+                    if boundary.location != NSNotFound { end = NSMaxRange(boundary) }
+                }
                 let range = NSRange(location: offset, length: end - offset)
                 let content = text.substring(with: range)
                 let next = end == text.length ? "pdf:\(index + 1):0" : "pdf:\(index):\(end)"

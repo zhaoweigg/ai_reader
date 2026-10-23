@@ -83,6 +83,7 @@ import PDFKit
         session.speed = 1.5
         XCTAssertEqual(speaker.spoken.last, "beta gamma"); XCTAssertEqual(speaker.speeds.last, 1.5)
         session.pause(); session.voice = "test.voice"
+        session.followsText = false
         let count = speaker.spoken.count
         session.resume(); XCTAssertEqual(speaker.spoken.count, count + 1)
         session.stop()
@@ -90,6 +91,7 @@ import PDFKit
         let reopened = ReadAloudSession(bookmarkURL: directory.appendingPathComponent("bookmark.json"), defaults: defaults, speaker: reopenedSpeaker)
         reopened.source = { _ in value }
         XCTAssertEqual(reopened.bookmark?.offset, 9); XCTAssertEqual(reopened.speed, 1.5); XCTAssertEqual(reopened.voice, "test.voice")
+        XCTAssertFalse(reopened.followsText)
         reopened.resumeSaved(); try await wait { reopened.state == .playing }
         XCTAssertEqual(reopenedSpeaker.spoken.first, "beta gamma"); reopened.stop()
     }
@@ -164,5 +166,15 @@ import PDFKit
         }
         await fulfillment(of: [complete], timeout: 20)
         synthesizer.stopSpeaking(at: .immediate)
+    }
+    func testChineseSystemVoiceProducesRealAudioBuffers() async throws {
+        let synthesizer = AVSpeechSynthesizer()
+        let voice = try XCTUnwrap(AVSpeechSynthesisVoice(language: "zh-CN"), "Chinese integration requires an installed system voice")
+        let utterance = AVSpeechUtterance(string: "从选中的位置开始，继续朗读下一章。"); utterance.voice = voice
+        let complete = expectation(description: "Synthesized Chinese PCM audio"); complete.assertForOverFulfill = false
+        synthesizer.write(utterance) { buffer in
+            if let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 { complete.fulfill() }
+        }
+        await fulfillment(of: [complete], timeout: 20); synthesizer.stopSpeaking(at: .immediate)
     }
 }
