@@ -153,8 +153,7 @@ final class ReaderModel: NSObject, ObservableObject {
             catch { annotationError = error.localizedDescription; return }
         }
         hideControls()
-        pdfView?.clearSelection()
-        webView?.evaluateJavaScript("window.Leaf.clearSelection()", completionHandler: nil)
+        clearNativeSelection()
     }
     func editAnnotation(_ id: UUID) {
         guard let annotation = book?.annotations.first(where: { $0.id == id }) else { return }
