@@ -318,7 +318,15 @@ final class LeafReaderUITests: XCTestCase {
             let viewportBeforeComposing = surface.frame
             app.buttons["openReaderChat"].tap()
             let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
-            input.tap(); input.typeText("Keep this question while listening")
+            let baseDraft = "Keep this question while listening"
+            input.tap()
+            if flow == "Pages" { input.typeText(baseDraft) }
+            else {
+                XCTAssertEqual(input.value as? String, baseDraft, "The first flow's draft is intentionally restored")
+                input.typeText(" [Scroll]")
+            }
+            let expectedDraft = input.value as? String ?? ""
+            XCTAssertEqual(expectedDraft.replacingOccurrences(of: " [Scroll]", with: ""), baseDraft)
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
             XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5), "An offscreen hardware-keyboard preview is not a composing state")
             XCTAssertLessThan(app.keyboards.firstMatch.frame.minY, app.frame.maxY - 100)
@@ -326,11 +334,11 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertEqual(surface.frame.height, viewportBeforeComposing.height, accuracy: 1)
             XCTAssertTrue(pause.isHittable, "Playback must remain controllable while composing a question")
             pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
-            XCTAssertEqual(input.value as? String, "Keep this question while listening")
+            XCTAssertEqual(input.value as? String, expectedDraft)
             capture(flow + " listening controls while typing to Ask Leaf", app: app)
             pause.tap(); XCUIDevice.shared.press(.home); app.activate()
             XCTAssertTrue(pause.waitForExistence(timeout: 8)); XCTAssertEqual(pause.label, "Resume listening", "Background playback pauses and retains the cursor")
-            XCTAssertEqual(input.value as? String, "Keep this question while listening")
+            XCTAssertEqual(input.value as? String, expectedDraft)
             capture(flow + " listening paused after background", app: app)
             app.buttons["closeReaderChat"].tap()
             app.buttons["stopListening"].tap()
