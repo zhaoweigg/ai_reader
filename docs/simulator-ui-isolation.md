@@ -77,3 +77,18 @@ This runner does not acquire or release ownership. Invoke it from the coordinato
 Only the controlled isolation experiment sets `"clipboard_probe": true` and provides `test_runner_env` with `LEAF_ISOLATION_SLOT`, a shared unique `LEAF_ISOLATION_RUN`, and (for paired runs) `LEAF_ISOLATION_BARRIER`. Ordinary Copy tests leave this option false; their clipboard is not seeded or required to remain unchanged. The clipboard probe restores text only and should run on disposable test simulators, not a clipboard holding non-text data.
 
 Run the host-only lifecycle regressions with `python3 -m unittest discover -s scripts -p test_simulator_job.py -v`. These do not use a simulator slot. The app-hosted iOS unit-test target still requires one; extracting portable logic into a Mac target is separate work.
+
+## Dashboard job runtime
+
+The read-only dashboard shows elapsed wall time for each xcodebuild job. It does not measure individual test cases or CPU time. Assignment refreshes remain every two seconds; clocks tick locally every second even when the registry has not changed. Only the coordinator persists timing metadata in the canonical registry, after matching the job's lease, head and device to the current assignment:
+
+- On verified START, copy the job metadata's actual `started_at` to the slot. Use ISO UTC, including seconds and a `Z` or `+00:00` suffix; fractional seconds are accepted. Do not use `assigned_at` or `start_acknowledged_at`.
+- On actual completion, copy `finished_at` and the metadata's `seconds` as numeric, finite, nonnegative `elapsed_seconds`. A slot with `finished_at` freezes its runtime even while still `testing`, `finalizing` or `completed`. The saved elapsed value is preferred because it comes from the runner's monotonic clock; valid start/finish timestamps provide a fallback if that value is absent or invalid.
+- When releasing the slot, preserve `last_run={lease_id,started_at,finished_at,elapsed_seconds}` and set its state to `available` (or `released`). The dashboard labels this frozen value **Last job runtime**. Do not put an unfinished run in `last_run`.
+- On a new lease, clear the previous lease's active timing fields. A reserved/assigned slot always shows **Not started**, never a ticking clock or its previous run. `last_run` is displayed only for available/released slots.
+
+Testing slots without a valid actual start show a dash and **Start time unavailable**. A future start, reversed finish/start, malformed timestamp or unfinished historical record never produces a negative or `NaN` clock. A missing completion timestamp does not keep a finalizing/completed run ticking. Completed times are floored to whole seconds in `HH:MM:SS`, with hours allowed to exceed 23.
+
+The server continues to expose only operational slot/queue/agent fields. There is no timing write endpoint. A transient registry read failure leaves the last received assignments visible with a disconnected notice; any ticking value then reflects that last reported testing state until the coordinator's next successful update. Do not infer process liveness from a timer alone.
+
+Run dashboard regressions with `node --test scripts/test_coordination_dashboard.js`. They use a host DOM harness and fake clock; no simulator slot is needed. The dashboard HTML is read by the existing server on every page request, so after merging and safely fast-forwarding the coordinator's clean main checkout, reload the browser tab. The Python server needs no restart for this change.
