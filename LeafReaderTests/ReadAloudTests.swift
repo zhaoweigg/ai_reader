@@ -3,7 +3,7 @@ import AVFoundation
 import PDFKit
 @testable import LeafReader
 
-@MainActor private final class RecordingSpeaker: ReadAloudSpeaking {
+@MainActor final class RecordingSpeaker: ReadAloudSpeaking {
     var finished: (() -> Void)?
     var progressed: ((NSRange) -> Void)?
     var spoken: [String] = []

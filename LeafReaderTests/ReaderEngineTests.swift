@@ -91,7 +91,11 @@ final class ReaderEngineTests: XCTestCase {
             try await assertOpened(model, contains: "attention")
             let result = try await model.webView?.callAsyncJavaScript("""
                 const view=document.querySelector('foliate-view');
-                const before=view.lastLocation.cfi, visited=new Set(), cursors=new Set();
+                const before=view.lastLocation.cfi, visited=new Set(), cursors=new Set(), parsed=[];
+                for(const [index,section] of view.book.sections.entries()) {
+                    const create=section.createDocument;
+                    if(create)section.createDocument=()=>{parsed[index]=(parsed[index]??0)+1;return create();};
+                }
                 let locator='section:0', count=0, longest=0, maxDocuments=0, ended=false;
                 for (;count<1000;++count) {
                     const chunk=await window.Leaf.readAloudChunk({locator});
@@ -101,7 +105,7 @@ final class ReaderEngineTests: XCTestCase {
                     maxDocuments=Math.max(maxDocuments,view.renderer.getContents().length);
                     locator=chunk.nextLocator;
                 }
-                return {ended,count,longest,maxDocuments,visited:[...visited],sections:view.book.sections.length,
+                return {ended,count,longest,maxDocuments,parsed:parsed.map(x=>x??0),visited:[...visited],sections:view.book.sections.length,
                     before,after:view.lastLocation.cfi};
                 """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
             let value = try XCTUnwrap(result)
@@ -110,8 +114,49 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertLessThanOrEqual(value["longest"] as? Int ?? 9999, 800)
             XCTAssertLessThanOrEqual(value["maxDocuments"] as? Int ?? 99, scrolling ? 3 : 1)
             XCTAssertEqual(value["before"] as? String, value["after"] as? String)
+            XCTAssertTrue((value["parsed"] as? [Int] ?? []).allSatisfy { $0 <= 1 }, "A chapter must not be reparsed for each spoken paragraph: \(value)")
             let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: value), uniformTypeIdentifier: "public.json")
             attachment.name = "Read aloud lazy traversal scrolling=\(scrolling)"; attachment.lifetime = .keepAlways; add(attachment)
+        }
+    }
+    func testReadAloudSessionFollowsAcrossRealChapterBoundariesAndRestoresSavedCursor() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let speaker = RecordingSpeaker()
+            let bookmarkURL = try XCTUnwrap(root).appendingPathComponent("speech-\(scrolling).json")
+            let session = ReadAloudSession(bookmarkURL: bookmarkURL, speaker: speaker)
+            session.source = { [weak model] locator in try await model?.readAloudPassage(at: locator) }
+            session.reveal = { [weak model] locator in await model?.revealReadAloud(at: locator) }
+            let oldChapter = model.chapterTitle
+            session.start(at: model.locator)
+            try await waitUntil { session.state == .playing }
+            var reached = false
+            for _ in 0..<80 {
+                let prior = session.passage?.locator
+                speaker.finished?()
+                try await waitUntil { session.passage?.locator != prior || session.state == .finished || session.state == .failed }
+                if model.chapterTitle != oldChapter { reached = true; break }
+            }
+            XCTAssertTrue(reached, "Spoken passages must cross an actual chapter boundary in scrolling=\(scrolling)")
+            XCTAssertNil(session.error)
+            session.pause()
+            let saved = try XCTUnwrap(session.bookmark)
+            session.stop()
+            let reopened = ReadAloudSession(bookmarkURL: bookmarkURL, speaker: RecordingSpeaker())
+            reopened.source = session.source; reopened.reveal = session.reveal
+            reopened.resumeSaved(); try await waitUntil { reopened.state == .playing }
+            XCTAssertEqual(reopened.passage?.locator, saved.locator)
+            let encoded = String(decoding: try JSONEncoder().encode(saved.locator), as: UTF8.self)
+            // Source restoration is exact even while native reveal finishes asynchronously.
+            let restored = try await model.readAloudPassage(at: saved.locator)
+            XCTAssertEqual(restored?.text, reopened.passage?.text)
+            try await model.revealReadAloud(at: saved.locator)
+            let visible = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
+            XCTAssertEqual(visible, true)
+            reopened.stop()
         }
     }
     func testReadAloudPreservesInlineWordsChineseAndEmojiAcrossChunkBoundariesAndReflow() async throws {
