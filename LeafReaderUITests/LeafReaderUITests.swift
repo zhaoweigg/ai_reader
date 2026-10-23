@@ -590,6 +590,11 @@ final class LeafReaderUITests: XCTestCase {
             } else { app.buttons["featuredBook"].tap() }
             waitForBook(app)
         }
+        func hideKeyboardAndWait() {
+            app.buttons["Hide keyboard"].tap()
+            expectation(for:NSPredicate(format:"exists == false"),evaluatedWith:app.keyboards.firstMatch)
+            waitForExpectations(timeout:5)
+        }
         openBook(); showReaderControls(app)
         if flow == "PDF" { app.buttons["nextPage"].tap() }
         else {
@@ -647,12 +652,13 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists, "Expanded typing can show the conversation")
         capture(flow + " expanded chat above keyboard", app: app)
         let typingHeight = panel.frame.height
-        app.buttons["Hide keyboard"].tap()
+        hideKeyboardAndWait()
         XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
         input.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout:5))
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
-        app.buttons["Hide keyboard"].tap()
+        hideKeyboardAndWait()
         XCUIDevice.shared.orientation = .landscapeLeft
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
@@ -666,7 +672,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
         XCTAssertTrue(input.isHittable)
         capture(flow + " landscape resize with keyboard", app: app)
-        app.buttons["Hide keyboard"].tap()
+        hideKeyboardAndWait()
         XCUIDevice.shared.orientation = .portrait
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
         waitForExpectations(timeout: 5)

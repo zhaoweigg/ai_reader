@@ -1232,8 +1232,12 @@ export class Paginator extends HTMLElement {
         if (rects) {
             // when the start of the range is immediately after a hyphen in the
             // previous column, there is an extra zero width rect in that column
-            const rect = Array.from(rects)
-                .find(r => r.width > 0 && r.height > 0) || rects[0]
+            // A scrolled CFI can start at a zero-width line break. Its line
+            // still needs to remain visible; only Pages skips previous-column
+            // hyphen/caret rectangles when selecting the destination column.
+            const rect = Array.from(rects).find(r => this.scrolled
+                ? (this.#vertical ? r.width > 0 : r.height > 0)
+                : r.width > 0 && r.height > 0) || rects[0]
             if (!rect) return
             await this.#scrollToRect(rect, reason)
             return

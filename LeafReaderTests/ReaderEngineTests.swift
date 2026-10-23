@@ -136,6 +136,42 @@ final class ReaderEngineTests: XCTestCase {
             reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
         }
     }
+    func testScrollRestoresCFIStartingAtAZeroWidthLineBreak() async throws {
+        let (book,url)=try prepare("The Art of Noticing.epub",format:.epub)
+        var prefs=preferences;prefs.scrolling=true
+        let model=try show(book,url:url,readerPreferences:prefs)
+        try await assertOpened(model,contains:"attention")
+        let result=try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view');await view.goTo(1);
+            const doc=view.renderer.getContents()[0].doc,walker=doc.createTreeWalker(doc.body,NodeFilter.SHOW_TEXT);
+            for(let node=walker.nextNode();node;node=walker.nextNode())for(let offset=1;offset<node.length-1;offset++){
+                const point=doc.createRange();point.setStart(node,offset);point.setEnd(node,offset+1);
+                const rect=point.getClientRects()[0];
+                if(!rect||rect.width!==0||rect.height<=0)continue;
+                const next=doc.createRange();next.setStart(node,offset+1);next.setEnd(node,offset+2);
+                const following=next.getClientRects()[0];
+                if(!following||following.width<=0||following.top<rect.top+rect.height/2)continue;
+                point.setEnd(node,Math.min(node.length,offset+60));
+                return {locator:view.getCFI(1,point),text:point.toString()};
+            }
+            throw new Error('Fixture has no zero-width line-break CFI');
+            """,arguments:[:],in:nil,contentWorld:.page)
+        let state=try XCTUnwrap(result as? [String:String]),locator=try XCTUnwrap(state["locator"])
+        model.webView?.stopLoading();window?.isHidden=true;window=nil
+        let reopened=try show(book,url:url,locator:locator,readerPreferences:prefs)
+        try await waitUntil {reopened.isReady||reopened.error != nil}
+        XCTAssertNil(reopened.error)
+        let encoded=String(decoding:try JSONEncoder().encode(locator),as:UTF8.self)
+        let restored=try await reopened.webView?.evaluateJavaScript("""
+            (()=>{const view=document.querySelector('foliate-view'),target=view.resolveCFI(\(encoded)),doc=view.renderer.getContents().find(c=>c.index===target.index).doc,range=target.anchor(doc),rect=range.getClientRects()[0];
+            return {visible:window.Leaf.isLocationVisible(\(encoded)),text:range.toString(),width:rect.width,top:rect.top+doc.defaultView.frameElement.getBoundingClientRect().top};})()
+            """) as? [String:Any]
+        XCTAssertEqual(restored?["visible"] as? Bool,true,"\(restored ?? [:])")
+        XCTAssertEqual(restored?["text"] as? String,state["text"])
+        XCTAssertEqual(restored?["width"] as? Double,0)
+        XCTAssertGreaterThanOrEqual(restored?["top"] as? Double ?? -999,0)
+    }
+
     func testHeadingRangeCFIRestoresInBothFlows() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         // The first visible range starts at an element boundary, not a text offset.
