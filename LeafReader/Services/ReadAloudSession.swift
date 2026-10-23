@@ -169,8 +169,9 @@ extension ReadAloudSpeaking {
         let savedSpeed = defaults.double(forKey: "audio.speed")
         speed = savedSpeed.isFinite && (0.5...2).contains(savedSpeed) ? savedSpeed : 1
         let savedVoice = defaults.string(forKey: "audio.voice") ?? ""
-        voice = AppleVoiceCatalog.installed.contains(where: { $0.id == savedVoice }) ? savedVoice : ""
-        if savedVoice != voice { defaults.set(voice, forKey: "audio.voice") }
+        let eligibleVoice = AppleVoiceCatalog.installed.contains(where: { $0.id == savedVoice }) ? savedVoice : ""
+        voice = eligibleVoice
+        if savedVoice != eligibleVoice { defaults.set(eligibleVoice, forKey: "audio.voice") }
         engine = ReadAloudEngine(rawValue: defaults.string(forKey: "audio.engine") ?? "") ?? .kokoro
         kokoroVoice = defaults.string(forKey: "audio.kokoroVoice") ?? ""
         followsText = defaults.object(forKey: "audio.followsText") == nil || defaults.bool(forKey: "audio.followsText")
