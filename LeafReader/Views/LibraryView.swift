@@ -19,7 +19,7 @@ struct LibraryView: View {
     @State private var chatButtonIsMoving = false
     @State private var choosingConversation = false
     @State private var viewportHeight: CGFloat = 0
-    @AppStorage("library.chatConversation") private var conversation = ""
+    @State private var conversation = "general"
 
     private var visible: [Book] {
         library.books.filter { book in
@@ -172,8 +172,7 @@ struct LibraryView: View {
                         .accessibilityAction { chatButtonIsMoving = false }
                 }
                 ReaderChatLauncher(isMoving: $chatButtonIsMoving, location: .library) {
-                    let book = conversation.isEmpty ? featured : library.books.first { $0.fingerprint == conversation }
-                    openChat(book)
+                    openChat(nil)
                 }
             } else if let chat {
                 LibraryChatOverlay(session: chat, book: chatBook, fullHeight: viewportHeight,
