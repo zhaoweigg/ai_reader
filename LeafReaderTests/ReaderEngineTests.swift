@@ -680,7 +680,10 @@ final class ReaderEngineTests: XCTestCase {
                     return Math.abs(parseFloat(root.fontSize)-size)<0.1 && root.colorScheme===theme.colorScheme;
                 });
                 rows.push({scrolling,size,font,margin,valid,visible:window.Leaf.isLocationVisible(saved),documents:contents.length,
-                    sameText:view.resolveNavigation(saved).anchor(doc).toString()===text});
+                    sameText:view.resolveNavigation(saved).anchor(doc).toString()===text,
+                    actual:contents.map(({index,doc})=>({index,size:doc.defaultView.getComputedStyle(doc.documentElement).fontSize,
+                        scheme:doc.defaultView.getComputedStyle(doc.documentElement).colorScheme,
+                        styles:[...doc.querySelectorAll('style')].map(s=>({namespace:s.namespaceURI,applied:!!s.sheet}))}))});
             }
             return rows;
             """, arguments:["base":prefs.payload,"themes":[ReadingTheme.day,ReadingTheme.paper,ReadingTheme.night].map { ReaderPreferences(fontSize:19,lineHeight:1.65,font:"Georgia",theme:$0,scrolling:true).payload }],in:nil,contentWorld:.page)

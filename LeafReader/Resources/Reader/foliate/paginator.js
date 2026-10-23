@@ -857,7 +857,7 @@ export class Paginator extends HTMLElement {
                 if (record.cancelled || epoch !== this.#scrollEpoch) return
                 let vertical = false
                 await record.view.load(src, doc => {
-                    const before = doc.createElement('style'), after = doc.createElement('style')
+                    const before = doc.createElementNS('http://www.w3.org/1999/xhtml', 'style'), after = doc.createElementNS('http://www.w3.org/1999/xhtml', 'style')
                     doc.head.prepend(before); doc.head.append(after)
                     this.#styleMap.set(doc, [before, after])
                     this.#applyDocumentStyles(doc)
@@ -1253,9 +1253,9 @@ export class Paginator extends HTMLElement {
             const view = this.#createView()
             const afterLoad = doc => {
                 if (doc.head) {
-                    const $styleBefore = doc.createElement('style')
+                    const $styleBefore = doc.createElementNS('http://www.w3.org/1999/xhtml', 'style')
                     doc.head.prepend($styleBefore)
-                    const $style = doc.createElement('style')
+                    const $style = doc.createElementNS('http://www.w3.org/1999/xhtml', 'style')
                     doc.head.append($style)
                     this.#styleMap.set(doc, [$styleBefore, $style])
                 }
