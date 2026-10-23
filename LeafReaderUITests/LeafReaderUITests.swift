@@ -315,13 +315,23 @@ final class LeafReaderUITests: XCTestCase {
             capture(flow + " listening landscape", app: app)
             XCUIDevice.shared.orientation = .portrait
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            let viewportBeforeComposing = surface.frame
             app.buttons["openReaderChat"].tap()
             let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
             input.tap(); input.typeText("Keep this question while listening")
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5), "An offscreen hardware-keyboard preview is not a composing state")
+            XCTAssertLessThan(app.keyboards.firstMatch.frame.minY, app.frame.maxY - 100)
+            XCTAssertEqual(surface.frame.width, viewportBeforeComposing.width, accuracy: 1)
+            XCTAssertEqual(surface.frame.height, viewportBeforeComposing.height, accuracy: 1)
             XCTAssertTrue(pause.isHittable, "Playback must remain controllable while composing a question")
             pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+            XCTAssertEqual(input.value as? String, "Keep this question while listening")
             capture(flow + " listening controls while typing to Ask Leaf", app: app)
+            pause.tap(); XCUIDevice.shared.press(.home); app.activate()
+            XCTAssertTrue(pause.waitForExistence(timeout: 8)); XCTAssertEqual(pause.label, "Resume listening", "Background playback pauses and retains the cursor")
+            XCTAssertEqual(input.value as? String, "Keep this question while listening")
+            capture(flow + " listening paused after background", app: app)
             app.buttons["closeReaderChat"].tap()
             app.buttons["stopListening"].tap()
             XCTAssertFalse(app.buttons["audioPlayPause"].exists)
