@@ -544,6 +544,10 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " selection automatically quoted with native menu",app:app)
         input.tap();input.typeText(" In this passage.")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
+        let composedDraft = input.value as? String ?? ""
+        XCTAssertTrue(composedDraft.contains(" In this passage."))
+        XCTAssertEqual(composedDraft.replacingOccurrences(of:" In this passage.",with:""),"Why does the author say this?",
+                       "Typing at the tapped caret must preserve the original question")
         XCTAssertEqual(passage.label,quote,"Keyboard focus must keep the attached selection")
         XCTAssertEqual(surface.frame.width,originalFrame.width,accuracy:2)
         XCTAssertEqual(surface.frame.height,originalFrame.height,accuracy:2)
@@ -566,7 +570,7 @@ final class LeafReaderUITests: XCTestCase {
         else { app.buttons["featuredBook"].tap() }
         waitForBook(app);app.buttons["openReaderChat"].tap()
         XCTAssertEqual(passage.label,quote)
-        XCTAssertEqual(input.value as? String,"Why does the author say this? In this passage.")
+        XCTAssertEqual(input.value as? String,composedDraft)
         capture(flow + " automatic quote and draft restored",app:app)
         app.buttons["removeChatSelection"].tap()
         XCTAssertFalse(passage.exists)
