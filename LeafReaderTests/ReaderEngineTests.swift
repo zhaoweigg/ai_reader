@@ -116,7 +116,22 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertNil(reopened.error)
             let encoded = String(decoding: try JSONEncoder().encode(locator), as: UTF8.self)
             let visible = try await reopened.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
-            XCTAssertEqual(visible, true, "scrolling=\(scrolling)")
+            if visible != true {
+                let diagnostic=try await reopened.webView?.evaluateJavaScript("""
+                    (()=>{const view=document.querySelector('foliate-view'),r=view.renderer,target=view.resolveCFI(\(encoded)),content=r.getContents().find(c=>c.index===target.index),doc=content?.doc,range=doc&&target.anchor(doc),current=view.lastLocation?.range;
+                    const rects=value=>[...(value?.getClientRects()??[])].slice(0,4).map(({x,y,width,height})=>({x,y,width,height}));
+                    const point=range?.cloneRange();point?.collapse(true);
+                    if(point?.startContainer.nodeType===3&&point.startOffset<point.startContainer.length)point.setEnd(point.startContainer,point.startOffset+1);
+                    const frame=doc?.defaultView.frameElement,container=frame?.parentElement.parentElement;
+                    return JSON.stringify({saved:\(encoded),current:view.lastLocation?.cfi,index:r.getContents()[0]?.index,targetIndex:target.index,top:container?.scrollTop,frameY:frame?.getBoundingClientRect().top,
+                        margin:r.getAttribute('margin'),font:doc&&doc.defaultView.getComputedStyle(doc.documentElement).fontSize,
+                        savedStart:range&&{node:range.startContainer.nodeName,offset:range.startOffset},currentStart:current&&{node:current.startContainer.nodeName,offset:current.startOffset},
+                        savedRects:rects(range),pointRects:rects(point),currentRects:rects(current)});})()
+                    """) as? String
+                let attachment=XCTAttachment(string:diagnostic ?? "No reopened geometry")
+                attachment.name="Reopened CFI failure geometry scrolling=\(scrolling)";attachment.lifetime = .keepAlways;add(attachment)
+            }
+            XCTAssertEqual(visible, true, "scrolling=\(scrolling), locator=\(locator)")
             XCTAssertTrue(store?.book(book.id)?.bookmarks.contains { $0.locator == locator } == true)
             reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
         }
