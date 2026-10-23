@@ -72,7 +72,7 @@ The coordinator grants the lease separately. Then a worker can run `python3 scri
 }
 ```
 
-This runner does not acquire or release ownership. It guards the lease, snapshots the keyboard key before mutation, starts one pinned xcodebuild process group, waits for actual process/runner exit, restores owned preferences and writes evidence. The coordinator must independently acknowledge START/RELEASE.
+This runner does not acquire or release ownership. Invoke it from the coordinator-managed main checkout: it uses its sibling canonical `simulator_lease.py` to validate the target worktree. Do not copy or replace a tracked guard inside a frozen feature checkout. It guards the lease, snapshots the keyboard key before mutation, starts one pinned xcodebuild process group, waits for actual process/runner exit, restores owned preferences and writes evidence. The coordinator must independently acknowledge START/RELEASE.
 
 Only the controlled isolation experiment sets `"clipboard_probe": true` and provides `test_runner_env` with `LEAF_ISOLATION_SLOT`, a shared unique `LEAF_ISOLATION_RUN`, and (for paired runs) `LEAF_ISOLATION_BARRIER`. Ordinary Copy tests leave this option false; their clipboard is not seeded or required to remain unchanged. The clipboard probe restores text only and should run on disposable test simulators, not a clipboard holding non-text data.
 
