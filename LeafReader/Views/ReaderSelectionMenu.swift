@@ -146,6 +146,7 @@ private struct ReaderSelectionAction {
 }
 
 private final class ReaderSelectionWindow: UIWindow {
+    override var canBecomeKey: Bool { false }
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let root = rootViewController?.view else { return nil }
         return root.hitTest(convert(point, to: root), with: event)
