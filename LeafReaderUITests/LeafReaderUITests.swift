@@ -684,7 +684,26 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(passage.exists,"An old native selection must not reattach after explicit removal")
     }
 
+    @MainActor private func assertCompactChatHeader(_ app: XCUIApplication) {
+        let header = app.descendants(matching: .any)["readerChatHeader"].firstMatch
+        let handle = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+        let close = app.buttons["closeReaderChat"]
+        // Accessibility's screen-coordinate conversion can round a 44 pt target down.
+        let minimumTarget: CGFloat = 44 - 0.01
+        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        XCTAssertEqual(header.frame.height, 44, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(close.frame.width, minimumTarget)
+        XCTAssertGreaterThanOrEqual(close.frame.height, minimumTarget)
+        XCTAssertGreaterThanOrEqual(header.frame.minY, handle.frame.maxY - 1, "Resize and dismiss gesture regions must stay separate")
+        XCTAssertLessThanOrEqual(header.frame.maxY - handle.frame.minY, 57, "The grabber and title row must leave room for the conversation")
+        if app.buttons["chatOptions"].exists {
+            XCTAssertGreaterThanOrEqual(app.buttons["chatOptions"].frame.width, minimumTarget)
+            XCTAssertGreaterThanOrEqual(app.buttons["chatOptions"].frame.height, minimumTarget)
+        }
+    }
+
     @MainActor private func verifyChatResize(flow: String) {
+        XCUIDevice.shared.orientation = .portrait
         let app = launchApp()
         defer { XCUIDevice.shared.orientation = .portrait }
         func openBook() {
@@ -725,6 +744,7 @@ final class LeafReaderUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
         waitForExpectations(timeout: 5)
         let panel = app.otherElements["readerChatPanel"]
+        assertCompactChatHeader(app)
         func resize(_ delta: CGFloat) {
             let edge = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
             let start = edge.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -737,15 +757,20 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(surface.frame.height, bookFrame.height, accuracy: 2, "Keep the book viewport unchanged")
         XCTAssertEqual(surface.frame.width, bookFrame.width, accuracy: 2)
         XCTAssertEqual(app.buttons["toggleChatQuote"].value as? String, selected)
+        assertCompactChatHeader(app)
         capture(flow + " expanded chat with sent quote", app: app)
         resize(240)
         XCTAssertLessThan(panel.frame.height, initial + 20)
         // Accessibility reports the content bounds, excluding 8 pt of padding at each edge.
         XCTAssertGreaterThanOrEqual(panel.frame.height, 183)
+        assertCompactChatHeader(app)
         capture(flow + " minimum resized chat", app: app)
         resize(-160)
         let readingHeight = panel.frame.height
-        app.buttons["closeReaderChat"].tap(); app.buttons["openReaderChat"].tap()
+        // Exercise the invisible edge of the target, outside the small X glyph.
+        app.buttons["closeReaderChat"].coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.1)).tap()
+        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+        app.buttons["openReaderChat"].tap()
         XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.typeText("Keep my resize draft")
@@ -756,6 +781,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
         XCTAssertEqual(input.value as? String, "Keep my resize draft")
         XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists, "Expanded typing can show the conversation")
+        assertCompactChatHeader(app)
         capture(flow + " expanded chat above keyboard", app: app)
         let typingHeight = panel.frame.height
         hideKeyboardAndWait()
@@ -771,12 +797,14 @@ final class LeafReaderUITests: XCTestCase {
         resize(-120)
         XCTAssertGreaterThanOrEqual(panel.frame.height, 200)
         XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists)
+        assertCompactChatHeader(app)
         capture(flow + " landscape expanded chat history", app: app)
         input.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         resize(-50)
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
         XCTAssertTrue(input.isHittable)
+        assertCompactChatHeader(app)
         capture(flow + " landscape resize with keyboard", app: app)
         hideKeyboardAndWait()
         XCUIDevice.shared.orientation = .portrait
@@ -788,6 +816,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(panel.frame.height, savedHeight, accuracy: 4)
         XCTAssertEqual(input.value as? String, "Keep my resize draft")
         XCTAssertEqual(app.buttons["toggleChatQuote"].value as? String, selected)
+        assertCompactChatHeader(app)
         capture(flow + " resized chat restored after relaunch", app: app)
     }
 

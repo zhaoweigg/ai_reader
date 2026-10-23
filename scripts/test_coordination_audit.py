@@ -98,6 +98,13 @@ class AuditTests(unittest.TestCase):
             self.registry["slots"] = {"A": {"state": state, "owner_thread": owner}}
             self.assertEqual(len(self.run_audit()["actions"]), count)
 
+    def test_waiting_for_a_build_is_not_an_executable_handoff(self):
+        self.registry["phone"]["ready_builds"] = [self.artifact()]
+        self.registry["slots"] = {"A": {"state": "available", "owner_thread": None}}
+        self.registry["slot_requests"] = [{"requested_slot": "A", "owner_thread": "worker",
+                                            "state": "waiting_for_ready_head"}]
+        self.assertEqual(self.run_audit()["actions"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
