@@ -958,7 +958,7 @@ export class Paginator extends HTMLElement {
             this.#header.replaceChildren()
             this.#footer.replaceChildren()
 
-            return this.#scrollLayout = { flow, margin, gap, columnWidth, width, height }
+            return this.#scrollLayout = { flow, margin, gap, columnWidth }
         }
 
         const divisor = Math.min(maxColumnCount, Math.ceil(size / maxInlineSize))
