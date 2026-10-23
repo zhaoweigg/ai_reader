@@ -88,9 +88,12 @@ final class ReaderEngineTests: XCTestCase {
             let result = try await model.webView?.callAsyncJavaScript("""
                 const view = document.querySelector('foliate-view'), r = view.renderer;
                 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-                const trace=[];
+                const trace=[],writes=[];
+                let containerHooked=false;
                 const snapshot=()=>{const contents=r.getContents(),doc=contents[0]?.doc,container=doc?.defaultView?.frameElement?.parentElement?.parentElement;return {active:contents[0]?.index,top:container?.scrollTop,max:container?container.scrollHeight-container.clientHeight:0,endSpace:container?.style.getPropertyValue('--leaf-book-end-space'),frames:contents.map(x=>({index:x.index,y:x.doc?.defaultView?.frameElement?.parentElement?.getBoundingClientRect().top,height:x.doc?.defaultView?.frameElement?.parentElement?.getBoundingClientRect().height}))};};
-                r.addEventListener('relocate',({detail})=>{trace.push({reason:detail.reason,...snapshot()});if(trace.length>30)trace.shift();});
+                r.addEventListener('relocate',({detail})=>{trace.push({reason:detail.reason,...snapshot()});if(trace.length>30)trace.shift();
+                    if(!containerHooked && r.getContents()[0]?.doc){containerHooked=true;const c=r.getContents()[0].doc.defaultView.frameElement.parentElement.parentElement,d=Object.getOwnPropertyDescriptor(Element.prototype,'scrollTop');Object.defineProperty(c,'scrollTop',{get(){return d.get.call(this)},set(value){writes.push({value,before:d.get.call(this),stack:new Error().stack});if(writes.length>35)writes.shift();d.set.call(this,value);}});}
+                });
                 await view.goTo(1); r.scrollToAnchor(1); await sleep(100); await r.next(); await sleep(100);
                 const forward = r.getContents()[0].index;
                 r.scrollToAnchor(0); await sleep(100); await r.prev(); await sleep(100);
@@ -101,7 +104,7 @@ final class ReaderEngineTests: XCTestCase {
                 await view.goTo(last); r.scrollToAnchor(1); await sleep(100); await r.next();
                 const end = r.getContents()[0].index,endState=snapshot();
                 await view.goTo(1); r.scrollToAnchor(0.35); await sleep(100);
-                return {forward,backward,beginning,end,last,documents:r.getContents().length,endState,trace};
+                return {forward,backward,beginning,end,last,documents:r.getContents().length,endState,trace,writes};
                 """, arguments: [:], in: nil, contentWorld: .page)
             let metrics = try XCTUnwrap(result as? [String: Any])
             let attachment=XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json");attachment.name="Boundary trace scrolling=\(scrolling)";attachment.lifetime = .keepAlways;add(attachment)
