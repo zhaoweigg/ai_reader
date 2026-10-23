@@ -573,29 +573,42 @@ final class LeafReaderUITests: XCTestCase {
         let form = app.descendants(matching: .any)["listeningForm"].firstMatch
         XCTAssertTrue(form.waitForExistence(timeout: 5), "Listening form is reachable in landscape")
         func reveal(_ element: XCUIElement, _ label: String, up: Bool = true) {
-            // Slow swipes in the needed direction. Press-then-drag gestures never
-            // scrolled this Form in the landscape sheet (every row kept its frame,
-            // from the gutter and from a cell alike) while swipes do; a default
-            // velocity flick overshoots the 402 pt sheet. Swipe from an inert text
-            // inside the frame so no row receives the touch (a press on the engine
-            // picker switched it back to the iPhone voice), with the form as the
-            // fallback. A row the Form has recycled is absent from the tree: scroll
-            // in the intended direction (`up` = the row lies further down) until it
-            // appears.
-            let inert = [form.staticTexts["Voice and speed"], form.staticTexts["Voice pack not downloaded"], form.staticTexts["Speed"],
-                         form.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Select any text")).firstMatch]
-            for _ in 0..<8 {
+            // Gesture evidence from the leased runs on this Form in the 874x402
+            // sheet: press(0.1 s)-then-drag moved the content 0 pt, from the gutter
+            // and from a cell alike; swipes on the whole form scroll it to either
+            // end (default and slow velocity; the sheet is short, so an end state
+            // can leave a row partly under the bar); a swipe on the 49x24 "Speed"
+            // label moved it 0 pt. So: coarse form swipes toward the row while it is
+            // absent or outside the frame, then short zero-hold drags on the form
+            // for the final fit. Every gesture is checked for effect and a gesture
+            // that moved nothing is swapped for the other kind; the sequence is
+            // attached to the result. `up` = the row lies further down the form.
+            var useDrag = false, trace = ""
+            for step in 0..<10 {
+                let before = element.exists ? element.frame : .null
                 let scrollDown: Bool
                 if element.exists {
-                    let target = element.frame
-                    if frame.contains(target) { break }
-                    scrollDown = target.minY >= frame.minY
+                    if frame.contains(before) { break }
+                    scrollDown = before.minY >= frame.minY
+                    if before.intersects(frame) { useDrag = true }
                 } else {
-                    scrollDown = up
+                    scrollDown = up; useDrag = false
                 }
-                let handle = inert.first { $0.exists && frame.insetBy(dx: 0, dy: 24).contains($0.frame) } ?? form
-                if scrollDown { handle.swipeUp(velocity: .slow) } else { handle.swipeDown(velocity: .slow) }
+                if useDrag {
+                    let from = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.6 : 0.4))
+                    let to = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.4 : 0.6))
+                    from.press(forDuration: 0, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0)
+                } else if scrollDown {
+                    form.swipeUp(velocity: .slow)
+                } else {
+                    form.swipeDown(velocity: .slow)
+                }
+                let after = element.exists ? element.frame : .null
+                trace += "\(step): \(useDrag ? "drag" : "swipe") \(scrollDown ? "content up" : "content down") \(before) -> \(after)\n"
+                if element.exists, after == before { useDrag.toggle() }
             }
+            let gestures = XCTAttachment(string: trace.isEmpty ? "no gesture needed" : trace)
+            gestures.name = label + " scroll gestures"; gestures.lifetime = .keepAlways; add(gestures)
             XCTAssertTrue(element.exists, label)
             XCTAssertTrue(frame.contains(element.frame), label + " inside the landscape frame: \(element.frame) in \(frame)")
             XCTAssertTrue(element.isHittable, label + " hittable in landscape")
