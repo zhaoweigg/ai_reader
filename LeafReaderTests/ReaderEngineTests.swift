@@ -489,11 +489,15 @@ final class ReaderEngineTests: XCTestCase {
             let metrics = try await waitForLayout(model, preferences: value)
             XCTAssertEqual(metrics["scrolling"],scrolling ? 1 : 0)
             let location = model.locator
-            for index in [0,1] {
+            for index in 0..<4 {
                 let selected = try await web.evaluateJavaScript("""
                     (() => {
                         const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
-                        const range = doc.createRange(); range.selectNodeContents(doc.querySelectorAll('p')[\(index)]);
+                        const paragraphs = doc.querySelectorAll('p');
+                        const range = doc.createRange();
+                        if (\(index) === 1) { range.setStart(paragraphs[0].firstChild,5); range.setEnd(paragraphs[0].firstChild,20); }
+                        else if (\(index) === 3) { range.setStart(paragraphs[0],0); range.setEnd(paragraphs[1].firstChild,12); }
+                        else range.selectNodeContents(paragraphs[\(index) === 2 ? 1 : 0]);
                         const selection = doc.getSelection(); selection.removeAllRanges(); selection.addRange(range);
                         return selection.toString();
                     })()
