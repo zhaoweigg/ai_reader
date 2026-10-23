@@ -159,9 +159,11 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
     func testPersistedBrowserCookiesSurviveNewBrowserInstance() async throws {
         let id = UUID(), data = WKWebsiteDataStore(forIdentifier: id)
         addTeardownBlock {
-            await withCheckedContinuation { continuation in
-                WKWebsiteDataStore.remove(forIdentifier: id) { _ in continuation.resume() }
-            }
+            await Task { @MainActor in
+                await withCheckedContinuation { continuation in
+                    WKWebsiteDataStore.remove(forIdentifier: id) { _ in continuation.resume() }
+                }
+            }.value
         }
         let server = try await server { request in
             .init(headers: ["Set-Cookie": "site_access=persistent; Path=/; Max-Age=3600; HttpOnly"])

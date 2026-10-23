@@ -6,6 +6,7 @@ private enum LibrarySort: String, CaseIterable { case recent = "Recently opened"
 struct LibraryView: View {
     @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var library: LibraryStore
+    @Environment(\.scenePhase) private var scenePhase
     let onImport: () -> Void
     let onOpen: (UUID) -> Void
     @State private var query = ""
@@ -13,6 +14,12 @@ struct LibraryView: View {
     @State private var sort: LibrarySort = .recent
     @State private var format: BookFormat?
     @State private var deleting: Book?
+    @State private var chat: ReaderChatSession?
+    @State private var chatBook: Book?
+    @State private var chatButtonIsMoving = false
+    @State private var choosingConversation = false
+    @State private var viewportHeight: CGFloat = 0
+    @AppStorage("library.chatConversation") private var conversation = ""
 
     private var visible: [Book] {
         library.books.filter { book in
@@ -88,7 +95,7 @@ struct LibraryView: View {
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 145, maximum: 195), spacing: 24, alignment: .top)], alignment: .leading, spacing: 28) {
                             ForEach(visible) { book in
-                                Button { onOpen(book.id) } label: {
+                                Button { openBook(book.id) } label: {
                                     VStack(alignment: .leading, spacing: 9) {
                                         BookCover(book: book, coverURL: library.coverURL(book))
                                         Text(book.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
@@ -106,7 +113,7 @@ struct LibraryView: View {
                                 .accessibilityLabel("\(book.title), \(book.author), \(book.format.label)")
                                 .accessibilityIdentifier("book-\(book.title)")
                                 .contextMenu {
-                                    Button("Read", systemImage: "book") { onOpen(book.id) }
+                                    Button("Read", systemImage: "book") { openBook(book.id) }
                                     Button(book.isFavorite ? "Remove from favorites" : "Add to favorites", systemImage: book.isFavorite ? "heart.slash" : "heart") { library.toggleFavorite(book.id) }
                                     ShareLink(item: library.fileURL(book) ?? URL(fileURLWithPath: "/")) { Label("Share book", systemImage: "square.and.arrow.up") }
                                     Button("Remove book", systemImage: "trash", role: .destructive) { deleting = book }
@@ -148,9 +155,55 @@ struct LibraryView: View {
                 Button("Remove from library", role: .destructive) { if let deleting { library.remove(deleting.id) }; deleting = nil }
             } message: { Text("This removes the book and its bookmarks from Leaf. Your original file stays in Files.") }
         }
+        .background {
+            GeometryReader { geometry in
+                Color.clear.onAppear { viewportHeight = geometry.size.height }
+                    .onChange(of: geometry.size) { _, size in viewportHeight = size.height }
+            }
+        }
+        .ignoresSafeArea(.keyboard)
+        .overlay {
+            if chat == nil {
+                if chatButtonIsMoving {
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture { chatButtonIsMoving = false }
+                        .accessibilityLabel("Finish moving Ask Leaf").accessibilityAddTraits(.isButton)
+                        .accessibilityIdentifier("finishMovingLibraryChatButton")
+                        .accessibilityAction { chatButtonIsMoving = false }
+                }
+                ReaderChatLauncher(isMoving: $chatButtonIsMoving, location: .library) {
+                    let book = conversation.isEmpty ? featured : library.books.first { $0.fingerprint == conversation }
+                    openChat(book)
+                }
+            } else if let chat {
+                LibraryChatOverlay(session: chat, book: chatBook, fullHeight: viewportHeight,
+                    onClose: closeChat, onChoose: { choosingConversation = true })
+            }
+        }
+        .sheet(isPresented: $choosingConversation) {
+            LibraryChatConversationPicker(books: library.books.sorted { ($0.lastOpenedAt ?? .distantPast) > ($1.lastOpenedAt ?? .distantPast) },
+                selected: conversation, onChoose: openChat)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { chatButtonIsMoving = false; chat?.flush() }
+        }
+        .onChange(of: library.books.map(\.fingerprint)) { _, fingerprints in
+            if let chatBook, !fingerprints.contains(chatBook.fingerprint) { openChat(nil) }
+        }
+        .onDisappear { closeChat(); chatButtonIsMoving = false }
     }
+    private func openChat(_ book: Book?) {
+        // Close the previous owner before creating a second session for its database.
+        guard chat?.flush() != false else { return }
+        chat?.close()
+        chatBook = book; conversation = book?.fingerprint ?? "general"
+        chat = ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true),
+            conversation: book?.fingerprint ?? "leaf.library.general.v1")
+    }
+    private func closeChat() { chat?.close(); chat = nil; chatBook = nil }
+    private func openBook(_ id: UUID) { closeChat(); onOpen(id) }
     private func featuredBook(_ book: Book) -> some View {
-        Button { onOpen(book.id) } label: {
+        Button { openBook(book.id) } label: {
             HStack(spacing: 22) {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(book.lastOpenedAt == nil ? "A good place to begin" : "Continue reading").font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.7))

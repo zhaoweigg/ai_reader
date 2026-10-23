@@ -21,6 +21,7 @@ struct LeafReaderApp: App {
         if process.arguments.contains("--ui-testing"),
            let value = process.environment["LEAF_UI_TEST_ID"], let id = UUID(uuidString: value) {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUITests/\(id.uuidString)", isDirectory: true)
+            seedSamples = process.environment["LEAF_UI_EMPTY_LIBRARY"] != "1"
             chatCredentials.service = "com.leafreader.uitests.\(id.uuidString)"
             if process.environment["LEAF_UI_CHAT_MOCK"] == "1" {
                 chatProvider = UITestChatProvider(slow: process.environment["LEAF_UI_CHAT_SLOW"] == "1")

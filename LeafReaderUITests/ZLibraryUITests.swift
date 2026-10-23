@@ -305,7 +305,7 @@ final class ZLibraryUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_WEBSITE_FIXTURE": "1"]
-        XCUIDevice.shared.orientation = .portrait
+        // Strict portrait workflow: do not change device orientation while another slot rotates.
         app.launch()
         app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
         XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout: 10))
@@ -357,7 +357,7 @@ final class ZLibraryUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_WEBSITE_FIXTURE": "1"]
-        XCUIDevice.shared.orientation = .portrait
+        // Strict portrait workflow: do not change device orientation while another slot rotates.
         app.launch()
         app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
         XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout: 10))
