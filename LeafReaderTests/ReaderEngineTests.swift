@@ -360,7 +360,9 @@ final class ReaderEngineTests: XCTestCase {
         let web = try XCTUnwrap(model.webView)
         for scrolling in [false, true] {
             var value = preferences; value.scrolling = scrolling
-            _ = try await waitForLayout(model, preferences: value)
+            model.applyPreferences(value)
+            let metrics = try await waitForLayout(model, preferences: value)
+            XCTAssertEqual(metrics["scrolling"],scrolling ? 1 : 0)
             let location = model.locator
             for index in [0,1] {
                 let selected = try await web.evaluateJavaScript("""
