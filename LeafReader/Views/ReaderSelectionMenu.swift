@@ -98,7 +98,7 @@ private struct ReaderSelectionAction {
     let perform: () -> Void
 }
 
-@MainActor private final class ReaderSelectionMenuPresenter: NSObject, UIGestureRecognizerDelegate {
+@MainActor private final class ReaderSelectionMenuPresenter: NSObject, UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate {
     private weak var source: UIView?
     private weak var window: UIWindow?
     private var controller: ReaderSelectionActionsController?
@@ -106,11 +106,12 @@ private struct ReaderSelectionAction {
     private var observers: [UIGestureRecognizer] = []
     private var deactivationObserver: NSObjectProtocol?
     private var systemMenuUntil = Date.distantPast
+    private var systemInteraction: UIEditMenuInteraction?
     private var selectionPress: UILongPressGestureRecognizer?
     private var requestMenu: (() async -> Void)?
     private var requestTask: Task<Void, Never>?
     private var revision = 0
-    var showsSystemMenu: Bool { Date() < systemMenuUntil }
+    var showsSystemMenu: Bool { systemInteraction != nil || Date() < systemMenuUntil }
     var usesExpandedMenu: Bool { requestTask != nil || controller != nil }
     func observeSelection(on source: UIView, request: @escaping () async -> Void) {
         self.source = source; requestMenu = request
@@ -195,6 +196,10 @@ private struct ReaderSelectionAction {
         observers = []; window = nil
     }
     func dismiss() {
+        if let interaction = systemInteraction {
+            systemInteraction = nil; interaction.dismissMenu(); interaction.view?.removeInteraction(interaction)
+        }
+        systemMenuUntil = .distantPast
         revision += 1; requestTask?.cancel(); requestTask = nil
         #if DEBUG
         readerSelectionMenuTrace("dismiss", source: source)
@@ -221,9 +226,36 @@ private struct ReaderSelectionAction {
         readerSelectionMenuTrace("systemRequested", source: source, context: source.selectionText?.isEmpty == false)
         #endif
         UIMenuSystem.context.setNeedsRebuild()
-        guard let interaction = source.selectionEditMenu, let view = interaction.view else { return }
-        let rect = view.convert(source.selectionAnchor, from: source)
+        // The WebKit-owned interaction carries its own configuration/session.
+        // Present UIKit's current responder actions without replacing that delegate.
+        let target = source.selectionFirstResponder ?? source
+        let interaction = UIEditMenuInteraction(delegate: self)
+        systemInteraction = interaction; target.addInteraction(interaction)
+        let rect = target.convert(source.selectionAnchor, from: source)
         interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.midY)))
+    }
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]) -> UIMenu? {
+        #if DEBUG
+        readerSelectionMenuTrace("systemSuggestedActions", source: source, context: !suggestedActions.isEmpty)
+        #endif
+        return UIMenu(children: suggestedActions)
+    }
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
+        guard let source, let target = interaction.view else { return .null }
+        return target.convert(source.selectionAnchor, from: source)
+    }
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, willPresentMenuFor configuration: UIEditMenuConfiguration, animator: UIEditMenuInteractionAnimating) {
+        #if DEBUG
+        readerSelectionMenuTrace("systemWillPresent", source: source)
+        #endif
+    }
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, willDismissMenuFor configuration: UIEditMenuConfiguration, animator: UIEditMenuInteractionAnimating) {
+        animator.addCompletion { [weak self, weak interaction] in
+            guard let self, let interaction, self.systemInteraction === interaction else { return }
+            self.systemInteraction = nil; self.systemMenuUntil = .distantPast
+            interaction.view?.removeInteraction(interaction)
+            UIMenuSystem.context.setNeedsRebuild()
+        }
     }
 }
 
