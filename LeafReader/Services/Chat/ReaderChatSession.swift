@@ -100,6 +100,15 @@ final class ReaderChatSession: ObservableObject {
         if !prompt.isEmpty { draft = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? prompt : draft + "\n\n" + prompt }
         flush()
     }
+    func attachLiveSelection(_ context: ReadingChatContext?, chatIsPresented: Bool) {
+        guard chatIsPresented, let context, !context.isEmpty else { return }
+        let bounded = context.bounded()
+        guard selectedContext != bounded else { return }
+        selectedContext = bounded; selectionDirty = true
+        // Selection handles can send many updates. Show the quote immediately,
+        // but checkpoint the final snapshot without writing on every handle move.
+        scheduleCheckpoint()
+    }
     func removeSelection() { selectedContext = nil; selectionDirty = true; flush() }
 
     func prepareSelectionPrompt(_ intent: ReaderSelectionIntent) {

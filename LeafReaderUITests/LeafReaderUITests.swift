@@ -501,6 +501,83 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    @MainActor func testOpenChatAutomaticallyQuotesSelectionInPages() { verifyAutomaticQuote(flow:"Pages") }
+    @MainActor func testOpenChatAutomaticallyQuotesSelectionInScroll() { verifyAutomaticQuote(flow:"Scroll") }
+    @MainActor func testOpenChatAutomaticallyQuotesSelectionInPDF() { verifyAutomaticQuote(flow:"PDF") }
+
+    @MainActor private func verifyAutomaticQuote(flow:String) {
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launchApp()
+        if flow == "PDF" {
+            let search = app.textFields["librarySearch"]
+            XCTAssertTrue(search.waitForExistence(timeout:10));search.tap();search.typeText("Coast")
+            app.buttons["book-Notes from the Coast"].tap()
+            showReaderControls(app);app.buttons["nextPage"].tap()
+        } else {
+            app.buttons["featuredBook"].tap();showReaderControls(app)
+            app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+            dismissAppearance(app)
+        }
+        waitForBook(app)
+        let surface = readingSurface(app), originalFrame = surface.frame
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap();input.typeText("Why does the author say this?")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
+        app.buttons["Hide keyboard"].tap()
+        XCTAssertFalse(app.staticTexts["chatSelectedPassage"].exists)
+        let paragraph = surface.staticTexts.containing(NSPredicate(format:"label CONTAINS %@",flow == "PDF" ? "Before the town" : "Attention is a way")).firstMatch
+        let point = paragraph.exists ? paragraph.coordinate(withNormalizedOffset:CGVector(dx:flow == "PDF" ? 0.15 : 0.3,dy:flow == "PDF" ? 0.25 : 0.1)) : surface.coordinate(withNormalizedOffset:CGVector(dx:0.3,dy:0.25))
+        point.press(forDuration:1.2)
+        let passage = app.staticTexts["chatSelectedPassage"]
+        XCTAssertTrue(passage.waitForExistence(timeout:5),"Selecting book text must attach it without tapping the Ask Leaf menu action")
+        XCTAssertFalse(passage.label.isEmpty)
+        let quote = passage.label
+        XCTAssertEqual(input.value as? String,"Why does the author say this?")
+        XCTAssertFalse(app.staticTexts["chatQuestion"].exists,"Quoting must not send the draft")
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+        capture(flow + " selection automatically quoted with native menu",app:app)
+        input.tap();input.typeText(" In this passage.")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
+        let composedDraft = input.value as? String ?? ""
+        XCTAssertTrue(composedDraft.contains(" In this passage."))
+        XCTAssertEqual(composedDraft.replacingOccurrences(of:" In this passage.",with:""),"Why does the author say this?",
+                       "Typing at the tapped caret must preserve the original question")
+        XCTAssertEqual(passage.label,quote,"Keyboard focus must keep the attached selection")
+        XCTAssertEqual(surface.frame.width,originalFrame.width,accuracy:2)
+        XCTAssertEqual(surface.frame.height,originalFrame.height,accuracy:2)
+        capture(flow + " automatic quote while composing",app:app)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);waitForExpectations(timeout:5)
+        XCTAssertEqual(passage.label,quote)
+        XCTAssertTrue(input.isHittable)
+        capture(flow + " automatic quote landscape keyboard",app:app)
+        XCUIDevice.shared.orientation = .portrait
+        expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
+        app.buttons["Hide keyboard"].tap()
+        app.buttons["closeReaderChat"].tap();showReaderControls(app);app.buttons["closeBook"].tap()
+        app.terminate();app.launch()
+        if flow == "PDF" {
+            let search = app.textFields["librarySearch"]
+            XCTAssertTrue(search.waitForExistence(timeout:10));search.tap();search.typeText("Coast")
+            app.buttons["book-Notes from the Coast"].tap()
+        }
+        else { app.buttons["featuredBook"].tap() }
+        waitForBook(app);app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(passage.label,quote)
+        XCTAssertEqual(input.value as? String,composedDraft)
+        capture(flow + " automatic quote and draft restored",app:app)
+        app.buttons["removeChatSelection"].tap()
+        XCTAssertFalse(passage.exists)
+        input.tap();input.typeText(" Still my question.")
+        XCTAssertFalse(passage.exists,"An old native selection must not reattach after explicit removal")
+    }
+
     @MainActor private func verifyChatResize(flow: String) {
         let app = launchApp()
         defer { XCUIDevice.shared.orientation = .portrait }
@@ -945,8 +1022,11 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor func testChatDismissesOnlyWithCloseOrTopBarSwipeInBothFlows() {
+        XCUIDevice.shared.orientation = .portrait
         let app = launchApp()
         defer { XCUIDevice.shared.orientation = .portrait }
+        expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app)
+        waitForExpectations(timeout:5)
         app.buttons["featuredBook"].tap()
         waitForBook(app)
         for flow in ["Pages", "Scroll"] {
