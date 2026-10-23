@@ -17,7 +17,10 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var hasSearched = false
     @Published var controlsVisible = false
     @Published var selectionRequest: ReaderSelectionRequest?
+    @Published private(set) var liveSelection: ReadingChatContext?
     private var selectedWebText = ""
+    private var selectedWebLocator: String?
+    private var selectedWebChapter: String?
     @Published private(set) var reloadID = UUID()
     let bookID: UUID
     let library: LibraryStore
@@ -28,6 +31,7 @@ final class ReaderModel: NSObject, ObservableObject {
     private var searchGeneration = UUID().uuidString
     private var lastAutomaticRecovery: Date?
     private var memoryWarningObserver: NSObjectProtocol?
+    private var pdfSelectionObserver: NSObjectProtocol?
     private var memoryWarningCount = 0
     private static let logger = Logger(subsystem: "com.weizhao.leafreader", category: "ReaderLifecycle")
 
@@ -45,13 +49,17 @@ final class ReaderModel: NSObject, ObservableObject {
             }
         }
     }
-    deinit { if let memoryWarningObserver { NotificationCenter.default.removeObserver(memoryWarningObserver) } }
+    deinit {
+        if let memoryWarningObserver { NotificationCenter.default.removeObserver(memoryWarningObserver) }
+        if let pdfSelectionObserver { NotificationCenter.default.removeObserver(pdfSelectionObserver) }
+    }
     var book: Book? { library.book(bookID) }
     var isBookmarked: Bool { book?.bookmarks.contains { $0.locator == locator } ?? false }
     var positionLabel: String { "\(Int(fraction * 100))%" }
     func reload() {
         library.flush()
-        error = nil; isReady = false; isSearching = false; selectedWebText = ""
+        error = nil; isReady = false; isSearching = false; selectedWebText = ""; liveSelection = nil
+        selectedWebLocator = nil; selectedWebChapter = nil
         searchGeneration = UUID().uuidString
         searchResults = []; hasSearched = false
         reloadID = UUID()
@@ -92,8 +100,12 @@ final class ReaderModel: NSObject, ObservableObject {
     func selectedReadingContext() -> ReadingChatContext? {
         let text = pdfView?.currentSelection?.string ?? selectedWebText
         guard isReady, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return ReadingChatContext(title: book?.title ?? "", author: book?.author ?? "", chapter: chapterTitle,
-                                  text: text, source: "selection", locator: locator).bounded()
+        return ReadingChatContext(title: book?.title ?? "", author: book?.author ?? "", chapter: pdfView != nil ? chapterTitle : selectedWebChapter ?? chapterTitle,
+                                  text: text, source: "selection", locator: pdfView != nil ? locator : selectedWebLocator ?? locator).bounded()
+    }
+    private func updateLiveSelection() {
+        let context = selectedReadingContext()
+        if liveSelection != context { liveSelection = context }
     }
     func askAboutSelection(_ intent: ReaderSelectionIntent, context: ReadingChatContext) {
         guard !context.isEmpty else { return }
@@ -152,7 +164,11 @@ final class ReaderModel: NSObject, ObservableObject {
     func receive(_ message: [String: Any]) {
         guard let type = message["type"] as? String else { return }
         switch type {
-        case "selection": selectedWebText = String((message["text"] as? String ?? "").prefix(12000))
+        case "selection":
+            selectedWebText = String((message["text"] as? String ?? "").prefix(12000))
+            selectedWebLocator = (message["locator"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(2000)) }
+            selectedWebChapter = (message["label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(300)) }
+            updateLiveSelection()
         case "toggleControls": toggleControls()
         case "readingActivity": hideControls()
         case "bridgeReady": openWebBook()
@@ -197,7 +213,14 @@ final class ReaderModel: NSObject, ObservableObject {
         } else { evaluate("search", ["query": text, "generation": searchGeneration]) }
     }
     func configurePDF(_ view: PDFView, url: URL) {
+        if let pdfSelectionObserver { NotificationCenter.default.removeObserver(pdfSelectionObserver) }
         pdfView = view
+        pdfSelectionObserver = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: view, queue: .main) { [weak self, weak view] _ in
+            Task { @MainActor [weak self, weak view] in
+                guard let self, let view, self.pdfView === view else { return }
+                self.updateLiveSelection()
+            }
+        }
         guard let document = PDFDocument(url: url) else { error = LibraryError.invalidPDF.localizedDescription; return }
         view.document = document
         isLocked = document.isLocked

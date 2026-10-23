@@ -348,8 +348,47 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(selection.source, "selection")
         XCTAssertFalse(selection.isEmpty)
         XCTAssertEqual(model.selectedReadingContext()?.text, selection.text)
+        try await waitUntil { model.liveSelection == selection }
         view.clearSelection()
         XCTAssertNil(model.selectedReadingContext())
+        try await waitUntil { model.liveSelection == nil }
+    }
+    func testLiveSelectionTracksWebRangeChangesInBothFlowsWithoutMovingPassage() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        let web = try XCTUnwrap(model.webView)
+        for scrolling in [false, true] {
+            var value = preferences; value.scrolling = scrolling
+            _ = try await waitForLayout(model, preferences: value)
+            let location = model.locator
+            for index in [0,1] {
+                let selected = try await web.evaluateJavaScript("""
+                    (() => {
+                        const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+                        const range = doc.createRange(); range.selectNodeContents(doc.querySelectorAll('p')[\(index)]);
+                        const selection = doc.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+                        return selection.toString();
+                    })()
+                    """) as? String
+                try await waitUntil { model.liveSelection?.text == selected }
+                XCTAssertEqual(model.liveSelection?.source, "selection")
+                let quoteLocator = try XCTUnwrap(model.liveSelection?.locator)
+                let encoded = String(decoding:try JSONEncoder().encode(quoteLocator),as:UTF8.self)
+                let anchored = try await web.evaluateJavaScript("""
+                    (() => {
+                        const view = document.querySelector('foliate-view');
+                        const resolved = view.resolveCFI(\(encoded));
+                        const doc = view.renderer.getContents().find(item => item.index === resolved.index).doc;
+                        return resolved.anchor(doc).toString();
+                    })()
+                    """) as? String
+                XCTAssertEqual(anchored,selected,"The quote CFI must identify the selected range, not just the viewport")
+                XCTAssertEqual(model.locator, location, "Quoting must not navigate or change the viewport")
+            }
+            _ = try await web.evaluateJavaScript("window.Leaf.clearSelection()")
+            try await waitUntil { model.liveSelection == nil }
+        }
     }
     func testPageTurnsAnimateAndCancelledSwipesKeepThePassage() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)

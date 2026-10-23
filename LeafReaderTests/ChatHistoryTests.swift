@@ -53,6 +53,53 @@ private final class HistoryProvider: ChatProvider {
     private func complete(_ provider: HistoryProvider, _ text: String = "An explanation") {
         provider.continuations.last?.yield(.text(text)); provider.continuations.last?.yield(.finished(truncated: false)); provider.continuations.last?.finish()
     }
+    func testLiveSelectionPreservesQuestionAndPersistsLatestQuoteWithoutSending() async throws {
+        let directory = try directory(), session = ReaderChatSession(directory: directory, conversation: "live-selection")
+        let first = ReadingChatContext(title: context.title, author: context.author, chapter: context.chapter,
+                                       text: "选中的第一句话。", source: "selection", locator: "first")
+        let latest = ReadingChatContext(title: context.title, author: context.author, chapter: context.chapter,
+                                        text: "新的选中文字 🌿", source: "selection", locator: "latest")
+        session.draft = "Why does this matter?\nMy interpretation is…"
+        let draft = session.draft
+        session.attachLiveSelection(first, chatIsPresented: false)
+        XCTAssertNil(session.selectedContext, "Selecting while chat is closed must not attach a quote")
+        session.attachLiveSelection(first, chatIsPresented: true)
+        session.attachLiveSelection(latest, chatIsPresented: true)
+        session.attachLiveSelection(latest, chatIsPresented: true)
+        session.attachLiveSelection(nil, chatIsPresented: true)
+        session.attachLiveSelection(ReadingChatContext(title: "", author: "", chapter: "", text: " \n", source: "selection", locator: ""), chatIsPresented: true)
+        XCTAssertEqual(session.selectedContext, latest, "Losing native selection to the keyboard must keep the quote")
+        XCTAssertEqual(session.draft, draft)
+        XCTAssertTrue(session.messages.isEmpty, "Selection alone must never submit a question")
+        // Exercise the scheduled checkpoint, without explicitly flushing the session.
+        let saved = try ChatHistoryStore(directory: directory, conversation: "live-selection")
+        try await wait { (try? saved.loadSelectedContext()) == latest }
+        let restored = ReaderChatSession(directory: directory, conversation: "live-selection")
+        XCTAssertEqual(restored.selectedContext, latest); XCTAssertEqual(restored.draft, draft)
+        restored.removeSelection(); restored.close()
+        XCTAssertNil(ReaderChatSession(directory: directory, conversation: "live-selection").selectedContext)
+    }
+    func testLiveQuoteChosenDuringReplyBelongsToNextQuestion() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        let session = ReaderChatSession(directory: directory, conversation: "live-during-reply")
+        let first = ReadingChatContext(title: context.title, author: context.author, chapter: context.chapter, text: "First passage", source: "selection", locator: "first")
+        let next = ReadingChatContext(title: context.title, author: context.author, chapter: context.chapter, text: "Second passage", source: "selection", locator: "next")
+        session.attachLiveSelection(first, chatIsPresented: true); session.draft = "First question"
+        session.send(settings: settings) { XCTFail("Use the automatically attached quote"); return nil }
+        try await wait { provider.requests.count == 1 }
+        session.draft = "Next question"; session.attachLiveSelection(next, chatIsPresented: true)
+        XCTAssertEqual(session.messages.first?.context, first)
+        complete(provider); try await wait { !session.isSending }
+        XCTAssertEqual(session.selectedContext, next); XCTAssertEqual(session.draft, "Next question")
+        session.close()
+        let restored = ReaderChatSession(directory: directory, conversation: "live-during-reply")
+        XCTAssertEqual(restored.selectedContext, next)
+        restored.send(settings: settings) { XCTFail("Use the new saved quote"); return nil }
+        try await wait { provider.requests.count == 2 }
+        XCTAssertEqual(restored.messages.filter(\.isUser).last?.context, next)
+        XCTAssertNil(restored.selectedContext)
+        complete(provider); try await wait { !restored.isSending }
+    }
     func testSelectedPassageAndDraftRestoreUntilSentOrExplicitlyRemoved() async throws {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
         let original = ReaderChatSession(directory: directory, conversation: "book-a")
