@@ -10,6 +10,7 @@ struct AnnotationEditorView: View {
     @State private var note: String
     @State private var color: BookAnnotationColor
     @State private var error: String?
+    @State private var showsFullPassage = false
 
     init(annotation: BookAnnotation, isSaved: Bool, onSave: @escaping (BookAnnotation) throws -> Void,
          onDelete: (() throws -> Void)? = nil, onClose: @escaping () -> Void) {
@@ -20,8 +21,11 @@ struct AnnotationEditorView: View {
     var body: some View {
         Form {
             Section("Selected passage") {
-                Text(annotation.text).font(.body).textSelection(.enabled)
+                Text(annotation.text).font(.body).textSelection(.enabled).lineLimit(showsFullPassage ? nil : 4)
                     .accessibilityIdentifier("annotationQuote")
+                if annotation.text.count > 160 {
+                    Button(showsFullPassage ? "Show less" : "Show full passage") { showsFullPassage.toggle() }.font(.subheadline)
+                }
                 if !annotation.chapter.isEmpty { Text(annotation.chapter).font(.caption).foregroundStyle(.secondary) }
             }
             Section("Highlight color") {
@@ -39,6 +43,12 @@ struct AnnotationEditorView: View {
             }
             Section {
                 TextEditor(text: $note).frame(minHeight: 160).scrollContentBackground(.hidden)
+                    .overlay(alignment: .topLeading) {
+                        if note.isEmpty {
+                            Text("Add your note…").foregroundStyle(.secondary).padding(.top, 8).padding(.leading, 5)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                    }
                     .accessibilityLabel("Note").accessibilityIdentifier("annotationNote")
                 if note.count > 20_000 { Text(BookAnnotationError.noteTooLong.localizedDescription).font(.caption).foregroundStyle(.red) }
             } header: { Text("Note") } footer: { Text("Your highlights and notes are saved on this device with the book.") }
