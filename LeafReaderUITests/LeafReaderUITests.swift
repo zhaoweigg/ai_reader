@@ -408,7 +408,18 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor private func selectFixturePassage(_ flow: String, app: XCUIApplication, pdfWordOffset: CGFloat = 0.15) {
         let pdf = flow == "PDF", paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", pdf ? "Before the town" : "Attention is a way")).firstMatch
         XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
-        paragraph.coordinate(withNormalizedOffset: CGVector(dx: pdf ? pdfWordOffset : 0.3, dy: pdf ? 0.25 : 0.1)).press(forDuration: 1.2)
+        // Web content's element-relative coordinates can retain the physical
+        // portrait transform after a public scene-geometry request. Use the
+        // measured scene frame, as the native handle drags below do.
+        let frame = paragraph.frame
+        let point = CGPoint(x: frame.minX + frame.width * (pdf ? pdfWordOffset : 0.3),
+                            y: frame.minY + frame.height * (pdf ? 0.25 : 0.1))
+        XCTAssertTrue(readingSurface(app).frame.contains(point), "The real long press must target visible book text")
+        let chat = app.otherElements["readerChatPanel"]
+        XCTAssertFalse(chat.exists && chat.frame.contains(point), "Selection setup must not press the chat panel")
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: point.x - app.frame.minX, dy: point.y - app.frame.minY))
+            .press(forDuration: 1.2)
     }
     @MainActor private func revealSelectionAction(_ id: String, app: XCUIApplication) -> XCUIElement {
         let menu = app.scrollViews["expandedSelectionMenu"], button = app.buttons["selection-" + id]
