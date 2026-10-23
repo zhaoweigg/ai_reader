@@ -564,9 +564,19 @@ final class LeafReaderUITests: XCTestCase {
         let form = app.descendants(matching: .any)["listeningForm"].firstMatch
         XCTAssertTrue(form.waitForExistence(timeout: 5), "Listening form is reachable in landscape")
         func reveal(_ element: XCUIElement, _ label: String, up: Bool = true) {
-            for _ in 0..<4 where !(element.exists && frame.contains(element.frame)) { up ? form.swipeUp() : form.swipeDown() }
+            // Short, slow drags in the needed direction: a flick overshoots the
+            // 402 pt landscape sheet and scrolls the target off the other edge.
+            for _ in 0..<8 {
+                guard element.exists else { break }
+                let target = element.frame
+                if frame.contains(target) { break }
+                let downward = target.minY < frame.minY
+                let from = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: downward ? 0.35 : 0.65))
+                let to = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: downward ? 0.65 : 0.35))
+                from.press(forDuration: 0.1, thenDragTo: to)
+            }
             XCTAssertTrue(element.exists, label)
-            XCTAssertTrue(frame.contains(element.frame), label + " inside the landscape frame")
+            XCTAssertTrue(frame.contains(element.frame), label + " inside the landscape frame: \(element.frame) in \(frame)")
             XCTAssertTrue(element.isHittable, label + " hittable in landscape")
         }
         XCTAssertTrue(engine.isHittable); XCTAssertTrue(frame.contains(engine.frame), "Engine picker inside the landscape frame")
