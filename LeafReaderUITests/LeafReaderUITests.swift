@@ -606,6 +606,14 @@ final class LeafReaderUITests: XCTestCase {
                            flow + ": the real engine spoke every passage")
             app.buttons["Stop listening"].tap()
             XCTAssertFalse(app.buttons["audioPlayPause"].waitForExistence(timeout: 3))
+            // The saved cursor resumes with the natural voice and the engine choice is retained.
+            showReaderControls(app); app.buttons["Listen"].tap()
+            XCTAssertTrue(app.buttons["resumeSavedListening"].waitForExistence(timeout: 5), flow + ": saved position offered")
+            XCTAssertTrue(app.buttons["kokoroRemove"].exists, flow + ": engine choice retained")
+            app.buttons["resumeSavedListening"].tap()
+            waitForVoice(flow + " resumed saved position")
+            capture(flow + " natural voice resumed saved position", app: app)
+            app.buttons["stopListening"].tap()
         }
         showReaderControls(app); app.buttons["closeBook"].tap()
         let search = app.textFields["librarySearch"]; XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
