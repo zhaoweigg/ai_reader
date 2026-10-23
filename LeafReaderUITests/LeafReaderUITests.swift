@@ -666,22 +666,24 @@ final class LeafReaderUITests: XCTestCase {
                 let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
                 XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
                 let point = paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.1))
+                let selectionAsk = app.buttons["selection-ask"]
                 for _ in 0..<2 {
                     point.press(forDuration: 1.2)
-                    // Retry a missed native long press, but never mask a missing Ask Leaf action when Copy is present.
-                    if app.menuItems["Copy"].waitForExistence(timeout: 2) || app.menuItems["Ask Leaf"].exists { break }
+                    // An expanded row is a button. Never dismiss a successful
+                    // selection or fall back to a hidden library/chat launcher.
+                    if selectionAsk.waitForExistence(timeout: 3) { break }
+                    if app.menuItems["Copy"].exists || app.buttons["Copy"].exists { break }
                     point.tap()
                 }
-                capture(flow + " native selection menu", app: app)
+                capture(flow + " expanded selection menu", app: app)
                 let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.name = flow + " selection menu hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
-                let menuItem = app.menuItems["Ask Leaf"]
-                if menuItem.waitForExistence(timeout: 2) { menuItem.tap() }
-                else {
-                    let candidates = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat"))
-                    XCTAssertTrue(candidates.firstMatch.waitForExistence(timeout: 3)); candidates.firstMatch.tap()
-                }
+                XCTAssertTrue(selectionAsk.waitForExistence(timeout: 3)); XCTAssertTrue(selectionAsk.isHittable)
+                let selected = app.tables["expandedSelectionMenu"].value as? String ?? ""
+                XCTAssertFalse(selected.isEmpty)
+                selectionAsk.tap()
                 let passage = app.staticTexts["chatSelectedPassage"]
                 XCTAssertTrue(passage.waitForExistence(timeout: 5)); XCTAssertFalse(passage.label.isEmpty)
+                XCTAssertEqual(passage.label, selected, "Ask Leaf must attach the exact currently selected passage")
                 let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
                 XCTAssertFalse(app.menuItems["Ask a question"].exists, "Ask Leaf must open chat directly")
                 XCTAssertFalse(app.buttons["Ask a question"].exists)
