@@ -70,6 +70,7 @@ struct ReaderContent: View {
             return try await reader.readAloudPassage(at: locator)
         }
         session.reveal = { [weak reader] locator in await reader?.revealReadAloud(at: locator) }
+        session.clearSource = { [weak reader] in reader?.webView?.evaluateJavaScript("window.Leaf?.clearReadAloud()", completionHandler: nil) }
         _audio = StateObject(wrappedValue: session)
         _chat = StateObject(wrappedValue: ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true), conversation: book.fingerprint))
     }

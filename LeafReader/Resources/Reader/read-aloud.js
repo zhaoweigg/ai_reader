@@ -2,6 +2,11 @@
 // documents are temporary; speech never renders or retains the whole book.
 const excluded = 'script,style,noscript,template,rt, [hidden], [aria-hidden="true"]';
 const limit = 800;
+const sources = new WeakMap();
+export function clearReadAloud(view) {
+    const source = sources.get(view);
+    if (source) { source.epoch++; source.doc = null; source.index = null; }
+}
 
 function readable(node) {
     if (!node.data || node.parentElement?.closest(excluded)) return false;
@@ -31,16 +36,23 @@ function passageEnd(text, start) {
 
 export async function readAloudChunk(view, locator) {
     if (!view?.book) throw new Error('Open a book before listening.');
+    let source = sources.get(view);
+    if (!source) { source = { epoch: 0 }; sources.set(view, source); }
+    const epoch = source.epoch;
     const resolved = locator?.startsWith('section:') ? { index: Number(locator.slice(8)) }
         : locator ? view.resolveNavigation(locator) : view.resolveNavigation(view.lastLocation?.cfi);
-    if (!resolved || !Number.isInteger(resolved.index)) throw new Error('This listening position is unavailable. Start again from the page.');
+    if (!resolved || !Number.isInteger(resolved.index) || resolved.index < 0) throw new Error('This listening position is unavailable. Start again from the page.');
     const book = view.book;
     for (let index = resolved.index; index < book.sections.length; ++index) {
-        if (view.book !== book) throw new Error('The book was closed.');
+        if (view.book !== book || source.epoch !== epoch) throw new Error('Listening was stopped.');
         const section = book.sections[index];
         if (index !== resolved.index && section.linear === 'no') continue;
         const mounted = view.renderer.getContents?.().find(item => item.index === index)?.doc;
-        const doc = mounted ?? await section.createDocument?.();
+        const doc = mounted ?? (source.index === index ? source.doc : null) ?? await section.createDocument?.();
+        if (view.book !== book || source.epoch !== epoch) throw new Error('Listening was stopped.');
+        // Keep at most one detached text document. Never retain mounted iframe
+        // documents: their lifetime belongs to the reader's bounded window.
+        source.doc = mounted ? null : doc; source.index = index;
         if (!doc?.body) continue; // Image-only pages have no text to synthesize.
         let anchor = index === resolved.index ? resolved.anchor?.(doc) : null;
         if (anchor && !anchor.cloneRange && anchor.nodeType) {

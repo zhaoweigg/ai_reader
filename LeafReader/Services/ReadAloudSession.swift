@@ -89,6 +89,7 @@ enum ReadAloudError: LocalizedError {
     @Published var voice: String { didSet { defaults.set(voice, forKey: "audio.voice"); restartVoice() } }
     var source: ((String?) async throws -> ReadAloudPassage?)?
     var reveal: ((String) async -> Void)?
+    var clearSource: (() -> Void)?
     private let speaker: any ReadAloudSpeaking
     private let defaults: UserDefaults
     private let bookmarkURL: URL?
@@ -168,6 +169,7 @@ enum ReadAloudError: LocalizedError {
         generation = UUID(); loadTask?.cancel(); loadTask = nil
         isLoading = false
         prefetch?.cancel(); prefetch = nil; revealTask?.cancel(); revealTask = nil; speaker.stop()
+        clearSource?()
     }
     private func load(at locator: String?, prepared: Task<ReadAloudPassage?, Error>? = nil) {
         let token = generation
@@ -184,6 +186,8 @@ enum ReadAloudError: LocalizedError {
                 guard let next else {
                     if passage == nil { throw ReadAloudError.noText }
                     state = .finished; bookmark = nil
+                    clearSource?()
+                    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
                     if let bookmarkURL { try? FileManager.default.removeItem(at: bookmarkURL) }
                     return
                 }
