@@ -32,6 +32,7 @@ struct WebBookSurface: UIViewRepresentable {
         let view = ReaderWebView(frame: .zero, configuration: configuration)
         view.selectionTheme = { [weak model] in model?.preferences?.theme ?? .day }
         view.selectionContext = { [weak model] in model?.selectedReadingContext() }
+        view.prepareSelection = { [weak model] in await model?.refreshSelectedWebContext() }
         view.onSelectionAction = { [weak model] intent, snapshot in model?.askAboutSelection(intent, context: snapshot) }
         view.listeningPosition = { [weak model] in model?.listeningSelectionPosition() }
         view.onListen = { [weak model] locator in model?.listeningRequest = ReaderListeningRequest(locator: locator) }
@@ -67,6 +68,7 @@ struct WebBookSurface: UIViewRepresentable {
         (view as? ReaderWebView)?.selectionTheme = nil
         (view as? ReaderWebView)?.onListen = nil
         (view as? ReaderWebView)?.selectionContext = nil
+        (view as? ReaderWebView)?.prepareSelection = nil
         (view as? ReaderWebView)?.onSelectionAction = nil
         (view as? ReaderWebView)?.annotationSelection = nil
         (view as? ReaderWebView)?.onAnnotationAction = nil

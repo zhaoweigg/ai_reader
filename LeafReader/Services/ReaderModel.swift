@@ -108,6 +108,15 @@ final class ReaderModel: NSObject, ObservableObject {
         return ReadingChatContext(title: title, author: author, chapter: chapter, text: text,
                                   source: source, locator: location).bounded()
     }
+    func refreshSelectedWebContext() async {
+        guard isReady, let view = webView else { return }
+        let epoch = reloadID
+        guard let value = try? await view.evaluateJavaScript("window.Leaf.chatContext()") as? [String: String],
+              !Task.isCancelled, webView === view, reloadID == epoch, isReady else { return }
+        let text = value["source"] == "selection" ? value["text"] ?? "" : ""
+        receive(["type": "selection", "text": text, "locator": value["locator"] ?? "", "label": value["label"] ?? "",
+                 "tooLong": text.utf16.count > 12000])
+    }
     func selectedReadingContext() -> ReadingChatContext? {
         let text = pdfView?.currentSelection?.string ?? selectedWebText
         guard isReady, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }

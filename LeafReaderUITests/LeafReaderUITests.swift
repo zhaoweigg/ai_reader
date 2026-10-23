@@ -413,6 +413,8 @@ final class LeafReaderUITests: XCTestCase {
         let menu = app.tables["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
         for id in ["ask", "listen", "highlight", "note", "copy", "system"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable) }
+        let firstSelection = menu.value as? String ?? ""
+        XCTAssertFalse(firstSelection.isEmpty)
         capture("Selection overlay receives all six actions", app: app)
         app.buttons["selection-copy"].tap(); XCTAssertFalse(menu.exists)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
@@ -422,10 +424,16 @@ final class LeafReaderUITests: XCTestCase {
         capture("Selection overlay preserves native composer focus", app: app)
         app.buttons["Hide keyboard"].tap(); selectFixturePassage("Pages", app: app)
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        XCTAssertEqual(menu.value as? String, firstSelection, "Requesting the same selected word must reopen its actions")
         input.tap(); input.typeText(" again")
         XCTAssertFalse(menu.exists); XCTAssertEqual(input.value as? String, "Keep my menu question again")
-        app.buttons["Hide keyboard"].tap(); selectFixturePassage("Pages", app: app)
+        app.buttons["Hide keyboard"].tap()
+        let paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
+        paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.1)).press(forDuration: 1.2)
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        let changedSelection = menu.value as? String ?? ""
+        XCTAssertFalse(changedSelection.isEmpty); XCTAssertNotEqual(changedSelection, firstSelection, "Actions must use the newly selected word")
+        capture("Repeated and changed selections use fresh menu snapshots", app: app)
         XCUIDevice.shared.press(.home); app.activate()
         XCTAssertFalse(menu.exists, "A backgrounded scene must release its selection window")
         showReaderControls(app); selectFixturePassage("Pages", app: app)
