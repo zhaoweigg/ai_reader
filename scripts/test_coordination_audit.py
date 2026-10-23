@@ -53,6 +53,13 @@ class AuditTests(unittest.TestCase):
         self.handoff.pop("ready_for_main_build")
         self.assertEqual(self.run_audit()["actions"][0]["action"], "prepare_main_build")
 
+    def test_structured_screenshot_review_counts_are_supported(self):
+        summary = json.loads(self.summary.read_text())
+        summary.pop("screenshots_reviewed")
+        summary["screenshots"] = {"final_named_reviewed": 100, "contact_sheets": ["review.jpg"]}
+        self.summary.write_text(json.dumps(summary))
+        self.assertEqual(self.run_audit()["actions"][0]["action"], "prepare_main_build")
+
     def test_corrupt_worker_file_does_not_hide_other_candidates(self):
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Test", "-c",

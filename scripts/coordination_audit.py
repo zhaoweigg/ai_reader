@@ -97,7 +97,13 @@ def audit(root, registry, handoffs, is_ancestor):
             if not any(summary.get(k, 0) for k in
                        ("distinct_cases_passed", "distinct_passed_cases", "distinct_passed")):
                 verified = False
-            if not summary.get("screenshots_reviewed"):
+            screenshot_review = summary.get("screenshots_reviewed")
+            if not screenshot_review and isinstance(summary.get("screenshots"), dict):
+                screenshot_review = any(
+                    key.endswith("_reviewed") and isinstance(count, int) and count > 0
+                    for key, count in summary["screenshots"].items()
+                )
+            if not screenshot_review:
                 verified = False
         actions.append({"action": "prepare_main_build" if verified else "verify_worker_evidence",
                         "merge_commit": merge, "sources": item["sources"]})
