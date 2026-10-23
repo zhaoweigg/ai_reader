@@ -65,9 +65,16 @@ enum KokoroSentenceSplitter {
                     && ((!isSpace(units[end]) && units[end] != 0x0A) || endsAbbreviation(units, before: index, start: start))
                 if !continues, length >= 2 || unit == 0x0A { flush(end); index = end; continue }
             } else if length >= limit {
+                // Prefer the last comma-like break in the latter two thirds of the
+                // window, then the last space, then a hard cut.
+                let floor = start + limit / 3
                 var cut = index
-                while cut > start + limit / 3, !(softBreaks.contains(units[cut]) || isSpace(units[cut])) { cut -= 1 }
-                if cut <= start + limit / 3 { cut = index }
+                while cut > floor, !softBreaks.contains(units[cut]) { cut -= 1 }
+                if cut <= floor {
+                    cut = index
+                    while cut > floor, !isSpace(units[cut]) { cut -= 1 }
+                    if cut <= floor { cut = index }
+                }
                 flush(cut + 1); index = cut + 1; continue
             }
             index += 1

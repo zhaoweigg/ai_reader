@@ -74,8 +74,9 @@ final class FakeArchiveDownloader: KokoroArchiveDownloading, @unchecked Sendable
 
 @MainActor final class KokoroSpeechTests: XCTestCase {
     private func fixture(_ name: String) throws -> URL {
-        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: name, withExtension: "tar.bz2"))
-        return url
+        let bundle = Bundle(for: Self.self)
+        return try XCTUnwrap(bundle.url(forResource: name, withExtension: "tar.bz2", subdirectory: "Fixtures")
+                             ?? bundle.url(forResource: name, withExtension: "tar.bz2"))
     }
     private func temporary() -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("KokoroTests-\(UUID().uuidString)", isDirectory: true)
@@ -115,7 +116,9 @@ final class FakeArchiveDownloader: KokoroArchiveDownloading, @unchecked Sendable
         // A long mixed sentence is cut at its commas so the first chunk starts playing quickly.
         let mixed = "我们昨天讨论了 Transformer 架构中的 attention 机制，会议定在下周三下午 3:30，地点是 Building B 的 Room 204。"
         let clauses = KokoroSentenceSplitter.split(mixed)
-        XCTAssertEqual(clauses.map(\.text), ["我们昨天讨论了 Transformer 架构中的 attention 机制，", "会议定在下周三下午 3:30，", "地点是 Building B 的 Room 204。"])
+        // The first cut prefers the comma over the space before "3:30"; the remainder is
+        // mostly Latin script, so it falls under the English limit and stays whole.
+        XCTAssertEqual(clauses.map(\.text), ["我们昨天讨论了 Transformer 架构中的 attention 机制，", "会议定在下周三下午 3:30，地点是 Building B 的 Room 204。"])
         for clause in clauses { XCTAssertEqual((mixed as NSString).substring(with: clause.range), clause.text) }
     }
 
