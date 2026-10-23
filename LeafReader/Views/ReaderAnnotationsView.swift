@@ -60,7 +60,7 @@ struct AnnotationEditorView: View {
                     }.accessibilityIdentifier("deleteAnnotation")
                 }
             }
-        }.leafFormStyle()
+        }.leafFormStyle().accessibilityIdentifier("annotationForm")
             .navigationTitle(isSaved ? "Edit highlight" : "Add note").navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(theme.canvas, for: .navigationBar)
             .toolbar {

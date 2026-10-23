@@ -51,6 +51,16 @@ final class AnnotationUITests: XCTestCase {
     @MainActor private func chatInput(_ app: XCUIApplication) -> XCUIElement {
         app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
     }
+    @MainActor private func revealAnnotationControl(_ control: XCUIElement, app: XCUIApplication) {
+        let form = app.descendants(matching: .any)["annotationForm"].firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !control.isHittable {
+            // Scroll the form beside the text editor, whose own scrolling must stay independent.
+            form.coordinate(withNormalizedOffset: CGVector(dx: 0.06, dy: 0.85))
+                .press(forDuration: 0.1, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.06, dy: 0.2)))
+        }
+        XCTAssertTrue(control.isHittable)
+    }
     @MainActor func testHighlightsAndNotesInPages() { verify(flow: "Pages") }
     @MainActor func testHighlightsAndNotesInScroll() { verify(flow: "Scroll") }
     @MainActor func testHighlightsAndNotesInPDF() { verify(flow: "PDF") }
@@ -109,9 +119,12 @@ final class AnnotationUITests: XCTestCase {
         controls(app); app.buttons["Saved"].tap()
         let edit = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "editAnnotation-")).firstMatch
         XCTAssertTrue(edit.waitForExistence(timeout: 5)); edit.tap()
-        XCTAssertTrue(app.textViews["annotationNote"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["saveAnnotation"].waitForExistence(timeout: 5))
+        app.buttons["Blue highlight"].tap()
+        revealAnnotationControl(app.textViews["annotationNote"], app: app)
+        XCTAssertEqual(app.textViews["annotationNote"].value as? String, marker)
         capture(flow + " landscape note editor")
-        app.buttons["Blue highlight"].tap(); app.buttons["saveAnnotation"].tap()
+        app.buttons["saveAnnotation"].tap()
         controls(app); app.buttons["closeBook"].tap()
         app.terminate(); XCUIDevice.shared.orientation = .portrait; app.launch()
 
@@ -126,8 +139,7 @@ final class AnnotationUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch.waitForExistence(timeout: 5))
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "editAnnotation-")).firstMatch.tap()
         let remove = app.buttons["deleteAnnotation"]
-        for _ in 0..<3 { if remove.isHittable { break }; app.swipeUp() }
-        XCTAssertTrue(remove.isHittable); remove.tap()
+        revealAnnotationControl(remove, app: app); remove.tap()
         controls(app); app.buttons["Saved"].tap()
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch.exists)
         capture(flow + " saved note removed")
