@@ -70,15 +70,17 @@ extension ReadAloudSpeaking {
         if synthesizer == nil {
             synthesizer = AVSpeechSynthesizer(); synthesizer?.delegate = self
         }
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio)
-        try session.setActive(true)
         let utterance = AVSpeechUtterance(string: text)
         let recognizer = NLLanguageRecognizer(); recognizer.processString(text)
         var detected = recognizer.dominantLanguage?.rawValue
         if detected == "zh-Hans" { detected = "zh-CN" }
         if detected == "zh-Hant" { detected = "zh-TW" }
+        // Resolve eligibility before taking over the audio session: a missing
+        // download must leave other audio untouched.
         utterance.voice = try selectedVoice(identifier: voice, detectedLanguage: detected, sourceLanguage: language)
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio)
+        try session.setActive(true)
         utterance.rate = min(AVSpeechUtteranceMaximumSpeechRate,
             max(AVSpeechUtteranceMinimumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(speed)))
         current = utterance

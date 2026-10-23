@@ -792,7 +792,7 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertTrue(engine.buttons["Apple voices"].exists)
             XCTAssertFalse(engine.buttons["iPhone voice"].exists)
             engine.buttons["Apple voices"].tap()
-            let guidance = app.otherElements["appleVoiceDownloadGuidance"]
+            let guidance = app.descendants(matching: .any)["appleVoiceDownloadGuidance"].firstMatch
             let picker = app.buttons["listeningVoice"].exists ? app.buttons["listeningVoice"] : app.otherElements["listeningVoice"]
             XCTAssertTrue(guidance.waitForExistence(timeout: 3) || picker.waitForExistence(timeout: 3), "Actual installed-quality list or explicit download guidance must be shown")
             capture(flow + " Apple high-quality voice choices portrait", app: app)
@@ -896,7 +896,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["kokoroRemove"].exists)
         capture("Natural voice download required", app: app)
         engine.buttons["Apple voices"].tap()
-        let noAppleVoices = app.otherElements["appleVoiceDownloadGuidance"].waitForExistence(timeout: 3)
+        let noAppleVoices = app.descendants(matching: .any)["appleVoiceDownloadGuidance"].firstMatch.waitForExistence(timeout: 3)
         if noAppleVoices {
             capture("No Enhanced or Premium voice installed", app: app)
             engine.buttons["Natural voice"].tap()
@@ -957,7 +957,7 @@ final class LeafReaderUITests: XCTestCase {
             waitForVoice(flow + " next passage")
             capture(flow + " natural voice next passage", app: app)
             app.buttons["listeningSettings"].tap()
-            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Last passage used the iPhone voice")).firstMatch.exists,
+            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Last passage used an Enhanced or Premium Apple voice")).firstMatch.exists,
                            flow + ": the real engine spoke every passage")
             app.buttons["Stop listening"].tap()
             XCTAssertFalse(app.buttons["audioPlayPause"].waitForExistence(timeout: 3))
