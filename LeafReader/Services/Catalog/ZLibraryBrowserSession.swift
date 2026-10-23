@@ -112,7 +112,7 @@ import WebKit
                 let fields = payload.response.allHeaderFields.reduce(into: [String: String]()) { result, item in
                     if let key = item.key as? String, let value = item.value as? String { result[key] = value }
                 }
-                for cookie in HTTPCookie.cookies(withResponseHeaderFields: fields, for: responseURL)
+                for cookie in payload.challengeCookies + HTTPCookie.cookies(withResponseHeaderFields: fields, for: responseURL)
                     where cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == origin.host {
                     await webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie)
                 }
@@ -122,27 +122,30 @@ import WebKit
         }
         guard contains(url), url.path.hasPrefix("/eapi/"), ["GET", "POST"].contains(request.httpMethod ?? "GET") else { throw ZLibraryError.address }
         try await prepare()
-        try Task.checkCancellation()
-        let id = UUID().uuidString
         // Cookie/User-Agent/Origin are browser-managed. Credentials only reach this exact origin.
         let headers = (request.allHTTPHeaderFields ?? [:]).filter {
             ["accept", "content-type", "remix-userid", "remix-userkey"].contains($0.key.lowercased())
         }
-        let arguments: [String: Any] = ["id": id, "target": url.absoluteString, "method": request.httpMethod ?? "GET",
+        let arguments: [String: Any] = ["target": url.absoluteString, "method": request.httpMethod ?? "GET",
                                         "headers": headers, "body": request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""]
-        let result = try await withTaskCancellationHandler {
-            try await webView.callAsyncJavaScript(Self.fetchScript, arguments: arguments, in: nil, contentWorld: .defaultClient)
-        } onCancel: { [weak self] in
-            Task { @MainActor in
-                _ = try? await self?.webView.callAsyncJavaScript("globalThis.leafCatalogRequests?.get(id)?.abort();", arguments: ["id": id], in: nil, contentWorld: .defaultClient)
-            }
+        // The provider's access check answers an API request with a redirect to the same
+        // URL that only hands out a cookie, then with a small page whose script sets a second
+        // one. A browser passes both on its own: it repeats the request once the cookie is
+        // stored, and it renders the page. Do the same with fixed bounds: one plain retry,
+        // one retry after loading the website document, one delayed retry for its scripts.
+        var retries = 0, reload = "not needed"
+        var result = try await fetch(arguments)
+        while retries < Self.challengeRetries, Self.isAccessChallenge(result) {
+            retries += 1
+            if retries == 2 { reload = try await reloadWebsite() ? "completed" : (presented ? "skipped" : "failed") }
+            if retries == 3 { try await Task.sleep(for: .seconds(3)) }
+            result = try await fetch(arguments)
         }
-        try Task.checkCancellation()
         await contextChanged?(nil)
         guard let result = result as? [String: Any], let kind = result["kind"] as? String else { throw ZLibraryError.response }
         let path = Self.diagnosticPath(url.path)
         if kind == "redirect" {
-            throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "\(request.httpMethod ?? "GET") \(path) · browser redirect · website verification required · no automatic retry")
+            throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "\(request.httpMethod ?? "GET") \(path) · browser redirect · retries: \(retries)/\(Self.challengeRetries) · website reload: \(reload) · website verification required")
         }
         if kind == "timeout" { throw URLError(.timedOut) }
         if kind == "size" { throw ZLibraryError.response }
@@ -151,6 +154,42 @@ import WebKit
               let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil,
                                              headerFields: ["Content-Type": result["contentType"] as? String ?? ""]) else { throw URLError(.networkConnectionLost) }
         return ZLibraryPayload(data: Data(text.utf8), file: nil, response: response)
+    }
+
+    static let challengeRetries = 3
+    private func fetch(_ arguments: [String: Any]) async throws -> Any? {
+        try Task.checkCancellation()
+        let id = UUID().uuidString
+        var arguments = arguments; arguments["id"] = id
+        let result = try await withTaskCancellationHandler {
+            try await webView.callAsyncJavaScript(Self.fetchScript, arguments: arguments, in: nil, contentWorld: .defaultClient)
+        } onCancel: { [weak self] in
+            Task { @MainActor in
+                _ = try? await self?.webView.callAsyncJavaScript("globalThis.leafCatalogRequests?.get(id)?.abort();", arguments: ["id": id], in: nil, contentWorld: .defaultClient)
+            }
+        }
+        try Task.checkCancellation()
+        return result
+    }
+    // A redirect, or a recognized access-check page in place of JSON. Other HTML (for
+    // example a sign-in page) is not retried: reloading the website cannot change it.
+    private static func isAccessChallenge(_ result: Any?) -> Bool {
+        guard let result = result as? [String: Any], let kind = result["kind"] as? String else { return false }
+        if kind == "redirect" { return true }
+        guard kind == "response", let status = result["status"] as? Int, let text = result["text"] as? String else { return false }
+        let body = text.prefix(4096).lowercased()
+        return status == 517 || body.contains("diamwall") || body.contains("/cdn-cgi/challenge") || body.contains("__cf_chl")
+    }
+    // Load the same document the Open website sheet shows, without presenting it.
+    private func reloadWebsite() async throws -> Bool {
+        guard !presented else { return false }
+        neutralDocument = false; ready = false; navigationFailed = false
+        webView.load(URLRequest(url: origin))
+        let deadline = ContinuousClock.now + .seconds(15)
+        while !ready && !navigationFailed && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        return ready
     }
 
     private static func diagnosticPath(_ path: String) -> String {
