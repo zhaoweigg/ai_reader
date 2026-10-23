@@ -100,9 +100,11 @@ private struct ReaderSelectionAction {
             let controller = ReaderSelectionActionsController(actions: actions, theme: theme, source: source)
             controller.choose = { [weak self] action in self?.dismiss(); action() }
             parent.addChild(controller)
-            controller.view.frame = parent.view.bounds
+            controller.view.frame = window.bounds
             controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            parent.view.addSubview(controller.view)
+            // UIHostingView performs SwiftUI hit testing independently of added
+            // UIKit children. Mount at this source window so the actions receive taps.
+            window.addSubview(controller.view)
             controller.didMove(toParent: parent)
             controller.tableView.accessibilityValue = selectedText
             self.controller = controller; self.window = window
