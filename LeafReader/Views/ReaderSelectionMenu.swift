@@ -49,7 +49,10 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
     actions.append(ReaderSelectionAction(title: "iOS text actions", image: "ellipsis", id: "system") { [weak presenter] in presenter?.presentSystemMenu() })
     #if DEBUG
     if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
-        for index in actions.indices { actions[index].testLocator = context.locator }
+        let identity = (view is PDFView && annotation?.pdfRanges.isEmpty == false)
+            ? context.locator + "|" + (annotation?.pdfRanges.map { "\($0.page):\($0.location):\($0.length)" }.joined(separator: ",") ?? "")
+            : context.locator
+        for index in actions.indices { actions[index].testLocator = identity }
     }
     #endif
     presenter.schedule(on: view, actions: actions, theme: theme, selectedText: context.text)
