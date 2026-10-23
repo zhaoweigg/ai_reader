@@ -558,7 +558,11 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["Hide keyboard"].tap()
         app.buttons["closeReaderChat"].tap();showReaderControls(app);app.buttons["closeBook"].tap()
         app.terminate();app.launch()
-        if flow == "PDF" { app.buttons["book-Notes from the Coast"].tap() }
+        if flow == "PDF" {
+            let search = app.textFields["librarySearch"]
+            XCTAssertTrue(search.waitForExistence(timeout:10));search.tap();search.typeText("Coast")
+            app.buttons["book-Notes from the Coast"].tap()
+        }
         else { app.buttons["featuredBook"].tap() }
         waitForBook(app);app.buttons["openReaderChat"].tap()
         XCTAssertEqual(passage.label,quote)
