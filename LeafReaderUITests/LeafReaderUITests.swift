@@ -813,17 +813,12 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["chatOptions"].tap();app.buttons["configureChatButton"].tap()
         XCTAssertTrue(slider.waitForExistence(timeout:5))
         XCTAssertEqual(slider.value as? String,"20%")
-        slider.adjust(toNormalizedSliderPosition:1)
-        if slider.value as? String != "95%" {
-            // Start on the thumb, rather than the track beyond it. XCTest can
-            // stop short on stepped sliders; cross the track end with the thumb.
-            slider.adjust(toNormalizedSliderPosition:0.5)
-            slider.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).press(
-                forDuration:0.05,
-                thenDragTo:slider.coordinate(withNormalizedOffset:CGVector(dx:1,dy:0.5)).withOffset(CGVector(dx:16,dy:0)),
-                withVelocity:.slow,
-                thenHoldForDuration:0.1
-            )
+        for attempt in 1...4 where slider.value as? String != "95%" {
+            // XCTest sometimes lands short of a stepped slider's maximum.
+            // Use its native adjustment again, retaining the exact endpoint.
+            slider.adjust(toNormalizedSliderPosition:1)
+            let trace = XCTAttachment(string: "Attempt \(attempt): \(slider.value as? String ?? "nil"); frame \(slider.frame)")
+            trace.name = flow + " transparency endpoint gesture"; trace.lifetime = .keepAlways; add(trace)
         }
         XCTAssertEqual(slider.value as? String,"95%")
         capture(flow + " faint button live preview",app:app)
