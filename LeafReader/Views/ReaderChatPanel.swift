@@ -247,7 +247,7 @@ struct ReaderChatPanel: View {
                         Button { session.removeSelection() } label: { Image(systemName: "xmark.circle").frame(width: 44, height: 44) }
                             .accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
                         if !isComposing { selectionActions(compact: true) }
-                    } else { Text("Ask Leaf").font(.subheadline.weight(.semibold)).foregroundStyle(accent) }
+                    } else { Text("Ask Leaf").font(.subheadline.weight(.semibold)).foregroundStyle(accent).lineLimit(1) }
                     Spacer(minLength: 4)
                     if !isComposing && !compact {
                         Text(settings.configuration.profile.model).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -274,6 +274,7 @@ struct ReaderChatPanel: View {
                         Image(systemName: "xmark").font(.system(size: 14, weight: .medium))
                             .foregroundStyle(.secondary)
                             .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).accessibilityLabel("Close chat").accessibilityIdentifier("closeReaderChat")
                 }

@@ -659,7 +659,10 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " minimum resized chat", app: app)
         resize(-160)
         let readingHeight = panel.frame.height
-        app.buttons["closeReaderChat"].tap(); app.buttons["openReaderChat"].tap()
+        // Exercise the invisible edge of the target, outside the small X glyph.
+        app.buttons["closeReaderChat"].coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.1)).tap()
+        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+        app.buttons["openReaderChat"].tap()
         XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.typeText("Keep my resize draft")
