@@ -353,6 +353,33 @@ final class ZLibraryUITests: XCTestCase {
         }
         XCUIDevice.shared.orientation = .portrait
     }
+    @MainActor func testClosingAndReopeningWebsiteKeepsItsBrowserDocument() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_WEBSITE_FIXTURE": "1"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout: 10))
+        app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
+        app.buttons["zlibraryCheckWebsite"].tap()
+        let draft = app.webViews.textFields["Website draft"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 10))
+        draft.tap(); draft.typeText("Keep my website draft")
+        capture("Offline website draft before closing")
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+        app.buttons["Z-Library connection"].tap()
+        app.buttons["zlibrarySignIn"].tap()
+        XCTAssertTrue(draft.waitForExistence(timeout: 10))
+        XCTAssertEqual(draft.value as? String, "Keep my website draft")
+        capture("Retained website document after reopening")
+        app.buttons["Check connection"].tap()
+        XCTAssertTrue(app.staticTexts["Account connected"].waitForExistence(timeout: 10))
+        app.buttons["Close connection"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+    }
     @MainActor func testRepeatedSearchPopularNavigationReusesResultsAndRefreshShowsAccessCheck() {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -355,46 +355,28 @@ private struct ZLibrarySignInWebView: UIViewRepresentable {
     @Binding var message: String?
     @Binding var ready: Bool
     func makeCoordinator() -> Coordinator { Coordinator(self) }
-    func makeUIView(context:Context) -> WKWebView {
-        let config = WKWebViewConfiguration(); config.websiteDataStore = store.websiteData
-        config.preferences.javaScriptCanOpenWindowsAutomatically = false
-        let view = WKWebView(frame:.zero,configuration:config); view.navigationDelegate = context.coordinator
-        view.isInspectable = false
-        #if DEBUG
-        if store.isPreview, ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_WEBSITE_FIXTURE"] == "1" {
-            view.loadHTMLString("<html><body><h1>Offline connection fixture</h1><script>document.cookie='site_access=refreshed-preview; path=/; Secure';</script></body></html>", baseURL: store.origin.url)
-            return view
-        }
-        #endif
-        view.load(URLRequest(url:store.origin.url)); return view
-    }
-    func updateUIView(_ uiView: WKWebView, context:Context) {}
-    static func dismantleUIView(_ view:WKWebView,coordinator:Coordinator) { view.stopLoading();view.navigationDelegate = nil }
-    final class Coordinator: NSObject, WKNavigationDelegate {
-        let parent: ZLibrarySignInWebView
-        init(_ parent: ZLibrarySignInWebView) { self.parent = parent }
-        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            parent.ready = false
-        }
-        func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping (WKNavigationActionPolicy)->Void) {
-            guard let url = action.request.url else { decisionHandler(.cancel);return }
-            if url.absoluteString == "about:blank" || parent.store.origin.contains(url) || (action.targetFrame?.isMainFrame == false && url.scheme == "https" && url.user == nil && url.password == nil) { decisionHandler(.allow) }
-            else { parent.message = "This link opens another website (\(url.host ?? "unknown")). If it is your trusted sign-in website, set its address in Connection first.";decisionHandler(.cancel) }
-        }
-        func webView(_ webView:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error) {
-            if (error as NSError).code != NSURLErrorCancelled { parent.message = "The website could not be loaded. Check its address and your connection." }
-        }
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            guard let url = webView.url, parent.store.origin.contains(url) else { return }
-            // Keep normal API requests consistent with the browser session the user opened.
-            // This reads only browser identity; it never solves or automates verification.
-            webView.evaluateJavaScript("navigator.userAgent") { [weak self] value, _ in
-                guard let self else { return }
-                if let text = value as? String { self.parent.store.captureWebsiteUserAgent(text) }
-                self.parent.ready = true
-                Task { try? await self.parent.store.saveWebsiteContext() }
+    func makeUIView(context: Context) -> WKWebView {
+        let browser = store.websiteBrowser
+        context.coordinator.browser = browser
+        browser.stateChanged = { [weak coordinator = context.coordinator] ready, message in
+            Task { @MainActor in
+                coordinator?.parent.ready = ready
+                coordinator?.parent.message = message
             }
         }
+        var fixture = false
+        #if DEBUG
+        fixture = store.isPreview && ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_WEBSITE_FIXTURE"] == "1"
+        #endif
+        browser.presentWebsite(fixture: fixture)
+        return browser.webView
+    }
+    func updateUIView(_ uiView: WKWebView, context: Context) { context.coordinator.parent = self }
+    static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) { coordinator.browser?.dismissWebsite() }
+    final class Coordinator {
+        var parent: ZLibrarySignInWebView
+        var browser: ZLibraryBrowserSession?
+        init(_ parent: ZLibrarySignInWebView) { self.parent = parent }
     }
 }
 

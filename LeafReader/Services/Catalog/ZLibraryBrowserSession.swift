@@ -1,0 +1,184 @@
+import Foundation
+import WebKit
+
+// Sign-in and catalog JSON share one WebKit cookie jar and browser context.
+// A redirect is handed back to the visible website; it is never replayed here.
+@MainActor final class ZLibraryBrowserSession: NSObject, ZLibraryTransport, WKNavigationDelegate {
+    let webView: WKWebView
+    private let origin: URL
+    private var ready = false
+    private var navigationFailed = false
+    private var neutralDocument = true
+    private var presented = false
+    var stateChanged: ((Bool, String?) -> Void)?
+    var contextChanged: ((String?) async -> Void)?
+
+    init(origin: ZLibraryOrigin, dataStore: WKWebsiteDataStore) {
+        self.origin = origin.url
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = dataStore
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        webView = WKWebView(frame: .zero, configuration: configuration)
+        super.init()
+        webView.navigationDelegate = self
+        webView.isInspectable = false
+    }
+
+    #if DEBUG
+    // Real WebKit network/cookie tests use an ephemeral loopback HTTP server.
+    init(testOrigin: URL, dataStore: WKWebsiteDataStore) {
+        precondition(testOrigin.scheme == "http" && testOrigin.host == "127.0.0.1")
+        origin = testOrigin
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = dataStore
+        webView = WKWebView(frame: .zero, configuration: configuration)
+        super.init()
+        webView.navigationDelegate = self
+    }
+    #endif
+
+    private func contains(_ url: URL) -> Bool {
+        url.scheme == origin.scheme && url.host == origin.host && url.port == origin.port
+            && url.user == nil && url.password == nil
+    }
+
+    func presentWebsite(fixture: Bool = false) {
+        presented = true
+        stateChanged?(ready, nil)
+        guard neutralDocument || webView.url == nil else { return }
+        neutralDocument = false
+        #if DEBUG
+        if fixture {
+            webView.loadHTMLString("<html><body><h1>Offline connection fixture</h1><input aria-label='Website draft'><script>document.cookie='site_access=refreshed-preview; path=/; Secure';</script></body></html>", baseURL: origin)
+            return
+        }
+        #endif
+        webView.load(URLRequest(url: origin))
+    }
+
+    func dismissWebsite() {
+        presented = false
+        stateChanged = nil
+        // Retain the document and its browser session after the sheet closes.
+    }
+
+    func invalidate() {
+        stateChanged = nil; contextChanged = nil
+        webView.stopLoading(); webView.navigationDelegate = nil
+        ready = false; navigationFailed = true
+    }
+
+    private func prepare() async throws {
+        if !ready && !webView.isLoading && !presented {
+            neutralDocument = true; navigationFailed = false
+            webView.loadHTMLString("<!doctype html><html><body></body></html>", baseURL: origin)
+        }
+        let deadline = ContinuousClock.now + .seconds(15)
+        while !ready {
+            try Task.checkCancellation()
+            if navigationFailed || ContinuousClock.now >= deadline { throw URLError(.cannotLoadFromNetwork) }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        guard let url = webView.url, contains(url) else { throw ZLibraryError.address }
+    }
+
+    func send(_ request: URLRequest, toFile: Bool, progress: @escaping @Sendable (Double?) -> Void) async throws -> ZLibraryPayload {
+        guard let url = request.url else { throw ZLibraryError.address }
+        if toFile { return try await ZLibraryHTTPTransport().send(request, toFile: true, progress: progress) }
+        guard contains(url), url.path.hasPrefix("/eapi/"), ["GET", "POST"].contains(request.httpMethod ?? "GET") else { throw ZLibraryError.address }
+        try await prepare()
+        try Task.checkCancellation()
+        let id = UUID().uuidString
+        // Cookie/User-Agent/Origin are browser-managed. Credentials only reach this exact origin.
+        let headers = (request.allHTTPHeaderFields ?? [:]).filter {
+            ["accept", "content-type", "remix-userid", "remix-userkey"].contains($0.key.lowercased())
+        }
+        let arguments: [String: Any] = ["id": id, "target": url.absoluteString, "method": request.httpMethod ?? "GET",
+                                        "headers": headers, "body": request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""]
+        let result = try await withTaskCancellationHandler {
+            try await webView.callAsyncJavaScript(Self.fetchScript, arguments: arguments, in: nil, contentWorld: .defaultClient)
+        } onCancel: { [weak self] in
+            Task { @MainActor in
+                _ = try? await self?.webView.callAsyncJavaScript("globalThis.leafCatalogRequests?.get(id)?.abort();", arguments: ["id": id], in: nil, contentWorld: .defaultClient)
+            }
+        }
+        try Task.checkCancellation()
+        await contextChanged?(nil)
+        guard let result = result as? [String: Any], let kind = result["kind"] as? String else { throw ZLibraryError.response }
+        let path = Self.diagnosticPath(url.path)
+        if kind == "redirect" {
+            throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "\(request.httpMethod ?? "GET") \(path) · browser redirect · website verification required · no automatic retry")
+        }
+        if kind == "timeout" { throw URLError(.timedOut) }
+        if kind == "size" { throw ZLibraryError.response }
+        guard kind == "response", let status = result["status"] as? Int,
+              let text = result["text"] as? String, text.utf8.count <= 2 * 1024 * 1024,
+              let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil,
+                                             headerFields: ["Content-Type": result["contentType"] as? String ?? ""]) else { throw URLError(.networkConnectionLost) }
+        return ZLibraryPayload(data: Data(text.utf8), file: nil, response: response)
+    }
+
+    private static func diagnosticPath(_ path: String) -> String {
+        // Never expose book IDs, hashes, queries, website response bodies or credentials.
+        if ["/eapi/book/most-popular", "/eapi/book/search", "/eapi/user/profile"].contains(path) { return path }
+        return "/eapi/book/request"
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = action.request.url else { decisionHandler(.cancel); return }
+        if url.absoluteString == "about:blank" || contains(url) || (action.targetFrame?.isMainFrame == false && url.scheme == "https" && url.user == nil && url.password == nil) {
+            decisionHandler(.allow)
+        } else {
+            stateChanged?(false, "This link opens another website. Set its trusted address in Connection first.")
+            decisionHandler(.cancel)
+        }
+    }
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        ready = false; navigationFailed = false; stateChanged?(false, nil)
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let url = webView.url, contains(url) else { return }
+        ready = true; navigationFailed = false; stateChanged?(true, nil)
+        webView.evaluateJavaScript("navigator.userAgent") { [weak self] value, _ in
+            Task { @MainActor in await self?.contextChanged?(value as? String) }
+        }
+    }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(error) }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(error) }
+    private func failed(_ error: Error) {
+        guard (error as NSError).code != NSURLErrorCancelled else { return }
+        ready = false; navigationFailed = true
+        stateChanged?(false, "The website could not be loaded. Check its address and your connection.")
+    }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        ready = false; navigationFailed = true
+        stateChanged?(false, "The website stopped responding. Close it and try again.")
+    }
+
+    private static let fetchScript = """
+    const controller = new AbortController();
+    globalThis.leafCatalogRequests ??= new Map();
+    globalThis.leafCatalogRequests.set(id, controller);
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try {
+        const response = await fetch(target, {method, headers, body: method === 'POST' ? body : undefined,
+            credentials: 'same-origin', mode: 'same-origin', redirect: 'manual', cache: 'no-store', signal: controller.signal});
+        if (response.type === 'opaqueredirect' || response.status === 0) return {kind: 'redirect'};
+        if (Number(response.headers.get('Content-Length')) > 2097152) { await response.body?.cancel(); return {kind: 'size'}; }
+        const reader = response.body?.getReader(), decoder = new TextDecoder();
+        let size = 0, text = '';
+        if (reader) {
+            while (true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+                size += value.byteLength;
+                if (size > 2097152) { await reader.cancel(); return {kind: 'size'}; }
+                text += decoder.decode(value, {stream: true});
+            }
+            text += decoder.decode();
+        }
+        return {kind: 'response', status: response.status, contentType: response.headers.get('Content-Type') || '', text};
+    } catch (error) { return {kind: controller.signal.aborted ? 'timeout' : 'network'}; }
+    finally { clearTimeout(timer); globalThis.leafCatalogRequests.delete(id); }
+    """
+}
