@@ -61,7 +61,7 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
             const range = doc.createRange(); range.selectNodeContents(anchor); anchor = range;
         }
         const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-        let node, first, last, lastEnd, block, remaining = limit;
+        let node, first, last, lastEnd, block, breaks, remaining = limit;
         const parts = [];
         while ((node = walker.nextNode())) {
             if (!readable(node)) continue;
@@ -75,12 +75,22 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
                     if (point.compareBoundaryPoints(Range.START_TO_START, anchor) < 0) continue;
                 }
             }
-            const parent = node.parentElement.closest('p,div,li,h1,h2,h3,h4,h5,h6,blockquote,td,pre') ?? doc.body;
+            const parent = node.parentElement.closest('p,div,li,h1,h2,h3,h4,h5,h6,blockquote,td,tr,pre,figcaption,dt,dd,section,article') ?? doc.body;
             if (first && parent !== block) break;
+            if (first && breaks.length) {
+                const gap = doc.createRange(); gap.setStart(last, lastEnd); gap.setEnd(node, start);
+                if (breaks.some(br => gap.intersectsNode(br))) {
+                    // A separator belongs only to the spoken string. Keep the
+                    // original text nodes and CFI offsets completely unchanged.
+                    parts.push('\n');
+                    if (--remaining <= 0) break;
+                }
+            }
             let end = Math.min(passageEnd(node.data, start), start + remaining);
             if (end < node.length && /[\uD800-\uDBFF]/.test(node.data[end - 1])) --end;
             const text = node.data.slice(start, end);
             if (!text.trim() && !first) continue;
+            if (!first) breaks = [...parent.querySelectorAll('br')].filter(br => !br.closest(excluded));
             first ??= { node, start }; block = parent; last = node; lastEnd = end;
             parts.push(text); remaining -= text.length;
             if (end < node.length || remaining <= 0) break;

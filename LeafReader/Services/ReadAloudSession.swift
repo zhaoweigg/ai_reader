@@ -56,6 +56,7 @@ enum ReadAloudError: LocalizedError {
         utterance.voice = AVSpeechSynthesisVoice(identifier: voice)
             ?? AVSpeechSynthesisVoice(language: detected ?? language)
             ?? AVSpeechSynthesisVoice(language: language)
+            ?? AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
         guard utterance.voice != nil else { throw ReadAloudError.noVoice }
         utterance.rate = min(AVSpeechUtteranceMaximumSpeechRate,
             max(AVSpeechUtteranceMinimumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(speed)))
