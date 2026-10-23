@@ -764,10 +764,28 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testFloatingButtonTransparencyInPages() { verifyButtonTransparency(flow:"Pages") }
     @MainActor func testFloatingButtonTransparencyInScroll() { verifyButtonTransparency(flow:"Scroll") }
 
+    @MainActor func testFloatingButtonTransparencyPortraitInPages() { verifyButtonTransparencyPortrait(flow: "Pages") }
+    @MainActor func testFloatingButtonTransparencyPortraitInScroll() { verifyButtonTransparencyPortrait(flow: "Scroll") }
+
     @MainActor private func verifyButtonTransparency(flow:String) {
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }
+        verifyButtonTransparencyPortrait(flow: flow) { app, launcher, surface in
+            XCUIDevice.shared.orientation = .landscapeLeft
+            self.expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);self.waitForExpectations(timeout:5)
+            XCTAssertLessThanOrEqual(launcher.frame.maxX,surface.frame.maxX)
+            XCTAssertLessThanOrEqual(launcher.frame.maxY,surface.frame.maxY)
+            self.capture(flow + " faint button landscape",app:app)
+            XCUIDevice.shared.orientation = .portrait
+            self.expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);self.waitForExpectations(timeout:5)
+        }
+    }
+    // The portrait cases share every endpoint/persistence assertion with the full
+    // cases, and never execute any device orientation call during parallel QA.
+    @MainActor private func verifyButtonTransparencyPortrait(flow:String,
+        checkRotation: ((XCUIApplication, XCUIElement, XCUIElement) -> Void)? = nil) {
         let app = launchApp()
+        expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
         func openButtonSettings() {
             app.tabBars.buttons["Settings"].tap()
             let link = app.buttons["openChatButtonSettings"]
@@ -831,13 +849,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(launcher.frame.minX,position.minX,accuracy:1)
         XCTAssertEqual(launcher.frame.minY,position.minY,accuracy:1)
         capture(flow + " 95 percent transparent button over text",app:app)
-        XCUIDevice.shared.orientation = .landscapeLeft
-        expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);waitForExpectations(timeout:5)
-        XCTAssertLessThanOrEqual(launcher.frame.maxX,surface.frame.maxX)
-        XCTAssertLessThanOrEqual(launcher.frame.maxY,surface.frame.maxY)
-        capture(flow + " faint button landscape",app:app)
-        XCUIDevice.shared.orientation = .portrait
-        expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
+        checkRotation?(app, launcher, surface)
         showReaderControls(app);app.buttons["closeBook"].tap()
         app.terminate();app.launch();openButtonSettings()
         XCTAssertEqual(slider.value as? String,"95%")
