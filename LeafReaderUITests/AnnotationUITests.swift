@@ -59,6 +59,8 @@ final class AnnotationUITests: XCTestCase {
             capture("Missing " + action + " selection action")
             let state = XCTAttachment(string: app.debugDescription); state.name = "Selection hierarchy"; state.lifetime = .keepAlways; add(state)
         }
+        let row = app.scrollViews["expandedSelectionMenu"]
+        for _ in 0..<3 where row.exists && (!button.isHittable || !row.frame.insetBy(dx: -1, dy: 0).contains(button.frame)) { row.swipeLeft() }
         let target = menu.exists ? menu : button
         XCTAssertTrue(target.waitForExistence(timeout: 3)); target.tap()
     }
@@ -92,6 +94,7 @@ final class AnnotationUITests: XCTestCase {
             if app.state == .runningForeground { self.setReaderOrientation(.portrait, app: app) }
             app.terminate()
         }
+
         let pdf = flow == "PDF"
         if pdf {
             let field = app.textFields["librarySearch"]; XCTAssertTrue(field.waitForExistence(timeout: 10))
@@ -132,6 +135,7 @@ final class AnnotationUITests: XCTestCase {
         app.buttons["Done"].tap()
         if !pdf { appearance(app, theme: "Night") }
         orient(.landscapeLeft)
+
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
         capture(flow + " highlight after theme and landscape change")
@@ -146,6 +150,7 @@ final class AnnotationUITests: XCTestCase {
         app.buttons["saveAnnotation"].tap()
         controls(app); app.buttons["closeBook"].tap()
         app.terminate(); orient(.portrait); app.launch()
+
 
         app.tabBars.buttons["Bookmarks"].tap()
         app.segmentedControls["librarySavedPassageFilter"].buttons["Highlights & notes"].tap()

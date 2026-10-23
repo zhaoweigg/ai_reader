@@ -1,4 +1,5 @@
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 import WebKit
 import PDFKit
 
@@ -42,15 +43,33 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
     }
     let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view
-    actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder] in
+    actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder, weak presenter] in
         if let copiedText { UIPasteboard.general.string = copiedText }
         else { responder?.perform(#selector(UIResponderStandardEditActions.copy(_:)), with: nil) }
+        presenter?.observeCopiedSelection()
     })
     actions.append(ReaderSelectionAction(title: "iOS text actions", image: "ellipsis", id: "system") { [weak presenter] in presenter?.presentSystemMenu() })
+    #if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+        let identity = (view is PDFView && annotation?.pdfRanges.isEmpty == false)
+            ? context.locator + "|" + (annotation?.pdfRanges.map { "\($0.page):\($0.location):\($0.length)" }.joined(separator: ",") ?? "")
+            : context.locator
+        for index in actions.indices { actions[index].testLocator = identity }
+    }
+    #endif
     presenter.schedule(on: view, actions: actions, theme: theme, selectedText: context.text)
 }
 
 private extension UIView {
+    var selectionCharacterRanges: [PDFAnnotationRange] {
+        guard let pdf = self as? PDFView, let document = pdf.document, let selection = pdf.currentSelection else { return [] }
+        return selection.pages.flatMap { page in
+            (0..<selection.numberOfTextRanges(on: page)).map { index in
+                let range = selection.range(at: index, on: page)
+                return PDFAnnotationRange(page: document.index(for: page), location: range.location, length: range.length)
+            }
+        }
+    }
     var selectionStatusBarOwner: UIViewController? {
         var responder: UIResponder? = self
         while let current = responder {
@@ -80,14 +99,42 @@ private extension UIView {
         let local = input.convert(point, from: self)
         return input.selectionRects(for: range).contains { $0.rect.insetBy(dx: -18, dy: -12).contains(local) }
     }
+    var selectionRectangles: [CGRect] {
+        if let pdf = self as? PDFView, let selection = pdf.currentSelection {
+            return selection.selectionsByLine().flatMap { line in
+                line.pages.map { pdf.convert(line.bounds(for: $0), from: $0) }
+            }
+        }
+        guard let input = selectionFirstResponder as? (UIView & UITextInput), let range = input.selectedTextRange else { return [] }
+        return input.selectionRects(for: range).map { convert($0.rect, from: input) }.filter { !$0.isEmpty }
+    }
     var selectionAnchor: CGRect {
-        var rect = CGRect.null
-        if let pdf = self as? PDFView, let selection = pdf.currentSelection,
-           let page = selection.pages.first { rect = pdf.convert(selection.bounds(for: page), from: page) }
-        else if let input = selectionFirstResponder as? (UIView & UITextInput), let range = input.selectedTextRange,
-                let first = input.selectionRects(for: range).first { rect = convert(first.rect, from: input) }
-        let clipped = rect.intersection(bounds)
-        return clipped.isNull || clipped.isEmpty ? CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1) : clipped
+        let rect = selectionRectangles.reduce(CGRect.null) { $0.union($1) }.intersection(bounds)
+        return rect.isNull || rect.isEmpty ? CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1) : rect
+    }
+    var nativeSelectionHandleViews: [UIView & UITextSelectionHandleView] {
+        if let handle = self as? (UIView & UITextSelectionHandleView), window != nil, !isHidden, alpha > 0.01 { return [handle] }
+        let displays = interactions.compactMap { $0 as? UITextSelectionDisplayInteraction }
+        let handles = displays.flatMap(\.handleViews).filter { $0.window != nil && !$0.isHidden && $0.alpha > 0.01 }
+        if !handles.isEmpty { return handles }
+        return subviews.flatMap(\.nativeSelectionHandleViews)
+    }
+    var selectionHandles: [CGRect] {
+        let native = nativeSelectionHandleViews
+        if native.count == 2 { return native.map { convert($0.bounds, from: $0).insetBy(dx: -10, dy: -10) } }
+        let rects = selectionRectangles
+        guard let first = rects.first, let last = rects.last else { return [] }
+        // Native selection stems/knobs extend beyond the selected glyphs. Keep
+        // the menu clear of both endpoints, including a multi-line selection.
+        return [CGRect(x: first.minX - 18, y: first.minY - 24, width: 36, height: first.height + 36),
+                CGRect(x: last.maxX - 18, y: last.minY - 12, width: 36, height: last.height + 36)]
+    }
+    func selectionHandleContains(_ point: CGPoint) -> Bool {
+        let handles = nativeSelectionHandleViews
+        if handles.count == 2 {
+            return handles.contains { convert($0.bounds, from: $0).insetBy(dx: -10, dy: -10).contains(point) }
+        }
+        return selectionHandles.contains { $0.contains(point) } && !selectionRectangles.contains { $0.contains(point) }
     }
 }
 
@@ -96,6 +143,41 @@ private struct ReaderSelectionAction {
     let image: String
     let id: String
     let perform: () -> Void
+    #if DEBUG
+    var testLocator: String?
+    #endif
+}
+
+/// Observes completion without recognizing a gesture. WebKit/PDFKit keep sole
+/// ownership of their long press, selection grips, scrolling, and cancellation.
+private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
+    enum Phase { case began, moved, ended, cancelled }
+    var observe: ((Phase, CGPoint, TimeInterval) -> Void)?
+    private var tracking = false
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard !tracking, touches.count == 1, event.allTouches?.count == 1, let touch = touches.first else {
+            cancelObservation(); return
+        }
+        tracking = true; observe?(.began, touch.location(in: view), touch.timestamp)
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard tracking, let touch = touches.first else { return }
+        guard event.allTouches?.count == 1 else { cancelObservation(); return }
+        observe?(.moved, touch.location(in: view), touch.timestamp)
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard tracking, let touch = touches.first else { state = .failed; return }
+        tracking = false; observe?(.ended, touch.location(in: view), touch.timestamp)
+        state = .failed
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { cancelObservation(touch: touches.first) }
+    private func cancelObservation(touch: UITouch? = nil) {
+        if tracking { observe?(.cancelled, touch?.location(in: view) ?? .zero, touch?.timestamp ?? 0) }
+        tracking = false; state = .failed
+    }
+    override func reset() { tracking = false; super.reset() }
 }
 
 @MainActor private final class ReaderSelectionMenuPresenter: NSObject, UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate {
@@ -105,34 +187,127 @@ private struct ReaderSelectionAction {
     private var menuWindow: ReaderSelectionWindow?
     private var observers: [UIGestureRecognizer] = []
     private var deactivationObserver: NSObjectProtocol?
+    #if DEBUG
+    private var orientationObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
+    #endif
+    private var pdfSelectionObserver: NSObjectProtocol?
+    private var pdfSelectionRanges: [PDFAnnotationRange] = []
+    private var selectionRefreshTask: Task<Void, Never>?
     private var systemMenuUntil = Date.distantPast
     private var systemInteraction: UIEditMenuInteraction?
-    private var selectionPress: UILongPressGestureRecognizer?
+    private var selectionTouch: ReaderSelectionTouchObserver?
+    private struct BookTouch {
+        let start: CGPoint
+        let timestamp: TimeInterval
+        let beganOnHandle: Bool
+        var distance: CGFloat = 0
+        var selectionChanged = false
+    }
+    private var bookTouch: BookTouch?
+    // UIKit can deliver a reader tap just after its native selection completes.
+    // A short monotonic grace protects only that completed selection gesture.
+    private var completedSelectionTouchUntil: TimeInterval = 0
+    var isHandlingNativeSelectionGesture: Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now < completedSelectionTouchUntil { return true }
+        guard let touch = bookTouch else { return false }
+        return touch.beganOnHandle || now - touch.timestamp >= 0.45 && touch.distance <= 20
+    }
+    private var adjustingSelectionHandle = false
     private var requestMenu: (() async -> Void)?
     private var requestTask: Task<Void, Never>?
     private var revision = 0
     var showsSystemMenu: Bool { systemInteraction != nil || Date() < systemMenuUntil }
-    var usesExpandedMenu: Bool { requestTask != nil || controller != nil }
+    var usesExpandedMenu: Bool { requestTask != nil || selectionRefreshTask != nil || adjustingSelectionHandle || controller != nil }
     func observeSelection(on source: UIView, request: @escaping () async -> Void) {
+        if self.source !== source { detach() }
         self.source = source; requestMenu = request
-        guard selectionPress == nil else { return }
-        let press = UILongPressGestureRecognizer(target: self, action: #selector(selectionPressed(_:)))
-        press.minimumPressDuration = 0.5; press.cancelsTouchesInView = false; press.delaysTouchesEnded = false
-        press.delegate = self; source.addGestureRecognizer(press); selectionPress = press
+        guard selectionTouch == nil else { return }
+        let touch = ReaderSelectionTouchObserver(target: nil, action: nil)
+        touch.cancelsTouchesInView = false; touch.delaysTouchesBegan = false; touch.delaysTouchesEnded = false
+        touch.requiresExclusiveTouchType = false; touch.delegate = self
+        touch.observe = { [weak self] phase, point, timestamp in self?.observeBookTouch(phase, point: point, timestamp: timestamp) }
+        source.addGestureRecognizer(touch); selectionTouch = touch
+        if let pdf = source as? PDFView {
+            pdfSelectionRanges = pdf.selectionCharacterRanges
+            pdfSelectionObserver = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdf, queue: .main) { [weak self, weak pdf] _ in
+                Task { @MainActor in
+                    guard let self, let pdf else { return }
+                    let ranges = pdf.selectionCharacterRanges
+                    guard ranges != self.pdfSelectionRanges else { return }
+                    self.pdfSelectionRanges = ranges
+                    self.selectionDidChange()
+                }
+            }
+        }
         if let scene = source.window?.windowScene {
             deactivationObserver = NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: scene, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.dismiss() }
+                Task { @MainActor in
+                    #if DEBUG
+                    readerSelectionMenuTrace("sceneDeactivated", source: self?.source)
+                    #endif
+                    self?.dismiss()
+                }
             }
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+                orientationObserver = NotificationCenter.default.addObserver(forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main) { [weak source] _ in
+                    Task { @MainActor in readerSelectionMenuTrace("deviceOrientationChanged", source: source) }
+                }
+                activationObserver = NotificationCenter.default.addObserver(forName: UIScene.didActivateNotification, object: scene, queue: .main) { [weak source] _ in
+                    Task { @MainActor in readerSelectionMenuTrace("sceneActivated", source: source) }
+                }
+            }
+            #endif
         }
     }
     func detach() {
+        #if DEBUG
+        readerSelectionMenuTrace("sourceDetached", source: source)
+        #endif
         dismiss()
-        if let selectionPress { selectionPress.view?.removeGestureRecognizer(selectionPress) }
-        selectionPress = nil; requestMenu = nil; source = nil
+        completedSelectionTouchUntil = 0
+        if let selectionTouch { selectionTouch.observe = nil; selectionTouch.view?.removeGestureRecognizer(selectionTouch) }
+        selectionTouch = nil; requestMenu = nil; source = nil
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
+        if let pdfSelectionObserver { NotificationCenter.default.removeObserver(pdfSelectionObserver) }; pdfSelectionObserver = nil
+        #if DEBUG
+        for observer in [orientationObserver, activationObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(observer) }
+        orientationObserver = nil; activationObserver = nil
+        #endif
+    }
+    func observeCopiedSelection() {
+        guard let source, let window = source.window, window.windowScene?.activationState == .foregroundActive,
+              source.selectionText?.isEmpty == false else { return }
+        // Copy dismisses actions, while UIKit keeps its native range and grips.
+        // Keep watching that range until an outside gesture or reader teardown.
+        adjustingSelectionHandle = true
+        installOutsideObservers(on: window)
+    }
+    func selectionDidChange() {
+        if bookTouch != nil {
+            bookTouch?.selectionChanged = true
+            if controller != nil || adjustingSelectionHandle {
+                adjustingSelectionHandle = true
+                dismiss(keepingHandleObserver: true)
+            }
+            return
+        }
+        guard !showsSystemMenu, controller != nil || adjustingSelectionHandle else { return }
+        adjustingSelectionHandle = true
+        dismiss(keepingHandleObserver: true)
+        let expectedRevision = revision
+        selectionRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, let self, self.revision == expectedRevision else { return }
+            self.selectionRefreshTask = nil
+            self.requestCurrentMenu()
+        }
     }
     func requestCurrentMenu() {
         guard let window = source?.window, window.windowScene?.activationState == .foregroundActive else { return }
+        selectionRefreshTask?.cancel(); selectionRefreshTask = nil
         systemMenuUntil = .distantPast
         revision += 1; let expectedRevision = revision; requestTask?.cancel()
         installOutsideObservers(on: window)
@@ -141,29 +316,57 @@ private struct ReaderSelectionAction {
             await request?()
             guard let self, self.revision == expectedRevision else { return }
             self.requestTask = nil
-            if self.controller == nil { self.removeOutsideObservers() }
+            if self.controller == nil { self.adjustingSelectionHandle = false; self.removeOutsideObservers() }
         }
         UIMenuSystem.context.setNeedsRebuild()
     }
-    @objc private func selectionPressed(_ press: UILongPressGestureRecognizer) {
-        guard press.state == .ended, let source = press.view, !showsSystemMenu else { return }
-        if source.selectionFirstResponder == nil { source.becomeFirstResponder() }
-        let withinSelection = source.selectionContains(press.location(in: source))
-        #if DEBUG
-        readerSelectionMenuTrace("press", source: source, context: withinSelection)
-        #endif
-        guard withinSelection else { return }
-        requestCurrentMenu()
+    private func observeBookTouch(_ phase: ReaderSelectionTouchObserver.Phase, point: CGPoint, timestamp: TimeInterval) {
+        guard let source, !showsSystemMenu else { bookTouch = nil; return }
+        switch phase {
+        case .began:
+            completedSelectionTouchUntil = 0
+            bookTouch = BookTouch(start: point, timestamp: timestamp, beganOnHandle: source.selectionHandleContains(point))
+            #if DEBUG
+            readerSelectionMenuTrace("bookTouchBegan", source: source, context: bookTouch?.beganOnHandle, point: point)
+            #endif
+        case .moved:
+            guard var touch = bookTouch else { return }
+            touch.distance = max(touch.distance, hypot(point.x - touch.start.x, point.y - touch.start.y))
+            bookTouch = touch
+            if touch.beganOnHandle, touch.distance > 3, controller != nil {
+                adjustingSelectionHandle = true; dismiss(keepingHandleObserver: true)
+            }
+        case .ended:
+            guard let touch = bookTouch else { return }
+            bookTouch = nil
+            let longPress = timestamp - touch.timestamp >= 0.45 && touch.distance <= 20
+            let adjusted = touch.beganOnHandle && (touch.selectionChanged || touch.distance > 3)
+            // The reader's single tap waits for double-tap failure and can arrive
+            // >350ms later. A fresh book touch clears this grace immediately.
+            if longPress || adjusted { completedSelectionTouchUntil = ProcessInfo.processInfo.systemUptime + 0.6 }
+            #if DEBUG
+            readerSelectionMenuTrace("bookTouchEnded", source: source, context: longPress || adjusted, point: point)
+            #endif
+            // Native selection can move/scroll under the finger. Snapshot its
+            // current range after completion, never gate on the old touch rect.
+            if longPress || adjusted { requestCurrentMenu() }
+        case .cancelled:
+            #if DEBUG
+            readerSelectionMenuTrace("bookTouchCancelled", source: source, context: timestamp > 0, point: point,
+                duration: bookTouch.map { timestamp - $0.timestamp }, distance: bookTouch?.distance)
+            #endif
+            bookTouch = nil; dismiss()
+        }
     }
     func schedule(on source: UIView, actions: [ReaderSelectionAction], theme: ReadingTheme, selectedText: String) {
         guard !Task.isCancelled, let window = source.window, let scene = window.windowScene, scene.activationState == .foregroundActive else { return }
         self.source = source
+        adjustingSelectionHandle = false
         // A completed user request drives presentation; building UIKit's cached
         // hierarchy has no presentation side effects. Native selection stays intact.
         source.selectionEditMenu?.dismissMenu()
         if let controller {
-            controller.actions = actions; controller.tableView.accessibilityValue = selectedText
-            controller.tableView.reloadData(); controller.view.setNeedsLayout(); return
+            controller.update(actions: actions, selectedText: selectedText); return
         }
         let controller = ReaderSelectionActionsController(actions: actions, theme: theme, source: source)
         controller.choose = { [weak self] action in self?.dismiss(); action() }
@@ -173,7 +376,7 @@ private struct ReaderSelectionAction {
         menuWindow.rootViewController = controller
         menuWindow.isHidden = false
         self.menuWindow = menuWindow
-        controller.tableView.accessibilityValue = selectedText
+        controller.scrollView.accessibilityValue = selectedText
         self.controller = controller
         installOutsideObservers(on: window)
         #if DEBUG
@@ -195,7 +398,8 @@ private struct ReaderSelectionAction {
         for observer in observers { window?.removeGestureRecognizer(observer) }
         observers = []; window = nil
     }
-    func dismiss() {
+    func dismiss(keepingHandleObserver: Bool = false) {
+        selectionRefreshTask?.cancel(); selectionRefreshTask = nil
         if let interaction = systemInteraction {
             systemInteraction = nil; interaction.dismissMenu(); interaction.view?.removeInteraction(interaction)
         }
@@ -204,19 +408,51 @@ private struct ReaderSelectionAction {
         #if DEBUG
         readerSelectionMenuTrace("dismiss", source: source)
         #endif
-        removeOutsideObservers()
+        if !keepingHandleObserver { bookTouch = nil; adjustingSelectionHandle = false; removeOutsideObservers() }
         menuWindow?.isHidden = true; menuWindow?.rootViewController = nil; menuWindow = nil
         controller = nil
         UIMenuSystem.context.setNeedsRebuild()
     }
     @objc private func outsideGesture(_ gesture: UIGestureRecognizer) {
+        if gesture is UIPanGestureRecognizer && adjustingSelectionHandle {
+            if gesture.state == .began { dismiss(keepingHandleObserver: true) }
+            if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
+                let completed = gesture.state == .ended
+                dismiss()
+                let expectedRevision = revision
+                if completed {
+                    Task { @MainActor [weak self] in
+                        await Task.yield()
+                        guard let self, self.revision == expectedRevision else { return }
+                        self.requestCurrentMenu()
+                    }
+                }
+            }
+            return
+        }
         if gesture.state == .ended || gesture.state == .began { dismiss() }
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        if gestureRecognizer === selectionPress { return true }
-        guard let view = touch.view else { return false }
+        guard let source, let view = touch.view else { return false }
+        let point = touch.location(in: source)
+        let onHandle = source.selectionHandleContains(point)
+        if gestureRecognizer === selectionTouch {
+            var ancestor: UIView? = view
+            while let current = ancestor, current !== source {
+                if current is UIControl { return false }; ancestor = current.superview
+            }
+            return view.isDescendant(of: source)
+        }
+        // Native grip stems can overlap selected glyphs. Only the passive book
+        // observer watches their completion; an outside pan losing arbitration
+        // to UIKit must not dismiss the newly refreshed actions afterward.
+        if onHandle { return false }
+        if gestureRecognizer is UIPanGestureRecognizer { adjustingSelectionHandle = onHandle }
+        #if DEBUG
+        readerSelectionMenuTrace(onHandle ? "handleTouch" : "outsideTouch", source: source, point: point, target: view)
+        #endif
         if let controller { return !view.isDescendant(of: controller.view) }
-        return requestTask != nil
+        return requestTask != nil || adjustingSelectionHandle
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     func presentSystemMenu() {
@@ -269,16 +505,22 @@ private final class ReaderSelectionWindow: UIWindow {
 
 private final class ReaderSelectionOverlayView: UIView {
     let card = UIView()
+    var selectionHandleRects: [CGRect] = []
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if selectionHandleRects.contains(where: { $0.contains(point) }) { return nil }
         let local = convert(point, to: card)
         return card.bounds.contains(local) ? card.hitTest(local, with: event) : nil
     }
 }
 
-@MainActor private final class ReaderSelectionActionsController: UIViewController, UITableViewDataSource, UITableViewDelegate {
-    var actions: [ReaderSelectionAction]
+@MainActor private final class ReaderSelectionActionsController: UIViewController, UIScrollViewDelegate {
+    private var actions: [ReaderSelectionAction]
     var choose: ((() -> Void) -> Void)?
-    let tableView = UITableView(frame: .zero, style: .plain)
+    let scrollView = UIScrollView()
+    private var buttons: [UIButton] = []
+    private var dividers: [UIView] = []
+    private let leadingHint = UIImageView(image: UIImage(systemName: "chevron.left"))
+    private let trailingHint = UIImageView(image: UIImage(systemName: "chevron.right"))
     private let theme: ReadingTheme
     private weak var source: UIView?
     private let hidesStatusBar: Bool
@@ -300,52 +542,136 @@ private final class ReaderSelectionOverlayView: UIView {
     override func viewDidLoad() {
         super.viewDidLoad()
         let overlay = view as! ReaderSelectionOverlayView
-        overlay.addSubview(overlay.card); overlay.card.addSubview(tableView)
-        overlay.card.layer.shadowColor = UIColor.black.cgColor; overlay.card.layer.shadowOpacity = 0.18
-        overlay.card.layer.shadowRadius = 18; overlay.card.layer.shadowOffset = CGSize(width: 0, height: 5)
-        tableView.backgroundColor = UIColor(theme.surface); tableView.layer.cornerRadius = 18
-        tableView.dataSource = self; tableView.delegate = self
-        tableView.rowHeight = 44; tableView.estimatedRowHeight = 44
-        tableView.separatorColor = UIColor(theme.foreground).withAlphaComponent(0.1)
-        tableView.accessibilityIdentifier = "expandedSelectionMenu"
-        tableView.contentInsetAdjustmentBehavior = .never
+        overlay.addSubview(overlay.card); overlay.card.addSubview(scrollView)
+        overlay.card.backgroundColor = UIColor(theme.surface); overlay.card.layer.cornerRadius = 14
+        overlay.card.layer.shadowColor = UIColor.black.cgColor; overlay.card.layer.shadowOpacity = 0.16
+        overlay.card.layer.shadowRadius = 12; overlay.card.layer.shadowOffset = CGSize(width: 0, height: 3)
+        scrollView.delegate = self; scrollView.showsHorizontalScrollIndicator = false
+        scrollView.isDirectionalLockEnabled = true; scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.accessibilityIdentifier = "expandedSelectionMenu"
+        scrollView.accessibilityLabel = "Selection actions"
+        scrollView.accessibilityHint = "Swipe left or right for more actions."
+        for hint in [leadingHint, trailingHint] {
+            hint.tintColor = UIColor(theme.foreground).withAlphaComponent(0.55)
+            hint.contentMode = .scaleAspectFit; hint.isUserInteractionEnabled = false
+            hint.isAccessibilityElement = false; overlay.card.addSubview(hint)
+        }
+        rebuildButtons()
+    }
+    func update(actions: [ReaderSelectionAction], selectedText: String) {
+        self.actions = actions; scrollView.accessibilityValue = selectedText
+        rebuildButtons(); view.setNeedsLayout()
+    }
+    private func rebuildButtons() {
+        for child in buttons.map({ $0 as UIView }) + dividers { child.removeFromSuperview() }
+        buttons = []; dividers = []
+        let font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: .systemFont(ofSize: 14, weight: .medium), maximumPointSize: 20)
+        for (index, action) in actions.enumerated() {
+            let button = UIButton(type: .system)
+            let compact = action.id == "listen" ? "Listen" : action.id == "note" ? "Note" : action.id == "system" ? "More" : action.title
+            button.setTitle(compact, for: .normal); button.setTitleColor(UIColor(theme.foreground), for: .normal)
+            button.titleLabel?.font = font; button.titleLabel?.adjustsFontForContentSizeCategory = true
+            button.accessibilityLabel = action.title; button.accessibilityIdentifier = "selection-" + action.id
+            #if DEBUG
+            if action.id == "ask" { button.accessibilityValue = action.testLocator }
+            #endif
+            button.addAction(UIAction { [weak self] _ in
+                guard let self, index < self.actions.count else { return }
+                self.choose?(self.actions[index].perform)
+            }, for: .touchUpInside)
+            scrollView.addSubview(button); buttons.append(button)
+            if index < actions.count - 1 {
+                let line = UIView(); line.backgroundColor = UIColor(theme.foreground).withAlphaComponent(0.12)
+                scrollView.addSubview(line); dividers.append(line)
+            }
+        }
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         guard let source, let overlay = view as? ReaderSelectionOverlayView else { return }
         let safe = view.bounds.inset(by: view.safeAreaInsets).insetBy(dx: 12, dy: 8)
         let anchor = source.convert(source.selectionAnchor, to: view)
-        let width = min(260, safe.width), height = min(CGFloat(actions.count) * 44, safe.height)
-        let below = anchor.maxY + 10
-        let top = below + height <= safe.maxY ? below : anchor.minY - height - 10
-        overlay.card.frame = CGRect(x: min(max(safe.minX, anchor.midX - width / 2), safe.maxX - width),
-            y: min(max(safe.minY, top), safe.maxY - height), width: width, height: height)
-        tableView.frame = overlay.card.bounds
+        let handles = source.selectionHandles.map { source.convert($0, to: view) }
+        let widths = buttons.map { max(44, ceil($0.intrinsicContentSize.width) + 20) }
+        let contentWidth = widths.reduce(0, +) + CGFloat(max(0, buttons.count - 1))
+        let height = max(44, ceil(buttons.first?.titleLabel?.font.lineHeight ?? 17) + 16)
+        let width = min(contentWidth + 16, safe.width)
+        let overflow = contentWidth + 16 > width
+        // Prefer above the entire selection, with enough clearance for its
+        // start knob. If it reaches the top, place below its end knob instead.
+        let selectionTop = min(anchor.minY, handles.map(\.minY).min() ?? anchor.minY)
+        let selectionBottom = max(anchor.maxY, handles.map(\.maxY).max() ?? anchor.maxY)
+        let above = selectionTop - height - 8, below = selectionBottom + 8
+        let left = min(max(safe.minX, anchor.midX - width / 2), safe.maxX - width)
+        let candidates = [above, below, safe.minY, safe.maxY - height]
+            + handles.flatMap { [$0.minY - height - 8, $0.maxY + 8] }
+        let top = candidates.first { y in
+            let rect = CGRect(x: left, y: y, width: width, height: height)
+            return y >= safe.minY && rect.maxY <= safe.maxY && !handles.contains { $0.intersects(rect) }
+        } ?? safe.minY
+        let frame = CGRect(x: left, y: top, width: width, height: height)
+        // Even an unusually short viewport must pass handle touches through.
+        overlay.selectionHandleRects = handles
+        overlay.card.frame = frame
+        let inset: CGFloat = overflow ? 18 : 8
+        scrollView.frame = overlay.card.bounds.insetBy(dx: inset, dy: 0)
+        var x: CGFloat = 0
+        for (index, button) in buttons.enumerated() {
+            button.frame = CGRect(x: x, y: 0, width: widths[index], height: height); x += widths[index]
+            if index < dividers.count { dividers[index].frame = CGRect(x: x, y: 12, width: 1, height: height - 24); x += 1 }
+        }
+        scrollView.contentSize = CGSize(width: contentWidth, height: height)
+        scrollView.contentOffset.x = min(max(0, scrollView.contentOffset.x), max(0, contentWidth - scrollView.bounds.width))
+        leadingHint.frame = CGRect(x: 5, y: 16, width: 8, height: height - 32)
+        trailingHint.frame = CGRect(x: width - 13, y: 16, width: 8, height: height - 32)
+        updateScrollHints()
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+            // Geometry only, for real native handle drags; this does not create
+            // a selection or intercept touches in the book.
+            var markers: [UIAccessibilityElement] = []
+            let nativeHandles = source.nativeSelectionHandleViews
+            if nativeHandles.count == 2 {
+                for (index, handle) in nativeHandles.enumerated() {
+                    let rect = handle.convert(handle.bounds, to: view)
+                    let start = handle.direction.contains(.leading) || index == 0 && !handle.direction.contains(.trailing)
+                    let marker = UIAccessibilityElement(accessibilityContainer: overlay)
+                    marker.accessibilityIdentifier = start ? "selection-start-geometry" : "selection-end-geometry"
+                    marker.accessibilityLabel = start ? "Selection start geometry" : "Selection end geometry"
+                    marker.accessibilityValue = "native"
+                    marker.accessibilityFrameInContainerSpace = rect
+                    markers.append(marker)
+                }
+            }
+            for (index, rect) in source.selectionRectangles.enumerated() where nativeHandles.count != 2 && (index == 0 || index == source.selectionRectangles.count - 1) {
+                let converted = source.convert(rect, to: view)
+                let start = index == 0
+                let marker = UIAccessibilityElement(accessibilityContainer: overlay)
+                marker.accessibilityIdentifier = start ? "selection-start-geometry" : "selection-end-geometry"
+                marker.accessibilityLabel = start ? "Selection start geometry" : "Selection end geometry"
+                marker.accessibilityFrameInContainerSpace = CGRect(x: (start ? converted.minX - 2 : converted.maxX), y: converted.midY - 1, width: 2, height: 2)
+                markers.append(marker)
+                if source.selectionRectangles.count == 1 {
+                    let end = UIAccessibilityElement(accessibilityContainer: overlay)
+                    end.accessibilityIdentifier = "selection-end-geometry"; end.accessibilityLabel = "Selection end geometry"
+                    end.accessibilityFrameInContainerSpace = CGRect(x: converted.maxX, y: converted.midY - 1, width: 2, height: 2); markers.append(end)
+                }
+            }
+            overlay.accessibilityElements = [scrollView] + markers
+        }
+        #endif
     }
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { actions.count }
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let action = actions[indexPath.row], cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-        let button = UIButton(type: .system)
-        var config = UIButton.Configuration.plain()
-        config.title = action.title; config.image = UIImage(systemName: action.image); config.imagePadding = 12
-        config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
-        config.baseForegroundColor = UIColor(theme.foreground)
-        button.configuration = config; button.contentHorizontalAlignment = .leading
-        button.accessibilityIdentifier = "selection-" + action.id
-        button.addAction(UIAction { [weak self] _ in self?.chooseAction(indexPath.row) }, for: .touchUpInside)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        cell.contentView.addSubview(button)
-        NSLayoutConstraint.activate([button.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor), button.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor), button.topAnchor.constraint(equalTo: cell.contentView.topAnchor), button.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor)])
-        cell.backgroundColor = UIColor(theme.surface); cell.isAccessibilityElement = false
-        return cell
+    func scrollViewDidScroll(_ scrollView: UIScrollView) { updateScrollHints() }
+    private func updateScrollHints() {
+        leadingHint.isHidden = scrollView.contentOffset.x <= 1
+        trailingHint.isHidden = scrollView.contentOffset.x + scrollView.bounds.width >= scrollView.contentSize.width - 1
     }
-    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) { chooseAction(indexPath.row) }
-    private func chooseAction(_ index: Int) { choose?(actions[index].perform) }
 }
 
 final class ReaderWebView: WKWebView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
     var prepareSelection: (() async -> Void)?
+    func selectionDidChange() { selectionMenu.selectionDidChange() }
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil { selectionMenu.detach() }
@@ -392,6 +718,7 @@ final class ReaderWebView: WKWebView {
 
 final class ReaderPDFView: PDFView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
+    var isHandlingNativeSelectionGesture: Bool { selectionMenu.isHandlingNativeSelectionGesture }
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil { selectionMenu.detach() }
@@ -439,7 +766,7 @@ final class ReaderPDFView: PDFView {
 private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTrace", qos: .utility)
 @MainActor private var selectionMenuTraceStarted = false
 /// Bounded, boolean-only UI-test evidence. No book text, quotes, CFIs, or credentials.
-@MainActor func readerSelectionMenuTrace(_ event: String, source: UIView?, context: Bool? = nil) {
+@MainActor func readerSelectionMenuTrace(_ event: String, source: UIView?, context: Bool? = nil, point: CGPoint? = nil, target: UIView? = nil, duration: TimeInterval? = nil, distance: CGFloat? = nil) {
     guard ProcessInfo.processInfo.arguments.contains("--ui-testing"),
           let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
     let url = cache.appendingPathComponent("SelectionMenuUITestTrace.json")
@@ -450,7 +777,40 @@ private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTr
         "hasNativeRange": input?.selectedTextRange != nil, "nativeRangeEmpty": input?.selectedTextRange?.isEmpty ?? true, "nativeEditInteraction": source?.selectionEditMenu != nil,
         "legacyMenuVisible": UIMenuController.shared.isMenuVisible,
         "visibleMenuWindow": source?.window?.windowScene?.windows.contains(where: { $0 is ReaderSelectionWindow && !$0.isHidden }) ?? false]
+    if let source {
+        if let pdf = source as? PDFView, let page = pdf.currentPage, let document = pdf.document {
+            row["pdfPage"] = document.index(for: page)
+        }
+        row["deviceOrientation"] = UIDevice.current.orientation.rawValue
+        if let scene = source.window?.windowScene {
+            row["interfaceOrientation"] = scene.effectiveGeometry.interfaceOrientation.rawValue
+            let sceneBounds: CGRect
+            if #available(iOS 26, *) { sceneBounds = scene.effectiveGeometry.coordinateSpace.bounds }
+            else { sceneBounds = scene.coordinateSpace.bounds }
+            row["sceneWidth"] = sceneBounds.width; row["sceneHeight"] = sceneBounds.height
+            row["windows"] = scene.windows.prefix(8).map { window in
+                var controller = window.rootViewController
+                var masks: [UInt] = [], types: [String] = []
+                while let current = controller, masks.count < 8 {
+                    masks.append(current.supportedInterfaceOrientations.rawValue)
+                    types.append(String(describing: type(of: current)))
+                    controller = current.presentedViewController
+                }
+                return ["key": window.isKeyWindow, "hidden": window.isHidden, "width": window.bounds.width,
+                        "height": window.bounds.height, "controllerMasks": masks, "controllerTypes": types] as [String: Any]
+            }
+        }
+        row["nativeHandles"] = source.nativeSelectionHandleViews.prefix(2).map { handle in
+            let rect = source.convert(handle.bounds, from: handle)
+            return ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height, "direction": CGFloat(handle.direction.rawValue)]
+        }
+        row["selectionRects"] = source.selectionRectangles.prefix(8).map { ["x": $0.minX, "y": $0.minY, "width": $0.width, "height": $0.height] }
+    }
     if let context { row["context"] = context }
+    if let duration { row["touchDuration"] = duration }
+    if let distance { row["touchDistance"] = distance }
+    if let point { row["x"] = point.x; row["y"] = point.y }
+    if let target { row["touchView"] = String(describing: type(of: target)); row["touchInBook"] = source.map { target.isDescendant(of: $0) } ?? false }
     guard let record = try? JSONSerialization.data(withJSONObject: row) else { return }
     selectionMenuTraceQueue.async {
         guard let row = try? JSONSerialization.jsonObject(with: record) as? [String: Any] else { return }
