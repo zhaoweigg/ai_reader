@@ -59,9 +59,14 @@ final class LibraryChatUITests: XCTestCase {
         // Opening the book underneath the panel must synchronously save and stop
         // Library's owner before the reader creates a session for the same history.
         app.buttons["featuredBook"].tap()
-        XCTAssertTrue(app.buttons["Appearance"].waitForExistence(timeout: 15))
+        let surface = app.webViews["bookWebView"]
+        XCTAssertTrue(surface.waitForExistence(timeout: 15))
         let loading = app.staticTexts["Opening your book…"]
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: loading); waitForExpectations(timeout: 20)
+        if !app.buttons["Appearance"].exists {
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+        }
+        XCTAssertTrue(app.buttons["Appearance"].waitForExistence(timeout: 5))
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
         app.segmentedControls["readingFlow"].buttons[flow].tap()
@@ -93,13 +98,18 @@ final class LibraryChatUITests: XCTestCase {
         send("Hello without any books", app: app)
         XCTAssertFalse(app.staticTexts["readerChatError"].exists)
         input(app).tap(); input(app).typeText("Unsent general draft")
+        XCTAssertEqual(input(app).value as? String, "Unsent general draft")
+        // Backgrounding exercises the app's explicit flush; force termination
+        // directly after a keystroke can precede the shared 500 ms checkpoint.
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5))
         app.terminate(); app.launch(); app.buttons["openLibraryChat"].tap()
         XCTAssertEqual(input(app).value as? String, "Unsent general draft")
         XCTAssertTrue(app.staticTexts["Hello without any books"].exists)
         capture("General chat in empty Library after relaunch")
         app.buttons["chatOptions"].tap(); app.buttons["requestClearConversation"].tap()
         XCTAssertTrue(app.staticTexts["Clear your general conversation?"].waitForExistence(timeout: 5))
-        app.buttons["confirmClearConversation"].tap()
+        app.buttons["confirmClearConversation"].firstMatch.tap()
         XCTAssertFalse(app.staticTexts["Hello without any books"].exists)
         app.terminate(); app.launch(); app.buttons["openLibraryChat"].tap()
         XCTAssertFalse(app.staticTexts.matching(identifier: "chatQuestion").firstMatch.exists)
@@ -134,7 +144,7 @@ final class LibraryChatUITests: XCTestCase {
         app.buttons["chatBook-The Art of Noticing"].tap()
         XCTAssertEqual(input(app).value as? String, "Book draft")
         XCTAssertFalse(app.staticTexts["A separate general question"].exists)
-        app.buttons["chatOptions"].tap(); app.buttons["AI settings"].tap()
+        app.buttons["chatOptions"].tap(); app.buttons["AI settings"].firstMatch.tap()
         XCTAssertTrue(app.otherElements["aiProvider"].exists || app.buttons["aiProvider"].waitForExistence(timeout: 5))
         app.buttons["Close"].tap()
         XCTAssertEqual(input(app).value as? String, "Book draft")

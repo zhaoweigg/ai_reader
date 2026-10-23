@@ -233,6 +233,14 @@ struct ReaderChatPanel: View {
 
     private var accent: Color { theme.accent }
     private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var contextHint: String {
+        switch context {
+        case .reader: return settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off."
+        case .libraryBook:
+            return settings.configuration.sharePage ? "Continues this book’s saved chat. Library shares only its title and author; open the book to quote a new passage." : "Continues this book’s saved chat. Passage sharing is off."
+        case .general: return "This conversation is separate from your book chats. No books are attached automatically."
+        }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -337,9 +345,11 @@ struct ReaderChatPanel: View {
                             }
                             if session.messages.isEmpty && session.selectedContext == nil {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(context == .general ? "A little room to talk about what you’re reading." : ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
-                                        .font(.subheadline)
-                                    Text(context == .general ? "This conversation is separate from your book chats. No books are attached automatically." : context == .libraryBook ? "Continues this book’s saved chat. Open the book to quote a new passage; Library shares only its title and author." : settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off.")
+                                    if context == .reader {
+                                        Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
+                                            .font(.subheadline)
+                                    }
+                                    Text(contextHint)
                                         .font(.caption).foregroundStyle(.secondary)
                                     Button("AI settings", action: onSettings).font(.subheadline)
                                 }

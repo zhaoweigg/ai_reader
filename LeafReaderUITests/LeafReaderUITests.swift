@@ -771,7 +771,14 @@ final class LeafReaderUITests: XCTestCase {
         func openButtonSettings() {
             app.tabBars.buttons["Settings"].tap()
             let link = app.buttons["openChatButtonSettings"]
-            for _ in 0..<6 where !link.isHittable { app.swipeUp() }
+            let form = app.collectionViews.firstMatch
+            XCTAssertTrue(form.waitForExistence(timeout: 5))
+            for _ in 0..<6 where !link.isHittable {
+                // The center of Settings contains sliders/choice controls. Drag
+                // the Form's trailing padding so the gesture scrolls the list.
+                form.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.85)).press(forDuration: 0.05,
+                    thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.2)))
+            }
             XCTAssertTrue(link.isHittable);link.tap()
             XCTAssertTrue(app.sliders["chatButtonTransparency"].waitForExistence(timeout:5))
         }
