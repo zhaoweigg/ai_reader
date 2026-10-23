@@ -283,6 +283,120 @@ final class LeafReaderUITests: XCTestCase {
         capture("PDF selection attached", app: app)
     }
 
+    @MainActor func testListeningFromBottomMenuInBothFlowsPersistsAndFitsLandscape() {
+        let app = launchApp()
+        defer { XCUIDevice.shared.orientation = .portrait }
+        app.buttons["featuredBook"].tap()
+        for flow in ["Pages", "Scroll"] {
+            showReaderControls(app); app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+            dismissAppearance(app); showReaderControls(app)
+            let surface = readingSurface(app), width = surface.frame.width
+            XCTAssertTrue(app.buttons["Listen"].isHittable); app.buttons["Listen"].tap()
+            XCTAssertTrue(app.buttons["listenFromPage"].waitForExistence(timeout: 5))
+            capture(flow + " listening settings", app: app)
+            app.buttons["listenFromPage"].tap()
+            let pause = app.buttons["audioPlayPause"]
+            expectation(for: NSPredicate(format: "label == %@", "Pause listening"), evaluatedWith: pause); waitForExpectations(timeout: 15)
+            XCTAssertTrue(app.staticTexts["spokenPassage"].exists)
+            XCTAssertEqual(surface.frame.width, width, accuracy: 1)
+            pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+            app.buttons["audioNext"].tap()
+            XCTAssertEqual(pause.label, "Resume listening", "Skipping while paused must remain paused")
+            capture(flow + " listening paused with passage", app: app)
+            app.buttons["playbackSpeed"].tap(); app.buttons["1.5×"].tap()
+            pause.tap(); XCTAssertEqual(pause.label, "Pause listening")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            for id in ["listeningSettings", "audioPlayPause", "stopListening"] { XCTAssertTrue(app.buttons[id].isHittable) }
+            capture(flow + " listening landscape", app: app)
+            XCUIDevice.shared.orientation = .portrait
+            expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            let viewportBeforeComposing = surface.frame
+            app.buttons["openReaderChat"].tap()
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            let baseDraft = "Keep this question while listening"
+            input.tap()
+            if flow == "Pages" { input.typeText(baseDraft) }
+            else {
+                XCTAssertEqual(input.value as? String, baseDraft, "The first flow's draft is intentionally restored")
+                input.typeText(" [Scroll]")
+            }
+            let expectedDraft = input.value as? String ?? ""
+            XCTAssertEqual(expectedDraft.replacingOccurrences(of: " [Scroll]", with: ""), baseDraft)
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5), "An offscreen hardware-keyboard preview is not a composing state")
+            XCTAssertLessThan(app.keyboards.firstMatch.frame.minY, app.frame.maxY - 100)
+            XCTAssertEqual(surface.frame.width, viewportBeforeComposing.width, accuracy: 1)
+            XCTAssertEqual(surface.frame.height, viewportBeforeComposing.height, accuracy: 1)
+            XCTAssertTrue(pause.isHittable, "Playback must remain controllable while composing a question")
+            pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+            XCTAssertEqual(input.value as? String, expectedDraft)
+            capture(flow + " listening controls while typing to Ask Leaf", app: app)
+            pause.tap(); XCUIDevice.shared.press(.home); app.activate()
+            XCTAssertTrue(pause.waitForExistence(timeout: 8)); XCTAssertEqual(pause.label, "Resume listening", "Background playback pauses and retains the cursor")
+            XCTAssertEqual(input.value as? String, expectedDraft)
+            capture(flow + " listening paused after background", app: app)
+            app.buttons["closeReaderChat"].tap()
+            app.buttons["stopListening"].tap()
+            XCTAssertFalse(app.buttons["audioPlayPause"].exists)
+            showReaderControls(app); app.buttons["closeBook"].tap(); app.buttons["featuredBook"].tap()
+            showReaderControls(app); app.buttons["Listen"].tap()
+            XCTAssertTrue(app.buttons["resumeSavedListening"].waitForExistence(timeout: 5))
+            capture(flow + " saved listening position", app: app)
+            app.buttons["resumeSavedListening"].tap()
+            XCTAssertTrue(pause.waitForExistence(timeout: 10)); app.buttons["stopListening"].tap()
+        }
+    }
+
+    @MainActor func testListeningFromNativeSelectionInBothFlows() {
+        let app = launchApp(); app.buttons["featuredBook"].tap()
+        for flow in ["Pages", "Scroll"] {
+            showReaderControls(app); app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap(); dismissAppearance(app)
+            let surface = readingSurface(app)
+            let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Attention is a way")).firstMatch
+            XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
+            paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.1)).press(forDuration: 1.2)
+            let menu = app.menuItems["Listen from here"].exists ? app.menuItems["Listen from here"] : app.buttons["Listen from here"]
+            XCTAssertTrue(menu.waitForExistence(timeout: 5))
+            capture(flow + " native Listen from here menu", app: app); menu.tap()
+            let pause = app.buttons["audioPlayPause"]
+            expectation(for: NSPredicate(format: "label == %@", "Pause listening"), evaluatedWith: pause); waitForExpectations(timeout: 15)
+            pause.tap()
+            XCTAssertFalse(app.buttons["closeReaderChat"].exists)
+            XCTAssertTrue(app.staticTexts["spokenPassage"].exists)
+            capture(flow + " playing selected passage", app: app)
+            app.buttons["stopListening"].tap()
+            showReaderControls(app); app.buttons["Contents"].tap()
+            app.buttons["Begin where you are"].tap()
+        }
+    }
+
+    @MainActor func testPDFListeningFromSelectionAndBottomMenu() {
+        let app = launchApp()
+        let search = app.textFields["librarySearch"]; XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
+        app.buttons["book-Notes from the Coast"].tap()
+        showReaderControls(app); app.buttons["nextPage"].tap(); showReaderControls(app)
+        app.buttons["Listen"].tap(); app.buttons["listenFromPage"].tap()
+        let pause = app.buttons["audioPlayPause"]
+        expectation(for: NSPredicate(format: "label == %@", "Pause listening"), evaluatedWith: pause); waitForExpectations(timeout: 15)
+        pause.tap(); capture("PDF listening from visible page", app: app); app.buttons["stopListening"].tap()
+        let surface = readingSurface(app)
+        let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Before the town")).firstMatch
+        if paragraph.exists { paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.25)).press(forDuration: 1.2) }
+        else { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.25)).press(forDuration: 1.2) }
+        let menu = app.menuItems["Listen from here"].exists ? app.menuItems["Listen from here"] : app.buttons["Listen from here"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5)); capture("PDF native listening selection menu", app: app); menu.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Pause listening"), evaluatedWith: pause); waitForExpectations(timeout: 15)
+        pause.tap(); XCTAssertTrue(app.staticTexts["spokenPassage"].exists)
+        capture("PDF listening from selected character", app: app); app.buttons["stopListening"].tap()
+    }
+
     @MainActor func testTextSizePreviewAfterSwitchingScrollAndPages() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()

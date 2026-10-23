@@ -9,17 +9,20 @@
 /* Begin PBXBuildFile section */
 		021B49041E40EA7358E662DB /* ChatGPTBrowserSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6850C7062B504A73A5242F98 /* ChatGPTBrowserSignIn.swift */; };
 		023DC1F13BA5C16630D5F12C /* AnnotationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC58F359F95C7405EC4DCB7B /* AnnotationUITests.swift */; };
+		1153DC061343A5D649032DD9 /* ReaderAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09DD5D1300ECF05BFAB674CF /* ReaderAudioPlayer.swift */; };
 		11F98810E05BCDC675C839EC /* ThemePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24297F21BBA41AD9AFD4A205 /* ThemePicker.swift */; };
 		1608AF5DEBCE97A8D9E72A38 /* LibraryChatUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */; };
 		1638B0F496721D3878BCB0BA /* AISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 241FD63FE84D0DB2819A589D /* AISettingsView.swift */; };
 		21ED9AF526E865E9547836E5 /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB89A39521EB5C1CB63BFC12 /* LibraryStore.swift */; };
 		240E576211DE00CEFEFC6B1E /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DDD91EF78808E1BD8AE415A /* ChatTests.swift */; };
 		262B7A06D68B8DB11254B6DD /* Fixtures in Resources */ = {isa = PBXBuildFile; fileRef = 8BEDAE49739E86E86ABC4D4D /* Fixtures */; };
+		2E28072A5C0CFC5100F00BEF /* ReaderAudioSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56D4D8913088D871C0A664F5 /* ReaderAudioSource.swift */; };
 		30AC44B6FCED33B9B5D44150 /* ReaderChatSizingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6B988ABBAD66FABEDB1E8E /* ReaderChatSizingTests.swift */; };
 		36730BF910AF1DBF55AE4EA9 /* ChatProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2776E6B6192B8E7EC19E4B8F /* ChatProvider.swift */; };
 		3FD99BFAA6C100E30E07044C /* ReaderAnnotationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7B596C7A37807FDBC583EA2 /* ReaderAnnotationsView.swift */; };
 		45A8DCDD2BA104372550136B /* ReaderModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7679CE530CAB3E1CBC7BF6 /* ReaderModel.swift */; };
 		48197B9BA6699E9830F76310 /* AddBooksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBECD7296E1A713FB8FE684C /* AddBooksView.swift */; };
+		4B9CCD168963BB4BB85D5646 /* ReadAloudSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B903372F35178474AE142CA2 /* ReadAloudSession.swift */; };
 		4FFA5D443B98E1E4B80522B2 /* ChatHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AF0B59C16AA23A2176C159D /* ChatHistoryTests.swift */; };
 		51E73A18348FB06EA3C85062 /* LibraryDisk.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62F03A2C012E7FD2C2F2AE2 /* LibraryDisk.swift */; };
 		528EB5F991F8175152420471 /* ReaderEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */; };
@@ -53,6 +56,7 @@
 		C787599E72120592DA445D2D /* ReaderChatPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F25FA3CF6923499A67C834 /* ReaderChatPanel.swift */; };
 		CA53E0D5B88DDD43C8306E39 /* ChatHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14B74EB530BE5F91DAC4B044 /* ChatHistoryStore.swift */; };
 		CE3F5B2B76E940DDD061A8A8 /* ChatModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96E14EF665D316B3CB3BA361 /* ChatModels.swift */; };
+		D0146216C2B09D9D5FA9A427 /* ReadAloudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9CBBF39DAF2F59A5F37C5B6 /* ReadAloudTests.swift */; };
 		D6DA98B648C58A402A3FF952 /* ReaderSurfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AE2D547BB82C9FCAEE6E8D7 /* ReaderSurfaces.swift */; };
 		D9CC609F0D4142FA91D26A0A /* ZLibraryBrowserSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03415DD750D6982938373279 /* ZLibraryBrowserSession.swift */; };
 		E4F40376077E61558F758D31 /* BookAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDFDA3B1B04E80DC6E19DE41 /* BookAnnotation.swift */; };
@@ -82,6 +86,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		09DD5D1300ECF05BFAB674CF /* ReaderAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAudioPlayer.swift; sourceTree = "<group>"; };
 		03415DD750D6982938373279 /* ZLibraryBrowserSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryBrowserSession.swift; sourceTree = "<group>"; };
 		14B74EB530BE5F91DAC4B044 /* ChatHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHistoryStore.swift; sourceTree = "<group>"; };
 		1B7679CE530CAB3E1CBC7BF6 /* ReaderModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderModel.swift; sourceTree = "<group>"; };
@@ -102,6 +107,7 @@
 		3BAAB2D0ADFB4B6AD2057EFA /* ChatGPTSubscriptionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTSubscriptionProvider.swift; sourceTree = "<group>"; };
 		3FD904DA89A963355B4AFD5B /* AnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationTests.swift; sourceTree = "<group>"; };
 		53EF7C81ECA87AA792CB61CD /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
+		56D4D8913088D871C0A664F5 /* ReaderAudioSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAudioSource.swift; sourceTree = "<group>"; };
 		5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryChatUITests.swift; sourceTree = "<group>"; };
 		5E6DF2E83336FF008A3ECB0C /* ZLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryTests.swift; sourceTree = "<group>"; };
 		613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryUITests.swift; sourceTree = "<group>"; };
@@ -122,6 +128,7 @@
 		AE07B9A1522472930DD1E8D6 /* ChatGPTConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTConnectionView.swift; sourceTree = "<group>"; };
 		B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTests.swift; sourceTree = "<group>"; };
 		B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderEngineTests.swift; sourceTree = "<group>"; };
+		B903372F35178474AE142CA2 /* ReadAloudSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadAloudSession.swift; sourceTree = "<group>"; };
 		BC58F359F95C7405EC4DCB7B /* AnnotationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationUITests.swift; sourceTree = "<group>"; };
 		C30FC3F239F7C9AB36F0AFB5 /* LibraryChatOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryChatOverlay.swift; sourceTree = "<group>"; };
 		C62F03A2C012E7FD2C2F2AE2 /* LibraryDisk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryDisk.swift; sourceTree = "<group>"; };
@@ -134,6 +141,7 @@
 		DEC483DB37697EED2DA2BC84 /* BookCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookCover.swift; sourceTree = "<group>"; };
 		DF8F5668FCD9D8ABD500192D /* ReaderAppearancePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAppearancePanel.swift; sourceTree = "<group>"; };
 		E6B763DF832118110BAED95B /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
+		E9CBBF39DAF2F59A5F37C5B6 /* ReadAloudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadAloudTests.swift; sourceTree = "<group>"; };
 		EB3AB44E4ACA1C37A7A07CAE /* LeafReaderUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LeafReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F09FE5DD36BCC4F16362E9EA /* LeafReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeafReaderApp.swift; sourceTree = "<group>"; };
 		F9567239B01E0D6638DA1D06 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
@@ -180,6 +188,7 @@
 				F9567239B01E0D6638DA1D06 /* LibraryView.swift */,
 				D7B596C7A37807FDBC583EA2 /* ReaderAnnotationsView.swift */,
 				DF8F5668FCD9D8ABD500192D /* ReaderAppearancePanel.swift */,
+				09DD5D1300ECF05BFAB674CF /* ReaderAudioPlayer.swift */,
 				D1F25FA3CF6923499A67C834 /* ReaderChatPanel.swift */,
 				1C1484671B40D96BC623E4F9 /* ReaderSelectionMenu.swift */,
 				2AE2D547BB82C9FCAEE6E8D7 /* ReaderSurfaces.swift */,
@@ -210,6 +219,7 @@
 				8AF0B59C16AA23A2176C159D /* ChatHistoryTests.swift */,
 				1DDD91EF78808E1BD8AE415A /* ChatTests.swift */,
 				B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */,
+				E9CBBF39DAF2F59A5F37C5B6 /* ReadAloudTests.swift */,
 				1C6B988ABBAD66FABEDB1E8E /* ReaderChatSizingTests.swift */,
 				B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */,
 				E6B763DF832118110BAED95B /* ThemeTests.swift */,
@@ -261,7 +271,9 @@
 				8899A77310F180B812766D5D /* BookMetadataLoader.swift */,
 				C62F03A2C012E7FD2C2F2AE2 /* LibraryDisk.swift */,
 				DB89A39521EB5C1CB63BFC12 /* LibraryStore.swift */,
+				B903372F35178474AE142CA2 /* ReadAloudSession.swift */,
 				34C5A29FFA6B5D43FE7AF65C /* ReaderAssetHandler.swift */,
+				56D4D8913088D871C0A664F5 /* ReaderAudioSource.swift */,
 				1B7679CE530CAB3E1CBC7BF6 /* ReaderModel.swift */,
 				FBE3E9591184C7FEDE46AC16 /* Catalog */,
 				60AC48A60443F0C7A664968C /* Chat */,
@@ -440,9 +452,12 @@
 				51E73A18348FB06EA3C85062 /* LibraryDisk.swift in Sources */,
 				21ED9AF526E865E9547836E5 /* LibraryStore.swift in Sources */,
 				78A529FF823C019A8445E417 /* LibraryView.swift in Sources */,
+				4B9CCD168963BB4BB85D5646 /* ReadAloudSession.swift in Sources */,
 				3FD99BFAA6C100E30E07044C /* ReaderAnnotationsView.swift in Sources */,
 				BA394ED9A589ADD27030CB7E /* ReaderAppearancePanel.swift in Sources */,
 				EFE98F950DFB6227CCCB254E /* ReaderAssetHandler.swift in Sources */,
+				1153DC061343A5D649032DD9 /* ReaderAudioPlayer.swift in Sources */,
+				2E28072A5C0CFC5100F00BEF /* ReaderAudioSource.swift in Sources */,
 				C787599E72120592DA445D2D /* ReaderChatPanel.swift in Sources */,
 				629FC1922792EEB8C5174BEC /* ReaderChatSession.swift in Sources */,
 				45A8DCDD2BA104372550136B /* ReaderModel.swift in Sources */,
@@ -468,6 +483,7 @@
 				4FFA5D443B98E1E4B80522B2 /* ChatHistoryTests.swift in Sources */,
 				240E576211DE00CEFEFC6B1E /* ChatTests.swift in Sources */,
 				716D839DBA091435CCFAF605 /* LibraryTests.swift in Sources */,
+				D0146216C2B09D9D5FA9A427 /* ReadAloudTests.swift in Sources */,
 				30AC44B6FCED33B9B5D44150 /* ReaderChatSizingTests.swift in Sources */,
 				528EB5F991F8175152420471 /* ReaderEngineTests.swift in Sources */,
 				F3AFD62E37C55DE98DED5815 /* ThemeTests.swift in Sources */,

@@ -17,6 +17,7 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var hasSearched = false
     @Published var controlsVisible = false
     @Published var selectionRequest: ReaderSelectionRequest?
+    @Published var listeningRequest: ReaderListeningRequest?
     @Published var annotationDraft: BookAnnotation?
     @Published var annotationError: String?
     @Published private(set) var liveSelection: ReadingChatContext?

@@ -53,6 +53,201 @@ final class ReaderEngineTests: XCTestCase {
         let rendered = try await model.webView?.evaluateJavaScript("window.Leaf.visibleText()") as? String
         XCTAssertTrue(rendered?.localizedCaseInsensitiveContains(text) == true, "Missing '\(text)' in rendered content: \(rendered?.prefix(500) ?? "nil")")
     }
+    func testReadAloudStartsAtExactSelectionInBothFlowsAndKeepsChatAndBookmarks() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let web = try XCTUnwrap(model.webView)
+            model.toggleBookmark(); let bookmarks = model.book?.bookmarks
+            let value = try await web.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'), doc=view.renderer.getContents()[0].doc;
+                const p=[...doc.querySelectorAll('p')].find(p=>p.textContent.includes('Attention'));
+                const node=p.firstChild, start=node.data.indexOf('way');
+                const range=doc.createRange(); range.setStart(node,start);range.setEnd(node,start+3);
+                const selection=doc.getSelection(); selection.removeAllRanges();selection.addRange(range);
+                const snapshot=window.Leaf.chatContext(), before=view.lastLocation.cfi;
+                const chunk=await window.Leaf.readAloudChunk({locator:snapshot.locator});
+                const target=view.resolveCFI(chunk.locator), text=target.anchor(doc).toString();
+                return {chunk,rangeText:text,before,after:view.lastLocation.cfi,selection:window.Leaf.chatContext().text};
+                """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+            let result = try XCTUnwrap(value), chunk = try XCTUnwrap(result["chunk"] as? [String: Any])
+            XCTAssertTrue((chunk["text"] as? String)?.hasPrefix("way of arriving") == true, "\(result)")
+            XCTAssertEqual((result["rangeText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), chunk["text"] as? String)
+            XCTAssertEqual(result["before"] as? String, result["after"] as? String)
+            XCTAssertEqual(result["selection"] as? String, "way")
+            XCTAssertEqual(model.book?.bookmarks, bookmarks)
+            let parsed = try await model.readAloudPassage(at: chunk["locator"] as? String)
+            XCTAssertEqual(parsed?.text, chunk["text"] as? String)
+            _ = try await model.webView?.evaluateJavaScript("window.Leaf.close()")
+        }
+    }
+    func testReadAloudTraversesEveryChapterLazilyWithoutMovingReadingViewport() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let result = try await model.webView?.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view');
+                const before=view.lastLocation.cfi, visited=new Set(), cursors=new Set(), parsed=[];
+                for(const [index,section] of view.book.sections.entries()) {
+                    const create=section.createDocument;
+                    if(create)section.createDocument=()=>{parsed[index]=(parsed[index]??0)+1;return create();};
+                }
+                let locator='section:0', count=0, longest=0, maxDocuments=0, ended=false;
+                for (;count<1000;++count) {
+                    const chunk=await window.Leaf.readAloudChunk({locator});
+                    if (!chunk) {ended=true;break;}
+                    if(cursors.has(chunk.locator)) throw new Error('Repeated listening cursor');
+                    cursors.add(chunk.locator);visited.add(chunk.index);longest=Math.max(longest,chunk.text.length);
+                    maxDocuments=Math.max(maxDocuments,view.renderer.getContents().length);
+                    locator=chunk.nextLocator;
+                }
+                return {ended,count,longest,maxDocuments,parsed:Array.from({length:view.book.sections.length},(_,i)=>parsed[i]??0),visited:[...visited],sections:view.book.sections.length,
+                    before,after:view.lastLocation.cfi};
+                """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+            let value = try XCTUnwrap(result)
+            XCTAssertEqual(value["ended"] as? Bool, true); XCTAssertGreaterThan(value["count"] as? Int ?? 0, 4)
+            XCTAssertEqual(value["visited"] as? [Int], [0, 1, 2, 3], "\(value)")
+            XCTAssertLessThanOrEqual(value["longest"] as? Int ?? 9999, 800)
+            XCTAssertLessThanOrEqual(value["maxDocuments"] as? Int ?? 99, scrolling ? 3 : 1)
+            XCTAssertEqual(value["before"] as? String, value["after"] as? String)
+            XCTAssertTrue((value["parsed"] as? [Int] ?? []).allSatisfy { $0 <= 1 }, "A chapter must not be reparsed for each spoken paragraph: \(value)")
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: value), uniformTypeIdentifier: "public.json")
+            attachment.name = "Read aloud lazy traversal scrolling=\(scrolling)"; attachment.lifetime = .keepAlways; add(attachment)
+        }
+    }
+    func testReadAloudSessionFollowsAcrossRealChapterBoundariesAndRestoresSavedCursor() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let speaker = RecordingSpeaker()
+            let bookmarkURL = try XCTUnwrap(root).appendingPathComponent("speech-\(scrolling).json")
+            let name = "SpeechEngine.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: name)!
+            addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+            let session = ReadAloudSession(bookmarkURL: bookmarkURL, defaults: defaults, speaker: speaker)
+            session.followsText = true
+            session.source = { [weak model] locator in try await model?.readAloudPassage(at: locator) }
+            session.reveal = { [weak model] locator in await model?.revealReadAloud(at: locator) }
+            let oldChapter = model.chapterTitle
+            session.start(at: model.locator)
+            try await waitUntil { session.state == .playing }
+            var reached = false
+            for _ in 0..<80 {
+                let prior = session.passage?.locator
+                speaker.finished?()
+                try await waitUntil { session.passage?.locator != prior || session.state == .finished || session.state == .failed }
+                if model.chapterTitle != oldChapter { reached = true; break }
+            }
+            XCTAssertTrue(reached, "Spoken passages must cross an actual chapter boundary in scrolling=\(scrolling)")
+            XCTAssertNil(session.error)
+            session.pause()
+            let saved = try XCTUnwrap(session.bookmark)
+            session.stop()
+            let reopened = ReadAloudSession(bookmarkURL: bookmarkURL, defaults: defaults, speaker: RecordingSpeaker())
+            reopened.source = session.source; reopened.reveal = session.reveal
+            reopened.resumeSaved(); try await waitUntil { reopened.state == .playing }
+            XCTAssertEqual(reopened.passage?.locator, saved.locator)
+            let encoded = String(decoding: try JSONEncoder().encode(saved.locator), as: UTF8.self)
+            // Source restoration is exact even while native reveal finishes asynchronously.
+            let restored = try await model.readAloudPassage(at: saved.locator)
+            XCTAssertEqual(restored?.text, reopened.passage?.text)
+            await model.revealReadAloud(at: saved.locator)
+            let visible = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
+            XCTAssertEqual(visible, true)
+            reopened.stop()
+        }
+    }
+    func testReadAloudPreservesInlineWordsChineseAndEmojiAcrossChunkBoundariesAndReflow() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "窗外")
+            let web = try XCTUnwrap(model.webView)
+            let result = try await web.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'),doc=view.renderer.getContents()[0].doc;
+                const p=doc.querySelector('p');p.innerHTML='First <em>inline</em> words. <span hidden>NEVER SPEAK</span>'+ '中😀'.repeat(600);
+                let locator=view.getCFI(0,(()=>{const r=doc.createRange();r.selectNodeContents(p);return r;})());
+                let combined='',chunks=0,splitSurrogate=false;
+                for(;chunks<20;++chunks){const c=await window.Leaf.readAloudChunk({locator});
+                    if(!c||c.label==='stop')break;
+                    combined+=c.text;locator=c.nextLocator;
+                    splitSurrogate ||= /[\\uD800-\\uDBFF]$/.test(c.text)||/^[\\uDC00-\\uDFFF]/.test(c.text);
+                    if(combined.endsWith('中😀'.repeat(3))&&combined.length>=1820)break;
+                }
+                return {combined,chunks,splitSurrogate};
+                """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+            let value = try XCTUnwrap(result), text = try XCTUnwrap(value["combined"] as? String)
+            XCTAssertTrue(text.hasPrefix("First inline words. "), "\(text.prefix(60))")
+            XCTAssertFalse(text.contains("NEVER SPEAK")); XCTAssertEqual(value["splitSurrogate"] as? Bool, false)
+            XCTAssertTrue(text.contains(String(repeating: "中😀", count: 600)), "No characters may disappear between chunks")
+        }
+    }
+    func testDetachedSpeechDocumentUsesTheSameSanitizedCFIPositionsAsRenderedText() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'); await view.goTo(2);
+            const content=view.renderer.getContents()[0],doc=content.doc,p=doc.querySelector('p');
+            const walker=doc.createTreeWalker(p,NodeFilter.SHOW_TEXT);const node=walker.nextNode();
+            const range=doc.createRange();range.setStart(node,5);range.setEnd(node,10);
+            const locator=view.getCFI(content.index,range),expected=node.data.slice(5);
+            await view.goTo(0);window.Leaf.clearReadAloud();
+            const section=view.book.sections[content.index],create=section.createDocument;
+            section.createDocument=async()=>{const raw=await create();const script=raw.createElement('script');
+                script.textContent='DO NOT READ';raw.body.prepend(script);return raw;};
+            const chunk=await window.Leaf.readAloudChunk({locator});
+            return {expected,text:chunk.text,index:chunk.index,active:view.renderer.getContents()[0].index};
+            """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        let value = try XCTUnwrap(result)
+        XCTAssertEqual(value["text"] as? String, (value["expected"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertEqual(value["index"] as? Int, 2); XCTAssertEqual(value["active"] as? Int, 0)
+    }
+    func testRapidSpokenPassageFollowingFinishesAtLatestColdChapter() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view');
+            const earlier=await window.Leaf.readAloudChunk({locator:'section:2'});
+            const latest=await window.Leaf.readAloudChunk({locator:'section:3'});
+            const section=view.book.sections[2],load=section.load;
+            section.load=async()=>{await new Promise(r=>setTimeout(r,100));return load();};
+            const first=window.Leaf.revealReadAloud({locator:earlier.locator});
+            await new Promise(r=>setTimeout(r,10));
+            await Promise.all([first,window.Leaf.revealReadAloud({locator:latest.locator})]);
+            return {active:view.renderer.getContents()[0].index,visible:window.Leaf.isLocationVisible(latest.locator)};
+            """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        XCTAssertEqual(result?["active"] as? Int, 3); XCTAssertEqual(result?["visible"] as? Bool, true)
+    }
+    func testReadAloudKeepsHardLineBreaksWithoutChangingInlineWordsOrCFIsInBothFlows() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "窗外")
+            let result = try await model.webView?.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'),doc=view.renderer.getContents()[0].doc,p=doc.querySelector('p');
+                p.innerHTML='Before<br>after <em>inline</em> text.';
+                const range=doc.createRange();range.selectNodeContents(p);
+                const locator=view.getCFI(0,range),chunk=await window.Leaf.readAloudChunk({locator});
+                const repeated=await window.Leaf.readAloudChunk({locator:chunk.locator});
+                return {spoken:chunk.text,repeated:repeated.text,original:p.textContent,
+                    rangeText:view.resolveCFI(chunk.locator).anchor(doc).toString()};
+                """, arguments: [:], in: nil, contentWorld: .page) as? [String: String]
+            XCTAssertEqual(result?["spoken"], "Before\nafter inline text.", "Hard line breaks must not glue neighboring words")
+            XCTAssertEqual(result?["repeated"], result?["spoken"])
+            XCTAssertEqual(result?["original"], "Beforeafter inline text.")
+            XCTAssertEqual(result?["rangeText"], result?["original"], "The original DOM and CFI character offsets must stay intact")
+        }
+    }
     func testEPUBRendersSearchesAndRestoresPosition() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         let model = try show(book, url: url)
