@@ -1,16 +1,28 @@
 import XCTest
 
 final class LeafReaderUITests: XCTestCase {
+    private var geometryApp: XCUIApplication?
+    @MainActor private func orient(_ direction: UIDeviceOrientation) {
+        if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
+        else { XCUIDevice.shared.orientation = direction }
+    }
     @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
+        app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = "1"
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
         app.launch()
+        geometryApp = app
+        orient(.portrait)
+        addTeardownBlock { @MainActor in
+            if app.state == .runningForeground { self.setReaderOrientation(.portrait, app: app) }
+            app.terminate()
+        }
         return app
     }
 
@@ -141,21 +153,21 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testThemeSelectorFitsLandscapeAndKeepsItsChoiceAfterRotation() {
         let app = launchApp()
-        defer { XCUIDevice.shared.orientation = .portrait }
+        defer { orient(.portrait) }
         app.tabBars.buttons["Settings"].tap()
         app.buttons["Night theme"].tap()
-        XCUIDevice.shared.orientation = .landscapeLeft
+        orient(.landscapeLeft)
         app.buttons["Sage theme"].tap()
         XCTAssertTrue(app.buttons["Sage theme"].isSelected)
         capture("Landscape app theme selector", app: app)
-        XCUIDevice.shared.orientation = .portrait
+        orient(.portrait)
         XCTAssertTrue(app.buttons["Sage theme"].isSelected)
         app.tabBars.buttons["Library"].tap()
         app.buttons["featuredBook"].tap()
         showReaderControls(app)
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
-        XCUIDevice.shared.orientation = .landscapeLeft
+        orient(.landscapeLeft)
         revealAppearanceControl(app, app.buttons["Paper theme"])
         app.buttons["Paper theme"].tap()
         XCTAssertTrue(app.buttons["Paper theme"].isSelected)
@@ -163,7 +175,7 @@ final class LeafReaderUITests: XCTestCase {
         revealAppearanceControl(app, app.buttons["Dusk theme"])
         app.buttons["Dusk theme"].tap()
         XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
-        XCUIDevice.shared.orientation = .portrait
+        orient(.portrait)
         XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
         capture("Reader theme selector after rotation", app: app)
     }
@@ -285,7 +297,7 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testListeningFromBottomMenuInBothFlowsPersistsAndFitsLandscape() {
         let app = launchApp()
-        defer { XCUIDevice.shared.orientation = .portrait }
+        defer { orient(.portrait) }
         app.buttons["featuredBook"].tap()
         for flow in ["Pages", "Scroll"] {
             showReaderControls(app); app.buttons["Appearance"].tap()
@@ -309,11 +321,11 @@ final class LeafReaderUITests: XCTestCase {
             capture(flow + " listening paused with passage", app: app)
             app.buttons["playbackSpeed"].tap(); app.buttons["1.5×"].tap()
             pause.tap(); XCTAssertEqual(pause.label, "Pause listening")
-            XCUIDevice.shared.orientation = .landscapeLeft
+            self.orient(.landscapeLeft)
             expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
             for id in ["listeningSettings", "audioPlayPause", "stopListening"] { XCTAssertTrue(app.buttons[id].isHittable) }
             capture(flow + " listening landscape", app: app)
-            XCUIDevice.shared.orientation = .portrait
+            self.orient(.portrait)
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
             let viewportBeforeComposing = surface.frame
             app.buttons["openReaderChat"].tap()
@@ -373,8 +385,8 @@ final class LeafReaderUITests: XCTestCase {
     }
     @MainActor func testExpandedSelectionMenuShowsAllPrimaryActionsAndCopiesInPagesScrollAndPDF() {
         continueAfterFailure = false
-        XCUIDevice.shared.orientation = .portrait
-        defer { XCUIDevice.shared.orientation = .portrait }
+        orient(.portrait)
+        defer { orient(.portrait) }
         for flow in ["Pages", "Scroll", "PDF"] {
             let app = launchApp(); openSelectionFixture(flow, app: app)
             app.buttons["openReaderChat"].tap()
@@ -389,11 +401,11 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertFalse(selected.isEmpty)
             for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " " + id) }
             capture(flow + " expanded selection menu all actions", app: app)
-            XCUIDevice.shared.orientation = .landscapeLeft
+            self.orient(.landscapeLeft)
             expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
             for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " landscape " + id) }
             capture(flow + " expanded selection menu landscape", app: app)
-            XCUIDevice.shared.orientation = .portrait
+            self.orient(.portrait)
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
             app.buttons["selection-copy"].tap()
             XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
@@ -479,8 +491,8 @@ final class LeafReaderUITests: XCTestCase {
     }
     @MainActor func testSpeechProgressHighlightsVisibleTextInPagesScrollAndPDF() {
         continueAfterFailure = false
-        XCUIDevice.shared.orientation = .portrait
-        defer { XCUIDevice.shared.orientation = .portrait }
+        orient(.portrait)
+        defer { orient(.portrait) }
         for flow in ["Pages", "Scroll", "PDF"] {
             let app = launchApp(); openSelectionFixture(flow, app: app)
             selectFixturePassage(flow, app: app)
@@ -490,11 +502,11 @@ final class LeafReaderUITests: XCTestCase {
             pause.tap(); let word = status.value as? String ?? ""
             XCTAssertFalse(word.isEmpty); XCTAssertEqual(pause.label, "Resume listening")
             capture(flow + " actual spoken text highlighted while paused", app: app)
-            XCUIDevice.shared.orientation = .landscapeLeft
+            self.orient(.landscapeLeft)
             expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
             XCTAssertEqual(status.value as? String, word)
             capture(flow + " spoken highlight retained after rotation", app: app)
-            XCUIDevice.shared.orientation = .portrait
+            self.orient(.portrait)
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
             app.buttons["openReaderChat"].tap()
             let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
@@ -650,7 +662,7 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testSelectionMenuOpensChatWithAttachedPassageInBothFlows() {
         let app = launchApp()
-        defer { XCUIDevice.shared.orientation = .portrait }
+        defer { orient(.portrait) }
         app.buttons["featuredBook"].tap()
         for flow in ["Pages", "Scroll"] {
             showReaderControls(app)
@@ -697,13 +709,13 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertEqual(input.value as? String, prompt, "Switching shortcuts replaces the prior preset")
                 XCTAssertFalse(app.staticTexts["chatQuestion"].exists, "A shortcut prepares an editable draft")
                 if flow == "Scroll" {
-                    XCUIDevice.shared.orientation = .landscapeLeft
+                    self.orient(.landscapeLeft)
                     expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                     XCTAssertTrue(app.buttons["explainChatSelection"].isHittable)
                     XCTAssertTrue(app.buttons["summarizeChatSelection"].isHittable)
                     capture("Landscape selection shortcuts", app: app)
-                    XCUIDevice.shared.orientation = .portrait
+                    self.orient(.portrait)
                     expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                 }
@@ -714,7 +726,7 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertTrue(app.buttons["removeChatSelection"].isHittable)
                 capture(flow + " attached passage while typing", app: app)
                 if flow == "Scroll" {
-                    XCUIDevice.shared.orientation = .landscapeLeft
+                    self.orient(.landscapeLeft)
                     expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                     XCTAssertTrue(passage.waitForExistence(timeout: 5))
@@ -722,7 +734,7 @@ final class LeafReaderUITests: XCTestCase {
                     XCTAssertTrue(input.isHittable)
                     XCTAssertLessThanOrEqual(app.otherElements["readerChatPanel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
                     capture(flow + " selected passage landscape keyboard", app: app)
-                    XCUIDevice.shared.orientation = .portrait
+                    self.orient(.portrait)
                     expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                 }
@@ -778,8 +790,8 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testOpenChatAutomaticallyQuotesSelectionInPDF() { verifyAutomaticQuote(flow:"PDF") }
 
     @MainActor private func verifyAutomaticQuote(flow:String) {
-        XCUIDevice.shared.orientation = .portrait
-        defer { XCUIDevice.shared.orientation = .portrait }
+        orient(.portrait)
+        defer { orient(.portrait) }
         let app = launchApp()
         if flow == "PDF" {
             let search = app.textFields["librarySearch"]
@@ -824,12 +836,12 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(surface.frame.width,originalFrame.width,accuracy:2)
         XCTAssertEqual(surface.frame.height,originalFrame.height,accuracy:2)
         capture(flow + " automatic quote while composing",app:app)
-        XCUIDevice.shared.orientation = .landscapeLeft
+        orient(.landscapeLeft)
         expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);waitForExpectations(timeout:5)
         XCTAssertEqual(passage.label,quote)
         XCTAssertTrue(input.isHittable)
         capture(flow + " automatic quote landscape keyboard",app:app)
-        XCUIDevice.shared.orientation = .portrait
+        orient(.portrait)
         expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
         app.buttons["Hide keyboard"].tap()
         app.buttons["closeReaderChat"].tap();showReaderControls(app);app.buttons["closeBook"].tap()
@@ -869,9 +881,9 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor private func verifyChatResize(flow: String) {
-        XCUIDevice.shared.orientation = .portrait
+        orient(.portrait)
         let app = launchApp()
-        defer { XCUIDevice.shared.orientation = .portrait }
+        defer { orient(.portrait) }
         func openBook() {
             if flow == "PDF" {
                 let search = app.textFields["librarySearch"]
@@ -957,7 +969,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout:5))
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
         hideKeyboardAndWait()
-        XCUIDevice.shared.orientation = .landscapeLeft
+        orient(.landscapeLeft)
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         resize(-120)
@@ -973,7 +985,7 @@ final class LeafReaderUITests: XCTestCase {
         assertCompactChatHeader(app)
         capture(flow + " landscape resize with keyboard", app: app)
         hideKeyboardAndWait()
-        XCUIDevice.shared.orientation = .portrait
+        orient(.portrait)
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         let savedHeight = panel.frame.height
@@ -988,7 +1000,7 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor private func verifySentQuote(flow: String) {
         let app = launchApp()
-        defer { XCUIDevice.shared.orientation = .portrait }
+        defer { orient(.portrait) }
         func openBook() {
             if flow == "PDF" {
                 let search = app.textFields["librarySearch"]
@@ -1044,12 +1056,12 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " sent question keeps quoted text", app: app)
         quote.tap(); XCTAssertEqual(quote.label, "Collapse quoted text")
         quote.tap(); XCTAssertEqual(quote.label, "Expand quoted text")
-        XCUIDevice.shared.orientation = .landscapeLeft
+        orient(.landscapeLeft)
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         XCTAssertTrue(app.buttons["closeReaderChat"].exists)
         capture(flow + " landscape sent quote conversation retained", app: app)
-        XCUIDevice.shared.orientation = .portrait
+        orient(.portrait)
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
@@ -1069,15 +1081,15 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testFloatingButtonTransparencyPortraitInScroll() { verifyButtonTransparencyPortrait(flow: "Scroll") }
 
     @MainActor private func verifyButtonTransparency(flow:String) {
-        XCUIDevice.shared.orientation = .portrait
-        defer { XCUIDevice.shared.orientation = .portrait }
+        orient(.portrait)
+        defer { orient(.portrait) }
         verifyButtonTransparencyPortrait(flow: flow) { app, launcher, surface in
-            XCUIDevice.shared.orientation = .landscapeLeft
+            self.orient(.landscapeLeft)
             self.expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);self.waitForExpectations(timeout:5)
             XCTAssertLessThanOrEqual(launcher.frame.maxX,surface.frame.maxX)
             XCTAssertLessThanOrEqual(launcher.frame.maxY,surface.frame.maxY)
             self.capture(flow + " faint button landscape",app:app)
-            XCUIDevice.shared.orientation = .portrait
+            self.orient(.portrait)
             self.expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);self.waitForExpectations(timeout:5)
         }
     }
@@ -1185,7 +1197,7 @@ final class LeafReaderUITests: XCTestCase {
         let app = launchApp()
         app.buttons["featuredBook"].tap()
         waitForBook(app)
-        defer { XCUIDevice.shared.orientation = .portrait }
+        defer { orient(.portrait) }
         for flow in ["Pages", "Scroll"] {
             for theme in ["Day", "Paper", "Night", "Sepia", "Sage", "Dusk"] {
                 showReaderControls(app)
@@ -1206,7 +1218,7 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
                 XCTAssertLessThanOrEqual(app.otherElements["readerChatPanel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
                 app.buttons["closeReaderChat"].tap()
-                XCUIDevice.shared.orientation = .landscapeLeft
+                self.orient(.landscapeLeft)
                 expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
                 waitForExpectations(timeout: 5)
                 XCTAssertTrue(launcher.waitForExistence(timeout: 5))
@@ -1214,7 +1226,7 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
                 app.buttons["closeReaderChat"].tap()
                 capture(flow + " landscape translucent button " + theme, app: app)
-                XCUIDevice.shared.orientation = .portrait
+                self.orient(.portrait)
                 expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
                 waitForExpectations(timeout: 5)
             }
@@ -1225,8 +1237,8 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testLongPressMoveAndTapAwayInScroll() { verifyMovableButton(in: "Scroll") }
 
     @MainActor private func verifyMovableButton(in flow: String) {
-        XCUIDevice.shared.orientation = .portrait
-        defer { XCUIDevice.shared.orientation = .portrait }
+        orient(.portrait)
+        defer { orient(.portrait) }
         let app = launchApp()
         app.buttons["featuredBook"].tap()
         showReaderControls(app)
@@ -1284,7 +1296,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(launcher.frame.minY, moved.minY, accuracy: 1)
         showReaderControls(app)
         XCTAssertEqual(bookmark.label, "Remove bookmark")
-        XCUIDevice.shared.orientation = .landscapeLeft
+        orient(.landscapeLeft)
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         XCTAssertGreaterThanOrEqual(launcher.frame.minX, readingSurface(app).frame.minX)
@@ -1292,7 +1304,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(launcher.frame.minY, readingSurface(app).frame.minY)
         XCTAssertLessThanOrEqual(launcher.frame.maxY, readingSurface(app).frame.maxY)
         capture(flow + " moved translucent button landscape", app: app)
-        XCUIDevice.shared.orientation = .portrait
+        orient(.portrait)
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         XCTAssertEqual(launcher.frame.minY, moved.minY, accuracy: 1)
@@ -1304,8 +1316,8 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor func testBothFlowsFillLandscapeViewportAndKeepLauncherInsideIt() {
-        XCUIDevice.shared.orientation = .portrait
-        defer { XCUIDevice.shared.orientation = .portrait }
+        orient(.portrait)
+        defer { orient(.portrait) }
         let app = launchApp()
         app.buttons["featuredBook"].tap()
         for flow in ["Pages", "Scroll"] {
@@ -1314,7 +1326,7 @@ final class LeafReaderUITests: XCTestCase {
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons[flow].tap()
             dismissAppearance(app)
-            XCUIDevice.shared.orientation = .landscapeLeft
+            self.orient(.landscapeLeft)
             let launcher = app.buttons["openReaderChat"]
             launcher.tap()
             XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
@@ -1326,7 +1338,7 @@ final class LeafReaderUITests: XCTestCase {
             let frames = "app: \(app.frame), surface: \(surface.frame), launcher: \(launcher.frame)"
             let attachment = XCTAttachment(string: frames); attachment.name = flow + " landscape frames"; attachment.lifetime = .keepAlways; add(attachment)
             capture(flow + " full screen landscape", app: app)
-            XCUIDevice.shared.orientation = .portrait
+            self.orient(.portrait)
         }
     }
 
@@ -1361,9 +1373,9 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor func testChatDismissesOnlyWithCloseOrTopBarSwipeInBothFlows() {
-        XCUIDevice.shared.orientation = .portrait
+        orient(.portrait)
         let app = launchApp()
-        defer { XCUIDevice.shared.orientation = .portrait }
+        defer { orient(.portrait) }
         expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app)
         waitForExpectations(timeout:5)
         app.buttons["featuredBook"].tap()
@@ -1409,7 +1421,7 @@ final class LeafReaderUITests: XCTestCase {
             waitForExpectations(timeout: 5)
             app.buttons["openReaderChat"].tap()
             XCTAssertEqual(input.value as? String, "Keep my question")
-            XCUIDevice.shared.orientation = .landscapeLeft
+            self.orient(.landscapeLeft)
             expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
             waitForExpectations(timeout: 5)
             surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
@@ -1423,7 +1435,7 @@ final class LeafReaderUITests: XCTestCase {
             app.buttons["openReaderChat"].tap()
             app.buttons["closeReaderChat"].tap()
             XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
-            XCUIDevice.shared.orientation = .portrait
+            self.orient(.portrait)
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
             waitForExpectations(timeout: 5)
             // The next flow uses the same persisted draft.

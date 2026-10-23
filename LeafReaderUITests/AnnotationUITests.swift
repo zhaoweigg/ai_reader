@@ -1,6 +1,11 @@
 import XCTest
 
 final class AnnotationUITests: XCTestCase {
+    private var geometryApp: XCUIApplication?
+    @MainActor private func orient(_ direction: UIDeviceOrientation) {
+        if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
+        else { XCUIDevice.shared.orientation = direction }
+    }
     @MainActor private func capture(_ name: String) {
         let item = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         item.name = name; item.lifetime = .keepAlways; add(item)
@@ -76,12 +81,17 @@ final class AnnotationUITests: XCTestCase {
 
     @MainActor private func verify(flow: String) {
         continueAfterFailure = false
-        XCUIDevice.shared.orientation = .portrait
-        defer { XCUIDevice.shared.orientation = .portrait }
+        orient(.portrait)
+        defer { orient(.portrait) }
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
-        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_CHAT_MOCK": "1", "LEAF_UI_ZLIB_MOCK": "1"]
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_CHAT_MOCK": "1", "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1"]
         app.launch()
+        geometryApp = app; orient(.portrait)
+        addTeardownBlock { @MainActor in
+            if app.state == .runningForeground { self.setReaderOrientation(.portrait, app: app) }
+            app.terminate()
+        }
         let pdf = flow == "PDF"
         if pdf {
             let field = app.textFields["librarySearch"]; XCTAssertTrue(field.waitForExistence(timeout: 10))
@@ -121,7 +131,7 @@ final class AnnotationUITests: XCTestCase {
         capture(flow + " saved highlight and note")
         app.buttons["Done"].tap()
         if !pdf { appearance(app, theme: "Night") }
-        XCUIDevice.shared.orientation = .landscapeLeft
+        orient(.landscapeLeft)
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
         capture(flow + " highlight after theme and landscape change")
@@ -135,7 +145,7 @@ final class AnnotationUITests: XCTestCase {
         capture(flow + " landscape note editor")
         app.buttons["saveAnnotation"].tap()
         controls(app); app.buttons["closeBook"].tap()
-        app.terminate(); XCUIDevice.shared.orientation = .portrait; app.launch()
+        app.terminate(); orient(.portrait); app.launch()
 
         app.tabBars.buttons["Bookmarks"].tap()
         app.segmentedControls["librarySavedPassageFilter"].buttons["Highlights & notes"].tap()

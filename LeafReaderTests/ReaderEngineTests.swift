@@ -159,16 +159,16 @@ final class ReaderEngineTests: XCTestCase {
                 const view=document.querySelector('foliate-view'),content=view.renderer.getContents()[0],doc=content.doc,p=doc.querySelector('p');
                 const whole=doc.createRange();whole.selectNodeContents(p);
                 const packet=await window.Leaf.readAloudChunk({locator:view.getCFI(0,whole)}),rows=[];
-                for(const location of [3,300,650,12]){
+                for(const [location,length] of [[3,1],[300,180],[650,60],[12,1]]){
                     // Simulate a cached semantic snapshot spanning the paragraph.
                     // Navigation must use physical line visibility, even if layout
                     // has changed since this snapshot was recorded.
                     view.lastLocation.range=whole.cloneRange();
-                    await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location,length:1,follow:true});
+                    await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location,length,follow:true});
                     await new Promise(r=>setTimeout(r,80));
                     const segment=packet.segments.find(s=>location>=s.offset&&location<s.offset+s.length),word=view.resolveCFI(segment.locator).anchor(doc);
                     word.setStart(word.startContainer,word.startOffset+location-segment.offset);word.setEnd(word.startContainer,word.startOffset+1);
-                    const rect=word.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect();
+                    const rect=[...word.getClientRects()].find(r=>r.width>0&&r.height>0),frame=doc.defaultView.frameElement.getBoundingClientRect();
                     const x=frame.left+rect.left,y=frame.top+rect.top;
                     rows.push({location,x,y,width:rect.width,height:rect.height,viewport:[innerWidth,innerHeight],
                         visible:x>=-1&&y>=-1&&x+rect.width<=innerWidth+1&&y+rect.height<=innerHeight+1,
@@ -288,20 +288,24 @@ final class ReaderEngineTests: XCTestCase {
                             const content=view.renderer.getContents()[0],doc=content.doc,segment=packet.segments.find(s=>650>=s.offset&&650<s.offset+s.length);
                             const range=view.resolveCFI(segment.locator).anchor(doc),node=range.startContainer;
                             range.setStart(node,range.startOffset+650-segment.offset);range.setEnd(node,range.startOffset+1);
-                            const word=range.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect(),whole=doc.createRange();whole.selectNodeContents(node);
+                            // WebKit can include a zero-width caret on the previous
+                            // line/column. Its bounding union is not the glyph box.
+                            const glyphRects=[...range.getClientRects()],word=glyphRects.find(r=>r.width>0&&r.height>0),frame=doc.defaultView.frameElement.getBoundingClientRect(),whole=doc.createRange();whole.selectNodeContents(node);
                             const expected=[...whole.getClientRects()].find(r=>Math.abs(r.top-word.top)<1&&r.left<=word.left&&r.right>=word.right);
                             const actual=[...content.overlayer.element.querySelectorAll('[data-leaf-spoken-line] rect')];
                             return {font:settings.font,size:settings.fontSize,scrolling:settings.scrolling,theme:settings.background,viewport:[innerWidth,innerHeight],
                                 visible:word.left+frame.left>=-1&&word.right+frame.left<=innerWidth+1&&word.top+frame.top>=-1&&word.bottom+frame.top<=innerHeight+1,
                                 exactLine:!!expected&&actual.length===1&&['x','y','width','height'].every((key,i)=>Math.abs(Number(actual[0].getAttribute(key))-expected[['left','top','width','height'][i]])<.8),
                                 unchanged:view.resolveCFI(packet.locator).anchor(doc).toString()===packet.text,
+                                caret:glyphRects.some(r=>!r.width||!r.height),glyphRects:glyphRects.map(r=>[r.left,r.top,r.width,r.height]),
+                                expectedLine:expected&&[expected.left,expected.top,expected.width,expected.height],
                                 word:[word.left,word.top,word.width,word.height],paint:actual.map(r=>['x','y','width','height'].map(k=>Number(r.getAttribute(k))))};
                             """, arguments: ["settings": prefs.payload, "packet": packet], in: nil, contentWorld: .page) as? [String: Any]
                         let row = try XCTUnwrap(result); rows.append(row)
                         for key in ["visible", "exactLine", "unchanged"] { XCTAssertEqual(row[key] as? Bool, true, "\(key): \(row)") }
                         let dimensions = row["viewport"] as? [Double] ?? []
                         XCTAssertEqual((dimensions.first ?? 0) > (dimensions.last ?? 0), viewport.width > viewport.height)
-                        if [12, 22, 32].contains(size) {
+                        if [12, 22, 32].contains(size) || (size == 23 && viewport.width > viewport.height && !scrolling && variant == 2) {
                             let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
                             let screenshot = XCTAttachment(image: try XCTUnwrap(image)); screenshot.name = "Spoken line \(Int(viewport.width))x\(Int(viewport.height)) scroll=\(scrolling) \(font) \(size)pt \(prefs.theme)"; screenshot.lifetime = .keepAlways; add(screenshot)
                         }
@@ -310,6 +314,7 @@ final class ReaderEngineTests: XCTestCase {
             }
         }
         XCTAssertEqual(rows.count, 252); XCTAssertNil(model.error)
+        XCTAssertTrue(rows.contains { $0["caret"] as? Bool == true }, "Exercise actual WebKit caret rectangles at wrapping boundaries")
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows), uniformTypeIdentifier: "public.json")
         attachment.name = "Spoken line 252 viewport-flow-font-size-theme measurements"; attachment.lifetime = .keepAlways; add(attachment)
     }
@@ -354,6 +359,8 @@ final class ReaderEngineTests: XCTestCase {
         model.highlightReadAloud(passage, range: town, follow: false)
         let line = try XCTUnwrap(view.highlightedSelections?.first?.string)
         XCTAssertTrue(line.contains("town")); XCTAssertGreaterThan(line.count, 4)
+        model.highlightReadAloud(passage, range: NSRange(location: town.location, length: min(200, text.length - town.location)), follow: false)
+        XCTAssertEqual(view.highlightedSelections?.first?.string, line, "A sentence callback spanning lines must still highlight only its leading line")
         XCTAssertEqual(view.currentSelection?.string, selected)
         XCTAssertEqual(page.annotations.count, annotations)
         model.highlightReadAloud(nil, range: NSRange(location: 0, length: 0), follow: false)
