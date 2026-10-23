@@ -1,6 +1,9 @@
 import UIKit
 import WebKit
 import PDFKit
+import OSLog
+
+private let selectionMenuLog = Logger(subsystem: "com.weizhao.leafreader", category: "ReaderSelectionMenu")
 
 enum ReaderSelectionIntent: String, CaseIterable {
     case ask, explain, summarize
@@ -28,6 +31,9 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
 
 @MainActor private func addSelectionMenu(to builder: UIMenuBuilder, view: UIView, presenter: ReaderSelectionMenuPresenter, theme: ReadingTheme, context: ReadingChatContext?, action: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?, annotation: BookAnnotationSelection?, annotate: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?, position: String?, listen: ((String) -> Void)?) {
     guard let context, !context.isEmpty, let action else { return }
+    #if DEBUG
+    selectionMenuLog.notice("Building book actions: sourceKey=\(view.window?.isKeyWindow ?? false), nativeInteraction=\(view.selectionEditMenu != nil)")
+    #endif
     guard !presenter.showsSystemMenu else { return }
     var actions = [ReaderSelectionAction(title: "Ask Leaf", image: "leaf", id: "ask") { action(.ask, context) }]
     if let position, let listen {
@@ -58,6 +64,13 @@ private extension UIView {
     var selectionEditMenu: UIEditMenuInteraction? {
         interactions.compactMap { $0 as? UIEditMenuInteraction }.first
             ?? subviews.lazy.compactMap(\.selectionEditMenu).first
+    }
+    func dismissSelectionEditMenu() {
+        #if DEBUG
+        selectionMenuLog.notice("Native edit menu: interaction=\(self.selectionEditMenu != nil), legacyVisible=\(UIMenuController.shared.isMenuVisible), sourceKey=\(self.window?.isKeyWindow ?? false)")
+        #endif
+        if let interaction = selectionEditMenu { interaction.dismissMenu() }
+        else { UIMenuController.shared.hideMenu() }
     }
     var selectionText: String? {
         if let pdf = self as? PDFView { return pdf.currentSelection?.string }
@@ -96,6 +109,9 @@ private struct ReaderSelectionAction {
         if let controller { controller.actions = actions; controller.tableView.accessibilityValue = selectedText; controller.tableView.reloadData(); controller.view.setNeedsLayout(); return }
         DispatchQueue.main.async { [weak self, weak source] in
             guard let self, let source, let window = source.window, let scene = window.windowScene, self.controller == nil else { return }
+            // Finish UIKit's suppressed edit-menu presentation as well as our
+            // own overlay, so a later long press can start a new native session.
+            source.dismissSelectionEditMenu()
             let controller = ReaderSelectionActionsController(actions: actions, theme: theme, source: source)
             controller.choose = { [weak self] action in self?.dismiss(); action() }
             // Give UIKit its own root controller without presenting a modal or
@@ -123,6 +139,7 @@ private struct ReaderSelectionAction {
         }
     }
     func dismiss() {
+        source?.dismissSelectionEditMenu()
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
         for observer in observers { window?.removeGestureRecognizer(observer) }
         observers = []; window = nil
