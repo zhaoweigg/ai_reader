@@ -353,6 +353,29 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertNil(model.selectedReadingContext())
         try await waitUntil { model.liveSelection == nil }
     }
+    func testPDFBookTapClearsSelectionBeforeShowingControls() async throws {
+        let (book, url) = try prepare("Notes from the Coast.pdf", format:.pdf)
+        let model = ReaderModel(bookID:book.id,library:try XCTUnwrap(store),initialLocator:nil)
+        self.model = model
+        let view = PDFView(frame:CGRect(x:0,y:0,width:390,height:700))
+        model.configurePDF(view,url:url)
+        let page = try XCTUnwrap(view.currentPage)
+        view.currentSelection = page.selection(for:page.bounds(for:.cropBox))
+        try await waitUntil { model.liveSelection != nil }
+        let chat = ReaderChatSession()
+        chat.attachLiveSelection(model.liveSelection,chatIsPresented:true)
+        let quote = chat.selectedContext
+        let tap = CenteredReaderTestTap();view.addGestureRecognizer(tap)
+        let coordinator = PDFBookSurface.Coordinator(model)
+        coordinator.tapped(tap)
+        try await waitUntil { model.liveSelection == nil }
+        chat.attachLiveSelection(model.liveSelection,chatIsPresented:false)
+        XCTAssertNil(view.currentSelection)
+        XCTAssertFalse(model.controlsVisible,"A deselection tap must not also navigate or show controls")
+        XCTAssertEqual(chat.selectedContext,quote,"Clearing PDF selection keeps the saved chat quote")
+        coordinator.tapped(tap)
+        XCTAssertTrue(model.controlsVisible,"The next center tap must make reader controls accessible")
+    }
     func testLiveSelectionTracksWebRangeChangesInBothFlowsWithoutMovingPassage() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         let model = try show(book, url: url)
@@ -930,6 +953,12 @@ final class ReaderEngineTests: XCTestCase {
         model.pdfPageChanged()
         XCTAssertEqual(model.locator, "pdf:2")
         XCTAssertEqual(model.fraction, 2.0 / 3.0, accuracy: 0.001)
+    }
+}
+
+@MainActor private final class CenteredReaderTestTap: UITapGestureRecognizer {
+    override func location(in view: UIView?) -> CGPoint {
+        CGPoint(x:(view?.bounds.width ?? 0)/2,y:(view?.bounds.height ?? 0)/2)
     }
 }
 

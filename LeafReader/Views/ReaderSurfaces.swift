@@ -141,7 +141,13 @@ struct PDFBookSurface: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
             if onReaderTap?() == true { return }
-            guard let view = gesture.view as? PDFView, view.currentSelection?.string?.isEmpty != false else { return }
+            guard let view = gesture.view as? PDFView else { return }
+            if view.currentSelection?.string?.isEmpty == false {
+                // PDFKit can keep its selection after focus moves into chat.
+                // Finish that native selection before handling reader controls.
+                view.clearSelection()
+                return
+            }
             let point = gesture.location(in: view)
             if let page = view.page(for: point, nearest: false), page.annotation(at: view.convert(point, to: page)) != nil { return }
             let fraction = point.x / max(1, view.bounds.width)
