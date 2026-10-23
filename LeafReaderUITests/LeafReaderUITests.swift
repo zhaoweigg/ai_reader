@@ -397,7 +397,8 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertTrue(menu.waitForExistence(timeout: 6))
                 XCTAssertLessThanOrEqual(menu.frame.height, 48, "Selection actions must occupy one compact row")
                 let initial = menu.value as? String ?? ""
-                XCTAssertFalse(initial.isEmpty)
+                let initialLocator = app.buttons["selection-ask"].value as? String ?? ""
+                XCTAssertFalse(initial.isEmpty); XCTAssertFalse(initialLocator.isEmpty)
                 let firstVisible = ["ask", "listen", "highlight", "note", "copy", "system"].filter { id in
                     let button = app.buttons["selection-" + id]
                     return button.isHittable && menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame)
@@ -413,7 +414,7 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(handle.frame), "Toolbar must leave the native handle clear")
                 capture(flow + (landscape ? " landscape" : " portrait") + " compact menu before native handle drag", app: app)
                 let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                start.press(forDuration: 0.7, thenDragTo: start.withOffset(CGVector(dx: 80, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.2)
+                start.press(forDuration: 0.7, thenDragTo: start.withOffset(CGVector(dx: 80, dy: landscape ? 0 : 35)), withVelocity: .slow, thenHoldForDuration: 0.2)
                 if !menu.waitForExistence(timeout: 4) {
                     let leaf = app.menuItems["Leaf actions"].exists ? app.menuItems["Leaf actions"] : app.buttons["Leaf actions"]
                     XCTAssertTrue(leaf.waitForExistence(timeout: 3)); leaf.tap()
@@ -422,8 +423,19 @@ final class LeafReaderUITests: XCTestCase {
                 let extended = menu.value as? String ?? ""
                 XCTAssertGreaterThan(extended.count, initial.count, "Dragging the real native end handle must extend the passage in " + flow)
                 XCTAssertTrue(extended.hasPrefix(initial), "Handle drag must retain the original selected word")
+                let extendedLocator = app.buttons["selection-ask"].value as? String ?? ""
+                XCTAssertFalse(extendedLocator.isEmpty); XCTAssertNotEqual(extendedLocator, initialLocator, "Actions must use the changed native range locator")
                 capture(flow + (landscape ? " landscape" : " portrait") + " native selection extended with horizontal menu", app: app)
-                _ = revealSelectionAction("copy", app: app)
+                let startHandle = app.descendants(matching: .any)["selection-start-geometry"].firstMatch
+                XCTAssertTrue(startHandle.waitForExistence(timeout: 3))
+                XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(startHandle.frame))
+                let trim = startHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                trim.press(forDuration: 0.7, thenDragTo: trim.withOffset(CGVector(dx: 36, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.2)
+                XCTAssertTrue(menu.waitForExistence(timeout: 5))
+                let trimmed = menu.value as? String ?? ""
+                XCTAssertFalse(trimmed.isEmpty); XCTAssertNotEqual(trimmed, extended, "Native start handle must also remain draggable")
+                XCTAssertNotEqual(app.buttons["selection-ask"].value as? String, extendedLocator)
+                capture(flow + (landscape ? " landscape" : " portrait") + " native start handle adjusted", app: app)
                 revealSelectionAction("copy", app: app).tap()
             }
             app.terminate()

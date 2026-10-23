@@ -47,6 +47,11 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
         else { responder?.perform(#selector(UIResponderStandardEditActions.copy(_:)), with: nil) }
     })
     actions.append(ReaderSelectionAction(title: "iOS text actions", image: "ellipsis", id: "system") { [weak presenter] in presenter?.presentSystemMenu() })
+    #if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+        for index in actions.indices { actions[index].testLocator = context.locator }
+    }
+    #endif
     presenter.schedule(on: view, actions: actions, theme: theme, selectedText: context.text)
 }
 
@@ -108,6 +113,9 @@ private struct ReaderSelectionAction {
     let image: String
     let id: String
     let perform: () -> Void
+    #if DEBUG
+    var testLocator: String?
+    #endif
 }
 
 @MainActor private final class ReaderSelectionMenuPresenter: NSObject, UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate {
@@ -120,6 +128,7 @@ private struct ReaderSelectionAction {
     private var systemMenuUntil = Date.distantPast
     private var systemInteraction: UIEditMenuInteraction?
     private var selectionPress: UILongPressGestureRecognizer?
+    private var handleDrag: UIPanGestureRecognizer?
     private var requestMenu: (() async -> Void)?
     private var requestTask: Task<Void, Never>?
     private var revision = 0
@@ -131,6 +140,9 @@ private struct ReaderSelectionAction {
         let press = UILongPressGestureRecognizer(target: self, action: #selector(selectionPressed(_:)))
         press.minimumPressDuration = 0.5; press.cancelsTouchesInView = false; press.delaysTouchesEnded = false
         press.delegate = self; source.addGestureRecognizer(press); selectionPress = press
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(selectionHandleDragged(_:)))
+        drag.cancelsTouchesInView = false; drag.delaysTouchesEnded = false; drag.delegate = self
+        source.addGestureRecognizer(drag); handleDrag = drag
         if let scene = source.window?.windowScene {
             deactivationObserver = NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: scene, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.dismiss() }
@@ -140,7 +152,8 @@ private struct ReaderSelectionAction {
     func detach() {
         dismiss()
         if let selectionPress { selectionPress.view?.removeGestureRecognizer(selectionPress) }
-        selectionPress = nil; requestMenu = nil; source = nil
+        if let handleDrag { handleDrag.view?.removeGestureRecognizer(handleDrag) }
+        selectionPress = nil; handleDrag = nil; requestMenu = nil; source = nil
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
     }
     func requestCurrentMenu() {
@@ -166,6 +179,16 @@ private struct ReaderSelectionAction {
         #endif
         guard withinSelection else { return }
         requestCurrentMenu()
+    }
+    @objc private func selectionHandleDragged(_ drag: UIPanGestureRecognizer) {
+        if drag.state == .began { dismiss() }
+        if drag.state == .ended {
+            Task { @MainActor [weak self] in
+                // Let the native text interaction commit its final range first.
+                await Task.yield()
+                self?.requestCurrentMenu()
+            }
+        }
     }
     func schedule(on source: UIView, actions: [ReaderSelectionAction], theme: ReadingTheme, selectedText: String) {
         guard !Task.isCancelled, let window = source.window, let scene = window.windowScene, scene.activationState == .foregroundActive else { return }
@@ -224,7 +247,15 @@ private struct ReaderSelectionAction {
         if gesture.state == .ended || gesture.state == .began { dismiss() }
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        if gestureRecognizer === selectionPress { return true }
+        if gestureRecognizer === selectionPress || gestureRecognizer === handleDrag {
+            guard let source else { return false }
+            let point = touch.location(in: source)
+            let onHandle = source.selectionHandles.contains { $0.contains(point) }
+                && !source.selectionRectangles.contains { $0.contains(point) }
+            // A second long press must not compete with UIKit's existing handle
+            // interaction. A simultaneous pan only observes its completion.
+            return gestureRecognizer === handleDrag ? onHandle : !onHandle
+        }
         guard let view = touch.view else { return false }
         if let controller { return !view.isDescendant(of: controller.view) }
         return requestTask != nil
@@ -280,7 +311,9 @@ private final class ReaderSelectionWindow: UIWindow {
 
 private final class ReaderSelectionOverlayView: UIView {
     let card = UIView()
+    var selectionHandleRects: [CGRect] = []
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if selectionHandleRects.contains(where: { $0.contains(point) }) { return nil }
         let local = convert(point, to: card)
         return card.bounds.contains(local) ? card.hitTest(local, with: event) : nil
     }
@@ -345,6 +378,9 @@ private final class ReaderSelectionOverlayView: UIView {
             button.setTitle(compact, for: .normal); button.setTitleColor(UIColor(theme.foreground), for: .normal)
             button.titleLabel?.font = font; button.titleLabel?.adjustsFontForContentSizeCategory = true
             button.accessibilityLabel = action.title; button.accessibilityIdentifier = "selection-" + action.id
+            #if DEBUG
+            if action.id == "ask" { button.accessibilityValue = action.testLocator }
+            #endif
             button.addAction(UIAction { [weak self] _ in
                 guard let self, index < self.actions.count else { return }
                 self.choose?(self.actions[index].perform)
@@ -372,14 +408,16 @@ private final class ReaderSelectionOverlayView: UIView {
         let selectionTop = min(anchor.minY, handles.map(\.minY).min() ?? anchor.minY)
         let selectionBottom = max(anchor.maxY, handles.map(\.maxY).max() ?? anchor.maxY)
         let above = selectionTop - height - 8, below = selectionBottom + 8
-        var top = above >= safe.minY ? above : below + height <= safe.maxY ? below : safe.minY
-        var frame = CGRect(x: min(max(safe.minX, anchor.midX - width / 2), safe.maxX - width), y: top, width: width, height: height)
-        if handles.contains(where: { $0.intersects(frame) }) {
-            // A selection may cover the full viewport. Dock at the opposite edge
-            // from the nearest handle rather than laying over its drag target.
-            top = handles.contains(where: { $0.intersects(frame) }) && selectionTop < safe.midY ? safe.maxY - height : safe.minY
-            frame.origin.y = top
-        }
+        let left = min(max(safe.minX, anchor.midX - width / 2), safe.maxX - width)
+        let candidates = [above, below, safe.minY, safe.maxY - height]
+            + handles.flatMap { [$0.minY - height - 8, $0.maxY + 8] }
+        let top = candidates.first { y in
+            let rect = CGRect(x: left, y: y, width: width, height: height)
+            return y >= safe.minY && rect.maxY <= safe.maxY && !handles.contains { $0.intersects(rect) }
+        } ?? safe.minY
+        let frame = CGRect(x: left, y: top, width: width, height: height)
+        // Even an unusually short viewport must pass handle touches through.
+        overlay.selectionHandleRects = handles
         overlay.card.frame = frame
         let inset: CGFloat = overflow ? 18 : 8
         scrollView.frame = overlay.card.bounds.insetBy(dx: inset, dy: 0)
@@ -404,12 +442,12 @@ private final class ReaderSelectionOverlayView: UIView {
                 let marker = UIAccessibilityElement(accessibilityContainer: overlay)
                 marker.accessibilityIdentifier = start ? "selection-start-geometry" : "selection-end-geometry"
                 marker.accessibilityLabel = start ? "Selection start geometry" : "Selection end geometry"
-                marker.accessibilityFrameInContainerSpace = CGRect(x: (start ? converted.minX : converted.maxX) - 1, y: start ? converted.minY - 8 : converted.maxY + 8, width: 2, height: 2)
+                marker.accessibilityFrameInContainerSpace = CGRect(x: (start ? converted.minX - 2 : converted.maxX), y: converted.midY - 1, width: 2, height: 2)
                 markers.append(marker)
                 if source.selectionRectangles.count == 1 {
                     let end = UIAccessibilityElement(accessibilityContainer: overlay)
                     end.accessibilityIdentifier = "selection-end-geometry"; end.accessibilityLabel = "Selection end geometry"
-                    end.accessibilityFrameInContainerSpace = CGRect(x: converted.maxX - 1, y: converted.maxY + 8, width: 2, height: 2); markers.append(end)
+                    end.accessibilityFrameInContainerSpace = CGRect(x: converted.maxX, y: converted.midY - 1, width: 2, height: 2); markers.append(end)
                 }
             }
             overlay.accessibilityElements = [scrollView] + markers
