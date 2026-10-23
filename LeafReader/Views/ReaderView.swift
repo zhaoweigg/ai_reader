@@ -181,6 +181,9 @@ struct ReaderContent: View {
         .accessibilityAction(.escape) { library.flush(); dismiss() }
         .task { library.open(book.id) }
         .onDisappear { chat.close(); library.flush() }
+        .onChange(of: model.liveSelection) { _, selection in
+            chat.attachLiveSelection(selection, chatIsPresented: chatIsPresented)
+        }
         .onChange(of: model.selectionRequest) { _, request in
             guard let request else { return }
             chatButtonIsMoving = false
