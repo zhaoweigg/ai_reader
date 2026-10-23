@@ -38,11 +38,20 @@ final class LeafReaderUITests: XCTestCase {
         return app.descendants(matching: .any)["bookPDFView"].firstMatch
     }
     @MainActor private func waitForBook(_ app: XCUIApplication) {
-        XCTAssertTrue(readingSurface(app).waitForExistence(timeout: 10))
+        let surface = readingSurface(app)
+        XCTAssertTrue(surface.waitForExistence(timeout: 10))
+        // The overlay clears exactly when the reader bridge posts "ready" after the first
+        // chapter is rendered (or PDFKit finishes setup). On a freshly booted simulator the
+        // book's WebContent process alone took ~12 s to spawn and ready arrived ~27 s after
+        // the tap (first open after boot); warm opens finish in 1–3 s and are not slowed by
+        // the bound. The rendered-text condition keeps the wait meaningful for web books.
         let loading = app.staticTexts["Opening your book…"]
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: loading)
-        waitForExpectations(timeout: 20)
+        waitForExpectations(timeout: 60)
         XCTAssertFalse(app.otherElements["readerError"].exists)
+        if surface.elementType == .webView {
+            XCTAssertTrue(surface.staticTexts.firstMatch.waitForExistence(timeout: 10), "rendered chapter text exposed by the book web view")
+        }
     }
     @MainActor private func showReaderControls(_ app: XCUIApplication) {
         waitForBook(app)
