@@ -561,8 +561,8 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertGreaterThan(frame.width, frame.height, "Landscape geometry must be applied")
         // The sheet is short in landscape, so the form scrolls; every row must be
         // fully inside the frame once scrolled to, and nothing may be clipped sideways.
-        let form = app.scrollViews.containing(.segmentedControl, identifier: "listeningEngine").firstMatch
-        XCTAssertTrue(form.waitForExistence(timeout: 5), "Listening form is a scroll view in landscape")
+        let form = app.descendants(matching: .any)["listeningForm"].firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5), "Listening form is reachable in landscape")
         func reveal(_ element: XCUIElement, _ label: String, up: Bool = true) {
             for _ in 0..<4 where !(element.exists && frame.contains(element.frame)) { up ? form.swipeUp() : form.swipeDown() }
             XCTAssertTrue(element.exists, label)

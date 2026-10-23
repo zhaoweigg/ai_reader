@@ -112,6 +112,7 @@ struct ReaderAudioSettings: View {
                 Text("Select any text and choose Listen from here to begin at that word and continue through the book. Listening does not change your highlights or conversation history.").font(.footnote).foregroundStyle(.secondary)
             }.listRowBackground(theme.surface)
         }.leafFormStyle().navigationTitle("Listen")
+            .accessibilityIdentifier("listeningForm")
             .onAppear { voices = AVSpeechSynthesisVoice.speechVoices().sorted { ($0.language, $0.name) < ($1.language, $1.name) } }
     }
 }
