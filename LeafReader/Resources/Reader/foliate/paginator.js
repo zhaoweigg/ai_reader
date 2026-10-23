@@ -1099,7 +1099,7 @@ export class Paginator extends HTMLElement {
         // Ignore new gestures until the current page has visibly settled.
         this.#touchState = null
         this.#scrollContinuation = null
-        if (this.#locked) return
+        if (this.#locked || this.#view?.document.getSelection()?.isCollapsed === false) return
         const touch = e.changedTouches[0]
         this.#touchState = {
             x: touch?.screenX, y: touch?.screenY, startX: touch?.screenX, startY: touch?.screenY,
@@ -1109,6 +1109,13 @@ export class Paginator extends HTMLElement {
         }
     }
     #onTouchMove(e) {
+        // A native long press may establish its range after touchstart. Yield
+        // without preventDefault or page motion while selection handles move.
+        if (this.#view?.document.getSelection()?.isCollapsed === false) {
+            this.#touchState = null
+            this.#touchScrolled = false
+            return
+        }
         const state = this.#touchState
         if (!state || this.#locked || state.pinched) return
         state.pinched = globalThis.visualViewport.scale > 1

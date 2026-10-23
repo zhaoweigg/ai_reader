@@ -6,16 +6,17 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true) -> XCUIApplication {
+
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
-        app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = "1"
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
         app.launch()
         geometryApp = app
         orient(.portrait)
@@ -23,6 +24,7 @@ final class LeafReaderUITests: XCTestCase {
             if app.state == .runningForeground { self.setReaderOrientation(.portrait, app: app) }
             app.terminate()
         }
+
         return app
     }
 
@@ -40,17 +42,12 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor private func waitForBook(_ app: XCUIApplication) {
         let surface = readingSurface(app)
         XCTAssertTrue(surface.waitForExistence(timeout: 10))
-        // The overlay clears exactly when the reader bridge posts "ready" after the first
-        // chapter is rendered (or PDFKit finishes setup). On a freshly booted simulator the
-        // book's WebContent process alone took ~12 s to spawn and ready arrived ~27 s after
-        // the tap (first open after boot); warm opens finish in 1–3 s and are not slowed by
-        // the bound. The rendered-text condition keeps the wait meaningful for web books.
         let loading = app.staticTexts["Opening your book…"]
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: loading)
         waitForExpectations(timeout: 60)
         XCTAssertFalse(app.otherElements["readerError"].exists)
         if surface.elementType == .webView {
-            XCTAssertTrue(surface.staticTexts.firstMatch.waitForExistence(timeout: 10), "rendered chapter text exposed by the book web view")
+            XCTAssertTrue(surface.staticTexts.firstMatch.waitForExistence(timeout: 10), "Wait for actual chapter text, not merely an empty WebView")
         }
     }
     @MainActor private func showReaderControls(_ app: XCUIApplication) {
@@ -66,6 +63,16 @@ final class LeafReaderUITests: XCTestCase {
             }
         }
         XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
+        let bookmark = app.buttons["toggleBookmark"]
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            bookmark.exists && bookmark.isEnabled && app.buttons["Appearance"].isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed, "Reader controls must be enabled and reachable before setup continues")
+    }
+    @MainActor private func openAppearance(_ app: XCUIApplication) {
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        XCTAssertTrue(app.segmentedControls["appearanceTabs"].waitForExistence(timeout: 10), "The Appearance sheet must actually open before selecting a tab")
     }
     @MainActor private func dismissAppearance(_ app: XCUIApplication) {
         XCTAssertFalse(app.buttons["Done"].exists)
@@ -170,6 +177,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Sage theme"].isSelected)
         capture("Landscape app theme selector", app: app)
         orient(.portrait)
+
         XCTAssertTrue(app.buttons["Sage theme"].isSelected)
         app.tabBars.buttons["Library"].tap()
         app.buttons["featuredBook"].tap()
@@ -177,6 +185,7 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
         orient(.landscapeLeft)
+
         revealAppearanceControl(app, app.buttons["Paper theme"])
         app.buttons["Paper theme"].tap()
         XCTAssertTrue(app.buttons["Paper theme"].isSelected)
@@ -185,6 +194,7 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["Dusk theme"].tap()
         XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
         orient(.portrait)
+
         XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
         capture("Reader theme selector after rotation", app: app)
     }
@@ -335,6 +345,7 @@ final class LeafReaderUITests: XCTestCase {
             for id in ["listeningSettings", "audioPlayPause", "stopListening"] { XCTAssertTrue(app.buttons[id].isHittable) }
             capture(flow + " listening landscape", app: app)
             self.orient(.portrait)
+
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
             let viewportBeforeComposing = surface.frame
             app.buttons["openReaderChat"].tap()
@@ -375,11 +386,18 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor private func openSelectionFixture(_ flow: String, app: XCUIApplication) {
         if flow == "PDF" {
-            let field = app.textFields["librarySearch"]; XCTAssertTrue(field.waitForExistence(timeout: 10))
-            field.tap(); field.typeText("Coast"); app.buttons["book-Notes from the Coast"].tap()
+            // Navigate the real library card; search-field focus is unrelated to selection.
+            let card = app.buttons["book-Notes from the Coast"]
+            for _ in 0..<5 {
+                if card.exists && card.isHittable { break }
+                app.scrollViews.firstMatch.swipeUp()
+            }
+            XCTAssertTrue(card.exists && card.isHittable, "PDF fixture must be reachable in the library")
+            card.tap()
             showReaderControls(app); app.buttons["nextPage"].tap()
         } else {
-            app.buttons["featuredBook"].tap(); showReaderControls(app); app.buttons["Appearance"].tap()
+            XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 10))
+            app.buttons["featuredBook"].tap(); openAppearance(app)
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons[flow].tap()
             app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
@@ -387,45 +405,248 @@ final class LeafReaderUITests: XCTestCase {
             dismissAppearance(app)
         }
     }
-    @MainActor private func selectFixturePassage(_ flow: String, app: XCUIApplication) {
+    @MainActor private func selectFixturePassage(_ flow: String, app: XCUIApplication, pdfWordOffset: CGFloat = 0.15) {
         let pdf = flow == "PDF", paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", pdf ? "Before the town" : "Attention is a way")).firstMatch
         XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
-        paragraph.coordinate(withNormalizedOffset: CGVector(dx: pdf ? 0.15 : 0.3, dy: pdf ? 0.25 : 0.1)).press(forDuration: 1.2)
+        // Web content's element-relative coordinates can retain the physical
+        // portrait transform after a public scene-geometry request. Use the
+        // measured scene frame, as the native handle drags below do.
+        let frame = paragraph.frame
+        let point = CGPoint(x: frame.minX + frame.width * (pdf ? pdfWordOffset : 0.3),
+                            y: frame.minY + frame.height * (pdf ? 0.25 : 0.1))
+        XCTAssertTrue(readingSurface(app).frame.contains(point), "The real long press must target visible book text")
+        let chat = app.otherElements["readerChatPanel"]
+        XCTAssertFalse(chat.exists && chat.frame.contains(point), "Selection setup must not press the chat panel")
+        let target = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: point.x - app.frame.minX, dy: point.y - app.frame.minY))
+        let evidence = XCTAttachment(string: "time: \(ProcessInfo.processInfo.systemUptime); paragraph: \(frame); intended scene point: \(point); resolved screen point: \(target.screenPoint); book: \(readingSurface(app).frame); app: \(app.frame)")
+        evidence.name = flow + " native selection gesture target"; evidence.lifetime = .keepAlways; add(evidence)
+        target.press(forDuration: 1.2)
     }
-    @MainActor func testExpandedSelectionMenuShowsAllPrimaryActionsAndCopiesInPagesScrollAndPDF() {
+    @MainActor private func revealSelectionAction(_ id: String, app: XCUIApplication) -> XCUIElement {
+        let menu = app.scrollViews["expandedSelectionMenu"], button = app.buttons["selection-" + id]
+        XCTAssertTrue(menu.waitForExistence(timeout: 6))
+        for _ in 0..<4 {
+            if button.isHittable && menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame) { return button }
+            if button.frame.midX < menu.frame.midX { menu.swipeRight() } else { menu.swipeLeft() }
+        }
+        XCTAssertTrue(button.isHittable, "Selection action must be reachable: " + id)
+        XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame), "Action must scroll fully into view: " + id)
+        return button
+    }
+    @MainActor func testHorizontalSelectionHandlesInPages() { verifyHorizontalSelectionHandles(flow: "Pages") }
+    @MainActor func testHorizontalSelectionHandlesInScroll() { verifyHorizontalSelectionHandles(flow: "Scroll") }
+    @MainActor func testHorizontalSelectionHandlesInPDF() { verifyHorizontalSelectionHandles(flow: "PDF") }
+    @MainActor func testHorizontalSelectionHandlesInScrollWithSceneGeometryFixture() { verifyHorizontalSelectionHandles(flow: "Scroll", geometryFixture: true) }
+    @MainActor private func verifyHorizontalSelectionHandles(flow: String, geometryFixture: Bool = true) {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        do {
+            let app = launchApp(geometryFixture: geometryFixture); openSelectionFixture(flow, app: app)
+            if geometryFixture {
+                addTeardownBlock { @MainActor in
+                    if app.state == .runningForeground { self.setReaderOrientation(.portrait, app: app) }
+                    app.terminate()
+                }
+            }
+            for landscape in [false, true] {
+                setReaderOrientation(landscape ? .landscapeLeft : .portrait, app: app)
+                expectation(for: NSPredicate { _, _ in landscape ? app.frame.width > app.frame.height : app.frame.height > app.frame.width }, evaluatedWith: app)
+                waitForExpectations(timeout: 6)
+                // PDFKit retains native grips after menu dismissal. Select a
+                // different word after rotation, not the old grip itself.
+                selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
+                let menu = app.scrollViews["expandedSelectionMenu"]
+                XCTAssertTrue(menu.waitForExistence(timeout: 6))
+                XCTAssertLessThanOrEqual(menu.frame.height, 48, "Selection actions must occupy one compact row")
+                let initial = menu.value as? String ?? ""
+                let initialLocator = app.buttons["selection-ask"].value as? String ?? ""
+                XCTAssertFalse(initial.isEmpty); XCTAssertFalse(initialLocator.isEmpty)
+                let firstVisible = ["ask", "listen", "highlight", "note", "copy", "system"].filter { id in
+                    let button = app.buttons["selection-" + id]
+                    return button.isHittable && menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame)
+                }
+                XCTAssertGreaterThanOrEqual(firstVisible.count, 4, "Pack at least four labelled actions in a phone row")
+                let askX = app.buttons["selection-ask"].frame.minX
+                _ = revealSelectionAction("system", app: app)
+                if !landscape { XCTAssertLessThan(app.buttons["selection-ask"].frame.minX, askX, "Hidden actions must be reached by sliding the row") }
+                _ = revealSelectionAction("ask", app: app)
+                XCTAssertEqual(menu.value as? String, initial, "Sliding the toolbar cannot change the selected text")
+                let handle = app.descendants(matching: .any)["selection-end-geometry"].firstMatch
+                XCTAssertTrue(handle.waitForExistence(timeout: 3))
+                XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(handle.frame), "Toolbar must leave the native handle clear")
+                capture(flow + (landscape ? " landscape" : " portrait") + " compact menu before native handle drag", app: app)
+                let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: handle.frame.midX, dy: handle.frame.midY))
+                start.press(forDuration: 0.7, thenDragTo: start.withOffset(CGVector(dx: 80, dy: landscape ? 0 : 35)), withVelocity: .slow, thenHoldForDuration: 0.2)
+                if !menu.waitForExistence(timeout: 4) {
+                    let leaf = app.menuItems["Leaf actions"].exists ? app.menuItems["Leaf actions"] : app.buttons["Leaf actions"]
+                    XCTAssertTrue(leaf.waitForExistence(timeout: 3)); leaf.tap()
+                }
+                XCTAssertTrue(menu.waitForExistence(timeout: 4))
+                let extended = menu.value as? String ?? ""
+                XCTAssertGreaterThan(extended.count, initial.count, "Dragging the real native end handle must extend the passage in " + flow)
+                let extendedLocator = app.buttons["selection-ask"].value as? String ?? ""
+                XCTAssertFalse(extendedLocator.isEmpty); XCTAssertNotEqual(extendedLocator, initialLocator, "Actions must use the changed native range locator")
+                if flow == "PDF" {
+                    // PDFKit can include adjacent whitespace while adjusting a
+                    // handle. Preserve the actual original characters, not an
+                    // assumption about leading whitespace in selection.string.
+                    func ranges(_ identity: String) -> [(Int, NSRange)] {
+                        identity.split(separator: "|", maxSplits: 1).last?.split(separator: ",").compactMap { value in
+                            let parts = value.split(separator: ":").compactMap { Int($0) }
+                            return parts.count == 3 ? (parts[0], NSRange(location: parts[1], length: parts[2])) : nil
+                        } ?? []
+                    }
+                    let oldRanges = ranges(initialLocator), newRanges = ranges(extendedLocator)
+                    XCTAssertFalse(oldRanges.isEmpty); XCTAssertFalse(newRanges.isEmpty)
+                    for (page, range) in oldRanges {
+                        XCTAssertTrue(newRanges.contains { $0.0 == page && $0.1.location <= range.location && NSMaxRange($0.1) >= NSMaxRange(range) }, "PDF handle adjustment must retain the exact original characters")
+                    }
+                    XCTAssertGreaterThan(newRanges.reduce(0) { $0 + $1.1.length }, oldRanges.reduce(0) { $0 + $1.1.length })
+                } else { XCTAssertTrue(extended.hasPrefix(initial), "Handle drag must retain the original selected word") }
+                capture(flow + (landscape ? " landscape" : " portrait") + " native selection extended with horizontal menu", app: app)
+                let startHandle = app.descendants(matching: .any)["selection-start-geometry"].firstMatch
+                XCTAssertTrue(startHandle.waitForExistence(timeout: 3))
+                XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(startHandle.frame))
+                let trim = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: startHandle.frame.midX, dy: startHandle.frame.midY))
+                trim.press(forDuration: 0.7, thenDragTo: trim.withOffset(CGVector(dx: 36, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.2)
+                XCTAssertTrue(menu.waitForExistence(timeout: 5))
+                let trimmed = menu.value as? String ?? ""
+                XCTAssertFalse(trimmed.isEmpty); XCTAssertNotEqual(trimmed, extended, "Native start handle must also remain draggable")
+                XCTAssertNotEqual(app.buttons["selection-ask"].value as? String, extendedLocator)
+                capture(flow + (landscape ? " landscape" : " portrait") + " native start handle adjusted", app: app)
+                let copiedStart = app.descendants(matching: .any)["selection-start-geometry"].firstMatch.frame
+                let copiedLocator = app.buttons["selection-ask"].value as? String
+                revealSelectionAction("copy", app: app).tap()
+                let lateCopyMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
+                lateCopyMenu.isInverted = true; waitForExpectations(timeout: 0.45)
+                // Copy intentionally retains UIKit's selection. Its real grip
+                // must still adjust that range and refresh actions afterward.
+                let retained = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: copiedStart.midX, dy: copiedStart.midY))
+                retained.press(forDuration: 0.7, thenDragTo: retained.withOffset(CGVector(dx: 18, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.2)
+                XCTAssertTrue(menu.waitForExistence(timeout: 5))
+                XCTAssertFalse((menu.value as? String ?? "").isEmpty)
+                XCTAssertNotEqual(menu.value as? String, trimmed)
+                XCTAssertNotEqual(app.buttons["selection-ask"].value as? String, copiedLocator)
+                capture(flow + (landscape ? " landscape" : " portrait") + " copied native selection remains adjustable", app: app)
+                // A tap explicitly finishes this range before starting another.
+                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+                if app.buttons["closeBook"].exists { readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+                selectFixturePassage(flow, app: app)
+                XCTAssertTrue(menu.waitForExistence(timeout: 5))
+                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+                if app.buttons["closeBook"].exists { readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+                let lateDismissedMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
+                lateDismissedMenu.isInverted = true; waitForExpectations(timeout: 0.45)
+            }
+            if flow == "PDF" {
+                // Leaving a selection must not permanently disable ordinary
+                // reader edge taps after the native gesture-completion grace.
+                selectFixturePassage(flow, app: app, pdfWordOffset: 0.55)
+                XCTAssertTrue(app.scrollViews["expandedSelectionMenu"].waitForExistence(timeout: 5))
+                revealSelectionAction("ask", app: app).tap()
+                XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+                app.buttons["closeReaderChat"].tap()
+                showReaderControls(app)
+                let title = app.staticTexts["readerChapterTitle"], originalPage = title.label
+                XCTAssertFalse(originalPage.isEmpty)
+                let surface = readingSurface(app)
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+                showReaderControls(app)
+                XCTAssertNotEqual(title.label, originalPage, "A normal right-edge tap must advance after selection closes")
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
+                showReaderControls(app)
+                XCTAssertEqual(title.label, originalPage, "A normal left-edge tap must return to the original PDF page")
+                capture("PDF ordinary edge navigation resumes after native selection", app: app)
+            }
+            if geometryFixture { setReaderOrientation(.portrait, app: app) }
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+    }
+    @MainActor func testHorizontalSelectionPrimaryActionsInPages() { verifyPrimarySelectionActions("Pages") }
+    @MainActor func testHorizontalSelectionPrimaryActionsInScroll() { verifyPrimarySelectionActions("Scroll") }
+    @MainActor func testHorizontalSelectionPrimaryActionsInPDF() { verifyPrimarySelectionActions("PDF") }
+
+    @MainActor private func finishNativeSelectionAfterRotation(_ flow: String, expectedQuote: String, app: XCUIApplication) {
+        let surface = readingSurface(app)
+        // UIKit can retain its native selection interaction after EPUB reflow
+        // clears the DOM range. End that interaction with one real book tap.
+        let target = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+        let trace = XCTAttachment(string: "time: \(ProcessInfo.processInfo.systemUptime); resolved screen point: \(target.screenPoint); book: \(surface.frame)")
+        trace.name = flow + " finish retained native selection gesture"; trace.lifetime = .keepAlways; add(trace)
+        target.tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Ending native selection must keep chat open")
+        XCTAssertEqual(app.staticTexts["chatSelectedPassage"].label, expectedQuote, "The saved quote survives ending native selection")
+        capture(flow + " retained native selection finished after rotation", app: app)
+    }
+
+    @MainActor private func verifyPrimarySelectionActions(_ flow: String) {
         continueAfterFailure = false
         orient(.portrait)
         defer { orient(.portrait) }
-        for flow in ["Pages", "Scroll", "PDF"] {
-            let app = launchApp(); openSelectionFixture(flow, app: app)
-            app.buttons["openReaderChat"].tap()
-            selectFixturePassage(flow, app: app)
-            let menu = app.tables["expandedSelectionMenu"]
-            if !menu.waitForExistence(timeout: 6) {
-                capture(flow + " missing expanded selection menu", app: app)
-                let state = XCTAttachment(string: app.debugDescription); state.name = "Expanded selection menu hierarchy"; state.lifetime = .keepAlways; add(state)
-                XCTFail("Expanded selection menu did not appear in " + flow); return
-            }
-            let selected = menu.value as? String ?? ""
-            XCTAssertFalse(selected.isEmpty)
-            for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " " + id) }
-            capture(flow + " expanded selection menu all actions", app: app)
-            self.orient(.landscapeLeft)
-            expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
-            for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " landscape " + id) }
-            capture(flow + " expanded selection menu landscape", app: app)
-            self.orient(.portrait)
-            expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
-            app.buttons["selection-copy"].tap()
-            XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
-            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
-            input.tap(); input.press(forDuration: 1.2)
-            let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
-            XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
-            XCTAssertEqual(input.value as? String, selected, "Copy must retain the actual native selection")
-            capture(flow + " copied selection pasted into chat", app: app)
-            app.terminate()
+        let app = launchApp(); openSelectionFixture(flow, app: app)
+        app.buttons["openReaderChat"].tap()
+        selectFixturePassage(flow, app: app)
+        let menu = app.scrollViews["expandedSelectionMenu"]
+        if !menu.waitForExistence(timeout: 6) {
+            capture(flow + " missing expanded selection menu", app: app)
+            let state = XCTAttachment(string: app.debugDescription); state.name = "Expanded selection menu hierarchy"; state.lifetime = .keepAlways; add(state)
+            XCTFail("Expanded selection menu did not appear in " + flow); return
         }
+        let selected = menu.value as? String ?? ""
+        XCTAssertFalse(selected.isEmpty)
+        let passage = app.staticTexts["chatSelectedPassage"]
+        XCTAssertTrue(passage.waitForExistence(timeout: 5))
+        XCTAssertEqual(passage.label, selected)
+        let originalLocator = app.buttons["selection-ask"].value as? String ?? ""
+        XCTAssertFalse(originalLocator.isEmpty)
+        for id in ["ask", "listen", "highlight", "note", "copy"] { _ = revealSelectionAction(id, app: app) }
+        XCTAssertEqual(menu.value as? String, selected)
+        XCTAssertEqual(app.buttons["selection-ask"].value as? String, originalLocator)
+        capture(flow + " expanded selection menu all actions", app: app)
+        self.orient(.landscapeLeft)
+
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
+        XCTAssertEqual(passage.label, selected, "The saved quote survives native selection invalidation during reflow")
+        // Actual EPUB reflow can clear the native range. Exercise a real
+        // selection in the new layout rather than assuming a cached menu
+        // still represents selected text. PDFKit can retain its old grips,
+        // so choose an unselected word away from the earlier endpoint.
+        finishNativeSelectionAfterRotation(flow, expectedQuote: selected, app: app)
+        selectFixturePassage(flow, app: app, pdfWordOffset: 0.55)
+        XCTAssertTrue(menu.waitForExistence(timeout: 6))
+        let landscapeSelection = menu.value as? String ?? ""
+        let landscapeLocator = app.buttons["selection-ask"].value as? String ?? ""
+        XCTAssertFalse(landscapeSelection.isEmpty); XCTAssertFalse(landscapeLocator.isEmpty)
+        XCTAssertEqual(passage.label, landscapeSelection)
+        for id in ["ask", "listen", "highlight", "note", "copy"] { _ = revealSelectionAction(id, app: app) }
+        XCTAssertEqual(menu.value as? String, landscapeSelection)
+        XCTAssertEqual(app.buttons["selection-ask"].value as? String, landscapeLocator)
+        capture(flow + " expanded selection menu landscape", app: app)
+        self.orient(.portrait)
+
+        expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+        XCTAssertEqual(passage.label, landscapeSelection)
+        finishNativeSelectionAfterRotation(flow, expectedQuote: landscapeSelection, app: app)
+        selectFixturePassage(flow, app: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 6))
+        let copiedSelection = menu.value as? String ?? ""
+        XCTAssertFalse(copiedSelection.isEmpty)
+        XCTAssertFalse((app.buttons["selection-ask"].value as? String ?? "").isEmpty)
+        revealSelectionAction("copy", app: app).tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+        XCTAssertEqual(passage.label, copiedSelection)
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.press(forDuration: 1.2)
+        let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+        XCTAssertEqual(input.value as? String, copiedSelection, "Copy must retain the actual current native selection")
+        capture(flow + " copied selection pasted into chat", app: app)
+        app.terminate()
     }
     @MainActor func testSelectionActionsReceiveTapsKeepComposerFocusAndLeaveNoWindowAfterClosing() {
         continueAfterFailure = false
@@ -433,14 +654,14 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["openReaderChat"].tap()
         capture("Reading before the selection menu", app: app)
         selectFixturePassage("Pages", app: app)
-        let menu = app.tables["expandedSelectionMenu"]
+        let menu = app.scrollViews["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
-        for id in ["ask", "listen", "highlight", "note", "copy", "system"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable) }
+        for id in ["ask", "listen", "highlight", "note", "copy", "system"] { _ = revealSelectionAction(id, app: app) }
         XCTAssertFalse(app.menuItems["Leaf actions"].exists || app.buttons["Leaf actions"].exists, "The native toolbar must not cover the expanded actions")
         let firstSelection = menu.value as? String ?? ""
         XCTAssertFalse(firstSelection.isEmpty)
         capture("Selection overlay receives all six actions", app: app)
-        app.buttons["selection-copy"].tap(); XCTAssertFalse(menu.exists)
+        revealSelectionAction("copy", app: app).tap(); XCTAssertFalse(menu.exists)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.typeText("Keep my menu question")
         XCTAssertEqual(input.value as? String, "Keep my menu question")
@@ -480,10 +701,10 @@ final class LeafReaderUITests: XCTestCase {
             let app = launchApp(); openSelectionFixture(flow, app: app)
             selectFixturePassage(flow, app: app)
             XCTAssertTrue(app.buttons["selection-system"].waitForExistence(timeout: 6))
-            let selected = app.tables["expandedSelectionMenu"].value as? String ?? ""
+            let selected = app.scrollViews["expandedSelectionMenu"].value as? String ?? ""
             XCTAssertFalse(selected.isEmpty)
-            app.buttons["selection-system"].tap()
-            let expanded = app.tables["expandedSelectionMenu"]
+            revealSelectionAction("system", app: app).tap()
+            let expanded = app.scrollViews["expandedSelectionMenu"]
             expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: expanded); waitForExpectations(timeout: 5)
             let nativeCopy = app.menuItems["Copy"].exists ? app.menuItems["Copy"] : app.buttons["Copy"]
             XCTAssertTrue(nativeCopy.waitForExistence(timeout: 5), "Native text actions must remain available in " + flow)
@@ -516,6 +737,7 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertEqual(status.value as? String, word)
             capture(flow + " spoken highlight retained after rotation", app: app)
             self.orient(.portrait)
+
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
             app.buttons["openReaderChat"].tap()
             let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
@@ -882,7 +1104,7 @@ final class LeafReaderUITests: XCTestCase {
                 capture(flow + " expanded selection menu", app: app)
                 let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.name = flow + " selection menu hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
                 XCTAssertTrue(selectionAsk.waitForExistence(timeout: 3)); XCTAssertTrue(selectionAsk.isHittable)
-                let selected = app.tables["expandedSelectionMenu"].value as? String ?? ""
+                let selected = app.scrollViews["expandedSelectionMenu"].value as? String ?? ""
                 XCTAssertFalse(selected.isEmpty)
                 selectionAsk.tap()
                 let passage = app.staticTexts["chatSelectedPassage"]
@@ -902,12 +1124,14 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertFalse(app.staticTexts["chatQuestion"].exists, "A shortcut prepares an editable draft")
                 if flow == "Scroll" {
                     self.orient(.landscapeLeft)
+
                     expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                     XCTAssertTrue(app.buttons["explainChatSelection"].isHittable)
                     XCTAssertTrue(app.buttons["summarizeChatSelection"].isHittable)
                     capture("Landscape selection shortcuts", app: app)
                     self.orient(.portrait)
+
                     expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                 }
@@ -919,6 +1143,7 @@ final class LeafReaderUITests: XCTestCase {
                 capture(flow + " attached passage while typing", app: app)
                 if flow == "Scroll" {
                     self.orient(.landscapeLeft)
+
                     expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                     XCTAssertTrue(passage.waitForExistence(timeout: 5))
@@ -927,6 +1152,7 @@ final class LeafReaderUITests: XCTestCase {
                     XCTAssertLessThanOrEqual(app.otherElements["readerChatPanel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
                     capture(flow + " selected passage landscape keyboard", app: app)
                     self.orient(.portrait)
+
                     expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                 }
@@ -1029,11 +1255,13 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(surface.frame.height,originalFrame.height,accuracy:2)
         capture(flow + " automatic quote while composing",app:app)
         orient(.landscapeLeft)
+
         expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);waitForExpectations(timeout:5)
         XCTAssertEqual(passage.label,quote)
         XCTAssertTrue(input.isHittable)
         capture(flow + " automatic quote landscape keyboard",app:app)
         orient(.portrait)
+
         expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
         app.buttons["Hide keyboard"].tap()
         app.buttons["closeReaderChat"].tap();showReaderControls(app);app.buttons["closeBook"].tap()
@@ -1162,6 +1390,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
         hideKeyboardAndWait()
         orient(.landscapeLeft)
+
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         resize(-120)
@@ -1178,6 +1407,7 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " landscape resize with keyboard", app: app)
         hideKeyboardAndWait()
         orient(.portrait)
+
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         let savedHeight = panel.frame.height
@@ -1249,11 +1479,13 @@ final class LeafReaderUITests: XCTestCase {
         quote.tap(); XCTAssertEqual(quote.label, "Collapse quoted text")
         quote.tap(); XCTAssertEqual(quote.label, "Expand quoted text")
         orient(.landscapeLeft)
+
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         XCTAssertTrue(app.buttons["closeReaderChat"].exists)
         capture(flow + " landscape sent quote conversation retained", app: app)
         orient(.portrait)
+
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
@@ -1277,11 +1509,13 @@ final class LeafReaderUITests: XCTestCase {
         defer { orient(.portrait) }
         verifyButtonTransparencyPortrait(flow: flow) { app, launcher, surface in
             self.orient(.landscapeLeft)
+
             self.expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);self.waitForExpectations(timeout:5)
             XCTAssertLessThanOrEqual(launcher.frame.maxX,surface.frame.maxX)
             XCTAssertLessThanOrEqual(launcher.frame.maxY,surface.frame.maxY)
             self.capture(flow + " faint button landscape",app:app)
             self.orient(.portrait)
+
             self.expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);self.waitForExpectations(timeout:5)
         }
     }
@@ -1411,6 +1645,7 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertLessThanOrEqual(app.otherElements["readerChatPanel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
                 app.buttons["closeReaderChat"].tap()
                 self.orient(.landscapeLeft)
+
                 expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
                 waitForExpectations(timeout: 5)
                 XCTAssertTrue(launcher.waitForExistence(timeout: 5))
@@ -1419,6 +1654,7 @@ final class LeafReaderUITests: XCTestCase {
                 app.buttons["closeReaderChat"].tap()
                 capture(flow + " landscape translucent button " + theme, app: app)
                 self.orient(.portrait)
+
                 expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
                 waitForExpectations(timeout: 5)
             }
@@ -1489,6 +1725,7 @@ final class LeafReaderUITests: XCTestCase {
         showReaderControls(app)
         XCTAssertEqual(bookmark.label, "Remove bookmark")
         orient(.landscapeLeft)
+
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         XCTAssertGreaterThanOrEqual(launcher.frame.minX, readingSurface(app).frame.minX)
@@ -1497,6 +1734,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertLessThanOrEqual(launcher.frame.maxY, readingSurface(app).frame.maxY)
         capture(flow + " moved translucent button landscape", app: app)
         orient(.portrait)
+
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         XCTAssertEqual(launcher.frame.minY, moved.minY, accuracy: 1)
@@ -1508,17 +1746,18 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor func testBothFlowsFillLandscapeViewportAndKeepLauncherInsideIt() {
+        continueAfterFailure = false
         orient(.portrait)
         defer { orient(.portrait) }
         let app = launchApp()
         app.buttons["featuredBook"].tap()
         for flow in ["Pages", "Scroll"] {
-            showReaderControls(app)
-            app.buttons["Appearance"].tap()
+            openAppearance(app)
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons[flow].tap()
             dismissAppearance(app)
             self.orient(.landscapeLeft)
+
             let launcher = app.buttons["openReaderChat"]
             launcher.tap()
             XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
@@ -1531,6 +1770,7 @@ final class LeafReaderUITests: XCTestCase {
             let attachment = XCTAttachment(string: frames); attachment.name = flow + " landscape frames"; attachment.lifetime = .keepAlways; add(attachment)
             capture(flow + " full screen landscape", app: app)
             self.orient(.portrait)
+
         }
     }
 
@@ -1614,6 +1854,7 @@ final class LeafReaderUITests: XCTestCase {
             app.buttons["openReaderChat"].tap()
             XCTAssertEqual(input.value as? String, "Keep my question")
             self.orient(.landscapeLeft)
+
             expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
             waitForExpectations(timeout: 5)
             surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
@@ -1628,6 +1869,7 @@ final class LeafReaderUITests: XCTestCase {
             app.buttons["closeReaderChat"].tap()
             XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
             self.orient(.portrait)
+
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
             waitForExpectations(timeout: 5)
             // The next flow uses the same persisted draft.
