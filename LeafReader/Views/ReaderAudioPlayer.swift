@@ -66,7 +66,7 @@ struct ReaderAudioSettings: View {
     @ObservedObject var session: ReadAloudSession
     let onStart: () -> Void
     let onResume: () -> Void
-    @State private var voices: [AVSpeechSynthesisVoice] = []
+    @State private var voices: [AppleReadingVoice] = []
     var body: some View {
         Form {
             Section {
@@ -84,17 +84,25 @@ struct ReaderAudioSettings: View {
             }.listRowBackground(theme.surface)
             Section {
                 Picker("Voice engine", selection: $session.engine) {
-                    ForEach(ReadAloudEngine.allCases) { engine in Text(engine.title).tag(engine) }
+                    ForEach(ReadAloudEngine.allCases) { engine in
+                        Text(engine == .kokoro ? "Natural voice" : "Apple voices").tag(engine)
+                    }
                 }.pickerStyle(.segmented).accessibilityIdentifier("listeningEngine")
                 if session.engine == .kokoro, let model = session.voiceModel {
                     KokoroVoicePackRow(model: model, session: session)
-                } else {
+                } else if !voices.isEmpty {
                     Picker("Voice", selection: $session.voice) {
-                        Text("Automatic · match the text").tag("")
-                        ForEach(voices, id: \.identifier) { voice in
-                            Text("\(voice.name) · \(Locale.current.localizedString(forIdentifier: voice.language) ?? voice.language)").tag(voice.identifier)
+                        Text("Automatic · best quality").tag("")
+                        ForEach(voices) { voice in
+                            Text("\(voice.name) · \(voice.qualityLabel) · \(Locale.current.localizedString(forIdentifier: voice.language) ?? voice.language)").tag(voice.id)
                         }
                     }.accessibilityIdentifier("listeningVoice")
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Download an Enhanced or Premium voice").font(.subheadline.weight(.semibold))
+                        Text("Add a voice in iPhone Accessibility settings, then return to Leaf. Basic voices are not used.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }.accessibilityIdentifier("appleVoiceDownloadGuidance")
                 }
                 HStack { Text("Speed"); Spacer(); Text(session.speedLabel).monospacedDigit().foregroundStyle(.secondary) }
                 Slider(value: $session.speed, in: 0.5...2, step: 0.25) { Text("Playback speed") }
@@ -103,9 +111,9 @@ struct ReaderAudioSettings: View {
                     .accessibilityIdentifier("followSpokenText")
             } header: { Text("Voice and speed") } footer: {
                 if session.engine == .kokoro {
-                    Text("Natural voice runs the open Kokoro model on your iPhone: Chinese and English, no account, and no text leaves the device. Sentences are generated a few seconds ahead; the iPhone voice reads any passage the model cannot start. Playback pauses when Leaf goes into the background; your listening position is saved.")
+                    Text("Natural voice runs on your iPhone for Chinese and English. No account is needed, and no text leaves the device. If it cannot start, Leaf can use a downloaded Enhanced or Premium Apple voice. Basic voices are not used. Playback pauses in the background; your listening position is saved.")
                 } else {
-                    Text("Uses the voices available on your iPhone. Automatic chooses a voice for the text’s language. No AI account is needed. Playback pauses when Leaf goes into the background; your listening position is saved.")
+                    Text("Only downloaded Enhanced and Premium Apple voices are used. Automatic prefers Premium for the text’s language. Add voices in iPhone Accessibility settings. Playback pauses in the background; your listening position is saved.")
                 }
             }.listRowBackground(theme.surface)
             Section {
@@ -113,7 +121,13 @@ struct ReaderAudioSettings: View {
             }.listRowBackground(theme.surface)
         }.leafFormStyle().navigationTitle("Listen")
             .accessibilityIdentifier("listeningForm")
-            .onAppear { voices = AVSpeechSynthesisVoice.speechVoices().sorted { ($0.language, $0.name) < ($1.language, $1.name) } }
+            .onAppear { voices = AppleVoiceCatalog.installed }
+            .onReceive(NotificationCenter.default.publisher(for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in
+                voices = AppleVoiceCatalog.installed
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                voices = AppleVoiceCatalog.installed
+            }
     }
 }
 
@@ -151,7 +165,7 @@ struct KokoroVoicePackRow: View {
                 Section("English") { ForEach(KokoroVoiceCatalog.english) { Text($0.title).tag($0.id) } }
             }.accessibilityIdentifier("kokoroVoice")
             if let reason = session.fallbackReason {
-                Text("Last passage used the iPhone voice: \(reason)").font(.footnote).foregroundStyle(.secondary)
+                Text("Last passage used an Enhanced or Premium Apple voice: \(reason)").font(.footnote).foregroundStyle(.secondary)
             }
             Button(role: .destructive) { model.remove() } label: { Label("Remove voice pack", systemImage: "trash") }
                 .accessibilityIdentifier("kokoroRemove")
