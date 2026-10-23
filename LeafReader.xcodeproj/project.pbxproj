@@ -38,6 +38,7 @@
 		54061AFBEC9BA1100163F4BA /* BookmarksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AB29A7913A706F43291361B /* BookmarksView.swift */; };
 		5664A96BFC589704B6A55C7C /* ChatGPTOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEC6851EC27447414454AFF7 /* ChatGPTOAuth.swift */; };
 		59B4EDBF40040C16DE521BB0 /* ReaderSelectionMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1484671B40D96BC623E4F9 /* ReaderSelectionMenu.swift */; };
+		5DCC8CC47046C8BCE3454EE8 /* AppleVoiceCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBFEF84FF9F66E74AF30D17 /* AppleVoiceCatalogTests.swift */; };
 		629FC1922792EEB8C5174BEC /* ReaderChatSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C632D3424C29D507323DF84 /* ReaderChatSession.swift */; };
 		62E2499891727C708E313390 /* KokoroModelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A014A572292DC05A6C0789 /* KokoroModelStore.swift */; };
 		65B49DB9ADAD380F69073981 /* ChatGPTAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 229584F749B3CCD25F03CD5A /* ChatGPTAccountStore.swift */; };
@@ -51,6 +52,7 @@
 		88921C02F99C02FBC5B4505E /* ReaderPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA375CCD5FE2A2A6CEEDDF5B /* ReaderPreferences.swift */; };
 		9110C50975F238750DA3ED00 /* BookMetadataLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8899A77310F180B812766D5D /* BookMetadataLoader.swift */; };
 		93E967055EC1E395AC160A13 /* ZLibraryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */; };
+		94989906649C2E04E90425C6 /* AppleVoiceCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC9000E9711E46C768A8470 /* AppleVoiceCatalog.swift */; };
 		965F9070210F18463495A4F4 /* ZLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27735E21F07ADCA25D2777AC /* ZLibraryStore.swift */; };
 		973AB757D5F2D3E1BA34EF5D /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782B9AF3266BE06B1B489337 /* ReaderView.swift */; };
 		9990D24CD222A8DE97366F3D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 95E3F1CC0A69A7431FDFC29B /* Assets.xcassets */; };
@@ -142,6 +144,7 @@
 		6AB29A7913A706F43291361B /* BookmarksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarksView.swift; sourceTree = "<group>"; };
 		6C58276EB1F4A939EEC2C0D2 /* Reader */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Reader; path = LeafReader/Resources/Reader; sourceTree = SOURCE_ROOT; };
 		6C632D3424C29D507323DF84 /* ReaderChatSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderChatSession.swift; sourceTree = "<group>"; };
+		6EC9000E9711E46C768A8470 /* AppleVoiceCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleVoiceCatalog.swift; sourceTree = "<group>"; };
 		764F9B499BFF20AAAEF67FB2 /* LeafReader.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = LeafReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		782B9AF3266BE06B1B489337 /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
 		7A228DC38545B9BC6725AE25 /* KokoroSentenceSplitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroSentenceSplitter.swift; sourceTree = "<group>"; };
@@ -157,6 +160,7 @@
 		B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTests.swift; sourceTree = "<group>"; };
 		B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderEngineTests.swift; sourceTree = "<group>"; };
 		B903372F35178474AE142CA2 /* ReadAloudSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadAloudSession.swift; sourceTree = "<group>"; };
+		BBBFEF84FF9F66E74AF30D17 /* AppleVoiceCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleVoiceCatalogTests.swift; sourceTree = "<group>"; };
 		BC121F68853537778A0E3CC2 /* UITestSceneGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSceneGeometry.swift; sourceTree = "<group>"; };
 		BC58F359F95C7405EC4DCB7B /* AnnotationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationUITests.swift; sourceTree = "<group>"; };
 		C1E9C79FC755BD7B61574177 /* libc++.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libc++.tbd"; path = "usr/lib/libc++.tbd"; sourceTree = SDKROOT; };
@@ -253,6 +257,7 @@
 		70AB1BF38C8721A95B13A0F9 /* Speech */ = {
 			isa = PBXGroup;
 			children = (
+				6EC9000E9711E46C768A8470 /* AppleVoiceCatalog.swift */,
 				2434F7777A908B18B5C17994 /* AudioEnginePlayer.swift */,
 				28A014A572292DC05A6C0789 /* KokoroModelStore.swift */,
 				3F39761621E9910A989FEB3A /* KokoroReadAloudSpeaker.swift */,
@@ -282,6 +287,7 @@
 			isa = PBXGroup;
 			children = (
 				3FD904DA89A963355B4AFD5B /* AnnotationTests.swift */,
+				BBBFEF84FF9F66E74AF30D17 /* AppleVoiceCatalogTests.swift */,
 				988B12B05A25D8C389A2D249 /* BookMetadataTests.swift */,
 				379B84A8D58BA66045270D3C /* ChatGPTTests.swift */,
 				8AF0B59C16AA23A2176C159D /* ChatHistoryTests.swift */,
@@ -521,6 +527,7 @@
 				6F3E0FC0ECA3238758363E78 /* AISettingsStore.swift in Sources */,
 				1638B0F496721D3878BCB0BA /* AISettingsView.swift in Sources */,
 				48197B9BA6699E9830F76310 /* AddBooksView.swift in Sources */,
+				94989906649C2E04E90425C6 /* AppleVoiceCatalog.swift in Sources */,
 				05F32394B7ACA13763E2E553 /* AudioEnginePlayer.swift in Sources */,
 				C323E799B40EC06789B081DA /* Book.swift in Sources */,
 				E4F40376077E61558F758D31 /* BookAnnotation.swift in Sources */,
@@ -574,6 +581,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A09C3F2A4E802FDB0B0BCA75 /* AnnotationTests.swift in Sources */,
+				5DCC8CC47046C8BCE3454EE8 /* AppleVoiceCatalogTests.swift in Sources */,
 				E7140E31D841ADAE2EB508AF /* BookMetadataTests.swift in Sources */,
 				B3EC6DAD8A1755A253168FE5 /* ChatGPTTests.swift in Sources */,
 				4FFA5D443B98E1E4B80522B2 /* ChatHistoryTests.swift in Sources */,
