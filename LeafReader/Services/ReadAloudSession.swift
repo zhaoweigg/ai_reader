@@ -42,9 +42,14 @@ enum ReadAloudError: LocalizedError {
     var finished: (() -> Void)? { get set }
     var progressed: ((NSRange) -> Void)? { get set }
     func speak(_ text: String, language: String, voice: String, speed: Double) throws
+    /// Optional warm-up for the passage that follows the one being spoken.
+    func prepare(_ text: String, language: String, voice: String, speed: Double)
     func pause()
     func resume() -> Bool
     func stop()
+}
+extension ReadAloudSpeaking {
+    func prepare(_ text: String, language: String, voice: String, speed: Double) {}
 }
 
 @MainActor final class SystemReadAloudSpeaker: NSObject, ReadAloudSpeaking, AVSpeechSynthesizerDelegate {
@@ -106,6 +111,17 @@ enum ReadAloudError: LocalizedError {
     } }
     @Published var speed: Double { didSet { defaults.set(speed, forKey: "audio.speed"); restartVoice() } }
     @Published var voice: String { didSet { defaults.set(voice, forKey: "audio.voice"); restartVoice() } }
+    /// `.kokoro` speaks with the downloaded on-device model; the iPhone voice is
+    /// used for any passage the model cannot start.
+    @Published var engine: ReadAloudEngine { didSet { defaults.set(engine.rawValue, forKey: "audio.engine"); restartVoice() } }
+    /// Kokoro voice id, or empty for automatic selection by the text's script.
+    @Published var kokoroVoice: String { didSet { defaults.set(kokoroVoice, forKey: "audio.kokoroVoice"); restartVoice() } }
+    /// True while the on-device model is generating audio that has not started playing.
+    @Published private(set) var isBuffering = false
+    /// Why the last passage used the iPhone voice although the on-device engine was selected.
+    @Published private(set) var fallbackReason: String?
+    var voiceModel: KokoroModelStore? { (speaker as? RoutingReadAloudSpeaker)?.kokoro.store }
+    var effectiveVoice: String { engine == .kokoro ? ReadAloudEngine.kokoroPrefix + kokoroVoice : voice }
     var source: ((String?) async throws -> ReadAloudPassage?)?
     var reveal: ((String) async -> Void)?
     var clearSource: (() -> Void)?
@@ -115,6 +131,7 @@ enum ReadAloudError: LocalizedError {
     private let bookmarkURL: URL?
     private var loadTask: Task<Void, Never>?
     private var prefetch: Task<ReadAloudPassage?, Error>?
+    private var warmTask: Task<Void, Never>?
     private var revealTask: Task<Void, Never>?
     private var generation = UUID()
     private var offset = 0
@@ -130,10 +147,12 @@ enum ReadAloudError: LocalizedError {
 
     init(bookmarkURL: URL? = nil, defaults: UserDefaults = .standard, speaker: (any ReadAloudSpeaking)? = nil) {
         self.bookmarkURL = bookmarkURL; self.defaults = defaults
-        self.speaker = speaker ?? SystemReadAloudSpeaker()
+        self.speaker = speaker ?? RoutingReadAloudSpeaker(system: SystemReadAloudSpeaker(), kokoro: KokoroReadAloudSpeaker(store: .shared))
         let savedSpeed = defaults.double(forKey: "audio.speed")
         speed = savedSpeed.isFinite && (0.5...2).contains(savedSpeed) ? savedSpeed : 1
         voice = defaults.string(forKey: "audio.voice") ?? ""
+        engine = ReadAloudEngine(rawValue: defaults.string(forKey: "audio.engine") ?? "") ?? .system
+        kokoroVoice = defaults.string(forKey: "audio.kokoroVoice") ?? ""
         followsText = defaults.object(forKey: "audio.followsText") == nil || defaults.bool(forKey: "audio.followsText")
         if let bookmarkURL, let data = try? Data(contentsOf: bookmarkURL) {
             bookmark = try? JSONDecoder().decode(ReadAloudBookmark.self, from: data)
@@ -150,6 +169,8 @@ enum ReadAloudError: LocalizedError {
             self.highlight?(passage, spoken, self.followsText)
             if Date().timeIntervalSince(self.lastSavedAt) > 1 { self.saveBookmark() }
         }
+        (self.speaker as? ReadAloudBufferingReporter)?.buffering = { [weak self] buffering in self?.isBuffering = buffering }
+        (self.speaker as? RoutingReadAloudSpeaker)?.onFallback = { [weak self] reason in self?.fallbackReason = reason }
         notificationTokens.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
             guard (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue else { return }
             Task { @MainActor in self?.pause() }
@@ -197,7 +218,8 @@ enum ReadAloudError: LocalizedError {
         clearHighlight()
         generation = UUID(); loadTask?.cancel(); loadTask = nil
         isLoading = false
-        prefetch?.cancel(); prefetch = nil; revealTask?.cancel(); revealTask = nil; speaker.stop()
+        prefetch?.cancel(); prefetch = nil; warmTask?.cancel(); warmTask = nil
+        revealTask?.cancel(); revealTask = nil; speaker.stop(); isBuffering = false
         clearSource?()
     }
     private func load(at locator: String?, prepared: Task<ReadAloudPassage?, Error>? = nil) {
@@ -224,7 +246,14 @@ enum ReadAloudError: LocalizedError {
                 guard !next.text.isEmpty, next.locator != next.nextLocator else { throw ReadAloudError.noText }
                 passage = next; saveBookmark()
                 let cursor = next.nextLocator
-                prefetch = Task { try Task.checkCancellation(); return try await source(cursor) }
+                let prefetch = Task { try Task.checkCancellation(); return try await source(cursor) }
+                self.prefetch = prefetch
+                // Warm the on-device voice for the next passage once its text is known.
+                warmTask?.cancel()
+                warmTask = Task { [weak self] in
+                    guard let upcoming = try? await prefetch.value, let self, !Task.isCancelled, generation == token else { return }
+                    speaker.prepare(upcoming.text, language: upcoming.language, voice: effectiveVoice, speed: speed)
+                }
                 if state != .paused { speakCurrent() }
             } catch {
                 guard !Task.isCancelled, generation == token else { return }
@@ -240,7 +269,7 @@ enum ReadAloudError: LocalizedError {
         if offset > 0, CFStringIsSurrogateLowCharacter(text.character(at: offset)) { offset -= 1 }
         utteranceOffset = offset
         do {
-            try speaker.speak(text.substring(from: offset), language: passage.language, voice: voice, speed: speed)
+            try speaker.speak(text.substring(from: offset), language: passage.language, voice: effectiveVoice, speed: speed)
             state = .playing
             if followsText {
                 revealTask?.cancel()
@@ -254,8 +283,8 @@ enum ReadAloudError: LocalizedError {
         clearHighlight()
         let paused = state == .paused
         history.append(passage.locator); if history.count > 50 { history.removeFirst() }
-        let prepared = prefetch; prefetch = nil
-        speaker.stop(); loadTask?.cancel(); generation = UUID(); offset = 0
+        let prepared = prefetch; prefetch = nil; warmTask?.cancel(); warmTask = nil
+        speaker.stop(); isBuffering = false; loadTask?.cancel(); generation = UUID(); offset = 0
         state = paused ? .paused : .loading
         load(at: passage.nextLocator, prepared: prepared)
     }

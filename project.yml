@@ -16,6 +16,17 @@ targets:
   LeafReader:
     type: application
     platform: iOS
+    dependencies:
+      # Prebuilt sherpa-onnx + onnxruntime static XCFrameworks (Apache-2.0),
+      # fetched and checksum-verified by `python3 scripts/fetch_sherpa_onnx.py`
+      # (see ThirdParty/dependencies.json). They are not committed.
+      - framework: ThirdParty/sherpa-onnx/sherpa-onnx.xcframework
+        embed: false
+      - framework: ThirdParty/sherpa-onnx/onnxruntime.xcframework
+        embed: false
+      - sdk: libc++.tbd
+      - sdk: libbz2.tbd
+      - sdk: Accelerate.framework
     sources:
       - path: LeafReader
         excludes: [Resources, Info.plist]
@@ -29,8 +40,8 @@ targets:
       path: LeafReader/Info.plist
       properties:
         CFBundleDisplayName: Leaf
-        CFBundleShortVersionString: "1.13.0"
-        CFBundleVersion: "54"
+        CFBundleShortVersionString: "1.14.0"
+        CFBundleVersion: "55"
         UILaunchScreen: {}
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -86,6 +97,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.weizhao.leafreader
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # libbz2 ships in the iOS SDK; it unpacks the downloaded voice archive.
+        SWIFT_OBJC_BRIDGING_HEADER: LeafReader/LeafReader-Bridging-Header.h
   LeafReaderTests:
     type: bundle.unit-test
     platform: iOS
