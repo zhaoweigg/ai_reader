@@ -427,6 +427,7 @@ class View {
         this.#contentRange = document.createRange()
         this.#overlayer = null
         this.onExpand = () => {}
+        this.onResize = () => {}
         this.#iframe.src = 'about:blank'
     }
 }
@@ -1412,6 +1413,9 @@ export class Paginator extends HTMLElement {
     }
     destroy() {
         this.#observer.disconnect()
+        this.#scrollContinuation = null
+        if (this.#scrollFrame) cancelAnimationFrame(this.#scrollFrame)
+        this.#scrollFrame = null
         this.#clearScrollWindow()
         this.#view?.destroy()
         this.#view?.element.remove()
