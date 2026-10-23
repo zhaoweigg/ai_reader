@@ -98,7 +98,7 @@ def main():
     args = parser.parse_args()
     spec = json.loads(args.spec.read_text())
     worktree = Path(spec["worktree"])
-    guard = [sys.executable, str(worktree / "scripts/simulator_lease.py"),
+    guard = [sys.executable, str(Path(__file__).resolve().with_name("simulator_lease.py")),
              "--registry", spec["registry"], "--slot", spec["slot"],
              "--owner", spec["owner"], "--lease", spec["lease_id"],
              "--head", spec["head"], "--device", spec["device_uuid"],
