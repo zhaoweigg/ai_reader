@@ -140,6 +140,7 @@ struct ReaderContent: View {
                     let height = min(limits.upperBound, max(limits.lowerBound, chatResizedHeight ?? preferred))
                     ReaderChatPanel(session: chat, bookTitle: book.title, isComposing: composing, onClose: {
                         chatIsPresented = false
+                        model.clearNativeSelection()
                         model.hideControls()
                     }, onSettings: {
                         chat.stop()
