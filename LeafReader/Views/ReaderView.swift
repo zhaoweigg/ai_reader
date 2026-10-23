@@ -104,11 +104,14 @@ struct ReaderContent: View {
                         .accessibilityIdentifier("dismissAppearance")
                     }
                 }
-            if audio.isPresented, panel == nil, !chatIsPresented {
+            if audio.isPresented, panel == nil {
                 VStack {
-                    Spacer(minLength: 0)
+                    if !chatIsPresented { Spacer(minLength: 0) }
                     ReaderAudioPlayer(session: audio) { panel = .audio }
-                        .padding(.horizontal, 12).padding(.bottom, showsControls ? 112 : 12)
+                        .padding(.horizontal, 12)
+                        .padding(.top, chatIsPresented ? (showsControls ? 68 : 8) : 0)
+                        .padding(.bottom, chatIsPresented ? 0 : (showsControls ? 112 : 12))
+                    if chatIsPresented { Spacer(minLength: 0) }
                 }.environment(\.leafTheme, theme)
             }
             if showsControls {

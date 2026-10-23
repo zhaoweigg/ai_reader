@@ -315,6 +315,14 @@ final class LeafReaderUITests: XCTestCase {
             capture(flow + " listening landscape", app: app)
             XCUIDevice.shared.orientation = .portrait
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            app.buttons["openReaderChat"].tap()
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.typeText("Keep this question while listening")
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(pause.isHittable, "Playback must remain controllable while composing a question")
+            pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+            capture(flow + " listening controls while typing to Ask Leaf", app: app)
+            app.buttons["closeReaderChat"].tap()
             app.buttons["stopListening"].tap()
             XCTAssertFalse(app.buttons["audioPlayPause"].exists)
             showReaderControls(app); app.buttons["closeBook"].tap(); app.buttons["featuredBook"].tap()
