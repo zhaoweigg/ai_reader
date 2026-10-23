@@ -124,7 +124,7 @@ final class ReaderChatSession: ObservableObject {
         flush()
     }
 
-    func send(settings: AISettingsStore, context: @escaping @MainActor () async throws -> ReadingChatContext?) {
+    func send(settings: AISettingsStore, missingContextNotice: String? = "No readable page text was found. This question is sent without a passage; you can paste one yourself.", context: @escaping @MainActor () async throws -> ReadingChatContext?) {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isSending, !question.isEmpty else { return }
         guard flush() else { return }
@@ -153,7 +153,7 @@ final class ReaderChatSession: ObservableObject {
                 self.setSavedDraft(nextDraft)
                 self.selectedContext = nextSelection; self.selectionDirty = false
                 if !sharePage && selected != nil { self.notice = "Selected text was not sent because passage sharing is off." }
-                if sharePage && (snapshot?.isEmpty ?? true) { self.notice = "No readable page text was found. This question is sent without a passage; you can paste one yourself." }
+                if sharePage && (snapshot?.isEmpty ?? true) { self.notice = missingContextNotice }
                 await self.respond(provider: provider, token: token, sharePage: sharePage)
             } catch {
                 guard self.generation == token else { return }
