@@ -674,8 +674,11 @@ final class ReaderEngineTests: XCTestCase {
             await view.goTo(1);await sleep(250);
             const doc=r.getContents()[0].doc,range=doc.createRange(),p=doc.querySelector('p').firstChild;
             range.setStart(p,8);range.setEnd(p,20);
-            const saved=view.getCFI(1,range),text=range.toString(),rows=[];
+            const saved=view.getCFI(1,range),text=range.toString(),rows=[],events=[];
+            const measure=()=>{const current=r.getContents()[0],frame=current.doc.defaultView.frameElement,container=frame.parentElement.parentElement;return {index:current.index,top:container.scrollTop,frameY:frame.getBoundingClientRect().top,start:r.start,locator:view.lastLocation?.cfi};};
+            r.addEventListener('relocate',({detail})=>{events.push({reason:detail.reason,...measure()});if(events.length>16)events.shift();});
             await view.goTo(saved);
+            const initial={...measure(),visible:window.Leaf.isLocationVisible(saved)};
             for(const scrolling of [true,false,true])for(let size=12;size<=32;size++){
                 const font=['Georgia','Palatino','System'][(size-12)%3],margin=[8,20,48][(size-12)%3],theme=themes[(size-12)%themes.length];
                 window.Leaf.applyPreferences({...base,...theme,scrolling,font,fontSize:size,horizontalMargin:margin});
@@ -685,7 +688,7 @@ final class ReaderEngineTests: XCTestCase {
                     const root=doc.defaultView.getComputedStyle(doc.documentElement);
                     return Math.abs(parseFloat(root.fontSize)-size)<0.1 && root.colorScheme===theme.colorScheme;
                 });
-                rows.push({scrolling,size,font,margin,valid,visible:window.Leaf.isLocationVisible(saved),documents:contents.length,
+                rows.push({scrolling,size,font,margin,valid,initial,state:measure(),events:[...events],visible:window.Leaf.isLocationVisible(saved),documents:contents.length,
                     sameText:view.resolveNavigation(saved).anchor(doc).toString()===text,
                     actual:contents.map(({index,doc})=>({index,size:doc.defaultView.getComputedStyle(doc.documentElement).fontSize,
                         scheme:doc.defaultView.getComputedStyle(doc.documentElement).colorScheme,
