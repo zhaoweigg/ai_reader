@@ -199,7 +199,6 @@ private struct ReaderSelectionAction {
         #if DEBUG
         readerSelectionMenuTrace("dismiss", source: source)
         #endif
-        if controller != nil { source?.selectionEditMenu?.dismissMenu() }
         removeOutsideObservers()
         menuWindow?.isHidden = true; menuWindow?.rootViewController = nil; menuWindow = nil
         controller = nil
@@ -339,7 +338,14 @@ final class ReaderWebView: WKWebView {
         #if DEBUG
         readerSelectionMenuTrace(selectionMenu.showsSystemMenu ? "systemBuild" : "build", source: self, context: selectionContext?()?.isEmpty == false)
         #endif
-        if selectionMenu.usesExpandedMenu && !selectionMenu.showsSystemMenu {
+        if selectionMenu.showsSystemMenu {
+            #if DEBUG
+            readerSelectionMenuTrace("systemHasDefaultItems", source: self, context: builder.menu(for: .root)?.children.isEmpty == false)
+            readerSelectionMenuTrace("systemCanCopy", source: self, context: selectionFirstResponder?.canPerformAction(#selector(UIResponderStandardEditActions.copy(_:)), withSender: nil) == true)
+            #endif
+            return
+        }
+        if selectionMenu.usesExpandedMenu {
             builder.replaceChildren(ofMenu: .root) { _ in [] }; return
         }
         // Menu hierarchies are cached. The handler snapshots the current selection
@@ -376,7 +382,14 @@ final class ReaderPDFView: PDFView {
         #if DEBUG
         readerSelectionMenuTrace(selectionMenu.showsSystemMenu ? "systemBuild" : "build", source: self, context: selectionContext?()?.isEmpty == false)
         #endif
-        if selectionMenu.usesExpandedMenu && !selectionMenu.showsSystemMenu {
+        if selectionMenu.showsSystemMenu {
+            #if DEBUG
+            readerSelectionMenuTrace("systemHasDefaultItems", source: self, context: builder.menu(for: .root)?.children.isEmpty == false)
+            readerSelectionMenuTrace("systemCanCopy", source: self, context: selectionFirstResponder?.canPerformAction(#selector(UIResponderStandardEditActions.copy(_:)), withSender: nil) == true)
+            #endif
+            return
+        }
+        if selectionMenu.usesExpandedMenu {
             builder.replaceChildren(ofMenu: .root) { _ in [] }; return
         }
         // Menu hierarchies are cached. The handler snapshots the current selection

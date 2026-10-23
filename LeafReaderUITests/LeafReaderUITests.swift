@@ -459,12 +459,21 @@ final class LeafReaderUITests: XCTestCase {
             let app = launchApp(); openSelectionFixture(flow, app: app)
             selectFixturePassage(flow, app: app)
             XCTAssertTrue(app.buttons["selection-system"].waitForExistence(timeout: 6))
+            let selected = app.tables["expandedSelectionMenu"].value as? String ?? ""
+            XCTAssertFalse(selected.isEmpty)
             app.buttons["selection-system"].tap()
             let expanded = app.tables["expandedSelectionMenu"]
             expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: expanded); waitForExpectations(timeout: 5)
             let nativeCopy = app.menuItems["Copy"].exists ? app.menuItems["Copy"] : app.buttons["Copy"]
             XCTAssertTrue(nativeCopy.waitForExistence(timeout: 5), "Native text actions must remain available in " + flow)
             capture(flow + " standard iOS text actions remain available", app: app)
+            nativeCopy.tap(); app.buttons["openReaderChat"].tap()
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.press(forDuration: 1.2)
+            let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+            XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+            XCTAssertEqual(input.value as? String, selected, "Standard Copy must use the current native selection in " + flow)
+            capture(flow + " standard iOS Copy retains selected text", app: app)
             app.terminate()
         }
     }
