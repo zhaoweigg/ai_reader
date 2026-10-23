@@ -263,6 +263,56 @@ final class ReaderEngineTests: XCTestCase {
             let screenshot = XCTAttachment(image: try XCTUnwrap(image)); screenshot.name = "Actual Chinese speech full line scrolling=\(scrolling) offset=\(offset)"; screenshot.lifetime = .keepAlways; add(screenshot)
         }
     }
+    func testSpokenLinesReflowAtEverySizeInBothViewportOrientationsAndFlows() async throws {
+        let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        let web = try XCTUnwrap(model.webView)
+        let loaded = try await model.readAloudPassage(at: "section:0")
+        let packet = try JSONSerialization.jsonObject(with: JSONEncoder().encode(try XCTUnwrap(loaded)))
+        var rows: [[String: Any]] = []
+        for viewport in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
+            window?.frame.size = viewport
+            try await Task.sleep(for: .milliseconds(250))
+            for scrolling in [false, true] {
+                for (variant, font) in ["Georgia", "Palatino", "System"].enumerated() {
+                    for size in 12...32 {
+                        var prefs = preferences
+                        prefs.scrolling = scrolling; prefs.font = font; prefs.fontSize = Double(size)
+                        prefs.horizontalMargin = [12, 20, 36][variant]; prefs.verticalMargin = [4, 12, 24][variant]
+                        prefs.lineHeight = [1.2, 1.65, 2.1][variant]; prefs.theme = [.day, .paper, .night][variant]
+                        let result = try await web.callAsyncJavaScript("""
+                            const sleep=ms=>new Promise(r=>setTimeout(r,ms)),view=document.querySelector('foliate-view');
+                            window.Leaf.applyPreferences(settings);await sleep(100);
+                            await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location:650,length:1,follow:true});await sleep(50);
+                            const content=view.renderer.getContents()[0],doc=content.doc,segment=packet.segments.find(s=>650>=s.offset&&650<s.offset+s.length);
+                            const range=view.resolveCFI(segment.locator).anchor(doc),node=range.startContainer;
+                            range.setStart(node,range.startOffset+650-segment.offset);range.setEnd(node,range.startOffset+1);
+                            const word=range.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect(),whole=doc.createRange();whole.selectNodeContents(node);
+                            const expected=[...whole.getClientRects()].find(r=>Math.abs(r.top-word.top)<1&&r.left<=word.left&&r.right>=word.right);
+                            const actual=[...content.overlayer.element.querySelectorAll('[data-leaf-spoken-line] rect')];
+                            return {font:settings.font,size:settings.fontSize,scrolling:settings.scrolling,theme:settings.background,viewport:[innerWidth,innerHeight],
+                                visible:word.left+frame.left>=-1&&word.right+frame.left<=innerWidth+1&&word.top+frame.top>=-1&&word.bottom+frame.top<=innerHeight+1,
+                                exactLine:!!expected&&actual.length===1&&['x','y','width','height'].every((key,i)=>Math.abs(Number(actual[0].getAttribute(key))-expected[['left','top','width','height'][i]])<.8),
+                                unchanged:view.resolveCFI(packet.locator).anchor(doc).toString()===packet.text,
+                                word:[word.left,word.top,word.width,word.height],paint:actual.map(r=>['x','y','width','height'].map(k=>Number(r.getAttribute(k))))};
+                            """, arguments: ["settings": prefs.payload, "packet": packet], in: nil, contentWorld: .page) as? [String: Any]
+                        let row = try XCTUnwrap(result); rows.append(row)
+                        for key in ["visible", "exactLine", "unchanged"] { XCTAssertEqual(row[key] as? Bool, true, "\(key): \(row)") }
+                        let dimensions = row["viewport"] as? [Double] ?? []
+                        XCTAssertEqual((dimensions.first ?? 0) > (dimensions.last ?? 0), viewport.width > viewport.height)
+                        if [12, 22, 32].contains(size) {
+                            let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
+                            let screenshot = XCTAttachment(image: try XCTUnwrap(image)); screenshot.name = "Spoken line \(Int(viewport.width))x\(Int(viewport.height)) scroll=\(scrolling) \(font) \(size)pt \(prefs.theme)"; screenshot.lifetime = .keepAlways; add(screenshot)
+                        }
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(rows.count, 252); XCTAssertNil(model.error)
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows), uniformTypeIdentifier: "public.json")
+        attachment.name = "Spoken line 252 viewport-flow-font-size-theme measurements"; attachment.lifetime = .keepAlways; add(attachment)
+    }
     func testSpokenRangeOnlyLoadsColdChaptersWhenFollowingAndLatestRangeWins() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         for scrolling in [false, true] {
