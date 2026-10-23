@@ -17,7 +17,7 @@ struct ReaderAudioPlayer: View {
                         }
                         Spacer(minLength: 0)
                     }.contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel("Listening settings").accessibilityIdentifier("listeningSettings")
+                }.buttonStyle(.plain).accessibilityLabel("Listening settings").accessibilityValue(session.spokenText).accessibilityIdentifier("listeningSettings")
                 Menu {
                     ForEach([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2], id: \.self) { speed in
                         Button(String(format: "%g×", speed)) { session.speed = speed }

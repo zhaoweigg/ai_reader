@@ -62,6 +62,26 @@ import PDFKit
         XCTAssertEqual(session.state, .paused); XCTAssertTrue(speaker.spoken.isEmpty)
         session.resume(); XCTAssertEqual(speaker.spoken, ["Passage 0"])
     }
+    func testSpokenRangesTrackResumeOffsetsStayPausedAndClearWithoutChangingSavedCursor() async throws {
+        let (session, speaker, _, _) = setup()
+        let value = passage(0, text: "Alpha 😀 beta gamma")
+        session.source = { locator in locator == "position:1" ? nil : value }
+        var highlighted: NSRange?, latestPassage: ReadAloudPassage?, following = false
+        session.highlight = { passage, range, follow in latestPassage = passage; highlighted = passage == nil ? nil : range; following = follow }
+        session.start(); try await wait { session.state == .playing }
+        speaker.progressed?(NSRange(location: 9, length: 4))
+        XCTAssertEqual(highlighted, NSRange(location: 9, length: 4)); XCTAssertEqual(session.spokenText, "beta")
+        XCTAssertEqual(latestPassage, value); XCTAssertTrue(following)
+        session.pause(); speaker.progressed?(NSRange(location: 14, length: 5))
+        XCTAssertEqual(session.spokenText, "beta"); XCTAssertEqual(highlighted?.location, 9)
+        session.followsText = false; XCTAssertFalse(following)
+        session.speed = 1.5; session.resume()
+        speaker.progressed?(NSRange(location: 5, length: 5))
+        XCTAssertEqual(highlighted, NSRange(location: 14, length: 5)); XCTAssertEqual(session.spokenText, "gamma")
+        session.stop(); XCTAssertNil(highlighted); XCTAssertNil(latestPassage); XCTAssertEqual(session.spokenText, "")
+        XCTAssertEqual(session.bookmark?.offset, 14)
+        speaker.progressed?(NSRange(location: 0, length: 5)); XCTAssertNil(highlighted)
+    }
     func testReplacingStartIgnoresCancelledLateSourceCompletion() async throws {
         let (session, speaker, _, _) = setup()
         session.source = { [self] locator in

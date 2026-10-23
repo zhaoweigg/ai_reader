@@ -35,6 +35,8 @@ final class ReaderModel: NSObject, ObservableObject {
     weak var webView: WKWebView?
     weak var pdfView: PDFView?
     var preferences: ReaderPreferences?
+    var spokenHighlightLocator: String?
+    var spokenHighlightView: ObjectIdentifier?
     private var searchGeneration = UUID().uuidString
     private var lastAutomaticRecovery: Date?
     private var memoryWarningObserver: NSObjectProtocol?

@@ -1,9 +1,12 @@
+import { Overlayer } from './foliate/overlayer.js';
+
 // Each request returns one bounded passage and a CFI cursor. Detached chapter
 // documents are temporary; speech never renders or retains the whole book.
 const excluded = 'script,style,noscript,template,rt, [hidden], [aria-hidden="true"]';
 const limit = 800;
 const sources = new WeakMap();
 export function clearReadAloud(view) {
+    clearSpokenRange(view);
     const source = sources.get(view);
     if (source) { source.epoch++; source.doc = null; source.index = null; }
 }
@@ -62,7 +65,8 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
         }
         const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
         let node, first, last, lastEnd, block, breaks, remaining = limit;
-        const parts = [];
+        const parts = [], pieces = [];
+        let spokenOffset = 0;
         while ((node = walker.nextNode())) {
             if (!readable(node)) continue;
             let start = 0;
@@ -83,6 +87,7 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
                     // A separator belongs only to the spoken string. Keep the
                     // original text nodes and CFI offsets completely unchanged.
                     parts.push('\n');
+                    spokenOffset++;
                     if (--remaining <= 0) break;
                 }
             }
@@ -92,14 +97,28 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
             if (!text.trim() && !first) continue;
             if (!first) breaks = [...parent.querySelectorAll('br')].filter(br => !br.closest(excluded));
             first ??= { node, start }; block = parent; last = node; lastEnd = end;
+            pieces.push({ node, start, end, offset: spokenOffset });
             parts.push(text); remaining -= text.length;
+            spokenOffset += text.length;
             if (end < node.length || remaining <= 0) break;
         }
         if (first) {
             const range = doc.createRange(); range.setStart(first.node, first.start); range.setEnd(last, lastEnd);
             const next = range.cloneRange(); next.collapse(false);
             const label = view.getProgressOf(index, range).tocItem?.label;
-            return { text: parts.join('').trim(), locator: view.getCFI(index, range), nextLocator: view.getCFI(index, next),
+            const raw = parts.join(''), text = raw.trim(), leading = raw.length - raw.trimStart().length;
+            // Spoken offsets include synthetic line breaks and omit trimmed
+            // whitespace/rt text. Map bounded text pieces back to original CFIs
+            // rather than inserting spans or assuming DOM and speech offsets match.
+            const segments = pieces.flatMap(piece => {
+                const start = Math.max(leading, piece.offset), end = Math.min(leading + text.length, piece.offset + piece.end - piece.start);
+                if (end <= start) return [];
+                const anchor = doc.createRange();
+                anchor.setStart(piece.node, piece.start + start - piece.offset);
+                anchor.setEnd(piece.node, piece.start + end - piece.offset);
+                return [{ offset: start - leading, length: end - start, locator: view.getCFI(index, anchor) }];
+            });
+            return { text, segments, locator: view.getCFI(index, range), nextLocator: view.getCFI(index, next),
                 language: first.node.parentElement.closest('[lang], [xml\\:lang]')?.getAttribute('lang')
                     || doc.documentElement.lang || (typeof book.metadata?.language === 'string' ? book.metadata.language : ''),
                 label: typeof label === 'string' ? label : '', index };
@@ -110,17 +129,94 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
     return null;
 }
 
-export async function revealReadAloud(view, locator) {
+const spokenViews = new WeakMap();
+const spokenKey = 'leaf-spoken-word';
+function clearPaint(view) {
+    for (const content of view.renderer?.getContents?.() ?? []) content.overlayer?.remove(spokenKey);
+}
+function paintSpokenRange(view, state) {
+    clearPaint(view);
+    const { passage, location, length } = state;
+    if (!passage || length <= 0) return;
+    const contents = view.renderer?.getContents?.() ?? [];
+    const ranges = [];
+    for (const segment of passage.segments ?? []) {
+        const start = Math.max(location, segment.offset), end = Math.min(location + length, segment.offset + segment.length);
+        if (end <= start) continue;
+        try {
+            const target = view.resolveCFI(segment.locator), content = contents.find(item => item.index === target.index);
+            if (!content?.overlayer) continue; // Never load a chapter to paint it.
+            const anchor = target.anchor(content.doc), range = anchor.cloneRange();
+            if (anchor.startContainer.nodeType !== Node.TEXT_NODE) continue;
+            range.setStart(anchor.startContainer, anchor.startOffset + start - segment.offset);
+            range.setEnd(anchor.startContainer, anchor.startOffset + end - segment.offset);
+            ranges.push({ content, range });
+        } catch { /* A stale/reloading document must not interrupt speech. */ }
+    }
+    // A word can cross inline elements. One draw group owns all of its rects,
+    // keeping hit testing and persistent annotations completely independent.
+    for (const content of new Set(ranges.map(item => item.content))) {
+        const matching = ranges.filter(item => item.content === content).map(item => item.range);
+        const range = { getClientRects: () => matching.flatMap(item => [...item.getClientRects()]) };
+        content.overlayer.add(spokenKey, range, rects => {
+            const group = Overlayer.highlight(rects, { color: '#F2B84B' });
+            group.setAttribute('data-leaf-spoken-word', 'true');
+            group.setAttribute('data-leaf-spoken-text', passage.text.slice(location, location + length));
+            group.style.opacity = '.42';
+            group.style.pointerEvents = 'none';
+            return group;
+        }, { interactive: false });
+    }
+}
+export function clearSpokenRange(view) {
+    const state = spokenViews.get(view);
+    if (state) { state.revision++; state.passage = null; }
+    clearPaint(view);
+}
+export async function setSpokenRange(view, { passage, locator, location, length, follow }) {
+    if (!view?.book) return;
+    let state = spokenViews.get(view);
+    if (!state) {
+        state = { revision: 0 };
+        spokenViews.set(view, state);
+        const redraw = () => queueMicrotask(() => paintSpokenRange(view, state));
+        view.addEventListener('create-overlay', redraw);
+        view.addEventListener('relocate', redraw);
+    }
+    if (passage) state.passage = passage;
+    if (state.passage?.locator !== locator) return;
+    const revision = ++state.revision;
+    state.location = Math.max(0, location); state.length = Math.max(0, length);
+    if (follow) {
+        const segment = state.passage.segments?.find(item => location >= item.offset && location < item.offset + item.length);
+        if (segment) {
+            await revealReadAloud(view, segment.locator, Math.max(0, location - segment.offset));
+        }
+    }
+    if (revision === state.revision) paintSpokenRange(view, state);
+}
+
+export async function revealReadAloud(view, locator, offset = 0) {
     const source = sources.get(view);
     if (!source) return;
     const epoch = source.epoch;
-    source.latestReveal = locator;
+    const request = `${locator}@${offset}`;
+    source.latestReveal = request;
     // Rapid Next/Previous actions must finish at the newest passage, even if an
     // earlier reveal is still waiting for a cold chapter document to load.
     source.navigation = (source.navigation ?? Promise.resolve()).catch(() => {}).then(async () => {
-        if (source.epoch !== epoch || source.latestReveal !== locator || !view.book) return;
+        if (source.epoch !== epoch || source.latestReveal !== request || !view.book) return;
         const target = view.resolveNavigation(locator);
         if (!target) return;
+        if (offset > 0) {
+            const anchor = target.anchor;
+            target.anchor = doc => {
+                const range = anchor(doc); range.collapse(true);
+                if (range.startContainer.nodeType === Node.TEXT_NODE)
+                    range.setStart(range.startContainer, Math.min(range.startContainer.length, range.startOffset + offset));
+                return range;
+            };
+        }
         // Do not add every spoken passage to the reader's navigation history.
         const visible = view.lastLocation?.range;
         const content = view.renderer.getContents?.().find(item => item.index === target.index);

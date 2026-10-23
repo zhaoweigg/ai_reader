@@ -352,6 +352,88 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    @MainActor private func openSelectionFixture(_ flow: String, app: XCUIApplication) {
+        if flow == "PDF" {
+            let field = app.textFields["librarySearch"]; XCTAssertTrue(field.waitForExistence(timeout: 10))
+            field.tap(); field.typeText("Coast"); app.buttons["book-Notes from the Coast"].tap()
+            showReaderControls(app); app.buttons["nextPage"].tap()
+        } else {
+            app.buttons["featuredBook"].tap(); showReaderControls(app); app.buttons["Appearance"].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap(); dismissAppearance(app)
+        }
+    }
+    @MainActor private func selectFixturePassage(_ flow: String, app: XCUIApplication) {
+        let pdf = flow == "PDF", paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", pdf ? "Before the town" : "Attention is a way")).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
+        paragraph.coordinate(withNormalizedOffset: CGVector(dx: pdf ? 0.15 : 0.3, dy: pdf ? 0.25 : 0.1)).press(forDuration: 1.2)
+    }
+    @MainActor func testExpandedSelectionMenuShowsAllPrimaryActionsAndCopiesInPagesScrollAndPDF() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            app.buttons["openReaderChat"].tap()
+            selectFixturePassage(flow, app: app)
+            let menu = app.tables["expandedSelectionMenu"]
+            if !menu.waitForExistence(timeout: 6) {
+                capture(flow + " missing expanded selection menu", app: app)
+                let state = XCTAttachment(string: app.debugDescription); state.name = "Expanded selection menu hierarchy"; state.lifetime = .keepAlways; add(state)
+                XCTFail("Expanded selection menu did not appear in " + flow); return
+            }
+            let selected = menu.value as? String ?? ""
+            XCTAssertFalse(selected.isEmpty)
+            for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " " + id) }
+            capture(flow + " expanded selection menu all actions", app: app)
+            XCUIDevice.shared.orientation = .landscapeLeft
+            expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            for id in ["ask", "listen", "highlight", "note", "copy"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable, flow + " landscape " + id) }
+            capture(flow + " expanded selection menu landscape", app: app)
+            XCUIDevice.shared.orientation = .portrait
+            expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            app.buttons["selection-copy"].tap()
+            XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.press(forDuration: 1.2)
+            let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+            XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+            XCTAssertEqual(input.value as? String, selected, "Copy must retain the actual native selection")
+            capture(flow + " copied selection pasted into chat", app: app)
+            app.terminate()
+        }
+    }
+    @MainActor func testSpeechProgressHighlightsVisibleTextInPagesScrollAndPDF() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            selectFixturePassage(flow, app: app)
+            XCTAssertTrue(app.buttons["selection-listen"].waitForExistence(timeout: 6)); app.buttons["selection-listen"].tap()
+            let status = app.buttons["listeningSettings"], pause = app.buttons["audioPlayPause"]
+            expectation(for: NSPredicate { _, _ in !(status.value as? String ?? "").isEmpty }, evaluatedWith: status); waitForExpectations(timeout: 15)
+            pause.tap(); let word = status.value as? String ?? ""
+            XCTAssertFalse(word.isEmpty); XCTAssertEqual(pause.label, "Resume listening")
+            capture(flow + " actual spoken text highlighted while paused", app: app)
+            XCUIDevice.shared.orientation = .landscapeLeft
+            expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            XCTAssertEqual(status.value as? String, word)
+            capture(flow + " spoken highlight retained after rotation", app: app)
+            XCUIDevice.shared.orientation = .portrait
+            expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            app.buttons["openReaderChat"].tap()
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.typeText("Keep my listening question")
+            XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+            XCTAssertTrue(pause.isHittable); XCTAssertEqual(status.value as? String, word)
+            capture(flow + " spoken highlight with actual chat keyboard", app: app)
+            app.buttons["closeReaderChat"].tap(); app.buttons["stopListening"].tap()
+            XCTAssertFalse(status.exists)
+            capture(flow + " stopping clears spoken highlight", app: app)
+            app.terminate()
+        }
+    }
     @MainActor func testListeningFromNativeSelectionInBothFlows() {
         let app = launchApp(); app.buttons["featuredBook"].tap()
         for flow in ["Pages", "Scroll"] {
