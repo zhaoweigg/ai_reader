@@ -84,7 +84,36 @@ import WebKit
 
     func send(_ request: URLRequest, toFile: Bool, progress: @escaping @Sendable (Double?) -> Void) async throws -> ZLibraryPayload {
         guard let url = request.url else { throw ZLibraryError.address }
-        if toFile { return try await ZLibraryHTTPTransport().send(request, toFile: true, progress: progress) }
+        if toFile {
+            var download = request
+            if contains(url) {
+                let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
+                let matching = cookies.filter { cookie in
+                    let path = url.path.isEmpty ? "/" : url.path
+                    return cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == origin.host
+                        && (cookie.expiresDate.map { $0 > Date() } ?? true)
+                        && (!cookie.isSecure || url.scheme == "https")
+                        && (path == cookie.path || (path.hasPrefix(cookie.path) && (cookie.path.hasSuffix("/") || path.dropFirst(cookie.path.count).hasPrefix("/"))))
+                }.sorted { $0.path.count > $1.path.count }
+                let header = HTTPCookie.requestHeaderFields(with: matching)["Cookie"]
+                guard matching.count <= 64, (header?.utf8.count ?? 0) <= 16384 else { throw ZLibraryError.response }
+                download.setValue(header, forHTTPHeaderField: "Cookie")
+            } else {
+                for name in ["Cookie", "Authorization", "remix-userid", "remix-userkey"] { download.setValue(nil, forHTTPHeaderField: name) }
+            }
+            let payload = try await ZLibraryHTTPTransport().send(download, toFile: true, progress: progress)
+            if let responseURL = payload.response.url, contains(responseURL) {
+                let fields = payload.response.allHeaderFields.reduce(into: [String: String]()) { result, item in
+                    if let key = item.key as? String, let value = item.value as? String { result[key] = value }
+                }
+                for cookie in HTTPCookie.cookies(withResponseHeaderFields: fields, for: responseURL)
+                    where cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == origin.host {
+                    await webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie)
+                }
+                await contextChanged?(nil)
+            }
+            return payload
+        }
         guard contains(url), url.path.hasPrefix("/eapi/"), ["GET", "POST"].contains(request.httpMethod ?? "GET") else { throw ZLibraryError.address }
         try await prepare()
         try Task.checkCancellation()

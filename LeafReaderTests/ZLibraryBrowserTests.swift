@@ -221,4 +221,25 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
         catch { XCTAssertEqual(error as? ZLibraryError, .response) }
         XCTAssertEqual(server.requests.count, 1)
     }
+
+    func testStreamedDownloadUsesCurrentBrowserCookiesAndSavesResponseUpdates() async throws {
+        let server = try await server { request in
+            if request.path.contains("most-popular") { return .init(headers: ["Set-Cookie": "site_access=latest; Path=/eapi; HttpOnly"]) }
+            let accepted = request.headers["cookie"]?.contains("site_access=latest") == true
+            return .init(status: accepted ? 200 : 401,
+                         headers: ["Content-Type": "application/octet-stream", "Set-Cookie": "site_access=after-download; Path=/eapi; HttpOnly"], body: "%PDF-fixture")
+        }
+        let browser = browser(server)
+        _ = try await send(request(server), through: browser)
+        var download = request(server, "/eapi/book/download")
+        download.setValue("site_access=obsolete", forHTTPHeaderField: "Cookie")
+        let result = try await browser.send(download, toFile: true, progress: { _ in })
+        let file = try XCTUnwrap(result.file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertEqual(try Data(contentsOf: file), Data("%PDF-fixture".utf8))
+        XCTAssertEqual(result.response.statusCode, 200)
+        let cookies = await browser.webView.configuration.websiteDataStore.httpCookieStore.allCookies()
+        XCTAssertEqual(cookies.first { $0.name == "site_access" }?.value, "after-download")
+        XCTAssertEqual(server.requests.count, 2)
+    }
 }
