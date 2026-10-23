@@ -549,23 +549,50 @@ final class LeafReaderUITests: XCTestCase {
             }
             let selected = menu.value as? String ?? ""
             XCTAssertFalse(selected.isEmpty)
+            let passage = app.staticTexts["chatSelectedPassage"]
+            XCTAssertTrue(passage.waitForExistence(timeout: 5))
+            XCTAssertEqual(passage.label, selected)
+            let originalLocator = app.buttons["selection-ask"].value as? String ?? ""
+            XCTAssertFalse(originalLocator.isEmpty)
             for id in ["ask", "listen", "highlight", "note", "copy"] { _ = revealSelectionAction(id, app: app) }
+            XCTAssertEqual(menu.value as? String, selected)
+            XCTAssertEqual(app.buttons["selection-ask"].value as? String, originalLocator)
             capture(flow + " expanded selection menu all actions", app: app)
             self.orient(.landscapeLeft)
 
             expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            XCTAssertEqual(passage.label, selected, "The saved quote survives native selection invalidation during reflow")
+            // Actual EPUB reflow can clear the native range. Exercise a real
+            // selection in the new layout rather than assuming a cached menu
+            // still represents selected text. PDFKit can retain its old grips,
+            // so choose an unselected word away from the earlier endpoint.
+            selectFixturePassage(flow, app: app, pdfWordOffset: 0.55)
+            XCTAssertTrue(menu.waitForExistence(timeout: 6))
+            let landscapeSelection = menu.value as? String ?? ""
+            let landscapeLocator = app.buttons["selection-ask"].value as? String ?? ""
+            XCTAssertFalse(landscapeSelection.isEmpty); XCTAssertFalse(landscapeLocator.isEmpty)
+            XCTAssertEqual(passage.label, landscapeSelection)
             for id in ["ask", "listen", "highlight", "note", "copy"] { _ = revealSelectionAction(id, app: app) }
+            XCTAssertEqual(menu.value as? String, landscapeSelection)
+            XCTAssertEqual(app.buttons["selection-ask"].value as? String, landscapeLocator)
             capture(flow + " expanded selection menu landscape", app: app)
             self.orient(.portrait)
 
             expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+            XCTAssertEqual(passage.label, landscapeSelection)
+            selectFixturePassage(flow, app: app)
+            XCTAssertTrue(menu.waitForExistence(timeout: 6))
+            let copiedSelection = menu.value as? String ?? ""
+            XCTAssertFalse(copiedSelection.isEmpty)
+            XCTAssertFalse((app.buttons["selection-ask"].value as? String ?? "").isEmpty)
             revealSelectionAction("copy", app: app).tap()
             XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+            XCTAssertEqual(passage.label, copiedSelection)
             let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
             input.tap(); input.press(forDuration: 1.2)
             let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
             XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
-            XCTAssertEqual(input.value as? String, selected, "Copy must retain the actual native selection")
+            XCTAssertEqual(input.value as? String, copiedSelection, "Copy must retain the actual current native selection")
             capture(flow + " copied selection pasted into chat", app: app)
             app.terminate()
         }
