@@ -1415,6 +1415,31 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(launcher.value as? String, "Stationary")
     }
 
+    @MainActor func testReaderOrientationBeforeLaunchAndAfterForegroundTransition() {
+        XCUIDevice.shared.orientation = .landscapeRight
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launchApp(); app.buttons["featuredBook"].tap(); waitForBook(app)
+        let initial = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.frame.width > app.frame.height }, object: app)
+        let initialResult = XCTWaiter.wait(for: [initial], timeout: 6)
+        capture("Before-launch landscape Right actual reader", app: app)
+        let first = XCTAttachment(string: "app: \(app.frame), book: \(readingSurface(app).frame)\n\(app.debugDescription)")
+        first.name = "Before-launch orientation geometry"; first.lifetime = .keepAlways; add(first)
+        XCTAssertEqual(initialResult, .completed)
+        XCUIDevice.shared.orientation = .portrait
+        XCUIDevice.shared.press(.home); app.activate()
+        let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.frame.height > app.frame.width }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [portrait], timeout: 6), .completed)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCUIDevice.shared.press(.home); app.activate()
+        let final = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.frame.width > app.frame.height }, object: app)
+        let finalResult = XCTWaiter.wait(for: [final], timeout: 6)
+        capture("After foreground landscape Left actual reader", app: app)
+        let last = XCTAttachment(string: "app: \(app.frame), book: \(readingSurface(app).frame)\n\(app.debugDescription)")
+        last.name = "After-foreground orientation geometry"; last.lifetime = .keepAlways; add(last)
+        XCTAssertEqual(finalResult, .completed)
+        XCTAssertFalse(app.scrollViews["expandedSelectionMenu"].exists)
+    }
+
     @MainActor func testReaderRotatesRightAndLeftWithoutSelectingText() {
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }

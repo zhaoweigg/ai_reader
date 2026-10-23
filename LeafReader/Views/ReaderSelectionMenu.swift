@@ -187,6 +187,10 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     private var menuWindow: ReaderSelectionWindow?
     private var observers: [UIGestureRecognizer] = []
     private var deactivationObserver: NSObjectProtocol?
+    #if DEBUG
+    private var orientationObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
+    #endif
     private var pdfSelectionObserver: NSObjectProtocol?
     private var pdfSelectionRanges: [PDFAnnotationRange] = []
     private var selectionRefreshTask: Task<Void, Never>?
@@ -232,6 +236,16 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
             deactivationObserver = NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: scene, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.dismiss() }
             }
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+                orientationObserver = NotificationCenter.default.addObserver(forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main) { [weak source] _ in
+                    Task { @MainActor in readerSelectionMenuTrace("deviceOrientationChanged", source: source) }
+                }
+                activationObserver = NotificationCenter.default.addObserver(forName: UIScene.didActivateNotification, object: scene, queue: .main) { [weak source] _ in
+                    Task { @MainActor in readerSelectionMenuTrace("sceneActivated", source: source) }
+                }
+            }
+            #endif
         }
     }
     func detach() {
@@ -240,6 +254,10 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         selectionTouch = nil; requestMenu = nil; source = nil
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
         if let pdfSelectionObserver { NotificationCenter.default.removeObserver(pdfSelectionObserver) }; pdfSelectionObserver = nil
+        #if DEBUG
+        for observer in [orientationObserver, activationObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(observer) }
+        orientationObserver = nil; activationObserver = nil
+        #endif
     }
     func observeCopiedSelection() {
         guard let source, let window = source.window, window.windowScene?.activationState == .foregroundActive,
@@ -730,6 +748,25 @@ private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTr
         "legacyMenuVisible": UIMenuController.shared.isMenuVisible,
         "visibleMenuWindow": source?.window?.windowScene?.windows.contains(where: { $0 is ReaderSelectionWindow && !$0.isHidden }) ?? false]
     if let source {
+        row["deviceOrientation"] = UIDevice.current.orientation.rawValue
+        if let scene = source.window?.windowScene {
+            row["interfaceOrientation"] = scene.effectiveGeometry.interfaceOrientation.rawValue
+            let sceneBounds: CGRect
+            if #available(iOS 26, *) { sceneBounds = scene.effectiveGeometry.coordinateSpace.bounds }
+            else { sceneBounds = scene.coordinateSpace.bounds }
+            row["sceneWidth"] = sceneBounds.width; row["sceneHeight"] = sceneBounds.height
+            row["windows"] = scene.windows.prefix(8).map { window in
+                var controller = window.rootViewController
+                var masks: [UInt] = [], types: [String] = []
+                while let current = controller, masks.count < 8 {
+                    masks.append(current.supportedInterfaceOrientations.rawValue)
+                    types.append(String(describing: type(of: current)))
+                    controller = current.presentedViewController
+                }
+                return ["key": window.isKeyWindow, "hidden": window.isHidden, "width": window.bounds.width,
+                        "height": window.bounds.height, "controllerMasks": masks, "controllerTypes": types] as [String: Any]
+            }
+        }
         row["nativeHandles"] = source.nativeSelectionHandleViews.prefix(2).map { handle in
             let rect = source.convert(handle.bounds, from: handle)
             return ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height, "direction": CGFloat(handle.direction.rawValue)]
