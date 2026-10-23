@@ -56,22 +56,14 @@ struct ReaderContent: View {
 
     init(book: Book, url: URL, library: LibraryStore, initialLocator: String?) {
         self.book = book; self.url = url
-        let reader = ReaderModel(bookID: book.id, library: library, initialLocator: initialLocator)
-        _model = StateObject(wrappedValue: reader)
+        _model = StateObject(wrappedValue: ReaderModel(bookID: book.id, library: library, initialLocator: initialLocator))
         var defaults = UserDefaults.standard
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing"), let id = ProcessInfo.processInfo.environment["LEAF_UI_TEST_ID"] {
             defaults = UserDefaults(suiteName: "com.leafreader.uitests.\(id)") ?? .standard
         }
         #endif
-        let session = ReadAloudSession(bookmarkURL: library.disk?.root.appendingPathComponent("Audio/\(book.id.uuidString).json"), defaults: defaults)
-        session.source = { [weak reader] locator in
-            guard let reader else { throw ReadAloudError.unavailable }
-            return try await reader.readAloudPassage(at: locator)
-        }
-        session.reveal = { [weak reader] locator in await reader?.revealReadAloud(at: locator) }
-        session.clearSource = { [weak reader] in reader?.webView?.evaluateJavaScript("window.Leaf?.clearReadAloud()", completionHandler: nil) }
-        _audio = StateObject(wrappedValue: session)
+        _audio = StateObject(wrappedValue: ReadAloudSession(bookmarkURL: library.disk?.root.appendingPathComponent("Audio/\(book.id.uuidString).json"), defaults: defaults))
         _chat = StateObject(wrappedValue: ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true), conversation: book.fingerprint))
     }
     var body: some View {
@@ -203,7 +195,18 @@ struct ReaderContent: View {
         .statusBarHidden(!showsControls)
         .persistentSystemOverlays(showsControls ? .automatic : .hidden)
         .accessibilityAction(.escape) { library.flush(); dismiss() }
-        .task { library.open(book.id) }
+        .task {
+            // Configure the retained StateObjects after installation. Creating
+            // them eagerly in init would allocate new readers/synthesizers on
+            // every parent refresh as reading progress changes.
+            audio.source = { [weak model] locator in
+                guard let model else { throw ReadAloudError.unavailable }
+                return try await model.readAloudPassage(at: locator)
+            }
+            audio.reveal = { [weak model] locator in await model?.revealReadAloud(at: locator) }
+            audio.clearSource = { [weak model] in model?.webView?.evaluateJavaScript("window.Leaf?.clearReadAloud()", completionHandler: nil) }
+            library.open(book.id)
+        }
         .onDisappear { audio.stop(); chat.close(); library.flush() }
         .onChange(of: library.book(book.id)?.annotations ?? []) { _, _ in model.synchronizeAnnotations() }
         .onChange(of: model.annotationDraft) { _, draft in if draft != nil { panel = .annotation } }

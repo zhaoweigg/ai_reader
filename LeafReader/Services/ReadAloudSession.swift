@@ -36,13 +36,15 @@ enum ReadAloudError: LocalizedError {
 }
 
 @MainActor final class SystemReadAloudSpeaker: NSObject, ReadAloudSpeaking, AVSpeechSynthesizerDelegate {
-    private let synthesizer = AVSpeechSynthesizer()
+    private var synthesizer: AVSpeechSynthesizer?
     private var current: AVSpeechUtterance?
     var finished: (() -> Void)?
     var progressed: ((NSRange) -> Void)?
-    override init() { super.init(); synthesizer.delegate = self }
     func speak(_ text: String, language: String, voice: String, speed: Double) throws {
         stop()
+        if synthesizer == nil {
+            synthesizer = AVSpeechSynthesizer(); synthesizer?.delegate = self
+        }
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .spokenAudio)
         try session.setActive(true)
@@ -58,11 +60,11 @@ enum ReadAloudError: LocalizedError {
         utterance.rate = min(AVSpeechUtteranceMaximumSpeechRate,
             max(AVSpeechUtteranceMinimumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(speed)))
         current = utterance
-        synthesizer.speak(utterance)
+        synthesizer?.speak(utterance)
     }
-    func pause() { synthesizer.pauseSpeaking(at: .immediate) }
-    func resume() -> Bool { synthesizer.continueSpeaking() }
-    func stop() { current = nil; synthesizer.stopSpeaking(at: .immediate) }
+    func pause() { synthesizer?.pauseSpeaking(at: .immediate) }
+    func resume() -> Bool { synthesizer?.continueSpeaking() ?? false }
+    func stop() { current = nil; synthesizer?.stopSpeaking(at: .immediate) }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor [weak self] in
             guard let self, self.current === utterance else { return }; self.current = nil; self.finished?()
