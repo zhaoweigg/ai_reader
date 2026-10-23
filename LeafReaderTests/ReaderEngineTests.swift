@@ -308,6 +308,7 @@ final class ReaderEngineTests: XCTestCase {
                         window.__paints.push({location:args.location,length:args.length,y:rect?Number(rect.getAttribute('y')):null});
                     }catch(e){window.__paints.push({location:args.location,error:String(e)});throw e;}
                 };
+                typeof window.Leaf.setSpokenRange;
                 """)
             let speaker = SystemReadAloudSpeaker(); speaker.reportsWordRanges = false
             let name = "LinesWithoutWords.\(UUID().uuidString)", defaults = UserDefaults(suiteName: name)!

@@ -246,16 +246,18 @@ import PDFKit
     }
     func testChineseSystemSpeakerReportsSentenceStartsWithoutWordRanges() async throws {
         let speaker = systemSpeaker(); speaker.reportsWordRanges = false
-        let text = "第一句话很短。第二句话也不长，但是有一个逗号。第三句结束这一段。"
-        let starts = KokoroSentenceSplitter.split(text).map(\.range.location)
-        XCTAssertEqual(starts, [0, 7, 22])
+        let sentences = ["第一句话很短。", "第二句话也不长，但是有一个逗号。", "第三句结束这一段。"]
+        let text = sentences.joined()
+        // Expected starts come from the sentences' own UTF-16 lengths, not from the splitter.
+        let starts = [0, (sentences[0] as NSString).length, (sentences[0] as NSString).length + (sentences[1] as NSString).length]
+        XCTAssertEqual(starts, [0, 7, 23])
         var reported: [Int] = []
         let finished = expectation(description: "finished once")
         speaker.finished = { finished.fulfill() }
         speaker.progressed = { reported.append($0.location) }
         try speaker.speak(text, language: "zh-CN", voice: "", speed: 2)
         await fulfillment(of: [finished], timeout: 40)
-        XCTAssertEqual(reported, starts)
+        XCTAssertEqual(reported, starts, "One didStart report per Chinese sentence, at its UTF-16 offset")
     }
     /// With a voice that reports words, ranges keep their per-word cadence and are
     /// offset into the passage, so they never restart at 0 for the second chunk.
