@@ -776,6 +776,96 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    /// Rendered landscape via the public scene-geometry fixture (no physical-rotation claim):
+    /// the new engine rows and the player capsule must stay inside the frame and reachable.
+    @MainActor func testNaturalVoiceSettingsAndPlayerFitLandscapeViaGeometryFixture() {
+        let app = launchApp()
+        defer { orient(.portrait) }
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app); app.buttons["Listen"].tap()
+        let engine = app.segmentedControls["listeningEngine"]
+        XCTAssertTrue(engine.waitForExistence(timeout: 5))
+        engine.buttons["Natural voice (on-device)"].tap()
+        XCTAssertTrue(app.buttons["kokoroDownload"].waitForExistence(timeout: 5))
+        orient(.landscapeLeft)
+        var frame = app.frame
+        XCTAssertGreaterThan(frame.width, frame.height, "Landscape geometry must be applied")
+        // The sheet is short in landscape, so the form scrolls; every row must be
+        // fully inside the frame once scrolled to, and nothing may be clipped sideways.
+        let form = app.descendants(matching: .any)["listeningForm"].firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5), "Listening form is reachable in landscape")
+        func reveal(_ element: XCUIElement, _ label: String, up: Bool = true) {
+            // Gesture evidence from the leased runs on this Form in the 874x402
+            // sheet: press(0.1 s)-then-drag moved the content 0 pt, from the gutter
+            // and from a cell alike; swipes on the whole form scroll it to either
+            // end (default and slow velocity; the sheet is short, so an end state
+            // can leave a row partly under the bar); a swipe on the 49x24 "Speed"
+            // label moved it 0 pt. So: coarse form swipes toward the row while it is
+            // absent or outside the frame, then short zero-hold drags on the form
+            // for the final fit. Every gesture is checked for effect and a gesture
+            // that moved nothing is swapped for the other kind; the sequence is
+            // attached to the result. `up` = the row lies further down the form.
+            var useDrag = false, trace = ""
+            for step in 0..<10 {
+                let before = element.exists ? element.frame : .null
+                let scrollDown: Bool
+                if element.exists {
+                    if frame.contains(before) { break }
+                    scrollDown = before.minY >= frame.minY
+                    if before.intersects(frame) { useDrag = true }
+                } else {
+                    scrollDown = up; useDrag = false
+                }
+                if useDrag {
+                    let from = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.6 : 0.4))
+                    let to = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.4 : 0.6))
+                    from.press(forDuration: 0, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0)
+                } else if scrollDown {
+                    form.swipeUp(velocity: .slow)
+                } else {
+                    form.swipeDown(velocity: .slow)
+                }
+                let after = element.exists ? element.frame : .null
+                trace += "\(step): \(useDrag ? "drag" : "swipe") \(scrollDown ? "content up" : "content down") \(before) -> \(after)\n"
+                if element.exists, after == before { useDrag.toggle() }
+            }
+            let gestures = XCTAttachment(string: trace.isEmpty ? "no gesture needed" : trace)
+            gestures.name = label + " scroll gestures"; gestures.lifetime = .keepAlways; add(gestures)
+            XCTAssertTrue(element.exists, label)
+            XCTAssertTrue(frame.contains(element.frame), label + " inside the landscape frame: \(element.frame) in \(frame)")
+            XCTAssertTrue(element.isHittable, label + " hittable in landscape")
+        }
+        XCTAssertTrue(engine.isHittable); XCTAssertTrue(frame.contains(engine.frame), "Engine picker inside the landscape frame")
+        XCTAssertLessThanOrEqual(engine.frame.maxX, frame.maxX); XCTAssertGreaterThanOrEqual(engine.frame.minX, frame.minX)
+        capture("Natural voice settings landscape", app: app)
+        reveal(app.buttons["kokoroDownload"], "Download row")
+        XCTAssertLessThanOrEqual(app.buttons["kokoroDownload"].frame.maxX, frame.maxX)
+        capture("Natural voice settings landscape download row", app: app)
+        reveal(app.switches["followSpokenText"], "Follow toggle")
+        XCTAssertTrue(app.sliders["listeningSpeedSlider"].exists)
+        capture("Natural voice settings landscape scrolled", app: app)
+        reveal(app.buttons["listenFromPage"], "Listen from this page", up: false)
+        app.buttons["listenFromPage"].tap()
+        let pause = app.buttons["audioPlayPause"], player = app.otherElements["readerAudioPlayer"]
+        expectation(for: NSPredicate(format: "label == %@", "Pause listening"), evaluatedWith: pause); waitForExpectations(timeout: 15)
+        frame = app.frame
+        XCTAssertGreaterThan(frame.width, frame.height)
+        XCTAssertTrue(player.exists); XCTAssertTrue(frame.contains(player.frame), "Player capsule inside the landscape frame")
+        XCTAssertEqual(player.value as? String, "Listening", "Fallback engine reports Listening in landscape")
+        for id in ["listeningSettings", "audioPlayPause", "audioNext", "stopListening"] { XCTAssertTrue(app.buttons[id].isHittable, id + " hittable in landscape") }
+        XCTAssertTrue(app.staticTexts["spokenPassage"].exists)
+        capture("Natural voice fallback player landscape", app: app)
+        pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+        orient(.portrait)
+        frame = app.frame
+        XCTAssertGreaterThan(frame.height, frame.width)
+        XCTAssertTrue(player.waitForExistence(timeout: 5)); XCTAssertTrue(frame.contains(player.frame), "Player capsule inside the portrait frame after returning")
+        XCTAssertEqual(pause.label, "Resume listening", "Returning to portrait keeps the paused state")
+        capture("Natural voice fallback player portrait again", app: app)
+        app.buttons["stopListening"].tap()
+        XCTAssertFalse(app.buttons["audioPlayPause"].waitForExistence(timeout: 3))
+    }
+
     @MainActor func testNaturalVoiceSettingsOfferTheDownloadAndFallBackToTheiPhoneVoice() {
         let app = launchApp(); app.buttons["featuredBook"].tap()
         showReaderControls(app); app.buttons["Listen"].tap()
