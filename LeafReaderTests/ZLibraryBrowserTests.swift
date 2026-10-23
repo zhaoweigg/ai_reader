@@ -177,21 +177,82 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
         await data.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
     }
 
-    func testBrowserRedirectDoesNotLoopOrLeakCredentialsAndKeepsCookieUpdate() async throws {
+    // The live provider answers a bare API request with a 307 to the same URL that only
+    // hands out a short-lived cookie. A browser stores it and repeats the request.
+    func testCookieChallengeRedirectIsRepeatedOnceWithStoredCookie() async throws {
         let server = try await server { request in
             if request.headers["cookie"]?.contains("fixture_gate=updated") == true { return .init() }
             return .init(status: 307, headers: ["Location": request.path, "Set-Cookie": "fixture_gate=updated; Path=/; HttpOnly"], body: "Local browser access fixture")
         }
         let browser = browser(server)
-        do { _ = try await send(request(server), through: browser); XCTFail("Browser redirect must require visible verification") }
+        var search = request(server, "/eapi/book/search")
+        search.httpMethod = "POST"; search.httpBody = Data("message=private%20query&page=1".utf8)
+        search.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let result = try await send(search, through: browser)
+        XCTAssertEqual(result.response.statusCode, 200)
+        XCTAssertEqual(server.requests.count, 2, "Exactly one repeat, no website load")
+        XCTAssertEqual(server.requests.map(\.path), ["/eapi/book/search", "/eapi/book/search"])
+        XCTAssertEqual(server.requests.last?.body, "message=private%20query&page=1", "307 keeps the POST body")
+        XCTAssertEqual(server.requests.last?.headers["remix-userkey"], "test-account-key")
+        XCTAssertTrue(server.requests.last?.headers["cookie"]?.contains("fixture_gate=updated") == true)
+    }
+
+    // The second stage is a small HTML page (HTTP 517) whose script sets another cookie.
+    // Loading the website document in the retained browser passes it without the sheet.
+    func testAccessCheckPageIsPassedByLoadingTheWebsiteDocument() async throws {
+        let server = try await server { request in
+            if request.path == "/" {
+                return .init(headers: ["Content-Type": "text/html"],
+                             body: "<html><body><script>document.cookie='fixture_dwid=set-by-script; path=/';</script>Local website fixture</body></html>")
+            }
+            if request.headers["cookie"]?.contains("fixture_dwid=set-by-script") == true { return .init() }
+            return .init(status: 517, headers: ["Content-Type": "text/html"], body: "<html><head><title>Access Denied | DiamWall</title></head><body>private-body</body></html>")
+        }
+        let browser = browser(server)
+        let result = try await send(request(server), through: browser)
+        XCTAssertEqual(result.response.statusCode, 200)
+        XCTAssertEqual(server.requests.map(\.path), ["/eapi/book/most-popular", "/eapi/book/most-popular", "/", "/eapi/book/most-popular"])
+        XCTAssertEqual(browser.webView.url?.path, "/", "The website document stays loaded for the sheet")
+        browser.presentWebsite()
+        XCTAssertEqual(server.requests.filter { $0.path == "/" }.count, 1, "Open website reuses the loaded document")
+    }
+
+    func testPersistentRedirectStaysBoundedAndLeaksNothing() async throws {
+        let server = try await server { request in
+            if request.path == "/" { return .init(headers: ["Content-Type": "text/html"], body: "<html><body>Still checking</body></html>") }
+            return .init(status: 307, headers: ["Location": request.path, "Set-Cookie": "fixture_gate=private-value; Path=/"], body: "private-body")
+        }
+        let browser = browser(server)
+        do { _ = try await send(request(server), through: browser); XCTFail("Persistent redirect must surface the access check") }
         catch let error as ZLibraryRequestFailure {
             XCTAssertEqual(error.issue, .accessCheck)
-            XCTAssertFalse(error.diagnostic.contains("test-account-key")); XCTAssertFalse(error.diagnostic.contains("updated"))
+            XCTAssertTrue(error.diagnostic.contains("retries: 3/3"), error.diagnostic)
+            XCTAssertTrue(error.diagnostic.contains("website reload: completed"), error.diagnostic)
+            for secret in ["test-account-key", "private-", "fixture_gate", "127.0.0.1"] { XCTAssertFalse(error.diagnostic.contains(secret), secret) }
         }
-        XCTAssertEqual(server.requests.count, 1, "No automatic redirect/retry, even when the server updates cookies")
-        let second = try await send(request(server), through: browser)
-        XCTAssertEqual(second.response.statusCode, 200)
-        XCTAssertEqual(server.requests.count, 2)
+        XCTAssertEqual(server.requests.filter { $0.path.hasPrefix("/eapi/") }.count, 1 + ZLibraryBrowserSession.challengeRetries)
+        XCTAssertEqual(server.requests.filter { $0.path == "/" }.count, 1)
+    }
+
+    func testSignInPageInsteadOfJSONIsNotRetried() async throws {
+        let server = try await server { _ in .init(status: 200, headers: ["Content-Type": "text/html"], body: "<html><body>Please sign in</body></html>") }
+        let browser = browser(server)
+        let result = try await send(request(server), through: browser)
+        XCTAssertEqual(result.response.mimeType, "text/html")
+        XCTAssertEqual(server.requests.count, 1)
+    }
+
+    func testWebsiteSheetIsNotReloadedUnderTheUser() async throws {
+        let server = try await server { request in
+            if request.path == "/" { return .init(headers: ["Content-Type": "text/html"], body: "<html><body>Signing in</body></html>") }
+            return .init(status: 307, headers: ["Location": request.path, "Set-Cookie": "fixture_gate=still-checking; Path=/"])
+        }
+        let browser = browser(server)
+        browser.presentWebsite()
+        try await wait { browser.webView.url?.path == "/" && !browser.webView.isLoading }
+        do { _ = try await send(request(server), through: browser); XCTFail("Persistent redirect must surface the access check") }
+        catch let error as ZLibraryRequestFailure { XCTAssertTrue(error.diagnostic.contains("website reload: skipped"), error.diagnostic) }
+        XCTAssertEqual(server.requests.filter { $0.path == "/" }.count, 1, "The presented document is left alone")
     }
 
     func testForeignOriginAndNonCatalogRequestsNeverReachTheNetwork() async throws {
@@ -243,5 +304,33 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
         let cookies = await browser.webView.configuration.websiteDataStore.httpCookieStore.allCookies()
         XCTAssertEqual(cookies.first { $0.name == "site_access" }?.value, "after-download")
         XCTAssertEqual(server.requests.count, 2)
+    }
+
+    func testStreamedDownloadRepeatsCookieChallengeRedirectOnceAndSavesItsCookie() async throws {
+        let server = try await server { request in
+            if request.headers["cookie"]?.contains("fixture_gate=download") == true {
+                return .init(headers: ["Content-Type": "application/octet-stream"], body: "%PDF-fixture")
+            }
+            return .init(status: 307, headers: ["Location": request.path, "Set-Cookie": "fixture_gate=download; Path=/"], body: "DiamWall")
+        }
+        let browser = browser(server)
+        var download = request(server, "/eapi/book/download")
+        download.setValue("site_access=kept", forHTTPHeaderField: "Cookie")
+        let result = try await browser.send(download, toFile: true, progress: { _ in })
+        let file = try XCTUnwrap(result.file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertEqual(try Data(contentsOf: file), Data("%PDF-fixture".utf8))
+        XCTAssertEqual(server.requests.count, 2)
+        XCTAssertEqual(server.requests.last?.headers["cookie"], "site_access=kept; fixture_gate=download")
+        let cookies = await browser.webView.configuration.websiteDataStore.httpCookieStore.allCookies()
+        XCTAssertEqual(cookies.first { $0.name == "fixture_gate" }?.value, "download")
+    }
+
+    func testStreamedDownloadStillRefusesSameURLRedirectWithoutCookies() async throws {
+        let server = try await server { request in .init(status: 307, headers: ["Location": request.path]) }
+        let browser = browser(server)
+        do { _ = try await browser.send(request(server, "/eapi/book/download"), toFile: true, progress: { _ in }); XCTFail("Loop followed") }
+        catch { XCTAssertEqual(ZLibraryRequestFailure.issue(error), .challenge) }
+        XCTAssertEqual(server.requests.count, 1)
     }
 }

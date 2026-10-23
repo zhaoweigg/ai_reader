@@ -130,6 +130,8 @@ struct ZLibraryPayload {
     var data: Data
     var file: URL?
     var response: HTTPURLResponse
+    // Cookies handed out by an access-check redirect on the way to this response.
+    var challengeCookies: [HTTPCookie] = []
 }
 struct ZLibrarySearchPage {
     static let pageSize = 30
@@ -462,6 +464,7 @@ private final class ZLibraryTransfer: NSObject, URLSessionDataDelegate, @uncheck
     private var originalURL: URL?
     private var visited = Set<URL>()
     private var redirectCount = 0
+    private var challengeCookies: [HTTPCookie] = []
     private var toFile = false
     private var progress: (@Sendable (Double?) -> Void)?
     init(configuration: URLSessionConfiguration) { self.configuration = configuration; super.init() }
@@ -495,9 +498,38 @@ private final class ZLibraryTransfer: NSObject, URLSessionDataDelegate, @uncheck
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         // JSON redirects are handled by the client so path-scoped cookies are rebuilt
         // for each URL. The transport never silently changes an API request's target.
+        if toFile, challengeCookies.isEmpty, redirectCount < 3, let url = request.url, url == response.url,
+           let cookies = Self.challengeCookies(response, for: url), !cookies.isEmpty {
+            // A redirect back to the same URL that only hands out cookies is the provider's
+            // access check, not a loop. Repeat the download once with those cookies, as a
+            // browser would; the session never stores them itself.
+            var next = request
+            next.setValue(Self.cookieHeader(request.value(forHTTPHeaderField: "Cookie"), adding: cookies), forHTTPHeaderField: "Cookie")
+            challengeCookies = cookies; redirectCount += 1
+            completionHandler(next); return
+        }
         let next = toFile ? ZLibraryHTTPTransport.redirect(request,original:originalURL,toFile:true,visited:visited,count:redirectCount) : nil
         if let url = next?.url { visited.insert(url); redirectCount += 1 }
         completionHandler(next)
+    }
+    private static func challengeCookies(_ response: HTTPURLResponse, for url: URL) -> [HTTPCookie]? {
+        guard let host = url.host?.lowercased(), let fields = response.allHeaderFields as? [String: String] else { return nil }
+        return HTTPCookie.cookies(withResponseHeaderFields: fields, for: url).filter { cookie in
+            let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            return host == domain || host.hasSuffix("." + domain)
+        }
+    }
+    private static func cookieHeader(_ existing: String?, adding cookies: [HTTPCookie]) -> String {
+        var pairs: [(String, String)] = (existing ?? "").split(separator: ";").compactMap { item in
+            let text = item.trimmingCharacters(in: .whitespaces)
+            guard let equals = text.firstIndex(of: "=") else { return nil }
+            return (String(text[..<equals]), String(text[text.index(after: equals)...]))
+        }
+        for cookie in cookies {
+            pairs.removeAll { $0.0 == cookie.name }
+            pairs.append((cookie.name, cookie.value))
+        }
+        return pairs.map { "\($0.0)=\($0.1)" }.joined(separator: "; ")
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         guard let response = response as? HTTPURLResponse else { completionHandler(.cancel); finish(.failure(ZLibraryError.response)); return }
@@ -517,7 +549,7 @@ private final class ZLibraryTransfer: NSObject, URLSessionDataDelegate, @uncheck
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error { finish(.failure(error)) }
-        else if let response { finish(.success(ZLibraryPayload(data: data, file: file, response: response))) }
+        else if let response { finish(.success(ZLibraryPayload(data: data, file: file, response: response, challengeCookies: challengeCookies))) }
         else { finish(.failure(ZLibraryError.response)) }
     }
     private func finish(_ result: Result<ZLibraryPayload, Error>) {
