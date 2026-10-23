@@ -209,6 +209,7 @@ const setStylesImportant = (el, styles) => {
 
 class View {
     #destroyed = false
+    #ready = false
     #finishLoad
     #loadEvents = new AbortController()
     #observer = new ResizeObserver(() => {
@@ -256,6 +257,9 @@ class View {
     get document() {
         return this.#iframe.contentDocument
     }
+    get ready() {
+        return this.#ready && !this.#destroyed
+    }
     async load(src, afterLoad, beforeRender) {
         if (typeof src !== 'string') throw new Error(`${src} is not string`)
         return new Promise(resolve => {
@@ -284,6 +288,7 @@ class View {
                 const layout = beforeRender?.({ vertical, rtl, background })
                 this.#iframe.style.display = 'block'
                 this.render(layout)
+                this.#ready = true
                 this.#observer.observe(doc.body)
 
                 // the resize observer above doesn't work in Firefox
@@ -769,7 +774,7 @@ export class Paginator extends HTMLElement {
         this.#container.style.removeProperty('--leaf-book-end-space')
     }
     #startScrollWindow() {
-        if (!this.scrolled || this.#vertical || !this.#view || this.#scrollViews.size) return
+        if (!this.scrolled || this.#vertical || !this.#view?.ready || this.#scrollViews.size) return
         this.#scrollSpacer = document.createElement('div')
         this.#scrollSpacer.style.cssText = 'height:0;flex:none;pointer-events:none;overflow-anchor:none'
         this.#container.prepend(this.#scrollSpacer)

@@ -630,6 +630,7 @@ final class ReaderEngineTests: XCTestCase {
                 const ready=async()=>{
                     const until=performance.now()+8000;
                     while(performance.now()<until){
+                        if(r.getContents().some(x=>!x.doc))throw new Error('Null mounted document: '+JSON.stringify(r.getContents().map(x=>({index:x.index,doc:!!x.doc,connected:x.doc?.defaultView?.frameElement?.isConnected})))) ;
                         if(r.getContents().length===3 && r.getContents().every(x=>x.doc.URL!=='about:blank' && x.doc.body.textContent.trim())){await sleep(20);return;}
                         await sleep(10);
                     }
