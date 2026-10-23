@@ -545,6 +545,51 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    /// Rendered landscape via the public scene-geometry fixture (no physical-rotation claim):
+    /// the new engine rows and the player capsule must stay inside the frame and reachable.
+    @MainActor func testNaturalVoiceSettingsAndPlayerFitLandscapeViaGeometryFixture() {
+        let app = launchApp()
+        defer { orient(.portrait) }
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app); app.buttons["Listen"].tap()
+        let engine = app.segmentedControls["listeningEngine"]
+        XCTAssertTrue(engine.waitForExistence(timeout: 5))
+        engine.buttons["Natural voice (on-device)"].tap()
+        XCTAssertTrue(app.buttons["kokoroDownload"].waitForExistence(timeout: 5))
+        orient(.landscapeLeft)
+        var frame = app.frame
+        XCTAssertGreaterThan(frame.width, frame.height, "Landscape geometry must be applied")
+        XCTAssertTrue(engine.isHittable); XCTAssertTrue(frame.contains(engine.frame), "Engine picker inside the landscape frame")
+        XCTAssertTrue(app.buttons["kokoroDownload"].isHittable); XCTAssertTrue(frame.contains(app.buttons["kokoroDownload"].frame), "Download row inside the landscape frame")
+        XCTAssertLessThanOrEqual(engine.frame.maxX, frame.maxX); XCTAssertGreaterThanOrEqual(engine.frame.minX, frame.minX)
+        capture("Natural voice settings landscape", app: app)
+        let follow = app.switches["followSpokenText"]
+        if !follow.isHittable { app.swipeUp() }
+        XCTAssertTrue(follow.waitForExistence(timeout: 5)); XCTAssertTrue(frame.contains(follow.frame), "Follow toggle reachable in landscape")
+        XCTAssertTrue(app.sliders["listeningSpeedSlider"].exists)
+        capture("Natural voice settings landscape scrolled", app: app)
+        if !app.buttons["listenFromPage"].isHittable { app.swipeDown() }
+        XCTAssertTrue(app.buttons["listenFromPage"].waitForExistence(timeout: 5)); app.buttons["listenFromPage"].tap()
+        let pause = app.buttons["audioPlayPause"], player = app.otherElements["readerAudioPlayer"]
+        expectation(for: NSPredicate(format: "label == %@", "Pause listening"), evaluatedWith: pause); waitForExpectations(timeout: 15)
+        frame = app.frame
+        XCTAssertGreaterThan(frame.width, frame.height)
+        XCTAssertTrue(player.exists); XCTAssertTrue(frame.contains(player.frame), "Player capsule inside the landscape frame")
+        XCTAssertEqual(player.value as? String, "Listening", "Fallback engine reports Listening in landscape")
+        for id in ["listeningSettings", "audioPlayPause", "audioNext", "stopListening"] { XCTAssertTrue(app.buttons[id].isHittable, id + " hittable in landscape") }
+        XCTAssertTrue(app.staticTexts["spokenPassage"].exists)
+        capture("Natural voice fallback player landscape", app: app)
+        pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+        orient(.portrait)
+        frame = app.frame
+        XCTAssertGreaterThan(frame.height, frame.width)
+        XCTAssertTrue(player.waitForExistence(timeout: 5)); XCTAssertTrue(frame.contains(player.frame), "Player capsule inside the portrait frame after returning")
+        XCTAssertEqual(pause.label, "Resume listening", "Returning to portrait keeps the paused state")
+        capture("Natural voice fallback player portrait again", app: app)
+        app.buttons["stopListening"].tap()
+        XCTAssertFalse(app.buttons["audioPlayPause"].waitForExistence(timeout: 3))
+    }
+
     @MainActor func testNaturalVoiceSettingsOfferTheDownloadAndFallBackToTheiPhoneVoice() {
         let app = launchApp(); app.buttons["featuredBook"].tap()
         showReaderControls(app); app.buttons["Listen"].tap()
