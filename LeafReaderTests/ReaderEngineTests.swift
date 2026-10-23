@@ -149,6 +149,37 @@ final class ReaderEngineTests: XCTestCase {
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: expected), uniformTypeIdentifier: "public.json")
         attachment.name = "Latest neighboring selection and retained prior range"; attachment.lifetime = .keepAlways; add(attachment)
     }
+    func testSpokenPositionFollowsInsideLongChineseParagraphInBothFlows() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "窗外")
+            let rows = try await model.webView?.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'),content=view.renderer.getContents()[0],doc=content.doc,p=doc.querySelector('p');
+                p.textContent='清晨窗外的树叶轻轻摇动，旅人沿着河边的小路慢慢走去。'.repeat(40);
+                await new Promise(r=>setTimeout(r,150));
+                const whole=doc.createRange();whole.selectNodeContents(p);
+                const packet=await window.Leaf.readAloudChunk({locator:view.getCFI(0,whole)}),rows=[];
+                for(const location of [3,300,650,12]){
+                    await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location,length:1,follow:true});
+                    await new Promise(r=>setTimeout(r,80));
+                    const segment=packet.segments.find(s=>location>=s.offset&&location<s.offset+s.length),word=view.resolveCFI(segment.locator).anchor(doc);
+                    word.setStart(word.startContainer,word.startOffset+location-segment.offset);word.setEnd(word.startContainer,word.startOffset+1);
+                    const rect=word.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect();
+                    const x=frame.left+rect.left,y=frame.top+rect.top;
+                    rows.push({location,x,y,width:rect.width,height:rect.height,viewport:[innerWidth,innerHeight],
+                        visible:x>=-1&&y>=-1&&x+rect.width<=innerWidth+1&&y+rect.height<=innerHeight+1,
+                        locator:view.lastLocation.cfi,paint:[...content.overlayer.element.querySelectorAll('[data-leaf-spoken-word] rect')].map(r=>['x','y','width','height'].map(k=>Number(r.getAttribute(k))))});
+                }
+                return rows;
+                """, arguments: [:], in: nil, contentWorld: .page) as? [[String: Any]]
+            let value = try XCTUnwrap(rows)
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: value), uniformTypeIdentifier: "public.json")
+            attachment.name = "Long Chinese speech follow scrolling=\(scrolling)"; attachment.lifetime = .keepAlways; add(attachment)
+            for row in value { XCTAssertEqual(row["visible"] as? Bool, true, "scrolling=\(scrolling) \(row)") }
+        }
+    }
     func testSpokenRangeMapsTrimmedInlineRubyBreaksAndLeavesSavedHighlightsInteractiveInBothFlows() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         for scrolling in [false, true] {
