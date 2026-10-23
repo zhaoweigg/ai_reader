@@ -612,6 +612,52 @@ final class ReaderEngineTests: XCTestCase {
         let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json")
         attachment.name="Continuous chapter boundary geometry";attachment.lifetime = .keepAlways;add(attachment)
     }
+    func testContinuousScrollEvictsDistantChaptersAndReleasesQueuedResourcesOnClose() async throws {
+        let (book, url) = try prepare("MemoryStress.epub", format: .epub, fixtures: true)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await waitUntil { model.isReady || model.error != nil }
+        let web = try XCTUnwrap(model.webView)
+        let result = try await web.callAsyncJavaScript("""
+            const active=new Map(),create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL);
+            let peakCount=0,peakBytes=0,maxDocuments=0,maxFrames=0;
+            URL.createObjectURL=blob=>{const url=create(blob);active.set(url,blob.size);peakCount=Math.max(peakCount,active.size);peakBytes=Math.max(peakBytes,[...active.values()].reduce((a,b)=>a+b,0));return url;};
+            URL.revokeObjectURL=url=>{active.delete(url);revoke(url);};
+            const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            try {
+                await window.Leaf.open(config);
+                const view=document.querySelector('foliate-view'),r=view.renderer,count=view.book.sections.length;
+                const ready=async()=>{
+                    const until=performance.now()+8000;
+                    while(performance.now()<until){
+                        if(r.getContents().length===3){await sleep(20);return;}
+                        await sleep(10);
+                    }
+                    throw new Error('Bounded nearby chapters did not finish');
+                };
+                for(let n=0;n<48;n++){
+                    await view.goTo(1+(n*37)%(count-2));await ready();
+                    const contents=r.getContents();
+                    maxDocuments=Math.max(maxDocuments,contents.length);
+                    maxFrames=Math.max(maxFrames,contents[0].doc.defaultView.frameElement.getRootNode().querySelectorAll('iframe').length);
+                    const current=contents[0].index;
+                    if(contents.some(x=>Math.abs(x.index-current)>1))throw new Error('Distant chapter retained');
+                }
+                // Close with an adjacent chapter read still queued/in flight.
+                await view.goTo(20);window.Leaf.close();await sleep(350);
+                return {count,peakCount,peakBytes,maxDocuments,maxFrames,afterClose:active.size};
+            } finally { URL.createObjectURL=create;URL.revokeObjectURL=revoke; }
+            """, arguments: ["config": ["name":"MemoryStress.epub","format":"epub","locator":"","preferences":prefs.payload]], in:nil,contentWorld:.page)
+        let metrics = try XCTUnwrap(result as? [String:Int])
+        XCTAssertGreaterThanOrEqual(metrics["count"] ?? 0,128)
+        XCTAssertEqual(metrics["maxDocuments"],3)
+        XCTAssertLessThanOrEqual(metrics["maxFrames"] ?? 99,5)
+        XCTAssertLessThanOrEqual(metrics["peakCount"] ?? 99,24)
+        XCTAssertLessThanOrEqual(metrics["peakBytes"] ?? .max,16*1024*1024)
+        XCTAssertEqual(metrics["afterClose"],0)
+        let attachment = XCTAttachment(data:try JSONEncoder().encode(metrics),uniformTypeIdentifier:"public.json")
+        attachment.name="Scroll chapter-window resource bounds and queued-close cleanup";attachment.lifetime = .keepAlways;add(attachment)
+    }
     func testPlainTextRenders() async throws {
         let (book, url) = try prepare("A Field Guide to Slow Days.txt", format: .txt)
         try await assertOpened(show(book, url: url), contains: "morning")
