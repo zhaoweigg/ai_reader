@@ -209,6 +209,8 @@ const setStylesImportant = (el, styles) => {
 
 class View {
     #destroyed = false
+    #finishLoad
+    #loadEvents = new AbortController()
     #observer = new ResizeObserver(() => {
         if (this.#column) this.render(this.#layout)
         else { this.expand(false); this.onResize?.() }
@@ -257,8 +259,10 @@ class View {
     async load(src, afterLoad, beforeRender) {
         if (typeof src !== 'string') throw new Error(`${src} is not string`)
         return new Promise(resolve => {
+            const finish = () => { this.#finishLoad = null; resolve() }
+            this.#finishLoad = finish
             this.#iframe.addEventListener('load', () => {
-                if (this.#destroyed) { resolve(); return }
+                if (this.#destroyed) { finish(); return }
                 const doc = this.document
                 afterLoad?.(doc)
 
@@ -282,8 +286,8 @@ class View {
                 // until the bug is fixed we can at least account for font load
                 doc.fonts.ready.then(() => { if (!this.#destroyed) this.render(this.#layout) })
 
-                resolve()
-            }, { once: true })
+                finish()
+            }, { once: true, signal: this.#loadEvents.signal })
             this.#iframe.src = src
         })
     }
@@ -423,6 +427,8 @@ class View {
     }
     destroy() {
         this.#destroyed = true
+        this.#loadEvents.abort()
+        this.#finishLoad?.()
         this.#observer.disconnect()
         this.#contentRange = document.createRange()
         this.#overlayer = null
@@ -536,6 +542,12 @@ export class Paginator extends HTMLElement {
             grid-column: 1 / -1;
             grid-row: 1 / -1;
             overflow: auto;
+        }
+        :host([flow="scrolled"]) #container::after {
+            content: '';
+            display: block;
+            height: var(--leaf-book-end-space, 0px);
+            pointer-events: none;
         }
         #header {
             grid-column: 3 / 4;
@@ -724,6 +736,7 @@ export class Paginator extends HTMLElement {
     }
     #releaseScrollRecord(record) {
         if (!record.released) {
+            record.cancelReady?.()
             record.released = true
             record.view.destroy()
             record.view.element.remove()
@@ -749,6 +762,7 @@ export class Paginator extends HTMLElement {
         this.#scrollSpacer?.remove()
         this.#scrollSpacer = null
         this.#scrollPrefix = 0
+        this.#container.style.removeProperty('--leaf-book-end-space')
     }
     #startScrollWindow() {
         if (!this.scrolled || this.#vertical || !this.#view || this.#scrollViews.size) return
@@ -762,7 +776,15 @@ export class Paginator extends HTMLElement {
         record.view.onResize = () => this.#scrollViewResized(record)
         record.height = record.view.element.getBoundingClientRect().height
         this.#scrollViews.set(this.#index, record)
+        this.#updateScrollEndSpace()
         this.#warmScrollWindow()
+    }
+    #updateScrollEndSpace() {
+        const last = this.#scrollViews.get(this.sections.length - 1)
+        const space = last ? Math.max(0, this.size - last.view.element.getBoundingClientRect().height) : 0
+        // Only the final short chapter gets room to restore its own first line
+        // at the top; intermediate chapters never receive viewport-sized gaps.
+        this.#container.style.setProperty('--leaf-book-end-space', `${space}px`)
     }
     #scrollViewExpanded(record) {
         if (this.#scrollRendering || record.stage || record.released) return
@@ -773,6 +795,7 @@ export class Paginator extends HTMLElement {
         const height = record.view.element.getBoundingClientRect().height
         const delta = height - (record.height ?? height)
         record.height = height
+        this.#updateScrollEndSpace()
         if (record.index < this.#index && Math.abs(delta) > 0.5) this.#container.scrollTop += delta
         else if (record.index === this.#index) this.#scrollToAnchor(this.#anchor)
     }
@@ -781,6 +804,7 @@ export class Paginator extends HTMLElement {
         const height = record.view.element.getBoundingClientRect().height
         const delta = height - (record.height ?? height)
         record.height = height
+        this.#updateScrollEndSpace()
         // A passive body resize must not re-anchor a reader who is scrolling.
         if (record.index < this.#index && Math.abs(delta) > 0.5) this.#container.scrollTop += delta
     }
@@ -803,6 +827,7 @@ export class Paginator extends HTMLElement {
                 this.#releaseScrollRecord(record)
             }
             this.#scrollSpacer.style.height = `${this.#scrollPrefix}px`
+            this.#updateScrollEndSpace()
         })
         // At most the current and two adjacent chapters, plus their in-flight loads.
         for (const index of wanted) {
@@ -816,6 +841,7 @@ export class Paginator extends HTMLElement {
         const { width, height } = this.#container.getBoundingClientRect()
         stage.style.cssText = `position:absolute;left:-100000px;top:0;width:${width}px;height:${height}px;visibility:hidden;pointer-events:none`
         const record = { index, section, stage, loaded: false, epoch }
+        record.cancelledReady = new Promise(resolve => { record.cancelReady = resolve })
         record.view = new View({ container: this, onExpand: () => this.#scrollViewExpanded(record) })
         record.view.onResize = () => this.#scrollViewResized(record)
         stage.append(record.view.element)
@@ -841,7 +867,7 @@ export class Paginator extends HTMLElement {
                     return vertical ? undefined : this.#scrollLayout
                 })
                 if (vertical || record.cancelled || epoch !== this.#scrollEpoch || !this.#continuous) return
-                await record.view.document.fonts.ready
+                await Promise.race([record.view.document.fonts.ready, record.cancelledReady])
                 if (record.cancelled || epoch !== this.#scrollEpoch || !this.#wantedScrollIndexes().has(index)) return
                 record.view.render(this.#scrollLayout)
                 this.#keepScrollPosition(() => {
@@ -855,6 +881,7 @@ export class Paginator extends HTMLElement {
                     stage.remove(); record.stage = null
                     record.height = record.view.element.getBoundingClientRect().height
                     this.#scrollViews.set(index, record)
+                    this.#updateScrollEndSpace()
                 })
                 this.dispatchEvent(new CustomEvent('create-overlayer', { detail: {
                     doc: record.view.document, index, attach: overlayer => record.view.overlayer = overlayer,
@@ -970,6 +997,7 @@ export class Paginator extends HTMLElement {
             record.height = record.view.element.getBoundingClientRect().height
         }
         this.#scrollRendering = false
+        if (this.#continuous) this.#updateScrollEndSpace()
         this.#scrollToAnchor(this.#anchor)
         this.#startScrollWindow()
     }
