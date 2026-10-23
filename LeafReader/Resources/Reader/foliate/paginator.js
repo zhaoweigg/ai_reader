@@ -632,7 +632,11 @@ export class Paginator extends HTMLElement {
 
         this.addEventListener('relocate', ({ detail }) => {
             if (detail.reason === 'selection') setSelectionTo(this.#anchor, 0)
-            else if (detail.reason === 'navigation') {
+            // A synthetic caret in a scrolled iframe can make WebKit restore a
+            // stale parent offset after a neighboring frame becomes visible.
+            // Scroll navigation only changes the passage; explicit selection
+            // above still installs the range requested by the user.
+            else if (detail.reason === 'navigation' && !this.scrolled) {
                 if (this.#anchor === 1) setSelectionTo(detail.range, 1)
                 else if (typeof this.#anchor === 'number')
                     setSelectionTo(detail.range, -1)
