@@ -175,6 +175,31 @@ final class LibraryStore: ObservableObject {
     func removeBookmark(_ bookID: UUID, bookmarkID: UUID) {
         update(bookID, { $0.bookmarks.removeAll { $0.id == bookmarkID } }, immediately: true)
     }
+    func saveAnnotation(_ annotation: BookAnnotation, bookID: UUID) throws {
+        guard annotation.note.count <= 20_000 else { throw BookAnnotationError.noteTooLong }
+        guard annotation.valid else { throw BookAnnotationError.selection }
+        guard let book = book(bookID), (book.format == .pdf) == !annotation.pdfRanges.isEmpty else { throw BookAnnotationError.selection }
+        try changeAnnotations(bookID) { annotations in
+            if let index = annotations.firstIndex(where: { $0.id == annotation.id }) { annotations[index] = annotation }
+            else if let index = annotations.firstIndex(where: { $0.locator == annotation.locator && $0.pdfRanges == annotation.pdfRanges }) {
+                var replacement = annotation
+                replacement.id = annotations[index].id; replacement.createdAt = annotations[index].createdAt
+                annotations[index] = replacement
+            }
+            else { annotations.append(annotation) }
+        }
+    }
+    func removeAnnotation(_ annotationID: UUID, bookID: UUID) throws {
+        try changeAnnotations(bookID) { $0.removeAll { $0.id == annotationID } }
+    }
+    private func changeAnnotations(_ bookID: UUID, change: (inout [BookAnnotation]) -> Void) throws {
+        guard canSave, let disk, let index = books.firstIndex(where: { $0.id == bookID }) else { throw BookAnnotationError.unavailable }
+        var updated = books
+        change(&updated[index].annotations)
+        // Publish only after an atomic disk write succeeds, including pending reading progress.
+        try disk.save(updated)
+        books = updated
+    }
     func remove(_ id: UUID) {
         guard canSave, let disk, let book = book(id) else { return }
         let remaining = books.filter { $0.id != id }

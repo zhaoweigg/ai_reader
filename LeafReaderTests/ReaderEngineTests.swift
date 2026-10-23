@@ -330,6 +330,109 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(model.selectionRequest?.context.text, selected, "The menu action keeps a stable selection snapshot")
         XCTAssertEqual(model.locator, location)
     }
+    func testHighlightsKeepExactCFITextAndGeometryAtEverySizeInBothFlows() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        _ = try await waitForLayout(model, preferences: preferences)
+        let web = try XCTUnwrap(model.webView)
+        _ = try await web.evaluateJavaScript("""
+            (() => {
+                const {doc} = document.querySelector('foliate-view').renderer.getContents()[0];
+                const node = doc.querySelector('p').firstChild, range = doc.createRange();
+                range.setStart(node, 3); range.setEnd(node, 24);
+                const selected = doc.getSelection(); selected.removeAllRanges(); selected.addRange(range);
+            })()
+            """)
+        try await waitUntil { model.selectedAnnotationSelection() != nil }
+        let selection = try XCTUnwrap(model.selectedAnnotationSelection()), before = model.locator
+        model.annotateSelection(.highlight, selection: selection)
+        let annotation = try XCTUnwrap(store?.book(book.id)?.annotations.first)
+        let result = try await web.callAsyncJavaScript("""
+            const view = document.querySelector('foliate-view'), sleep = ms => new Promise(r => setTimeout(r, ms));
+            const originalText = view.renderer.getContents()[0].doc.body.textContent, rows = [];
+            for (const [variant, font] of ['Georgia', 'Palatino', 'System'].entries()) {
+              for (const scrolling of [false, true]) {
+                for (let size = 12; size <= 32; size++) {
+                    window.Leaf.applyPreferences({...base, scrolling, fontSize:size, font,
+                        horizontalMargin:[12,20,36][variant], background:['#FFFFFF','#F4EDDD','#17232E'][variant],
+                        foreground:['#263440','#493F30','#D7DEE4'][variant], colorScheme:variant === 2 ? 'dark' : 'light'});
+                    await sleep(160);
+                    const content = view.renderer.getContents().find(c => c.index === view.resolveCFI(anchor).index);
+                    const range = view.resolveCFI(anchor).anchor(content.doc);
+                    const actual = [...content.overlayer.element.querySelectorAll(`[data-leaf-highlight="${id}"] rect`)];
+                    const expected = [...range.getClientRects()];
+                    const sameBounds = actual.length === expected.length && actual.every((rect, i) =>
+                        ['x','y','width','height'].every((name,j) => Math.abs(Number(rect.getAttribute(name)) - expected[i][['left','top','width','height'][j]]) < 0.75));
+                    rows.push({font, scrolling, size, quote:range.toString() === quote,
+                        text:content.doc.body.textContent === originalText, sameBounds, rectangles:actual.length});
+                }
+              }
+            }
+            return rows;
+            """, arguments: ["base": preferences.payload, "anchor": annotation.locator, "id": annotation.id.uuidString, "quote": selection.text], in: nil, contentWorld: .page)
+        let rows = try XCTUnwrap(result as? [[String: Any]])
+        XCTAssertEqual(rows.count, 126)
+        for row in rows {
+            XCTAssertEqual(row["quote"] as? Bool, true, "\(row)")
+            XCTAssertEqual(row["text"] as? Bool, true, "\(row)")
+            XCTAssertEqual(row["sameBounds"] as? Bool, true, "\(row)")
+            XCTAssertGreaterThan(row["rectangles"] as? Int ?? 0, 0, "\(row)")
+        }
+        XCTAssertFalse(before.isEmpty)
+        XCTAssertEqual(store?.book(book.id)?.annotations.first?.locator, selection.locator)
+        XCTAssertNil(model.error)
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows), uniformTypeIdentifier: "public.json")
+        attachment.name = "126 exact highlight ranges across fonts sizes themes margins and flows"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+    func testHighlightsAndNotesRestoreAcrossLazyChaptersAndReaderReopenInBothFlows() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let web = try XCTUnwrap(model.webView)
+            _ = try await web.evaluateJavaScript("""
+                (() => { const {doc} = document.querySelector('foliate-view').renderer.getContents()[0];
+                    const range = doc.createRange(); range.selectNodeContents(doc.querySelector('p'));
+                    const selection = doc.getSelection(); selection.removeAllRanges(); selection.addRange(range); })()
+                """)
+            try await waitUntil { model.selectedAnnotationSelection() != nil }
+            let selection = try XCTUnwrap(model.selectedAnnotationSelection())
+            model.annotateSelection(.note, selection: selection)
+            var saved = try XCTUnwrap(model.annotationDraft); saved.note = "A note that survives closing the book"; saved.color = .green
+            try model.saveAnnotation(saved); model.annotationDraft = nil
+            let state = try await web.callAsyncJavaScript("""
+                const view = document.querySelector('foliate-view'), sleep = ms => new Promise(r => setTimeout(r, ms));
+                const initialDocuments = view.renderer.getContents().length;
+                const unloaded = view.getCFI(view.book.sections.length - 1);
+                await window.Leaf.setAnnotations({items:[...items, {id:'unloaded-test',value:unloaded,color:'#F2C94C'}]});
+                const noExtraLoads = view.renderer.getContents().length === initialDocuments;
+                await window.Leaf.setAnnotations({items});
+                await view.goTo(1); await sleep(180); await view.goTo(anchor); await sleep(180);
+                const content = view.renderer.getContents().find(c => c.index === view.resolveCFI(anchor).index);
+                return {noExtraLoads, documents:view.renderer.getContents().length,
+                    exact: view.resolveCFI(anchor).anchor(content.doc).toString() === quote,
+                    rendered: content.overlayer.element.querySelectorAll('[data-leaf-highlight]').length};
+                """, arguments: ["items": [saved.webPayload], "anchor": saved.locator, "quote": saved.text], in: nil, contentWorld: .page)
+            let values = try XCTUnwrap(state as? [String: Any])
+            XCTAssertEqual(values["noExtraLoads"] as? Bool, true)
+            XCTAssertLessThanOrEqual(values["documents"] as? Int ?? 100, 3)
+            XCTAssertEqual(values["exact"] as? Bool, true)
+            XCTAssertEqual(values["rendered"] as? Int, 1)
+            model.webView?.stopLoading(); window?.isHidden = true; window = nil
+            let reopened = try show(book, url: url, locator: saved.locator, readerPreferences: prefs)
+            try await waitUntil { reopened.isReady || reopened.error != nil }
+            let encoded = String(decoding: try JSONEncoder().encode(saved.locator), as: UTF8.self)
+            let visible = try await reopened.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
+            XCTAssertEqual(visible, true)
+            XCTAssertEqual(store?.book(book.id)?.annotations.first?.note, saved.note)
+            try reopened.removeAnnotation(saved.id)
+            let removed = try await reopened.webView?.callAsyncJavaScript("await new Promise(r=>setTimeout(r,150)); return document.querySelector('foliate-view').renderer.getContents().every(c=>!c.overlayer?.element.querySelector('[data-leaf-highlight]'));", arguments: [:], in: nil, contentWorld: .page) as? Bool
+            XCTAssertEqual(removed, true)
+            reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
+        }
+    }
     func testPDFChatContextUsesCurrentPageAndSelection() async throws {
         let (book, url) = try prepare("Notes from the Coast.pdf", format: .pdf)
         let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil)
