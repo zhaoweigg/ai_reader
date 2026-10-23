@@ -132,6 +132,7 @@ private struct ReaderSelectionAction {
         #if DEBUG
         readerSelectionMenuTrace("dismiss", source: source)
         #endif
+        if controller != nil { source?.selectionEditMenu?.dismissMenu() }
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
         for observer in observers { window?.removeGestureRecognizer(observer) }
         observers = []; window = nil
