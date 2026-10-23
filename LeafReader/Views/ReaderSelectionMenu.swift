@@ -137,6 +137,8 @@ private struct ReaderSelectionAction {
     private var menuWindow: ReaderSelectionWindow?
     private var observers: [UIGestureRecognizer] = []
     private var deactivationObserver: NSObjectProtocol?
+    private var pdfSelectionObserver: NSObjectProtocol?
+    private var selectionRefreshTask: Task<Void, Never>?
     private var systemMenuUntil = Date.distantPast
     private var systemInteraction: UIEditMenuInteraction?
     private var selectionPress: UILongPressGestureRecognizer?
@@ -152,6 +154,11 @@ private struct ReaderSelectionAction {
         let press = UILongPressGestureRecognizer(target: self, action: #selector(selectionPressed(_:)))
         press.minimumPressDuration = 0.5; press.cancelsTouchesInView = false; press.delaysTouchesEnded = false
         press.delegate = self; source.addGestureRecognizer(press); selectionPress = press
+        if let pdf = source as? PDFView {
+            pdfSelectionObserver = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdf, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.selectionDidChange() }
+            }
+        }
         if let scene = source.window?.windowScene {
             deactivationObserver = NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: scene, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.dismiss() }
@@ -163,9 +170,23 @@ private struct ReaderSelectionAction {
         if let selectionPress { selectionPress.view?.removeGestureRecognizer(selectionPress) }
         selectionPress = nil; requestMenu = nil; source = nil
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }; deactivationObserver = nil
+        if let pdfSelectionObserver { NotificationCenter.default.removeObserver(pdfSelectionObserver) }; pdfSelectionObserver = nil
+    }
+    func selectionDidChange() {
+        guard !showsSystemMenu, controller != nil || adjustingSelectionHandle else { return }
+        adjustingSelectionHandle = true
+        dismiss(keepingHandleObserver: true)
+        let expectedRevision = revision
+        selectionRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, let self, self.revision == expectedRevision else { return }
+            self.selectionRefreshTask = nil
+            self.requestCurrentMenu()
+        }
     }
     func requestCurrentMenu() {
         guard let window = source?.window, window.windowScene?.activationState == .foregroundActive else { return }
+        selectionRefreshTask?.cancel(); selectionRefreshTask = nil
         systemMenuUntil = .distantPast
         revision += 1; let expectedRevision = revision; requestTask?.cancel()
         installOutsideObservers(on: window)
@@ -191,6 +212,7 @@ private struct ReaderSelectionAction {
     func schedule(on source: UIView, actions: [ReaderSelectionAction], theme: ReadingTheme, selectedText: String) {
         guard !Task.isCancelled, let window = source.window, let scene = window.windowScene, scene.activationState == .foregroundActive else { return }
         self.source = source
+        adjustingSelectionHandle = false
         // A completed user request drives presentation; building UIKit's cached
         // hierarchy has no presentation side effects. Native selection stays intact.
         source.selectionEditMenu?.dismissMenu()
@@ -228,6 +250,7 @@ private struct ReaderSelectionAction {
         observers = []; window = nil
     }
     func dismiss(keepingHandleObserver: Bool = false) {
+        selectionRefreshTask?.cancel(); selectionRefreshTask = nil
         if let interaction = systemInteraction {
             systemInteraction = nil; interaction.dismissMenu(); interaction.view?.removeInteraction(interaction)
         }
@@ -490,6 +513,7 @@ private final class ReaderSelectionOverlayView: UIView {
 final class ReaderWebView: WKWebView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
     var prepareSelection: (() async -> Void)?
+    func selectionDidChange() { selectionMenu.selectionDidChange() }
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil { selectionMenu.detach() }

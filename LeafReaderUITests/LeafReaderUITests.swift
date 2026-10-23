@@ -440,6 +440,13 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertNotEqual(app.buttons["selection-ask"].value as? String, extendedLocator)
                 capture(flow + (landscape ? " landscape" : " portrait") + " native start handle adjusted", app: app)
                 revealSelectionAction("copy", app: app).tap()
+                let lateCopyMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
+                lateCopyMenu.isInverted = true; waitForExpectations(timeout: 0.45)
+                selectFixturePassage(flow, app: app)
+                XCTAssertTrue(menu.waitForExistence(timeout: 5))
+                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+                let lateDismissedMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
+                lateDismissedMenu.isInverted = true; waitForExpectations(timeout: 0.45)
             }
             app.terminate()
             XCUIDevice.shared.orientation = .portrait

@@ -99,7 +99,11 @@ struct WebBookSurface: UIViewRepresentable {
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.webView === model.webView, message.frameInfo.isMainFrame, let body = message.body as? [String: Any] else { return }
+            let previousSelection = model.selectedReadingContext()
             model.receive(body)
+            if body["type"] as? String == "selection", previousSelection != model.selectedReadingContext() {
+                (message.webView as? ReaderWebView)?.selectionDidChange()
+            }
         }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             let url = navigationAction.request.url
