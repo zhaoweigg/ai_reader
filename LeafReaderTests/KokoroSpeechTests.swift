@@ -64,7 +64,11 @@ final class FakeArchiveDownloader: KokoroArchiveDownloading, @unchecked Sendable
     var progressed: ((NSRange) -> Void)?
     var spoken: [(text: String, voice: String)] = []
     var stops = 0
-    func speak(_ text: String, language: String, voice: String, speed: Double) throws { spoken.append((text, voice)) }
+    var failure: Error?
+    func speak(_ text: String, language: String, voice: String, speed: Double) throws {
+        if let failure { throw failure }
+        spoken.append((text, voice))
+    }
     func pause() {}
     func resume() -> Bool { true }
     func stop() { stops += 1 }
@@ -337,6 +341,47 @@ final class FakeArchiveDownloader: KokoroArchiveDownloading, @unchecked Sendable
 
     // Routing and session integration
 
+    func testUnavailableNaturalAndHighQualityAppleVoicesThrowWithoutFinishingOrSkipping() throws {
+        let store = try readyStore(root: temporary()), system = StubSystemSpeaker()
+        system.failure = AppleReadingVoiceError.downloadRequired
+        let kokoro = KokoroReadAloudSpeaker(store: store, player: FakeAudioPlayer(), makeSynthesizer: { _ in FakeKokoroSynthesizer() })
+        let router = RoutingReadAloudSpeaker(system: system, kokoro: kokoro)
+        var finished = 0; router.finished = { finished += 1 }
+        XCTAssertThrowsError(try router.speak("Keep this passage.", language: "en", voice: "kokoro:", speed: 1))
+        XCTAssertNil(router.active); XCTAssertNil(router.fallbackReason)
+        XCTAssertTrue(system.spoken.isEmpty); XCTAssertEqual(finished, 0)
+    }
+
+    func testAsyncNaturalFailureWithoutHighQualityFallbackPreservesTheSessionCursor() async throws {
+        for paused in [false, true] {
+            let root = temporary(), store = try readyStore(root: root)
+            try TarBzip2Extractor.extract(archive: fixture("KokoroPack"), into: root)
+            try store.manifest.archiveSHA256.write(to: root.appendingPathComponent("kokoro-multi-lang-v1_1.installed"), atomically: true, encoding: .utf8)
+            store.refresh()
+            let system = StubSystemSpeaker(); system.failure = AppleReadingVoiceError.downloadRequired
+            let kokoro = KokoroReadAloudSpeaker(store: store, player: FakeAudioPlayer(), makeSynthesizer: { _ in
+                Thread.sleep(forTimeInterval: 0.1); throw KokoroSynthesizerError.loadFailed
+            })
+            let router = RoutingReadAloudSpeaker(system: system, kokoro: kokoro)
+            let name = "FailedQualityFallback.\(UUID().uuidString)", defaults = UserDefaults(suiteName: name)!
+            defer { defaults.removePersistentDomain(forName: name) }
+            let session = ReadAloudSession(bookmarkURL: root.appendingPathComponent("cursor.json"), defaults: defaults, speaker: router)
+            let passage = ReadAloudPassage(text: "Keep this unread passage.", locator: "a", nextLocator: "b", language: "en", label: "A")
+            session.source = { locator in locator == "a" ? passage : nil }
+            session.start(at: "a", offset: 5)
+            try await wait { session.state == .playing }
+            if paused { session.pause() }
+            try await wait { session.state == .failed }
+            XCTAssertEqual(session.error, AppleReadingVoiceError.downloadRequired.localizedDescription)
+            XCTAssertEqual(session.passage?.locator, "a"); XCTAssertEqual(session.bookmark?.offset, 5)
+            XCTAssertFalse(session.isBuffering); XCTAssertNil(router.active); XCTAssertNil(router.fallbackReason)
+            XCTAssertTrue(system.spoken.isEmpty)
+            session.stop()
+            let restored = ReadAloudSession(bookmarkURL: root.appendingPathComponent("cursor.json"), defaults: defaults, speaker: StubSystemSpeaker())
+            XCTAssertEqual(restored.bookmark, ReadAloudBookmark(locator: "a", offset: 5))
+        }
+    }
+
     func testRoutingUsesKokoroOnlyForKokoroVoicesAndFallsBackToTheSystemVoice() async throws {
         let root = temporary()
         let store = try readyStore(root: root)
@@ -368,6 +413,8 @@ final class FakeArchiveDownloader: KokoroArchiveDownloading, @unchecked Sendable
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
         let speaker = StubSystemSpeaker()
         let session = ReadAloudSession(bookmarkURL: nil, defaults: defaults, speaker: speaker)
+        XCTAssertEqual(session.engine, .kokoro)
+        session.engine = .system
         session.source = { locator in locator == nil ? ReadAloudPassage(text: "Passage text.", locator: "a", nextLocator: "b", language: "en", label: "A") : nil }
         session.start(); try await wait { session.state == .playing }
         XCTAssertEqual(speaker.spoken.map(\.voice), [""])

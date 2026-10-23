@@ -102,7 +102,7 @@ import PDFKit
         speaker.progressed?(NSRange(location: 9, length: 4))
         session.speed = 1.5
         XCTAssertEqual(speaker.spoken.last, "beta gamma"); XCTAssertEqual(speaker.speeds.last, 1.5)
-        session.pause(); session.voice = "test.voice"
+        session.pause(); session.kokoroVoice = "zf_003"
         session.followsText = false
         let count = speaker.spoken.count
         session.resume(); XCTAssertEqual(speaker.spoken.count, count + 1)
@@ -110,7 +110,7 @@ import PDFKit
         let reopenedSpeaker = RecordingSpeaker()
         let reopened = ReadAloudSession(bookmarkURL: directory.appendingPathComponent("bookmark.json"), defaults: defaults, speaker: reopenedSpeaker)
         reopened.source = { _ in value }
-        XCTAssertEqual(reopened.bookmark?.offset, 9); XCTAssertEqual(reopened.speed, 1.5); XCTAssertEqual(reopened.voice, "test.voice")
+        XCTAssertEqual(reopened.bookmark?.offset, 9); XCTAssertEqual(reopened.speed, 1.5); XCTAssertEqual(reopened.kokoroVoice, "zf_003")
         XCTAssertFalse(reopened.followsText)
         reopened.resumeSaved(); try await wait { reopened.state == .playing }
         XCTAssertEqual(reopenedSpeaker.spoken.first, "beta gamma"); reopened.stop()
