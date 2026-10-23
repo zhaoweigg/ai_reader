@@ -10,6 +10,7 @@
 		021B49041E40EA7358E662DB /* ChatGPTBrowserSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6850C7062B504A73A5242F98 /* ChatGPTBrowserSignIn.swift */; };
 		023DC1F13BA5C16630D5F12C /* AnnotationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC58F359F95C7405EC4DCB7B /* AnnotationUITests.swift */; };
 		11F98810E05BCDC675C839EC /* ThemePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24297F21BBA41AD9AFD4A205 /* ThemePicker.swift */; };
+		1608AF5DEBCE97A8D9E72A38 /* LibraryChatUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */; };
 		1638B0F496721D3878BCB0BA /* AISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 241FD63FE84D0DB2819A589D /* AISettingsView.swift */; };
 		21ED9AF526E865E9547836E5 /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB89A39521EB5C1CB63BFC12 /* LibraryStore.swift */; };
 		240E576211DE00CEFEFC6B1E /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DDD91EF78808E1BD8AE415A /* ChatTests.swift */; };
@@ -42,6 +43,7 @@
 		A09C3F2A4E802FDB0B0BCA75 /* AnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FD904DA89A963355B4AFD5B /* AnnotationTests.swift */; };
 		B3112B6445A1C3A0F805B724 /* ChatGPTConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE07B9A1522472930DD1E8D6 /* ChatGPTConnectionView.swift */; };
 		B3EC6DAD8A1755A253168FE5 /* ChatGPTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 379B84A8D58BA66045270D3C /* ChatGPTTests.swift */; };
+		B4D346ED1E78489624DD45B0 /* LibraryChatOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30FC3F239F7C9AB36F0AFB5 /* LibraryChatOverlay.swift */; };
 		BA394ED9A589ADD27030CB7E /* ReaderAppearancePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8F5668FCD9D8ABD500192D /* ReaderAppearancePanel.swift */; };
 		BAE84B9CFB4A8A3492DA836A /* LeafReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09FE5DD36BCC4F16362E9EA /* LeafReaderApp.swift */; };
 		C28F300180E7E803C9941677 /* Samples in Resources */ = {isa = PBXBuildFile; fileRef = 1DFADC00594A53824F3A7DC6 /* Samples */; };
@@ -97,6 +99,7 @@
 		3BAAB2D0ADFB4B6AD2057EFA /* ChatGPTSubscriptionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTSubscriptionProvider.swift; sourceTree = "<group>"; };
 		3FD904DA89A963355B4AFD5B /* AnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationTests.swift; sourceTree = "<group>"; };
 		53EF7C81ECA87AA792CB61CD /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
+		5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryChatUITests.swift; sourceTree = "<group>"; };
 		5E6DF2E83336FF008A3ECB0C /* ZLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryTests.swift; sourceTree = "<group>"; };
 		613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryUITests.swift; sourceTree = "<group>"; };
 		6850C7062B504A73A5242F98 /* ChatGPTBrowserSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTBrowserSignIn.swift; sourceTree = "<group>"; };
@@ -117,6 +120,7 @@
 		B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTests.swift; sourceTree = "<group>"; };
 		B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderEngineTests.swift; sourceTree = "<group>"; };
 		BC58F359F95C7405EC4DCB7B /* AnnotationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationUITests.swift; sourceTree = "<group>"; };
+		C30FC3F239F7C9AB36F0AFB5 /* LibraryChatOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryChatOverlay.swift; sourceTree = "<group>"; };
 		C62F03A2C012E7FD2C2F2AE2 /* LibraryDisk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryDisk.swift; sourceTree = "<group>"; };
 		CEC6851EC27447414454AFF7 /* ChatGPTOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTOAuth.swift; sourceTree = "<group>"; };
 		D1F25FA3CF6923499A67C834 /* ReaderChatPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderChatPanel.swift; sourceTree = "<group>"; };
@@ -168,6 +172,7 @@
 				DEC483DB37697EED2DA2BC84 /* BookCover.swift */,
 				6AB29A7913A706F43291361B /* BookmarksView.swift */,
 				AE07B9A1522472930DD1E8D6 /* ChatGPTConnectionView.swift */,
+				C30FC3F239F7C9AB36F0AFB5 /* LibraryChatOverlay.swift */,
 				F9567239B01E0D6638DA1D06 /* LibraryView.swift */,
 				D7B596C7A37807FDBC583EA2 /* ReaderAnnotationsView.swift */,
 				DF8F5668FCD9D8ABD500192D /* ReaderAppearancePanel.swift */,
@@ -186,6 +191,7 @@
 			children = (
 				BC58F359F95C7405EC4DCB7B /* AnnotationUITests.swift */,
 				276132151BB695DA489747FD /* LeafReaderUITests.swift */,
+				5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */,
 				613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */,
 			);
 			path = LeafReaderUITests;
@@ -398,6 +404,7 @@
 			files = (
 				023DC1F13BA5C16630D5F12C /* AnnotationUITests.swift in Sources */,
 				FD3C12EFA92B6645053C6669 /* LeafReaderUITests.swift in Sources */,
+				1608AF5DEBCE97A8D9E72A38 /* LibraryChatUITests.swift in Sources */,
 				93E967055EC1E395AC160A13 /* ZLibraryUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -423,6 +430,7 @@
 				CE3F5B2B76E940DDD061A8A8 /* ChatModels.swift in Sources */,
 				36730BF910AF1DBF55AE4EA9 /* ChatProvider.swift in Sources */,
 				BAE84B9CFB4A8A3492DA836A /* LeafReaderApp.swift in Sources */,
+				B4D346ED1E78489624DD45B0 /* LibraryChatOverlay.swift in Sources */,
 				51E73A18348FB06EA3C85062 /* LibraryDisk.swift in Sources */,
 				21ED9AF526E865E9547836E5 /* LibraryStore.swift in Sources */,
 				78A529FF823C019A8445E417 /* LibraryView.swift in Sources */,

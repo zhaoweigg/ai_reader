@@ -793,14 +793,39 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testFloatingButtonTransparencyInPages() { verifyButtonTransparency(flow:"Pages") }
     @MainActor func testFloatingButtonTransparencyInScroll() { verifyButtonTransparency(flow:"Scroll") }
 
+    @MainActor func testFloatingButtonTransparencyPortraitInPages() { verifyButtonTransparencyPortrait(flow: "Pages") }
+    @MainActor func testFloatingButtonTransparencyPortraitInScroll() { verifyButtonTransparencyPortrait(flow: "Scroll") }
+
     @MainActor private func verifyButtonTransparency(flow:String) {
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }
+        verifyButtonTransparencyPortrait(flow: flow) { app, launcher, surface in
+            XCUIDevice.shared.orientation = .landscapeLeft
+            self.expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);self.waitForExpectations(timeout:5)
+            XCTAssertLessThanOrEqual(launcher.frame.maxX,surface.frame.maxX)
+            XCTAssertLessThanOrEqual(launcher.frame.maxY,surface.frame.maxY)
+            self.capture(flow + " faint button landscape",app:app)
+            XCUIDevice.shared.orientation = .portrait
+            self.expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);self.waitForExpectations(timeout:5)
+        }
+    }
+    // The portrait cases share every endpoint/persistence assertion with the full
+    // cases, and never execute any device orientation call during parallel QA.
+    @MainActor private func verifyButtonTransparencyPortrait(flow:String,
+        checkRotation: ((XCUIApplication, XCUIElement, XCUIElement) -> Void)? = nil) {
         let app = launchApp()
+        expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
         func openButtonSettings() {
             app.tabBars.buttons["Settings"].tap()
             let link = app.buttons["openChatButtonSettings"]
-            for _ in 0..<6 where !link.isHittable { app.swipeUp() }
+            let form = app.collectionViews.firstMatch
+            XCTAssertTrue(form.waitForExistence(timeout: 5))
+            for _ in 0..<6 where !link.isHittable {
+                // The center of Settings contains sliders/choice controls. Drag
+                // the Form's trailing padding so the gesture scrolls the list.
+                form.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.85)).press(forDuration: 0.05,
+                    thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.2)))
+            }
             XCTAssertTrue(link.isHittable);link.tap()
             XCTAssertTrue(app.sliders["chatButtonTransparency"].waitForExistence(timeout:5))
         }
@@ -835,16 +860,29 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["chatOptions"].tap();app.buttons["configureChatButton"].tap()
         XCTAssertTrue(slider.waitForExistence(timeout:5))
         XCTAssertEqual(slider.value as? String,"20%")
-        slider.adjust(toNormalizedSliderPosition:1)
+        for attempt in 1...4 where slider.value as? String != "95%" {
+            // XCTest sometimes lands short of a stepped slider's maximum.
+            // Use its native adjustment again, retaining the exact endpoint.
+            slider.adjust(toNormalizedSliderPosition:1)
+            let trace = XCTAttachment(string: "Attempt \(attempt): \(slider.value as? String ?? "nil"); frame \(slider.frame)")
+            trace.name = flow + " transparency endpoint gesture"; trace.lifetime = .keepAlways; add(trace)
+        }
         if slider.value as? String != "95%" {
-            // XCTest's normalized gesture can stop short on the stepped native slider.
-            // Finish at the physical track endpoint, retaining the exact maximum assertion.
-            slider.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).press(
-                forDuration:0.05,
-                thenDragTo:slider.coordinate(withNormalizedOffset:CGVector(dx:1,dy:0.5)),
-                withVelocity:.slow,
-                thenHoldForDuration:0.1
-            )
+            let value = Double((slider.value as? String ?? "").replacingOccurrences(of: "%", with: ""))
+            let frame = slider.frame
+            XCTAssertNotNil(value)
+            if let value, frame.width > frame.height {
+                // Begin on the measured thumb, allow Form's delayed touch to
+                // reach the control, and release inside the track's endpoint.
+                let inset = frame.height / 2 / frame.width
+                let progress = min(1, max(0, (value - 20) / 75))
+                let thumb = inset + (1 - 2 * inset) * progress
+                slider.coordinate(withNormalizedOffset: CGVector(dx: thumb, dy: 0.5)).press(forDuration: 0.35,
+                    thenDragTo: slider.coordinate(withNormalizedOffset: CGVector(dx: 1 - 1 / frame.width, dy: 0.5)),
+                    withVelocity: .slow, thenHoldForDuration: 0.2)
+                let trace = XCTAttachment(string: "Measured thumb \(thumb); result \(slider.value as? String ?? "nil"); frame \(frame)")
+                trace.name = flow + " measured endpoint drag"; trace.lifetime = .keepAlways; add(trace)
+            }
         }
         XCTAssertEqual(slider.value as? String,"95%")
         capture(flow + " faint button live preview",app:app)
@@ -857,13 +895,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(launcher.frame.minX,position.minX,accuracy:1)
         XCTAssertEqual(launcher.frame.minY,position.minY,accuracy:1)
         capture(flow + " 95 percent transparent button over text",app:app)
-        XCUIDevice.shared.orientation = .landscapeLeft
-        expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);waitForExpectations(timeout:5)
-        XCTAssertLessThanOrEqual(launcher.frame.maxX,surface.frame.maxX)
-        XCTAssertLessThanOrEqual(launcher.frame.maxY,surface.frame.maxY)
-        capture(flow + " faint button landscape",app:app)
-        XCUIDevice.shared.orientation = .portrait
-        expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
+        checkRotation?(app, launcher, surface)
         showReaderControls(app);app.buttons["closeBook"].tap()
         app.terminate();app.launch();openButtonSettings()
         XCTAssertEqual(slider.value as? String,"95%")

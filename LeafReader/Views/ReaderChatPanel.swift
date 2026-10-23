@@ -31,7 +31,7 @@ enum ReaderChatPlacement {
         return CGPoint(x: min(bounds.maxX, max(bounds.minX, point.x)),
                        y: min(bounds.maxY, max(bounds.minY, point.y)))
     }
-    static func center(x: Double, y: Double, in size: CGSize) -> CGPoint {
+    static func center(x: Double, y: Double, in size: CGSize, bottom: CGFloat = ReaderChatPlacement.bottom) -> CGPoint {
         let bounds = bounds(in: size)
         guard x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else {
             return clamp(CGPoint(x: size.width - trailing - diameter / 2,
@@ -125,7 +125,7 @@ struct ReaderChatButtonSettings: View {
                 Button("Reset transparency") { transparency = ReaderChatButtonAppearance.defaultTransparency }
                     .accessibilityIdentifier("resetChatButtonTransparency")
             } footer: {
-                Text("Applies immediately to the floating Ask Leaf button in every book. Long press the button to move it. Reduce Transparency in iOS uses a solid button.")
+                Text("Applies immediately to the floating Ask Leaf button in Library and every book. Each view remembers its own position. Long press the button to move it. Reduce Transparency in iOS uses a solid button.")
             }
             .listRowBackground(theme.surface)
         }.leafFormStyle()
@@ -135,18 +135,31 @@ struct ReaderChatButtonSettings: View {
 }
 
 struct ReaderChatLauncher: View {
+    enum Location {
+        case reader, library
+        var storagePrefix: String { self == .reader ? "reader" : "library" }
+        var identifier: String { self == .reader ? "openReaderChat" : "openLibraryChat" }
+        var bottom: CGFloat { self == .reader ? ReaderChatPlacement.bottom : 24 }
+    }
     @Environment(\.leafTheme) private var theme
     @Binding var isMoving: Bool
+    let location: Location
     let action: () -> Void
     @AppStorage("reader.chatButtonTransparency") private var transparency = ReaderChatButtonAppearance.defaultTransparency
-    @AppStorage("reader.chatButtonX") private var savedX = -1.0
-    @AppStorage("reader.chatButtonY") private var savedY = -1.0
+    @AppStorage private var savedX: Double
+    @AppStorage private var savedY: Double
     @State private var dragOrigin: CGPoint?
     @State private var draggedCenter: CGPoint?
 
+    init(isMoving: Binding<Bool>, location: Location = .reader, action: @escaping () -> Void) {
+        _isMoving = isMoving; self.location = location; self.action = action
+        _savedX = AppStorage(wrappedValue: -1, "\(location.storagePrefix).chatButtonX")
+        _savedY = AppStorage(wrappedValue: -1, "\(location.storagePrefix).chatButtonY")
+    }
+
     var body: some View {
         GeometryReader { geometry in
-            let center = draggedCenter ?? ReaderChatPlacement.center(x: savedX, y: savedY, in: geometry.size)
+            let center = draggedCenter ?? ReaderChatPlacement.center(x: savedX, y: savedY, in: geometry.size, bottom: location.bottom)
             Button { if !isMoving { action() } } label: {
                 ReaderChatButtonIcon(appearance:ReaderChatButtonAppearance(transparency:transparency),isMoving:isMoving)
             }
@@ -157,7 +170,7 @@ struct ReaderChatLauncher: View {
             .accessibilityLabel("Ask Leaf")
             .accessibilityValue(isMoving ? "Move mode" : "Stationary")
             .accessibilityHint(isMoving ? "Drag to move. Tap elsewhere to finish." : "Opens your reading companion. Long press to move.")
-            .accessibilityIdentifier("openReaderChat")
+            .accessibilityIdentifier(location.identifier)
             .accessibilityAction(named: "Move button") { isMoving = true }
             .accessibilityAction(named: "Move left") { move(center, dx: -24, dy: 0, in: geometry.size) }
             .accessibilityAction(named: "Move right") { move(center, dx: 24, dy: 0, in: geometry.size) }
@@ -200,11 +213,14 @@ struct ReaderChatLauncher: View {
 }
 
 struct ReaderChatPanel: View {
+    enum Context { case reader, libraryBook, general }
     @Environment(\.leafTheme) private var theme
     @ObservedObject var session: ReaderChatSession
     @EnvironmentObject private var settings: AISettingsStore
     let bookTitle: String
     let isComposing: Bool
+    var context: Context = .reader
+    var onChooseConversation: (() -> Void)? = nil
     let onClose: () -> Void
     let onSettings: () -> Void
     let onButtonSettings: () -> Void
@@ -217,6 +233,14 @@ struct ReaderChatPanel: View {
 
     private var accent: Color { theme.accent }
     private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var contextHint: String {
+        switch context {
+        case .reader: return settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off."
+        case .libraryBook:
+            return settings.configuration.sharePage ? "Continues this book’s saved chat. Library shares only its title and author; open the book to quote a new passage." : "Continues this book’s saved chat. Passage sharing is off."
+        case .general: return "This conversation is separate from your book chats. No books are attached automatically."
+        }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -249,7 +273,16 @@ struct ReaderChatPanel: View {
                         if !isComposing { selectionActions(compact: true) }
                     } else { Text("Ask Leaf").font(.subheadline.weight(.semibold)).foregroundStyle(accent).lineLimit(1) }
                     Spacer(minLength: 4)
-                    if !isComposing && !compact {
+                    if let onChooseConversation, !isComposing {
+                        Button(action: onChooseConversation) {
+                            HStack(spacing: 4) {
+                                Text(context == .general ? "General chat" : bookTitle).lineLimit(1)
+                                Image(systemName: "chevron.down")
+                            }.font(.caption).frame(minWidth: 44, minHeight: 44)
+                        }.accessibilityLabel("Choose conversation").accessibilityValue(context == .general ? "General chat" : bookTitle)
+                            .accessibilityIdentifier("chooseLibraryConversation")
+                    }
+                    if context == .reader && !isComposing && !compact {
                         Text(settings.configuration.profile.model).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
                     if !isComposing && !compact {
@@ -314,9 +347,11 @@ struct ReaderChatPanel: View {
                             }
                             if session.messages.isEmpty && session.selectedContext == nil {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
-                                        .font(.subheadline)
-                                    Text(settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off.")
+                                    if context == .reader {
+                                        Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
+                                            .font(.subheadline)
+                                    }
+                                    Text(contextHint)
                                         .font(.caption).foregroundStyle(.secondary)
                                     Button("AI settings", action: onSettings).font(.subheadline)
                                 }
@@ -372,7 +407,7 @@ struct ReaderChatPanel: View {
             }
 
             HStack(alignment: .bottom, spacing: 8) {
-                TextField(session.selectedContext == nil ? "Ask about this page…" : "Ask about the selected text…", text: $session.draft, axis: .vertical)
+                TextField(session.selectedContext != nil ? "Ask about the selected text…" : context == .general ? "Ask Leaf…" : context == .libraryBook ? "Ask about this book…" : "Ask about this page…", text: $session.draft, axis: .vertical)
                     .font(.subheadline).lineLimit(1...(compact ? 1 : 3))
                     .focused($inputFocused).submitLabel(.send)
                     .onSubmit(send)
@@ -395,11 +430,11 @@ struct ReaderChatPanel: View {
         .foregroundStyle(.primary).tint(accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
         .accessibilityAction(.escape, close)
-        .confirmationDialog("Clear this book’s conversation?", isPresented: $confirmsClear, titleVisibility: .visible) {
+        .confirmationDialog(context == .general ? "Clear your general conversation?" : "Clear this book’s conversation?", isPresented: $confirmsClear, titleVisibility: .visible) {
             Button("Clear conversation", role: .destructive) { session.clear() }
                 .accessibilityIdentifier("confirmClearConversation")
             Button("Cancel", role: .cancel) {}
-        } message: { Text("This deletes this book’s saved messages and draft from this device.") }
+        } message: { Text(context == .general ? "This deletes the general chat’s saved messages and draft from this device. Book conversations are kept." : "This deletes this book’s saved messages and draft from this device.") }
     }
 
     private func selectionActions(compact: Bool) -> some View {

@@ -53,6 +53,43 @@ private final class HistoryProvider: ChatProvider {
     private func complete(_ provider: HistoryProvider, _ text: String = "An explanation") {
         provider.continuations.last?.yield(.text(text)); provider.continuations.last?.yield(.finished(truncated: false)); provider.continuations.last?.finish()
     }
+    func testLibraryGeneralChatHasNoBookContextAndStaysSeparateFromBookHistory() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        let book = ReaderChatSession(directory: directory, conversation: "book-fingerprint")
+        book.draft = "Book draft"; book.attachSelection(context)
+        let general = ReaderChatSession(directory: directory, conversation: "leaf.library.general.v1")
+        general.draft = "Hello from Library"
+        general.send(settings: settings, missingContextNotice: nil) { nil }
+        try await wait { provider.requests.count == 1 }
+        XCTAssertEqual(provider.requests[0].turns.last?.content, "Hello from Library")
+        XCTAssertNil(general.messages.first?.context); XCTAssertNil(general.notice)
+        complete(provider); try await wait { !general.isSending }
+        general.close()
+        XCTAssertEqual(ReaderChatSession(directory: directory, conversation: "leaf.library.general.v1").messages.count, 2)
+        general.clear()
+        let restoredBook = ReaderChatSession(directory: directory, conversation: "book-fingerprint")
+        XCTAssertEqual(restoredBook.draft, "Book draft"); XCTAssertEqual(restoredBook.selectedContext, context)
+    }
+    func testLibraryBookChatSendsOnlyMetadataAndResumesAnAttachedQuote() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        let metadata = ReadingChatContext(title: "A Book", author: "Author", chapter: "", text: "", source: "library_metadata", locator: "")
+        let library = ReaderChatSession(directory: directory, conversation: "same-book")
+        library.draft = "Who wrote this?"
+        library.send(settings: settings, missingContextNotice: nil) { metadata }
+        try await wait { provider.requests.count == 1 }
+        XCTAssertEqual(library.messages.first?.context, metadata); XCTAssertNil(library.notice)
+        XCTAssertTrue(provider.requests[0].turns.last?.content.contains("library_metadata") == true)
+        XCTAssertFalse(provider.requests[0].turns.last?.content.contains(context.text) == true)
+        complete(provider); try await wait { !library.isSending }; library.close()
+        let reader = ReaderChatSession(directory: directory, conversation: "same-book")
+        XCTAssertEqual(reader.messages.count, 2)
+        reader.attachSelection(context); reader.draft = "Explain this quote"; reader.close()
+        let resumed = ReaderChatSession(directory: directory, conversation: "same-book")
+        resumed.send(settings: settings, missingContextNotice: nil) { XCTFail("Use the persisted quote"); return metadata }
+        try await wait { provider.requests.count == 2 }
+        XCTAssertEqual(resumed.messages.last(where: \.isUser)?.context, context)
+        complete(provider); try await wait { !resumed.isSending }
+    }
     func testLiveSelectionPreservesQuestionAndPersistsLatestQuoteWithoutSending() async throws {
         let directory = try directory(), session = ReaderChatSession(directory: directory, conversation: "live-selection")
         let first = ReadingChatContext(title: context.title, author: context.author, chapter: context.chapter,
