@@ -382,11 +382,14 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame), "Action must scroll fully into view: " + id)
         return button
     }
-    @MainActor func testHorizontalSelectionMenuScrollsAndLeavesNativeHandlesDraggableInAllFlows() {
+    @MainActor func testHorizontalSelectionHandlesInPages() { verifyHorizontalSelectionHandles(flow: "Pages") }
+    @MainActor func testHorizontalSelectionHandlesInScroll() { verifyHorizontalSelectionHandles(flow: "Scroll") }
+    @MainActor func testHorizontalSelectionHandlesInPDF() { verifyHorizontalSelectionHandles(flow: "PDF") }
+    @MainActor private func verifyHorizontalSelectionHandles(flow: String) {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }
-        for flow in ["Pages", "Scroll", "PDF"] {
+        do {
             let app = launchApp(); openSelectionFixture(flow, app: app)
             for landscape in [false, true] {
                 XCUIDevice.shared.orientation = landscape ? .landscapeLeft : .portrait

@@ -101,7 +101,16 @@ private extension UIView {
         let rect = selectionRectangles.reduce(CGRect.null) { $0.union($1) }.intersection(bounds)
         return rect.isNull || rect.isEmpty ? CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1) : rect
     }
+    var nativeSelectionHandleViews: [UIView & UITextSelectionHandleView] {
+        if let handle = self as? (UIView & UITextSelectionHandleView), window != nil, !isHidden, alpha > 0.01 { return [handle] }
+        let displays = interactions.compactMap { $0 as? UITextSelectionDisplayInteraction }
+        let handles = displays.flatMap(\.handleViews).filter { $0.window != nil && !$0.isHidden && $0.alpha > 0.01 }
+        if !handles.isEmpty { return handles }
+        return subviews.flatMap(\.nativeSelectionHandleViews)
+    }
     var selectionHandles: [CGRect] {
+        let native = nativeSelectionHandleViews
+        if native.count == 2 { return native.map { convert($0.bounds, from: $0).insetBy(dx: -10, dy: -10) } }
         let rects = selectionRectangles
         guard let first = rects.first, let last = rects.last else { return [] }
         // Native selection stems/knobs extend beyond the selected glyphs. Keep
@@ -440,7 +449,20 @@ private final class ReaderSelectionOverlayView: UIView {
             // Geometry only, for real native handle drags; this does not create
             // a selection or intercept touches in the book.
             var markers: [UIAccessibilityElement] = []
-            for (index, rect) in source.selectionRectangles.enumerated() where index == 0 || index == source.selectionRectangles.count - 1 {
+            let nativeHandles = source.nativeSelectionHandleViews
+            if nativeHandles.count == 2 {
+                for (index, handle) in nativeHandles.enumerated() {
+                    let rect = handle.convert(handle.bounds, to: view)
+                    let start = handle.direction.contains(.leading) || index == 0 && !handle.direction.contains(.trailing)
+                    let marker = UIAccessibilityElement(accessibilityContainer: overlay)
+                    marker.accessibilityIdentifier = start ? "selection-start-geometry" : "selection-end-geometry"
+                    marker.accessibilityLabel = start ? "Selection start geometry" : "Selection end geometry"
+                    marker.accessibilityValue = "native"
+                    marker.accessibilityFrameInContainerSpace = rect
+                    markers.append(marker)
+                }
+            }
+            for (index, rect) in source.selectionRectangles.enumerated() where nativeHandles.count != 2 && (index == 0 || index == source.selectionRectangles.count - 1) {
                 let converted = source.convert(rect, to: view)
                 let start = index == 0
                 let marker = UIAccessibilityElement(accessibilityContainer: overlay)
@@ -572,6 +594,13 @@ private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTr
         "hasNativeRange": input?.selectedTextRange != nil, "nativeRangeEmpty": input?.selectedTextRange?.isEmpty ?? true, "nativeEditInteraction": source?.selectionEditMenu != nil,
         "legacyMenuVisible": UIMenuController.shared.isMenuVisible,
         "visibleMenuWindow": source?.window?.windowScene?.windows.contains(where: { $0 is ReaderSelectionWindow && !$0.isHidden }) ?? false]
+    if let source {
+        row["nativeHandles"] = source.nativeSelectionHandleViews.prefix(2).map { handle in
+            let rect = source.convert(handle.bounds, from: handle)
+            return ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height, "direction": CGFloat(handle.direction.rawValue)]
+        }
+        row["selectionRects"] = source.selectionRectangles.prefix(8).map { ["x": $0.minX, "y": $0.minY, "width": $0.width, "height": $0.height] }
+    }
     if let context { row["context"] = context }
     if let point { row["x"] = point.x; row["y"] = point.y }
     if let target { row["touchView"] = String(describing: type(of: target)); row["touchInBook"] = source.map { target.isDescendant(of: $0) } ?? false }

@@ -966,7 +966,12 @@ final class ReaderEngineTests: XCTestCase {
             var prefs = preferences; prefs.scrolling = scrolling
             let model = try show(book, url: url, readerPreferences: prefs)
             try await assertOpened(model, contains: "窗外")
-            _ = try await waitForLayout(model, preferences: prefs)
+            if !scrolling { _ = try await waitForLayout(model, preferences: prefs) }
+            else {
+                try await waitUntil { model.isReady }
+                let ready = try await model.webView?.callAsyncJavaScript("await document.querySelector('foliate-view').renderer.getContents()[0].doc.fonts.ready; return true;", arguments: [:], in: nil, contentWorld: .page) as? Bool
+                XCTAssertEqual(ready, true)
+            }
             let web = try XCTUnwrap(model.webView)
             let value = try await web.callAsyncJavaScript("""
                 const view=document.querySelector('foliate-view'),renderer=view.renderer;
