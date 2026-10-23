@@ -37,9 +37,11 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
         actions.append(ReaderSelectionAction(title: "Highlight", image: "highlighter", id: "highlight") { annotate(.highlight, annotation) })
         actions.append(ReaderSelectionAction(title: "Add Note", image: "square.and.pencil", id: "note") { annotate(.note, annotation) })
     }
+    let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view
     actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder] in
-        responder?.perform(#selector(UIResponderStandardEditActions.copy(_:)), with: nil)
+        if let copiedText { UIPasteboard.general.string = copiedText }
+        else { responder?.perform(#selector(UIResponderStandardEditActions.copy(_:)), with: nil) }
     })
     actions.append(ReaderSelectionAction(title: "iOS text actions", image: "ellipsis", id: "system") { [weak presenter] in presenter?.presentSystemMenu() })
     // UIKit's edit toolbar paginates long labels horizontally. Keep its native
@@ -56,6 +58,11 @@ private extension UIView {
     var selectionEditMenu: UIEditMenuInteraction? {
         interactions.compactMap { $0 as? UIEditMenuInteraction }.first
             ?? subviews.lazy.compactMap(\.selectionEditMenu).first
+    }
+    var selectionText: String? {
+        if let pdf = self as? PDFView { return pdf.currentSelection?.string }
+        guard let input = selectionFirstResponder as? UITextInput, let range = input.selectedTextRange else { return nil }
+        return input.text(in: range)
     }
     var selectionAnchor: CGRect {
         var rect = CGRect.null
@@ -75,56 +82,110 @@ private struct ReaderSelectionAction {
     let perform: () -> Void
 }
 
-@MainActor private final class ReaderSelectionMenuPresenter: NSObject, UIPopoverPresentationControllerDelegate {
-    private weak var view: UIView?
-    private weak var controller: ReaderSelectionActionsController?
+@MainActor private final class ReaderSelectionMenuPresenter: NSObject, UIGestureRecognizerDelegate {
+    private weak var source: UIView?
+    private weak var window: UIWindow?
+    private var controller: ReaderSelectionActionsController?
+    private var observers: [UIGestureRecognizer] = []
     private var systemMenuUntil = Date.distantPast
     var showsSystemMenu: Bool { Date() < systemMenuUntil }
-    func schedule(on view: UIView, actions: [ReaderSelectionAction], theme: ReadingTheme, selectedText: String) {
-        self.view = view
-        if let controller { controller.actions = actions; controller.tableView.accessibilityValue = selectedText; controller.tableView.reloadData(); return }
-        DispatchQueue.main.async { [weak self, weak view] in
-            guard let self, let view, view.window != nil, self.controller == nil,
-                  var parent = view.window?.rootViewController else { return }
+    func schedule(on source: UIView, actions: [ReaderSelectionAction], theme: ReadingTheme, selectedText: String) {
+        self.source = source
+        if let controller { controller.actions = actions; controller.tableView.accessibilityValue = selectedText; controller.tableView.reloadData(); controller.view.setNeedsLayout(); return }
+        DispatchQueue.main.async { [weak self, weak source] in
+            guard let self, let source, let window = source.window, self.controller == nil,
+                  var parent = window.rootViewController else { return }
             while let next = parent.presentedViewController { parent = next }
             guard !parent.isBeingDismissed else { return }
-            let controller = ReaderSelectionActionsController(actions: actions, theme: theme)
+            let controller = ReaderSelectionActionsController(actions: actions, theme: theme, source: source)
+            controller.choose = { [weak self] action in self?.dismiss(); action() }
+            parent.addChild(controller)
+            controller.view.frame = parent.view.bounds
+            controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            parent.view.addSubview(controller.view)
+            controller.didMove(toParent: parent)
             controller.tableView.accessibilityValue = selectedText
-            controller.modalPresentationStyle = .popover
-            controller.preferredContentSize = CGSize(width: 260, height: CGFloat(actions.count) * 44)
-            if let popover = controller.popoverPresentationController {
-                popover.sourceView = view; popover.sourceRect = view.selectionAnchor
-                popover.permittedArrowDirections = [.up, .down]; popover.delegate = self
-                popover.backgroundColor = UIColor(theme.surface)
+            self.controller = controller; self.window = window
+            // A modal popover consumes the first outside tap and can resign the
+            // native selection responder. Observe dismissal without intercepting
+            // the book, composer, keyboard, or draggable chat launcher underneath.
+            let tap = UITapGestureRecognizer(target: self, action: #selector(self.outsideGesture(_:)))
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(self.outsideGesture(_:)))
+            self.observers = [tap, pan]
+            for observer in self.observers {
+                observer.cancelsTouchesInView = false; observer.delaysTouchesEnded = false
+                observer.delegate = self; window.addGestureRecognizer(observer)
             }
-            self.controller = controller
-            parent.present(controller, animated: true)
         }
     }
-    func presentSystemMenu() {
-        guard let view else { return }
-        systemMenuUntil = Date().addingTimeInterval(2)
-        let rect = view.selectionAnchor
-        view.selectionEditMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.midY)))
+    func dismiss() {
+        for observer in observers { window?.removeGestureRecognizer(observer) }
+        observers = []; window = nil
+        controller?.willMove(toParent: nil); controller?.view.removeFromSuperview(); controller?.removeFromParent()
+        controller = nil
     }
-    func adaptivePresentationStyle(for controller: UIPresentationController) -> UIModalPresentationStyle { .none }
+    @objc private func outsideGesture(_ gesture: UIGestureRecognizer) {
+        if gesture.state == .ended || gesture.state == .began { dismiss() }
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard let controller, let view = touch.view else { return false }
+        return !view.isDescendant(of: controller.view)
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+    func presentSystemMenu() {
+        guard let source else { return }
+        systemMenuUntil = Date().addingTimeInterval(2)
+        let rect = source.selectionAnchor
+        source.selectionEditMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.midY)))
+    }
 }
 
-@MainActor private final class ReaderSelectionActionsController: UITableViewController {
+private final class ReaderSelectionOverlayView: UIView {
+    let card = UIView()
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let local = convert(point, to: card)
+        return card.bounds.contains(local) ? card.hitTest(local, with: event) : nil
+    }
+}
+
+@MainActor private final class ReaderSelectionActionsController: UIViewController, UITableViewDataSource, UITableViewDelegate {
     var actions: [ReaderSelectionAction]
+    var choose: ((() -> Void) -> Void)?
+    let tableView = UITableView(frame: .zero, style: .plain)
     private let theme: ReadingTheme
-    init(actions: [ReaderSelectionAction], theme: ReadingTheme) { self.actions = actions; self.theme = theme; super.init(style: .plain) }
+    private weak var source: UIView?
+    init(actions: [ReaderSelectionAction], theme: ReadingTheme, source: UIView) {
+        self.actions = actions; self.theme = theme; self.source = source; super.init(nibName: nil, bundle: nil)
+    }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func loadView() { view = ReaderSelectionOverlayView() }
     override func viewDidLoad() {
         super.viewDidLoad()
-        tableView.backgroundColor = UIColor(theme.surface)
+        let overlay = view as! ReaderSelectionOverlayView
+        overlay.addSubview(overlay.card); overlay.card.addSubview(tableView)
+        overlay.card.layer.shadowColor = UIColor.black.cgColor; overlay.card.layer.shadowOpacity = 0.18
+        overlay.card.layer.shadowRadius = 18; overlay.card.layer.shadowOffset = CGSize(width: 0, height: 5)
+        tableView.backgroundColor = UIColor(theme.surface); tableView.layer.cornerRadius = 18
+        tableView.dataSource = self; tableView.delegate = self
         tableView.rowHeight = 44; tableView.estimatedRowHeight = 44
         tableView.separatorColor = UIColor(theme.foreground).withAlphaComponent(0.1)
         tableView.accessibilityIdentifier = "expandedSelectionMenu"
         tableView.contentInsetAdjustmentBehavior = .never
     }
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { actions.count }
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard let source, let overlay = view as? ReaderSelectionOverlayView else { return }
+        let safe = view.bounds.inset(by: view.safeAreaInsets).insetBy(dx: 12, dy: 8)
+        let anchor = source.convert(source.selectionAnchor, to: view)
+        let width = min(260, safe.width), height = min(CGFloat(actions.count) * 44, safe.height)
+        let below = anchor.maxY + 10
+        let top = below + height <= safe.maxY ? below : anchor.minY - height - 10
+        overlay.card.frame = CGRect(x: min(max(safe.minX, anchor.midX - width / 2), safe.maxX - width),
+            y: min(max(safe.minY, top), safe.maxY - height), width: width, height: height)
+        tableView.frame = overlay.card.bounds
+    }
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { actions.count }
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let action = actions[indexPath.row], cell = UITableViewCell(style: .default, reuseIdentifier: nil)
         let button = UIButton(type: .system)
         var config = UIButton.Configuration.plain()
@@ -133,24 +194,20 @@ private struct ReaderSelectionAction {
         config.baseForegroundColor = UIColor(theme.foreground)
         button.configuration = config; button.contentHorizontalAlignment = .leading
         button.accessibilityIdentifier = "selection-" + action.id
-        button.addAction(UIAction { [weak self] _ in self?.choose(indexPath.row) }, for: .touchUpInside)
+        button.addAction(UIAction { [weak self] _ in self?.chooseAction(indexPath.row) }, for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
         cell.contentView.addSubview(button)
         NSLayoutConstraint.activate([button.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor), button.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor), button.topAnchor.constraint(equalTo: cell.contentView.topAnchor), button.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor)])
         cell.backgroundColor = UIColor(theme.surface); cell.isAccessibilityElement = false
         return cell
     }
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        choose(indexPath.row)
-    }
-    private func choose(_ index: Int) {
-        let action = actions[index].perform
-        dismiss(animated: true, completion: action)
-    }
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) { chooseAction(indexPath.row) }
+    private func chooseAction(_ index: Int) { choose?(actions[index].perform) }
 }
 
 final class ReaderWebView: WKWebView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
+    override func didMoveToWindow() { super.didMoveToWindow(); if window == nil { selectionMenu.dismiss() } }
     var selectionTheme: (() -> ReadingTheme)?
     var listeningPosition: (() -> String?)?
     var onListen: ((String) -> Void)?
@@ -166,6 +223,7 @@ final class ReaderWebView: WKWebView {
 
 final class ReaderPDFView: PDFView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
+    override func didMoveToWindow() { super.didMoveToWindow(); if window == nil { selectionMenu.dismiss() } }
     var selectionTheme: (() -> ReadingTheme)?
     var listeningPosition: (() -> String?)?
     var onListen: ((String) -> Void)?

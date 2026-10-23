@@ -406,6 +406,21 @@ final class LeafReaderUITests: XCTestCase {
             app.terminate()
         }
     }
+    @MainActor func testExpandedSelectionMenuKeepsNativeTextActionsInAllReaderFlows() {
+        continueAfterFailure = false
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            selectFixturePassage(flow, app: app)
+            XCTAssertTrue(app.buttons["selection-system"].waitForExistence(timeout: 6))
+            app.buttons["selection-system"].tap()
+            let expanded = app.tables["expandedSelectionMenu"]
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: expanded); waitForExpectations(timeout: 5)
+            let nativeCopy = app.menuItems["Copy"].exists ? app.menuItems["Copy"] : app.buttons["Copy"]
+            XCTAssertTrue(nativeCopy.waitForExistence(timeout: 5), "Native text actions must remain available in " + flow)
+            capture(flow + " standard iOS text actions remain available", app: app)
+            app.terminate()
+        }
+    }
     @MainActor func testSpeechProgressHighlightsVisibleTextInPagesScrollAndPDF() {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
