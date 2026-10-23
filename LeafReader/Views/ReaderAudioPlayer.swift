@@ -44,7 +44,7 @@ struct ReaderAudioPlayer: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22))
         .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(theme.foreground.opacity(0.08)))
         .foregroundStyle(theme.foreground).tint(theme.accent)
-        .accessibilityIdentifier("readerAudioPlayer")
+        .accessibilityElement(children: .contain).accessibilityIdentifier("readerAudioPlayer")
     }
     private var status: String {
         switch session.state {
