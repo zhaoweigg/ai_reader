@@ -88,12 +88,7 @@ final class ReaderEngineTests: XCTestCase {
             let result = try await model.webView?.callAsyncJavaScript("""
                 const view = document.querySelector('foliate-view'), r = view.renderer;
                 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-                const trace=[],writes=[];
-                let containerHooked=false;
                 const snapshot=()=>{const contents=r.getContents(),doc=contents[0]?.doc,container=doc?.defaultView?.frameElement?.parentElement?.parentElement;return {active:contents[0]?.index,top:container?.scrollTop,max:container?container.scrollHeight-container.clientHeight:0,endSpace:container?.style.getPropertyValue('--leaf-book-end-space'),frames:contents.map(x=>({index:x.index,y:x.doc?.defaultView?.frameElement?.parentElement?.getBoundingClientRect().top,height:x.doc?.defaultView?.frameElement?.parentElement?.getBoundingClientRect().height}))};};
-                r.addEventListener('relocate',({detail})=>{trace.push({reason:detail.reason,...snapshot()});if(trace.length>30)trace.shift();
-                    if(!containerHooked && r.getContents()[0]?.doc){containerHooked=true;const c=r.getContents()[0].doc.defaultView.frameElement.parentElement.parentElement,d=Object.getOwnPropertyDescriptor(Element.prototype,'scrollTop');Object.defineProperty(c,'scrollTop',{get(){return d.get.call(this)},set(value){const entry={value,before:d.get.call(this),max:this.scrollHeight-this.clientHeight,stack:new Error().stack};writes.push(entry);if(writes.length>35)writes.shift();d.set.call(this,value);entry.actual=d.get.call(this);}});}
-                });
                 await view.goTo(1); r.scrollToAnchor(1); await sleep(100); await r.next(); await sleep(100);
                 const forward = r.getContents()[0].index;
                 r.scrollToAnchor(0); await sleep(100); await r.prev(); await sleep(100);
@@ -104,7 +99,7 @@ final class ReaderEngineTests: XCTestCase {
                 await view.goTo(last); r.scrollToAnchor(1); await sleep(100); await r.next();
                 const end = r.getContents()[0].index,endState=snapshot();
                 await view.goTo(1); r.scrollToAnchor(0.35); await sleep(100);
-                return {forward,backward,beginning,end,last,documents:r.getContents().length,endState,trace,writes};
+                return {forward,backward,beginning,end,last,documents:r.getContents().length,endState};
                 """, arguments: [:], in: nil, contentWorld: .page)
             let metrics = try XCTUnwrap(result as? [String: Any])
             let attachment=XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json");attachment.name="Boundary trace scrolling=\(scrolling)";attachment.lifetime = .keepAlways;add(attachment)
@@ -638,11 +633,14 @@ final class ReaderEngineTests: XCTestCase {
                     const marker=view.lastLocation.range.cloneRange();
                     if(marker.startContainer.nodeType===3)marker.setStart(marker.startContainer,Math.min(marker.startContainer.length,marker.startOffset+40));
                     marker.collapse(true);
-                    const saved=view.getCFI(last,marker),before=frame.getBoundingClientRect().top;
+                    const saved=view.getCFI(last,marker),before=frame.getBoundingClientRect().top,caretRanges=doc.getSelection().rangeCount;
                     await sleep(80);await r.next();await ready([last-1,last]);await sleep(300);
-                    rows.push({delay,active:r.getContents()[0].index,savedVisible:window.Leaf.isLocationVisible(saved),before,after:frame.getBoundingClientRect().top,
+                    rows.push({delay,caretRanges,active:r.getContents()[0].index,savedVisible:window.Leaf.isLocationVisible(saved),before,after:frame.getBoundingClientRect().top,
                         saved,current:view.lastLocation.cfi});
                 }
+                const doc=r.getContents()[0].doc,node=doc.querySelector('p').firstChild,range=doc.createRange();
+                range.setStart(node,2);range.setEnd(node,12);await r.scrollToAnchor(range,true);
+                rows.at(-1).explicitSelection=doc.getSelection().toString()===range.toString();
                 return rows;
             } finally {previous.load=load;}
             """,arguments:[:],in:nil,contentWorld:.page)
@@ -651,6 +649,8 @@ final class ReaderEngineTests: XCTestCase {
         attachment.name="Delayed previous chapter with final-page navigation";attachment.lifetime = .keepAlways;add(attachment)
         for row in rows {
             XCTAssertEqual(row["active"] as? Int,3,"\(row)")
+            XCTAssertEqual(row["caretRanges"] as? Int,0,"Scroll navigation must not create a synthetic caret: \(row)")
+            if let selected=row["explicitSelection"] as? Bool { XCTAssertTrue(selected,"Explicit selection still installs its range") }
             XCTAssertEqual(row["savedVisible"] as? Bool,true,"\(row)")
             XCTAssertEqual(row["before"] as? Double ?? 0,row["after"] as? Double ?? 999,accuracy:3,"\(row)")
         }

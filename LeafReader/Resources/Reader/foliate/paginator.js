@@ -1293,7 +1293,7 @@ export class Paginator extends HTMLElement {
         }
         await this.scrollToAnchor((typeof anchor === 'function'
             ? anchor(this.#view.document) : anchor) ?? 0, select)
-        if (hasFocus) this.focusView()
+        if (hasFocus && !this.scrolled) this.focusView()
     }
     #canGoToIndex(index) {
         return index >= 0 && index <= this.sections.length - 1
