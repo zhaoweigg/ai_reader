@@ -210,6 +210,23 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(value["text"] as? String, (value["expected"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines))
         XCTAssertEqual(value["index"] as? Int, 2); XCTAssertEqual(value["active"] as? Int, 0)
     }
+    func testRapidSpokenPassageFollowingFinishesAtLatestColdChapter() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view');
+            const earlier=await window.Leaf.readAloudChunk({locator:'section:2'});
+            const latest=await window.Leaf.readAloudChunk({locator:'section:3'});
+            const section=view.book.sections[2],load=section.load;
+            section.load=async()=>{await new Promise(r=>setTimeout(r,100));return load();};
+            const first=window.Leaf.revealReadAloud({locator:earlier.locator});
+            await new Promise(r=>setTimeout(r,10));
+            await Promise.all([first,window.Leaf.revealReadAloud({locator:latest.locator})]);
+            return {active:view.renderer.getContents()[0].index,visible:window.Leaf.isLocationVisible(latest.locator)};
+            """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        XCTAssertEqual(result?["active"] as? Int, 3); XCTAssertEqual(result?["visible"] as? Bool, true)
+    }
     func testEPUBRendersSearchesAndRestoresPosition() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         let model = try show(book, url: url)
