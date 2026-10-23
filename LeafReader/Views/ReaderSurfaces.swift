@@ -145,6 +145,7 @@ struct PDFBookSurface: UIViewRepresentable {
         let model: ReaderModel
         var onReaderTap: (() -> Bool)?
         var token: NSObjectProtocol?
+        private var annotationTokens: [NSObjectProtocol] = []
         init(_ model: ReaderModel) { self.model = model; super.init() }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
@@ -167,7 +168,18 @@ struct PDFBookSurface: UIViewRepresentable {
             token = NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.model.pdfPageChanged() }
             }
+            for name: Notification.Name in [.PDFViewVisiblePagesChanged, .PDFViewScaleChanged] {
+                annotationTokens.append(NotificationCenter.default.addObserver(forName: name, object: view, queue: .main) { [weak self, weak view] _ in
+                    Task { @MainActor [weak self, weak view] in
+                        guard let self, let view, self.model.pdfView === view else { return }
+                        self.model.synchronizeAnnotations()
+                    }
+                })
+            }
         }
-        deinit { if let token { NotificationCenter.default.removeObserver(token) } }
+        deinit {
+            if let token { NotificationCenter.default.removeObserver(token) }
+            for observer in annotationTokens { NotificationCenter.default.removeObserver(observer) }
+        }
     }
 }

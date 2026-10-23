@@ -172,7 +172,8 @@ final class ReaderModel: NSObject, ObservableObject {
         if let pdfView, let document = pdfView.document {
             let proposed = pdfView.currentPage.map { document.index(for: $0) } ?? 0
             let current = (0..<document.pageCount).contains(proposed) ? proposed : 0
-            let pages = Set(max(0, current - 1)...min(max(0, document.pageCount - 1), current + 1))
+            let visible = pdfView.visiblePages.map { document.index(for: $0) }.filter { (0..<document.pageCount).contains($0) }
+            let pages = Set(max(0, current - 1)...min(max(0, document.pageCount - 1), current + 1)).union(visible)
             let values = book?.annotations ?? []
             guard pages != renderedPDFPages || values != renderedPDFValues else { return }
             renderedPDFPages = pages; renderedPDFValues = values

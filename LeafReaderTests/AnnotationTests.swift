@@ -1,5 +1,6 @@
 import XCTest
 import PDFKit
+import UIKit
 @testable import LeafReader
 
 @MainActor final class AnnotationTests: XCTestCase {
@@ -129,5 +130,47 @@ import PDFKit
         try model.removeAnnotation(saved.id)
         XCTAssertTrue(page.annotations.isEmpty)
         XCTAssertEqual(try Data(contentsOf: source), original)
+    }
+    func testPDFHighlightWindowTracksVisiblePagesAndZoomWithoutAnnotatingAllPages() async throws {
+        let (store, book, root) = try library(format: .pdf)
+        let source = root.appendingPathComponent("pages.pdf")
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 300, height: 500))
+        try renderer.pdfData { context in
+            for number in 0..<8 {
+                context.beginPage()
+                ("Page \(number) selected passage for a saved note." as NSString).draw(in: CGRect(x: 20, y: 30, width: 260, height: 200), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
+            }
+        }.write(to: source)
+        for number in 0..<8 {
+            let saved = BookAnnotation(text: "selected passage", locator: "pdf:\(number)", chapter: "Page \(number + 1)", fraction: Double(number) / 7,
+                pdfRanges: [PDFAnnotationRange(page: number, location: 7, length: 16)])
+            try store.saveAnnotation(saved, bookID: book.id)
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        let controller = UIViewController(); window.rootViewController = controller
+        let view = ReaderPDFView(frame: CGRect(x: 0, y: 0, width: 300, height: 500))
+        view.displayMode = .singlePageContinuous; view.displayDirection = .vertical; view.autoScales = true
+        controller.view.addSubview(view); window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let model = ReaderModel(bookID: book.id, library: store, initialLocator: nil)
+        model.configurePDF(view, url: source)
+        let coordinator = PDFBookSurface.Coordinator(model); coordinator.observe(view)
+        let document = try XCTUnwrap(view.document)
+        XCTAssertTrue(try XCTUnwrap(document.page(at: 7)).annotations.isEmpty)
+        view.go(to: try XCTUnwrap(document.page(at: 6)))
+        let deadline = Date().addingTimeInterval(5)
+        while view.currentPage.map({ document.index(for: $0) }) != 6 && Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        model.pdfPageChanged()
+        XCTAssertEqual(view.currentPage.map { document.index(for: $0) }, 6)
+        XCTAssertFalse(try XCTUnwrap(document.page(at: 6)).annotations.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(document.page(at: 0)).annotations.isEmpty)
+        view.scaleFactor = 0.25
+        try await Task.sleep(for: .milliseconds(200))
+        model.synchronizeAnnotations()
+        let visible = view.visiblePages
+        XCTAssertGreaterThan(visible.count, 1)
+        XCTAssertTrue(visible.allSatisfy { !$0.annotations.isEmpty })
+        withExtendedLifetime(coordinator) { }
     }
 }
