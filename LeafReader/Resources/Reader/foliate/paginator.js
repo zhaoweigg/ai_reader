@@ -264,6 +264,11 @@ class View {
             this.#iframe.addEventListener('load', () => {
                 if (this.#destroyed) { finish(); return }
                 const doc = this.document
+                // WebKit can deliver the initial about:blank event after a
+                // cached chapter URL was assigned. Its styles/ranges belong
+                // to a different document and must never mark the chapter ready.
+                if (!doc?.body || doc.URL === 'about:blank') return
+                this.#loadEvents.abort()
                 afterLoad?.(doc)
 
                 // it needs to be visible for Firefox to get computed style
@@ -287,7 +292,7 @@ class View {
                 doc.fonts.ready.then(() => { if (!this.#destroyed) this.render(this.#layout) })
 
                 finish()
-            }, { once: true, signal: this.#loadEvents.signal })
+            }, { signal: this.#loadEvents.signal })
             this.#iframe.src = src
         })
     }

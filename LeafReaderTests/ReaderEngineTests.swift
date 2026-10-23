@@ -104,7 +104,7 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertEqual(metrics["forward"], 2, "scrolling=\(scrolling)")
             XCTAssertEqual(metrics["backward"], 1, "scrolling=\(scrolling)")
             XCTAssertEqual(metrics["beginning"], 0)
-            XCTAssertEqual(metrics["end"], metrics["last"])
+            XCTAssertEqual(metrics["end"], metrics["last"], "scrolling=\(scrolling), \(metrics)")
             XCTAssertLessThanOrEqual(metrics["documents"] ?? 99, scrolling ? 3 : 1)
             let locator = model.locator
             model.toggleBookmark(); store?.flush()
@@ -569,7 +569,7 @@ final class ReaderEngineTests: XCTestCase {
             const ready = async indices => {
                 const until = performance.now()+8000;
                 while(performance.now()<until) {
-                    if(indices.every(i=>r.getContents().some(x=>x.index===i && x.doc.readyState==='complete'))) { await sleep(60);return; }
+                    if(indices.every(i=>r.getContents().some(x=>x.index===i && x.doc.readyState==='complete' && x.doc.URL!=='about:blank'))) { await sleep(60);return; }
                     await sleep(20);
                 }
                 throw new Error('Nearby chapter window not ready: '+JSON.stringify(r.getContents().map(x=>x.index)));
@@ -630,7 +630,7 @@ final class ReaderEngineTests: XCTestCase {
                 const ready=async()=>{
                     const until=performance.now()+8000;
                     while(performance.now()<until){
-                        if(r.getContents().length===3){await sleep(20);return;}
+                        if(r.getContents().length===3 && r.getContents().every(x=>x.doc.URL!=='about:blank' && x.doc.body.textContent.trim())){await sleep(20);return;}
                         await sleep(10);
                     }
                     throw new Error('Bounded nearby chapters did not finish');
