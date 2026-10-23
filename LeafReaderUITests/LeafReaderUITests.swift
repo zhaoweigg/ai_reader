@@ -409,10 +409,13 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testSelectionActionsReceiveTapsKeepComposerFocusAndLeaveNoWindowAfterClosing() {
         continueAfterFailure = false
         let app = launchApp(); app.buttons["featuredBook"].tap(); waitForBook(app)
-        app.buttons["openReaderChat"].tap(); selectFixturePassage("Pages", app: app)
+        app.buttons["openReaderChat"].tap()
+        capture("Reading before the selection menu", app: app)
+        selectFixturePassage("Pages", app: app)
         let menu = app.tables["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
         for id in ["ask", "listen", "highlight", "note", "copy", "system"] { XCTAssertTrue(app.buttons["selection-" + id].isHittable) }
+        XCTAssertFalse(app.menuItems["Leaf actions"].exists || app.buttons["Leaf actions"].exists, "The native toolbar must not cover the expanded actions")
         let firstSelection = menu.value as? String ?? ""
         XCTAssertFalse(firstSelection.isEmpty)
         capture("Selection overlay receives all six actions", app: app)

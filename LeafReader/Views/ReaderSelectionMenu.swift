@@ -51,6 +51,14 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
 }
 
 private extension UIView {
+    var selectionStatusBarOwner: UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController { return controller }
+            responder = current.next
+        }
+        return nil
+    }
     var selectionFirstResponder: UIView? {
         if isFirstResponder { return self }
         return subviews.lazy.compactMap(\.selectionFirstResponder).first
@@ -103,6 +111,7 @@ private struct ReaderSelectionAction {
     private var requestTask: Task<Void, Never>?
     private var revision = 0
     var showsSystemMenu: Bool { Date() < systemMenuUntil }
+    var usesExpandedMenu: Bool { requestTask != nil || controller != nil }
     func observeSelection(on source: UIView, request: @escaping () async -> Void) {
         self.source = source; requestMenu = request
         guard selectionPress == nil else { return }
@@ -123,6 +132,7 @@ private struct ReaderSelectionAction {
     }
     func requestCurrentMenu() {
         guard let window = source?.window, window.windowScene?.activationState == .foregroundActive else { return }
+        systemMenuUntil = .distantPast
         revision += 1; let expectedRevision = revision; requestTask?.cancel()
         installOutsideObservers(on: window)
         requestTask = Task { [weak self] in
@@ -132,6 +142,7 @@ private struct ReaderSelectionAction {
             self.requestTask = nil
             if self.controller == nil { self.removeOutsideObservers() }
         }
+        UIMenuSystem.main.setNeedsRebuild()
     }
     @objc private func selectionPressed(_ press: UILongPressGestureRecognizer) {
         guard press.state == .ended, let source = press.view, !showsSystemMenu else { return }
@@ -157,6 +168,7 @@ private struct ReaderSelectionAction {
         controller.choose = { [weak self] action in self?.dismiss(); action() }
         let menuWindow = ReaderSelectionWindow(windowScene: scene)
         menuWindow.backgroundColor = .clear; menuWindow.windowLevel = window.windowLevel + 1
+        menuWindow.overrideUserInterfaceStyle = source.traitCollection.userInterfaceStyle
         menuWindow.rootViewController = controller
         menuWindow.isHidden = false
         self.menuWindow = menuWindow
@@ -191,6 +203,7 @@ private struct ReaderSelectionAction {
         removeOutsideObservers()
         menuWindow?.isHidden = true; menuWindow?.rootViewController = nil; menuWindow = nil
         controller = nil
+        UIMenuSystem.main.setNeedsRebuild()
     }
     @objc private func outsideGesture(_ gesture: UIGestureRecognizer) {
         if gesture.state == .ended || gesture.state == .began { dismiss() }
@@ -232,8 +245,19 @@ private final class ReaderSelectionOverlayView: UIView {
     let tableView = UITableView(frame: .zero, style: .plain)
     private let theme: ReadingTheme
     private weak var source: UIView?
+    private let hidesStatusBar: Bool
+    private let statusBarStyle: UIStatusBarStyle
+    override var prefersStatusBarHidden: Bool { hidesStatusBar }
+    override var preferredStatusBarStyle: UIStatusBarStyle { statusBarStyle }
     init(actions: [ReaderSelectionAction], theme: ReadingTheme, source: UIView) {
-        self.actions = actions; self.theme = theme; self.source = source; super.init(nibName: nil, bundle: nil)
+        self.actions = actions; self.theme = theme; self.source = source
+        let status = source.window?.windowScene?.statusBarManager
+        var hiddenOwner = source.selectionStatusBarOwner, styleOwner = hiddenOwner
+        while let child = hiddenOwner?.childForStatusBarHidden { hiddenOwner = child }
+        while let child = styleOwner?.childForStatusBarStyle { styleOwner = child }
+        hidesStatusBar = hiddenOwner?.prefersStatusBarHidden ?? status?.isStatusBarHidden ?? true
+        statusBarStyle = styleOwner?.preferredStatusBarStyle ?? status?.statusBarStyle ?? .default
+        super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func loadView() { view = ReaderSelectionOverlayView() }
@@ -310,7 +334,9 @@ final class ReaderWebView: WKWebView {
         #if DEBUG
         readerSelectionMenuTrace("build", source: self, context: selectionContext?()?.isEmpty == false)
         #endif
-        guard !selectionMenu.showsSystemMenu else { return }
+        if selectionMenu.usesExpandedMenu && !selectionMenu.showsSystemMenu {
+            builder.replaceChildren(ofMenu: .root) { _ in [] }; return
+        }
         // Menu hierarchies are cached. The handler snapshots the current selection
         // when invoked, including accessibility and keyboard edit-menu requests.
         let action = UIAction(title: "Leaf actions", image: UIImage(systemName: "leaf")) { [weak self] _ in self?.selectionMenu.requestCurrentMenu() }
@@ -345,7 +371,9 @@ final class ReaderPDFView: PDFView {
         #if DEBUG
         readerSelectionMenuTrace("build", source: self, context: selectionContext?()?.isEmpty == false)
         #endif
-        guard !selectionMenu.showsSystemMenu else { return }
+        if selectionMenu.usesExpandedMenu && !selectionMenu.showsSystemMenu {
+            builder.replaceChildren(ofMenu: .root) { _ in [] }; return
+        }
         // Menu hierarchies are cached. The handler snapshots the current selection
         // when invoked, including accessibility and keyboard edit-menu requests.
         let action = UIAction(title: "Leaf actions", image: UIImage(systemName: "leaf")) { [weak self] _ in self?.selectionMenu.requestCurrentMenu() }

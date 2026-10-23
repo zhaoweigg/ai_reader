@@ -53,6 +53,80 @@ final class ReaderEngineTests: XCTestCase {
         let rendered = try await model.webView?.evaluateJavaScript("window.Leaf.visibleText()") as? String
         XCTAssertTrue(rendered?.localizedCaseInsensitiveContains(text) == true, "Missing '\(text)' in rendered content: \(rendered?.prefix(500) ?? "nil")")
     }
+    func testSelectionRefreshSnapshotsTheCurrentRangeAndIgnoresCancellationInBothFlows() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let selectWord = """
+            const view=document.querySelector('foliate-view'),content=view.renderer.getContents()[0],doc=content.doc,node=doc.querySelector('p').firstChild;
+            const start=node.data.indexOf(word);if(start<0)throw new Error('Missing fixture word');
+            const range=doc.createRange();range.setStart(node,start);range.setEnd(node,start+word.length);
+            const selection=doc.getSelection();selection.removeAllRanges();selection.addRange(range);
+            return {text:selection.toString(),locator:view.getCFI(content.index,range),place:view.lastLocation.cfi};
+            """
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let web = try XCTUnwrap(model.webView)
+            if !model.isBookmarked { model.toggleBookmark() }
+            let bookmarks = model.book?.bookmarks
+            _ = try await web.callAsyncJavaScript(selectWord, arguments: ["word": "Attention"], in: nil, contentWorld: .page)
+            try await waitUntil { model.selectedReadingContext()?.text == "Attention" }
+            // An IPC selection message may still be pending when the menu is requested.
+            // Disconnecting that bridge leaves the cache stale while the real DOM changes.
+            web.configuration.userContentController.removeScriptMessageHandler(forName: "leaf")
+            let expected = try await web.callAsyncJavaScript(selectWord, arguments: ["word": "way"], in: nil, contentWorld: .page) as? [String: String]
+            XCTAssertEqual(model.selectedReadingContext()?.text, "Attention")
+            _ = try await web.evaluateJavaScript("window.savedContextForTest=window.Leaf.chatContext;window.Leaf.chatContext=()=>{const value=window.savedContextForTest();const end=performance.now()+180;while(performance.now()<end){};return value;};")
+            let cancelled = Task { await model.refreshSelectedWebContext() }
+            try await Task.sleep(for: .milliseconds(25)); cancelled.cancel(); await cancelled.value
+            XCTAssertEqual(model.selectedReadingContext()?.text, "Attention", "A cancelled request cannot attach a late selection")
+            _ = try await web.evaluateJavaScript("window.Leaf.chatContext=window.savedContextForTest;delete window.savedContextForTest;")
+            await model.refreshSelectedWebContext()
+            XCTAssertEqual(model.selectedReadingContext()?.text, expected?["text"])
+            XCTAssertEqual(model.selectedReadingContext()?.locator, expected?["locator"])
+            let currentPlace = try await web.evaluateJavaScript("window.Leaf.currentLocation()") as? String
+            XCTAssertEqual(currentPlace, expected?["place"])
+            XCTAssertEqual(model.book?.bookmarks, bookmarks)
+            model.clearNativeSelection(); await model.refreshSelectedWebContext()
+            XCTAssertNil(model.selectedReadingContext(), "Clearing selection must not substitute page text for a selected quote")
+        }
+    }
+    func testSelectionRefreshKeepsTheFocusedNeighborCFIWhenAnotherChapterRetainsASelection() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await assertOpened(model, contains: "attention")
+        let web = try XCTUnwrap(model.webView)
+        _ = try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            await view.goTo(1);
+            const end=performance.now()+8000;
+            while(!r.getContents().some(c=>c.index===2&&c.doc?.body)){if(performance.now()>end)throw new Error('Neighbor not ready');await sleep(10);}
+            const frame=r.getContents().find(c=>c.index===2).doc.defaultView.frameElement,container=frame.parentElement.parentElement;
+            container.scrollTop=frame.parentElement.getBoundingClientRect().top-container.getBoundingClientRect().top+container.scrollTop-container.clientHeight*.45;
+            await sleep(300);
+            """, arguments: [:], in: nil, contentWorld: .page)
+        web.configuration.userContentController.removeScriptMessageHandler(forName: "leaf")
+        let state = try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),contents=view.renderer.getContents();
+            const earlier=contents.find(c=>c.index===1),latest=contents.find(c=>c.index===2);
+            function select(content){const doc=content.doc,node=doc.querySelector('p').firstChild,range=doc.createRange();range.setStart(node,2);range.setEnd(node,12);doc.body.tabIndex=-1;doc.body.focus({preventScroll:true});const selected=doc.getSelection();selected.removeAllRanges();selected.addRange(range);return {range,selected};}
+            const old=select(earlier),current=select(latest);
+            latest.doc.body.focus({preventScroll:true});
+            await new Promise(resolve=>setTimeout(resolve,80));
+            return {text:current.selected.toString(),expected:view.getCFI(2,current.range),focused:latest.doc.hasFocus(),oldRetained:!old.selected.isCollapsed,place:view.lastLocation.cfi};
+            """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        let expected = try XCTUnwrap(state)
+        XCTAssertEqual(expected["focused"] as? Bool, true)
+        XCTAssertFalse((expected["text"] as? String ?? "").isEmpty)
+        await model.refreshSelectedWebContext()
+        XCTAssertEqual(model.selectedReadingContext()?.text, expected["text"] as? String)
+        XCTAssertEqual(model.selectedReadingContext()?.locator, expected["expected"] as? String, "The current focused selection owns the CFI")
+        let currentPlace = try await web.evaluateJavaScript("window.Leaf.currentLocation()") as? String
+        XCTAssertEqual(currentPlace, expected["place"] as? String)
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: expected), uniformTypeIdentifier: "public.json")
+        attachment.name = "Focused neighboring selection and retained prior range"; attachment.lifetime = .keepAlways; add(attachment)
+    }
     func testSpokenRangeMapsTrimmedInlineRubyBreaksAndLeavesSavedHighlightsInteractiveInBothFlows() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         for scrolling in [false, true] {
