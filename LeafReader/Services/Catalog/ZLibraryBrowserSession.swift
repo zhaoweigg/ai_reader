@@ -49,7 +49,13 @@ import WebKit
         neutralDocument = false
         #if DEBUG
         if fixture {
-            webView.loadHTMLString("<html><body><h1>Offline connection fixture</h1><input aria-label='Website draft'><script>document.cookie='site_access=refreshed-preview; path=/; Secure';</script></body></html>", baseURL: origin)
+            webView.loadHTMLString("""
+                <html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head>
+                <body style='font:17px -apple-system;color:#111;background:white;padding:16px'>
+                <h1 style='font-size:24px'>Offline connection fixture</h1>
+                <input aria-label='Website draft' style='font-size:17px;width:100%;box-sizing:border-box'>
+                <script>document.cookie='site_access=refreshed-preview; path=/; Secure';</script></body></html>
+                """, baseURL: origin)
             return
         }
         #endif

@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class ZLibraryUITests: XCTestCase {
     @MainActor private func launch(feedFailure: Bool = false, details: String? = nil) -> XCUIApplication {
@@ -12,6 +13,32 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor private func capture(_ name:String) {
         let attachment = XCTAttachment(screenshot:XCUIScreen.main.screenshot());attachment.name = name;attachment.lifetime = .keepAlways;add(attachment)
+    }
+    @MainActor private func assertWebsiteFixtureHasVisibleText(_ app: XCUIApplication) {
+        let heading = app.webViews.staticTexts["Offline connection fixture"]
+        XCTAssertTrue(heading.waitForExistence(timeout: 10))
+        XCTAssertTrue(heading.isHittable)
+        let image = app.screenshot().image
+        guard let source = image.cgImage else { return XCTFail("Missing screenshot pixels") }
+        let frame = heading.frame.intersection(app.webViews.firstMatch.frame).intersection(app.frame)
+        guard frame.width > 20, frame.height > 10 else { return XCTFail("Website heading is outside the visible browser") }
+        let scaleX = CGFloat(source.width) / app.frame.width, scaleY = CGFloat(source.height) / app.frame.height
+        let rect = CGRect(x: (frame.minX - app.frame.minX) * scaleX, y: (frame.minY - app.frame.minY) * scaleY,
+                          width: frame.width * scaleX, height: frame.height * scaleY)
+        guard let crop = source.cropping(to: rect) else { return XCTFail("Missing website heading crop") }
+        let width = crop.width, height = crop.height
+        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        let ink = pixels.withUnsafeMutableBytes { buffer -> Int in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return 0 }
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: width, height: height))
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            return stride(from: 0, to: bytes.count, by: 4).reduce(0) { count, i in
+                count + (bytes[i] < 128 && bytes[i + 1] < 128 && bytes[i + 2] < 128 ? 1 : 0)
+            }
+        }
+        XCTAssertGreaterThan(ink, width * height / 200, "Accessibility text must also be visibly rendered in the website")
     }
     @MainActor private func revealCatalogElement(_ element: XCUIElement, app: XCUIApplication) {
         XCTAssertTrue(element.exists)
@@ -315,6 +342,7 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["Offline connection fixture"].waitForExistence(timeout: 10))
         let check = app.buttons["Check connection"]
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: check); waitForExpectations(timeout: 10)
+        assertWebsiteFixtureHasVisibleText(app)
         capture("Website identity ready before connection check")
         app.buttons["Cancel"].tap() // Refresh an already verified account without Check connection.
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
@@ -367,6 +395,7 @@ final class ZLibraryUITests: XCTestCase {
         let draft = app.webViews.textFields["Website draft"]
         XCTAssertTrue(draft.waitForExistence(timeout: 10))
         draft.tap(); draft.typeText("Keep my website draft")
+        assertWebsiteFixtureHasVisibleText(app)
         capture("Offline website draft before closing")
         app.buttons["Cancel"].tap()
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
@@ -374,6 +403,7 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["zlibrarySignIn"].tap()
         XCTAssertTrue(draft.waitForExistence(timeout: 10))
         XCTAssertEqual(draft.value as? String, "Keep my website draft")
+        assertWebsiteFixtureHasVisibleText(app)
         capture("Retained website document after reopening")
         app.buttons["Check connection"].tap()
         XCTAssertTrue(app.staticTexts["Account connected"].waitForExistence(timeout: 10))
