@@ -172,9 +172,9 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         tracking = false; observe?(.ended, touch.location(in: view), touch.timestamp)
         state = .failed
     }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { cancelObservation() }
-    private func cancelObservation() {
-        if tracking { observe?(.cancelled, .zero, 0) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { cancelObservation(touch: touches.first) }
+    private func cancelObservation(touch: UITouch? = nil) {
+        if tracking { observe?(.cancelled, touch?.location(in: view) ?? .zero, touch?.timestamp ?? 0) }
         tracking = false; state = .failed
     }
     override func reset() { tracking = false; super.reset() }
@@ -243,7 +243,12 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         }
         if let scene = source.window?.windowScene {
             deactivationObserver = NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: scene, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.dismiss() }
+                Task { @MainActor in
+                    #if DEBUG
+                    readerSelectionMenuTrace("sceneDeactivated", source: self?.source)
+                    #endif
+                    self?.dismiss()
+                }
             }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
@@ -258,6 +263,9 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         }
     }
     func detach() {
+        #if DEBUG
+        readerSelectionMenuTrace("sourceDetached", source: source)
+        #endif
         dismiss()
         completedSelectionTouchUntil = 0
         if let selectionTouch { selectionTouch.observe = nil; selectionTouch.view?.removeGestureRecognizer(selectionTouch) }
@@ -318,6 +326,9 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         case .began:
             completedSelectionTouchUntil = 0
             bookTouch = BookTouch(start: point, timestamp: timestamp, beganOnHandle: source.selectionHandleContains(point))
+            #if DEBUG
+            readerSelectionMenuTrace("bookTouchBegan", source: source, context: bookTouch?.beganOnHandle, point: point)
+            #endif
         case .moved:
             guard var touch = bookTouch else { return }
             touch.distance = max(touch.distance, hypot(point.x - touch.start.x, point.y - touch.start.y))
@@ -340,6 +351,10 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
             // current range after completion, never gate on the old touch rect.
             if longPress || adjusted { requestCurrentMenu() }
         case .cancelled:
+            #if DEBUG
+            readerSelectionMenuTrace("bookTouchCancelled", source: source, context: timestamp > 0, point: point,
+                duration: bookTouch.map { timestamp - $0.timestamp }, distance: bookTouch?.distance)
+            #endif
             bookTouch = nil; dismiss()
         }
     }
@@ -751,7 +766,7 @@ final class ReaderPDFView: PDFView {
 private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTrace", qos: .utility)
 @MainActor private var selectionMenuTraceStarted = false
 /// Bounded, boolean-only UI-test evidence. No book text, quotes, CFIs, or credentials.
-@MainActor func readerSelectionMenuTrace(_ event: String, source: UIView?, context: Bool? = nil, point: CGPoint? = nil, target: UIView? = nil) {
+@MainActor func readerSelectionMenuTrace(_ event: String, source: UIView?, context: Bool? = nil, point: CGPoint? = nil, target: UIView? = nil, duration: TimeInterval? = nil, distance: CGFloat? = nil) {
     guard ProcessInfo.processInfo.arguments.contains("--ui-testing"),
           let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
     let url = cache.appendingPathComponent("SelectionMenuUITestTrace.json")
@@ -792,6 +807,8 @@ private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTr
         row["selectionRects"] = source.selectionRectangles.prefix(8).map { ["x": $0.minX, "y": $0.minY, "width": $0.width, "height": $0.height] }
     }
     if let context { row["context"] = context }
+    if let duration { row["touchDuration"] = duration }
+    if let distance { row["touchDistance"] = distance }
     if let point { row["x"] = point.x; row["y"] = point.y }
     if let target { row["touchView"] = String(describing: type(of: target)); row["touchInBook"] = source.map { target.isDescendant(of: $0) } ?? false }
     guard let record = try? JSONSerialization.data(withJSONObject: row) else { return }
