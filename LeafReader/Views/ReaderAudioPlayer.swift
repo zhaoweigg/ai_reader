@@ -45,6 +45,9 @@ struct ReaderAudioPlayer: View {
         .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(theme.foreground.opacity(0.08)))
         .foregroundStyle(theme.foreground).tint(theme.accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerAudioPlayer")
+        // The container's value mirrors the visible status ("Generating voice…", "Listening", …)
+        // so automation can wait for audible playback without changing the button labels.
+        .accessibilityValue(status)
     }
     private var status: String {
         switch session.state {

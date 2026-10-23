@@ -585,10 +585,10 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"; app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = "1"
         app.launchEnvironment["LEAF_UI_KOKORO_ROOT"] = root
         app.launch()
-        let status = app.buttons["listeningSettings"], pause = app.buttons["audioPlayPause"]
+        let player = app.otherElements["readerAudioPlayer"], pause = app.buttons["audioPlayPause"]
         func waitForVoice(_ label: String) {
-            // "Generating voice…" first, then "Listening" once the first chunk is audible.
-            expectation(for: NSPredicate(format: "label BEGINSWITH %@", "Listening"), evaluatedWith: status); waitForExpectations(timeout: 90)
+            // The player's value is "Generating voice…" until the first chunk is audible, then "Listening".
+            expectation(for: NSPredicate(format: "value == %@", "Listening"), evaluatedWith: player); waitForExpectations(timeout: 90)
             XCTAssertEqual(pause.label, "Pause listening", label)
             XCTAssertTrue(app.staticTexts["spokenPassage"].exists, label)
         }
@@ -604,7 +604,7 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertFalse(app.buttons["kokoroDownload"].exists)
             if flow == "Pages" { capture("Natural voice installed settings", app: app) }
             app.buttons["listenFromPage"].tap()
-            let generating = status.waitForExistence(timeout: 5) && status.label.hasPrefix("Generating voice")
+            let generating = player.waitForExistence(timeout: 5) && (player.value as? String)?.hasPrefix("Generating voice") == true
             if generating { capture(flow + " natural voice generating", app: app) }
             waitForVoice(flow + " first passage")
             capture(flow + " natural voice listening", app: app)
