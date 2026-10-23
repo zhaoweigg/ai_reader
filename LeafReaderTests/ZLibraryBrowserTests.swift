@@ -314,14 +314,15 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
             return .init(status: 307, headers: ["Location": request.path, "Set-Cookie": "fixture_gate=download; Path=/"], body: "DiamWall")
         }
         let browser = browser(server)
-        var download = request(server, "/eapi/book/download")
-        download.setValue("site_access=kept", forHTTPHeaderField: "Cookie")
-        let result = try await browser.send(download, toFile: true, progress: { _ in })
+        // The download reads the browser jar, never the request's own Cookie header.
+        let kept = try XCTUnwrap(HTTPCookie(properties: [.domain: "127.0.0.1", .path: "/", .name: "site_access", .value: "kept"]))
+        await browser.webView.configuration.websiteDataStore.httpCookieStore.setCookie(kept)
+        let result = try await browser.send(request(server, "/eapi/book/download"), toFile: true, progress: { _ in })
         let file = try XCTUnwrap(result.file)
         defer { try? FileManager.default.removeItem(at: file) }
         XCTAssertEqual(try Data(contentsOf: file), Data("%PDF-fixture".utf8))
         XCTAssertEqual(server.requests.count, 2)
-        XCTAssertEqual(server.requests.last?.headers["cookie"], "site_access=kept; fixture_gate=download")
+        XCTAssertEqual(server.requests.last?.headers["cookie"], "site_access=kept; fixture_gate=download", "Jar cookie kept, challenge cookie added")
         let cookies = await browser.webView.configuration.websiteDataStore.httpCookieStore.allCookies()
         XCTAssertEqual(cookies.first { $0.name == "fixture_gate" }?.value, "download")
     }
