@@ -225,62 +225,63 @@ struct ReaderChatPanel: View {
     }
     private func content(compact: Bool, showsHistory: Bool) -> some View {
         VStack(spacing: compact ? 4 : 8) {
-            Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
-                .frame(maxWidth: .infinity).frame(height: compact ? 12 : 20)
-                .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 3, coordinateSpace: .global)
-                    .onChanged { onResize($0.translation.height, false) }
-                    .onEnded { onResize($0.translation.height, true) })
-                .accessibilityElement().accessibilityLabel("Resize chat")
-                .accessibilityHint("Drag up to expand or down to shrink. Swipe down on the header to close.")
-                .accessibilityIdentifier("readerChatDragHandle")
-                .accessibilityAdjustableAction { direction in
-                    switch direction { case .increment: onResizeStep(56); case .decrement: onResizeStep(-56); @unknown default: break }
-                }
-                .accessibilityAction(named: "Reset chat size", onResetSize)
-                .accessibilityAction(named: "Close chat", close)
-            HStack(spacing: 8) {
-                Image(systemName: "leaf.fill").foregroundStyle(accent)
-                if compact, let selection = session.selectedContext {
-                    Text(selection.text).font(.caption).lineLimit(1).layoutPriority(-1).accessibilityIdentifier("chatSelectedPassage")
-                    Button { session.removeSelection() } label: { Image(systemName: "xmark.circle").frame(width: 44, height: 44) }
-                        .accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
-                    if !isComposing { selectionActions(compact: true) }
-                } else { Text("Ask Leaf").font(.headline).foregroundStyle(accent) }
-                Spacer(minLength: 4)
-                if !isComposing && !compact {
-                    Text(settings.configuration.profile.model).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
-                if !isComposing && !compact {
-                    Menu {
-                        Button("AI settings", systemImage: "gearshape", action: onSettings)
-                        Button("Floating button",systemImage:"circle.lefthalf.filled",action:onButtonSettings)
-                            .accessibilityIdentifier("configureChatButton")
-                        Button("Clear conversation", systemImage: "trash", role: .destructive) { confirmsClear = true }
-                            .accessibilityIdentifier("requestClearConversation")
-                    } label: {
-                        Image(systemName: "ellipsis").frame(width: 44, height: 44)
-                    }.accessibilityLabel("Chat options").accessibilityIdentifier("chatOptions")
-                }
-                if isComposing {
-                    Button { inputFocused = false } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                            .frame(width: 44, height: 44).foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
+                    .frame(maxWidth: .infinity).frame(height: 12)
+                    .contentShape(Rectangle())
+                    .gesture(DragGesture(minimumDistance: 3, coordinateSpace: .global)
+                        .onChanged { onResize($0.translation.height, false) }
+                        .onEnded { onResize($0.translation.height, true) })
+                    .accessibilityElement().accessibilityLabel("Resize chat")
+                    .accessibilityHint("Drag up to expand or down to shrink. Swipe down on the header to close.")
+                    .accessibilityIdentifier("readerChatDragHandle")
+                    .accessibilityAdjustableAction { direction in
+                        switch direction { case .increment: onResizeStep(56); case .decrement: onResizeStep(-56); @unknown default: break }
                     }
-                    .buttonStyle(.plain).accessibilityLabel("Hide keyboard")
+                    .accessibilityAction(named: "Reset chat size", onResetSize)
+                    .accessibilityAction(named: "Close chat", close)
+                HStack(spacing: 6) {
+                    Image(systemName: "leaf.fill").font(.system(size: 15, weight: .medium)).foregroundStyle(accent).accessibilityHidden(true)
+                    if compact, let selection = session.selectedContext {
+                        Text(selection.text).font(.caption).lineLimit(1).layoutPriority(-1).accessibilityIdentifier("chatSelectedPassage")
+                        Button { session.removeSelection() } label: { Image(systemName: "xmark.circle").frame(width: 44, height: 44) }
+                            .accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
+                        if !isComposing { selectionActions(compact: true) }
+                    } else { Text("Ask Leaf").font(.subheadline.weight(.semibold)).foregroundStyle(accent) }
+                    Spacer(minLength: 4)
+                    if !isComposing && !compact {
+                        Text(settings.configuration.profile.model).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    if !isComposing && !compact {
+                        Menu {
+                            Button("AI settings", systemImage: "gearshape", action: onSettings)
+                            Button("Floating button",systemImage:"circle.lefthalf.filled",action:onButtonSettings)
+                                .accessibilityIdentifier("configureChatButton")
+                            Button("Clear conversation", systemImage: "trash", role: .destructive) { confirmsClear = true }
+                                .accessibilityIdentifier("requestClearConversation")
+                        } label: {
+                            Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                        }.accessibilityLabel("Chat options").accessibilityIdentifier("chatOptions")
+                    }
+                    if isComposing {
+                        Button { inputFocused = false } label: {
+                            Image(systemName: "keyboard.chevron.compact.down")
+                                .frame(width: 44, height: 44).foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain).accessibilityLabel("Hide keyboard")
+                    }
+                    Button(action: close) {
+                        Image(systemName: "xmark").font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Close chat").accessibilityIdentifier("closeReaderChat")
                 }
-                Button(action: close) {
-                    Image(systemName: "xmark").font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                        .background(.primary.opacity(0.04), in: Circle())
-                }
-                .buttonStyle(.plain).accessibilityLabel("Close chat").accessibilityIdentifier("closeReaderChat")
+                .contentShape(Rectangle())
+                .simultaneousGesture(dismissDrag)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("readerChatHeader")
             }
-            .contentShape(Rectangle())
-            .simultaneousGesture(dismissDrag)
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("readerChatHeader")
 
             if !showsHistory { Spacer(minLength: 0) }
             if showsHistory {
@@ -389,7 +390,7 @@ struct ReaderChatPanel: View {
             .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 28))
             .overlay(RoundedRectangle(cornerRadius: 28).stroke(.secondary.opacity(0.3), lineWidth: 0.75))
         }
-        .padding(.horizontal, 16).padding(.vertical, compact ? 4 : 8)
+        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, compact ? 4 : 8)
         .foregroundStyle(.primary).tint(accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
         .accessibilityAction(.escape, close)
