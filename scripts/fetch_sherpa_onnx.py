@@ -11,16 +11,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEST = os.path.join(ROOT, "ThirdParty", "sherpa-onnx")
 with open(os.path.join(ROOT, "ThirdParty", "dependencies.json")) as f:
     pin = json.load(f)["sherpa-onnx"]
-BASE = f"{pin['swift-package']}/releases/download/{pin['version']}/"
+ORT = json.load(open(os.path.join(ROOT, "ThirdParty", "dependencies.json")))["onnxruntime"]
+# name -> (url, sha256). sherpa-onnx comes from the Swift package's release (built from
+# the upstream v1.13.8 tag against onnxruntime 1.28.2 headers); onnxruntime comes from
+# the same k2-fsa build that sherpa-onnx's own build-ios.sh downloads. The package's
+# bundled onnxruntime is 1.24.4 and fails sherpa-onnx's API-version check at engine
+# creation, so it is not used.
 ARCHIVES = {
-    "sherpa-onnx.xcframework.zip": pin["sherpa-onnx.xcframework.zip.sha256"],
-    "onnxruntime.xcframework.zip": pin["onnxruntime.xcframework.zip.sha256"],
+    "sherpa-onnx.xcframework.zip": (f"{pin['swift-package']}/releases/download/{pin['version']}/sherpa-onnx.xcframework.zip",
+                                    pin["sherpa-onnx.xcframework.zip.sha256"]),
+    "onnxruntime.xcframework.zip": (ORT["source"], ORT["sha256"]),
 }
 STAMP = os.path.join(DEST, ".fetched")
 
 
 def fetch(name, sha256):
-    url = BASE + name
+    url = ARCHIVES[name][0]
     print(f"downloading {url}", flush=True)
     with urllib.request.urlopen(url, timeout=120) as response:
         data = response.read()
@@ -31,7 +37,7 @@ def fetch(name, sha256):
 
 
 def main():
-    expected = json.dumps(ARCHIVES, sort_keys=True)
+    expected = json.dumps({name: sha for name, (_, sha) in ARCHIVES.items()}, sort_keys=True)
     if os.path.isfile(STAMP) and open(STAMP).read() == expected and all(
         os.path.isdir(os.path.join(DEST, n.replace(".zip", ""))) for n in ARCHIVES
     ):
@@ -39,7 +45,7 @@ def main():
         return
     shutil.rmtree(DEST, ignore_errors=True)
     os.makedirs(DEST)
-    for name, sha256 in ARCHIVES.items():
+    for name, (_, sha256) in ARCHIVES.items():
         data = fetch(name, sha256)
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             for member in archive.infolist():

@@ -19,9 +19,16 @@
     "upstream": "https://github.com/k2-fsa/sherpa-onnx/tree/v1.13.8",
     "swift-package": "https://github.com/willwade/sherpa-onnx-spm",
     "swift-package-commit": "84b485d6357382faefb066d15854fa50d417aad9",
-    "note": "Prebuilt iOS XCFrameworks built by the package's public GitHub Actions workflow from the upstream tag (onnxruntime 1.24.4 static). `python3 scripts/fetch_sherpa_onnx.py` downloads them into ThirdParty/sherpa-onnx (not committed), verifies these checksums, and removes onnxruntime's duplicate root module map, which otherwise collides with sherpa-onnx's in Xcode's header copy step.",
-    "sherpa-onnx.xcframework.zip.sha256": "e592886927846382ee69d9162688cab529657e653120af0cc21fd03f73e98813",
-    "onnxruntime.xcframework.zip.sha256": "5a18cf7abd25800d77e7365f7f05dc8322d2deed8bde8daa57ba2c282fec4ea5"
+    "note": "Prebuilt sherpa-onnx static XCFramework built by the package's public GitHub Actions workflow from the upstream tag (it compiles against onnxruntime 1.28.2 headers; requests ORT API version 28). `python3 scripts/fetch_sherpa_onnx.py` downloads it into ThirdParty/sherpa-onnx (not committed) and verifies this checksum. The package's own onnxruntime.xcframework.zip (1.24.4, API 24) is NOT used: sherpa-onnx refuses it at engine creation ('requested API version [28] is not available'), verified with Leaf's synthesizer code on the Mac.",
+    "sherpa-onnx.xcframework.zip.sha256": "e592886927846382ee69d9162688cab529657e653120af0cc21fd03f73e98813"
+  },
+  "onnxruntime": {
+    "version": "1.28.2",
+    "license": "MIT",
+    "source": "https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.28.2/onnxruntime-ios-static-xcframework-1.28.2.xcframework.zip",
+    "size": 33821118,
+    "sha256": "2c2299acbb461d26d4bac4bc85985d40e7c7177ed6072703ae0846d88b0b4599",
+    "note": "The same k2-fsa onnxruntime iOS static XCFramework that sherpa-onnx's build-ios.sh downloads for v1.13.8 (device + simulator slices). Fetched by scripts/fetch_sherpa_onnx.py; not committed."
   },
   "kokoro-multi-lang-v1_1": {
     "model": "Kokoro-82M v1.1-zh (hexgrad), ONNX export by k2-fsa",
