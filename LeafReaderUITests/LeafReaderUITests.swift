@@ -360,7 +360,10 @@ final class LeafReaderUITests: XCTestCase {
         } else {
             app.buttons["featuredBook"].tap(); showReaderControls(app); app.buttons["Appearance"].tap()
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
-            app.segmentedControls["readingFlow"].buttons[flow].tap(); dismissAppearance(app)
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+            dismissAppearance(app)
         }
     }
     @MainActor private func selectFixturePassage(_ flow: String, app: XCUIApplication) {
