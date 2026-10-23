@@ -105,7 +105,7 @@ final class ReaderEngineTests: XCTestCase {
                     maxDocuments=Math.max(maxDocuments,view.renderer.getContents().length);
                     locator=chunk.nextLocator;
                 }
-                return {ended,count,longest,maxDocuments,parsed:parsed.map(x=>x??0),visited:[...visited],sections:view.book.sections.length,
+                return {ended,count,longest,maxDocuments,parsed:Array.from({length:view.book.sections.length},(_,i)=>parsed[i]??0),visited:[...visited],sections:view.book.sections.length,
                     before,after:view.lastLocation.cfi};
                 """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
             let value = try XCTUnwrap(result)
@@ -127,7 +127,11 @@ final class ReaderEngineTests: XCTestCase {
             try await assertOpened(model, contains: "attention")
             let speaker = RecordingSpeaker()
             let bookmarkURL = try XCTUnwrap(root).appendingPathComponent("speech-\(scrolling).json")
-            let session = ReadAloudSession(bookmarkURL: bookmarkURL, speaker: speaker)
+            let name = "SpeechEngine.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: name)!
+            addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+            let session = ReadAloudSession(bookmarkURL: bookmarkURL, defaults: defaults, speaker: speaker)
+            session.followsText = true
             session.source = { [weak model] locator in try await model?.readAloudPassage(at: locator) }
             session.reveal = { [weak model] locator in await model?.revealReadAloud(at: locator) }
             let oldChapter = model.chapterTitle
@@ -145,7 +149,7 @@ final class ReaderEngineTests: XCTestCase {
             session.pause()
             let saved = try XCTUnwrap(session.bookmark)
             session.stop()
-            let reopened = ReadAloudSession(bookmarkURL: bookmarkURL, speaker: RecordingSpeaker())
+            let reopened = ReadAloudSession(bookmarkURL: bookmarkURL, defaults: defaults, speaker: RecordingSpeaker())
             reopened.source = session.source; reopened.reveal = session.reveal
             reopened.resumeSaved(); try await waitUntil { reopened.state == .playing }
             XCTAssertEqual(reopened.passage?.locator, saved.locator)
@@ -153,7 +157,7 @@ final class ReaderEngineTests: XCTestCase {
             // Source restoration is exact even while native reveal finishes asynchronously.
             let restored = try await model.readAloudPassage(at: saved.locator)
             XCTAssertEqual(restored?.text, reopened.passage?.text)
-            try await model.revealReadAloud(at: saved.locator)
+            await model.revealReadAloud(at: saved.locator)
             let visible = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
             XCTAssertEqual(visible, true)
             reopened.stop()
