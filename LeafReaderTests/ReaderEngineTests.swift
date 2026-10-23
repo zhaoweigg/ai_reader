@@ -635,7 +635,10 @@ final class ReaderEngineTests: XCTestCase {
                     previous.load=async()=>{await sleep(delay);return load();};
                     await view.goTo(last);await r.scrollToAnchor(1);
                     const doc=r.getContents()[0].doc,frame=doc.defaultView.frameElement;
-                    const saved=view.lastLocation.cfi,before=frame.getBoundingClientRect().top;
+                    const marker=view.lastLocation.range.cloneRange();
+                    if(marker.startContainer.nodeType===3)marker.setStart(marker.startContainer,Math.min(marker.startContainer.length,marker.startOffset+40));
+                    marker.collapse(true);
+                    const saved=view.getCFI(last,marker),before=frame.getBoundingClientRect().top;
                     await sleep(80);await r.next();await ready([last-1,last]);await sleep(300);
                     rows.push({delay,active:r.getContents()[0].index,savedVisible:window.Leaf.isLocationVisible(saved),before,after:frame.getBoundingClientRect().top,
                         saved,current:view.lastLocation.cfi});
