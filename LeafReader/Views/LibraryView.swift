@@ -10,6 +10,7 @@ struct LibraryView: View {
     let onImport: () -> Void
     let onOpen: (UUID) -> Void
     @State private var query = ""
+    @FocusState private var searchFocused: Bool
     @State private var filter: LibraryFilter = .all
     @State private var sort: LibrarySort = .recent
     @State private var format: BookFormat?
@@ -74,7 +75,7 @@ struct LibraryView: View {
                         }
                         HStack(spacing: 9) {
                             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                            TextField("Find a title or author", text: $query).accessibilityIdentifier("librarySearch")
+                            TextField("Find a title or author", text: $query).focused($searchFocused).accessibilityIdentifier("librarySearch")
                             if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.accessibilityLabel("Clear search") }
                         }.padding(13).background(theme.surface, in: .rect(cornerRadius: 12))
                         Picker("Library filter", selection: $filter) {
@@ -194,6 +195,7 @@ struct LibraryView: View {
     private func openChat(_ book: Book?) {
         // Close the previous owner before creating a second session for its database.
         guard chat?.flush() != false else { return }
+        searchFocused = false
         chat?.close()
         chatBook = book; conversation = book?.fingerprint ?? "general"
         chat = ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true),
