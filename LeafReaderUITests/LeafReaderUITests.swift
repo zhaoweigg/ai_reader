@@ -417,9 +417,11 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(readingSurface(app).frame.contains(point), "The real long press must target visible book text")
         let chat = app.otherElements["readerChatPanel"]
         XCTAssertFalse(chat.exists && chat.frame.contains(point), "Selection setup must not press the chat panel")
-        app.coordinate(withNormalizedOffset: .zero)
+        let target = app.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: point.x - app.frame.minX, dy: point.y - app.frame.minY))
-            .press(forDuration: 1.2)
+        let evidence = XCTAttachment(string: "time: \(ProcessInfo.processInfo.systemUptime); paragraph: \(frame); intended scene point: \(point); resolved screen point: \(target.screenPoint); book: \(readingSurface(app).frame); app: \(app.frame)")
+        evidence.name = flow + " native selection gesture target"; evidence.lifetime = .keepAlways; add(evidence)
+        target.press(forDuration: 1.2)
     }
     @MainActor private func revealSelectionAction(_ id: String, app: XCUIApplication) -> XCUIElement {
         let menu = app.scrollViews["expandedSelectionMenu"], button = app.buttons["selection-" + id]
