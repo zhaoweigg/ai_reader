@@ -1653,6 +1653,7 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor private func verifySentQuote(flow: String) {
+        continueAfterFailure = false
         let app = launchApp()
         defer { orient(.portrait) }
         func openBook() {
@@ -1676,20 +1677,19 @@ final class LeafReaderUITests: XCTestCase {
         }
         let surface = readingSurface(app)
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", flow == "PDF" ? "Before the town" : "Attention is a way")).firstMatch
-        XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
-        let point = paragraph.coordinate(withNormalizedOffset: CGVector(dx: flow == "PDF" ? 0.15 : 0.3, dy: flow == "PDF" ? 0.25 : 0.1))
-        for _ in 0..<2 {
-            point.press(forDuration: 1.2)
-            if app.menuItems["Copy"].waitForExistence(timeout: 2) || app.menuItems["Ask Leaf"].exists { break }
-            point.tap()
-        }
-        let ask = app.menuItems["Ask Leaf"].exists ? app.menuItems["Ask Leaf"] : app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Ask Leaf", "openReaderChat")).firstMatch
-        XCTAssertTrue(ask.waitForExistence(timeout: 5)); ask.tap()
+        selectFixturePassage(flow, app: app)
+        let menu = app.scrollViews["expandedSelectionMenu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 6))
+        let selectedText = menu.value as? String ?? ""
+        XCTAssertFalse(selectedText.isEmpty)
+        // Target the visible reader action, never a same-label library launcher.
+        let ask = menu.buttons["selection-ask"]
+        XCTAssertTrue(ask.isHittable)
+        XCTAssertTrue(menu.frame.contains(ask.frame))
+        ask.tap()
         let draftQuote = app.staticTexts["chatSelectedPassage"]
         XCTAssertTrue(draftQuote.waitForExistence(timeout: 5))
-        let selectedText = draftQuote.label
-        XCTAssertFalse(selectedText.isEmpty)
+        XCTAssertEqual(draftQuote.label, selectedText, "Ask Leaf must attach the actual selected passage")
         sendChatQuestion("What does this mean?", app: app)
         expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
         waitForExpectations(timeout: 5)
