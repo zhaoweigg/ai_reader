@@ -439,6 +439,32 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame), "Action must scroll fully into view: " + id)
         return button
     }
+    @MainActor private func tapBookOutsideSelectionPalette(_ app: XCUIApplication) {
+        let menu = app.scrollViews["expandedSelectionMenu"]
+        XCTAssertTrue(menu.exists)
+        let book = readingSurface(app).frame.insetBy(dx: 12, dy: 12)
+        var excluded = [menu.frame.insetBy(dx: -12, dy: -12)]
+        let chat = app.otherElements["readerChatPanel"]
+        if chat.exists { excluded.append(chat.frame) }
+        for id in ["selection-start-geometry", "selection-end-geometry"] {
+            let grip = app.descendants(matching: .any)[id].firstMatch
+            if grip.exists { excluded.append(grip.frame.insetBy(dx: -18, dy: -18)) }
+        }
+        let candidates = [0.85, 0.65, 0.4, 0.2].flatMap { y in
+            [0.5, 0.25, 0.75].map { x in CGPoint(x: book.minX + book.width * x, y: book.minY + book.height * y) }
+        }
+        guard let point = candidates.first(where: { point in !excluded.contains { $0.contains(point) } }) else {
+            XCTFail("A visible book point outside the palette and native handles is required"); return
+        }
+        XCTAssertTrue(book.contains(point))
+        XCTAssertFalse(excluded.contains { $0.contains(point) })
+        let target = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: point.x - app.frame.minX, dy: point.y - app.frame.minY))
+        let proof = XCTAttachment(string: "Book: \(book); palette including card: \(excluded[0]); exclusions: \(excluded); intended point: \(point); actual screen point: \(target.screenPoint)")
+        proof.name = "Measured book tap outside selection palette"; proof.lifetime = .keepAlways; add(proof)
+        target.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: menu); waitForExpectations(timeout: 5)
+    }
     @MainActor func testSelectionPaletteThemesFontExtremesAndMarginsInBothFlows() {
         continueAfterFailure = false
         defer { orient(.portrait) }
@@ -580,11 +606,11 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertNotEqual(app.buttons["selection-ask"].value as? String, copiedLocator)
                 capture(flow + (landscape ? " landscape" : " portrait") + " copied native selection remains adjustable", app: app)
                 // A tap explicitly finishes this range before starting another.
-                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+                tapBookOutsideSelectionPalette(app)
                 if app.buttons["closeBook"].exists { readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
                 selectFixturePassage(flow, app: app)
                 XCTAssertTrue(menu.waitForExistence(timeout: 5))
-                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+                tapBookOutsideSelectionPalette(app)
                 if app.buttons["closeBook"].exists { readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
                 let lateDismissedMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
                 lateDismissedMenu.isInverted = true; waitForExpectations(timeout: 0.45)
@@ -689,6 +715,7 @@ final class LeafReaderUITests: XCTestCase {
         revealSelectionAction("copy", app: app).tap()
         XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
         XCTAssertEqual(passage.label, copiedSelection)
+        capture(flow + " native Copy completed with selected quote intact", app: app)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.press(forDuration: 1.2)
         let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]

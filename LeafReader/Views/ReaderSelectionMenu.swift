@@ -43,9 +43,16 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
     }
     let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view
-    actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder, weak presenter] in
+    actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder, weak presenter, weak view] in
+        #if DEBUG
+        readerSelectionMenuTrace("copyInvokedWithMatchingSnapshot", source: view, context: copiedText == context.text)
+        readerSelectionMenuTrace("copyNativeRangeStillMatchesMenu", source: view, context: view?.selectionText == context.text)
+        #endif
         if let copiedText { UIPasteboard.general.string = copiedText }
         else { responder?.perform(#selector(UIResponderStandardEditActions.copy(_:)), with: nil) }
+        #if DEBUG
+        if let copiedText { readerSelectionMenuTrace("copyClipboardMatchesSnapshot", source: view, context: UIPasteboard.general.string == copiedText) }
+        #endif
         presenter?.observeCopiedSelection()
     })
     actions.append(ReaderSelectionAction(title: "iOS text actions", image: "ellipsis", id: "system") { [weak presenter] in presenter?.presentSystemMenu() })
