@@ -17,6 +17,9 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
         app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
+        if let diagnostics = ProcessInfo.processInfo.environment["LEAF_UI_COMPOSER_DIAGNOSTICS"] {
+            app.launchEnvironment["LEAF_UI_COMPOSER_DIAGNOSTICS"] = diagnostics
+        }
         if naturalVoicePack {
             let root = ProcessInfo.processInfo.environment["LEAF_UI_KOKORO_ROOT"] ?? ""
             XCTAssertFalse(root.isEmpty, "Audible playback checks require the real prepared natural voice pack")
