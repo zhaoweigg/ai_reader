@@ -716,11 +716,11 @@ final class ReaderEngineTests: XCTestCase {
                             const divider=frame.parentElement.previousElementSibling;
                             const present=divider?.matches('.chapter-divider')===true;
                             const p=doc.querySelector('p').getBoundingClientRect(),width=doc.defaultView.innerWidth;
-                            const body=doc.body.getBoundingClientRect(),css=doc.defaultView.getComputedStyle(doc.body);
+                            const css=doc.defaultView.getComputedStyle(doc.body);
                             return {present,labels:[...container.querySelectorAll('.chapter-divider')].map(el=>el.textContent),
                                 clear:!present||divider.getBoundingClientRect().bottom<=frame.parentElement.getBoundingClientRect().top+1,
                                 height:present?divider.getBoundingClientRect().height:0,width:p.width,viewportWidth:width,
-                                expectedWidth:body.width-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight),
+                                expectedWidth:parseFloat(css.width)-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight),
                                 visible:window.Leaf.isLocationVisible(window.dividerCFI),sameText:view.resolveCFI(window.dividerCFI).anchor(doc).toString()===window.dividerText,
                                 documents:r.getContents().length,landscape:innerWidth>innerHeight};
                             """, arguments: ["settings": prefs.payload], in: nil, contentWorld: .page) as? [String: Any]
