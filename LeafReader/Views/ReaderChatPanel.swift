@@ -1,86 +1,4 @@
 import SwiftUI
-#if DEBUG
-import GameController
-#endif
-
-#if DEBUG
-/// Opt-in, read-only diagnostics. No text, focus requests, or keyboard changes.
-@MainActor private enum ReaderComposerUITestTrace {
-    private static var timer: Timer?
-    private static var observers: [NSObjectProtocol] = []
-    private static var focused = false
-    private static var composing = false
-    private static let writes = DispatchQueue(label: "Leaf.ComposerUITestTrace", qos: .utility)
-    private static var enabled: Bool {
-        ProcessInfo.processInfo.arguments.contains("--ui-testing") &&
-        ProcessInfo.processInfo.environment["LEAF_UI_COMPOSER_DIAGNOSTICS"] == "1"
-    }
-    static func start(focused: Bool, composing: Bool) {
-        guard enabled else { return }
-        update("appear", focused: focused, composing: composing)
-        guard timer == nil else { return }
-        for name in [UIResponder.keyboardWillShowNotification, UIResponder.keyboardDidShowNotification,
-                     UIResponder.keyboardWillHideNotification, UIResponder.keyboardDidHideNotification,
-                     UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardDidChangeFrameNotification] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { notification in
-                let frame = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
-                Task { @MainActor in record(name.rawValue, keyboardFrame: frame) }
-            })
-        }
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-            Task { @MainActor in record("sample") }
-        }
-    }
-    static func update(_ event: String, focused: Bool, composing: Bool) {
-        guard enabled else { return }
-        self.focused = focused; self.composing = composing
-        record(event)
-    }
-    static func stop() {
-        guard enabled else { return }
-        record("disappear")
-        timer?.invalidate(); timer = nil
-        observers.forEach { NotificationCenter.default.removeObserver($0) }; observers = []
-    }
-    private static func firstResponder(in view: UIView) -> UIView? {
-        if view.isFirstResponder { return view }
-        return view.subviews.lazy.compactMap { firstResponder(in: $0) }.first
-    }
-    private static func record(_ event: String, keyboardFrame: CGRect? = nil) {
-        guard enabled, let testID = ProcessInfo.processInfo.environment["LEAF_UI_TEST_ID"],
-              let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
-        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
-        var row: [String: Any] = ["event": event, "time": Date().timeIntervalSince1970,
-            "uptime": ProcessInfo.processInfo.systemUptime, "focused": focused, "composing": composing,
-            "hardwareKeyboardConnected": GCKeyboard.coalesced != nil,
-            "windows": windows.map { window -> [String: Any] in
-                var state: [String: Any] = ["class": String(describing: type(of: window)), "key": window.isKeyWindow,
-                    "hidden": window.isHidden, "frame": String(describing: window.frame)]
-                if let responder = firstResponder(in: window) {
-                    state["responderClass"] = String(describing: type(of: responder))
-                    state["responderIdentifier"] = responder.accessibilityIdentifier ?? ""
-                    let frame = responder.convert(responder.bounds, to: window)
-                    state["responderFrame"] = String(describing: frame)
-                    if let hit = window.hitTest(CGPoint(x: frame.midX, y: frame.midY), with: nil) {
-                        state["responderCenterHitClass"] = String(describing: type(of: hit))
-                    }
-                }
-                return state
-            }]
-        if let keyboardFrame { row["keyboardFrame"] = String(describing: keyboardFrame) }
-        guard let rowData = try? JSONSerialization.data(withJSONObject: row) else { return }
-        let url = cache.appendingPathComponent("ReaderComposerUITestTrace.json")
-        writes.async {
-            var rows: [[String: Any]] = []
-            if let data = try? Data(contentsOf: url), let previous = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               previous["testID"] as? String == testID { rows = previous["rows"] as? [[String: Any]] ?? [] }
-            if let row = try? JSONSerialization.jsonObject(with: rowData) as? [String: Any] { rows.append(row) }
-            let value: [String: Any] = ["testID": testID, "rows": Array(rows.suffix(400))]
-            if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) { try? data.write(to: url, options: .atomic) }
-        }
-    }
-}
-#endif
 
 enum ReaderChatSizing {
     static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> ClosedRange<CGFloat> {
@@ -512,12 +430,6 @@ struct ReaderChatPanel: View {
         .foregroundStyle(.primary).tint(accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
         .accessibilityAction(.escape, close)
-        #if DEBUG
-        .onAppear { ReaderComposerUITestTrace.start(focused: inputFocused, composing: isComposing) }
-        .onChange(of: inputFocused) { _, value in ReaderComposerUITestTrace.update("focus", focused: value, composing: isComposing) }
-        .onChange(of: isComposing) { _, value in ReaderComposerUITestTrace.update("layout", focused: inputFocused, composing: value) }
-        .onDisappear { ReaderComposerUITestTrace.stop() }
-        #endif
         .confirmationDialog(context == .general ? "Clear your general conversation?" : "Clear this book’s conversation?", isPresented: $confirmsClear, titleVisibility: .visible) {
             Button("Clear conversation", role: .destructive) { session.clear() }
                 .accessibilityIdentifier("confirmClearConversation")
