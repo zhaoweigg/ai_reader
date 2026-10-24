@@ -439,11 +439,73 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame), "Action must scroll fully into view: " + id)
         return button
     }
-    @MainActor func testHorizontalSelectionHandlesInPages() { verifyHorizontalSelectionHandles(flow: "Pages") }
-    @MainActor func testHorizontalSelectionHandlesInScroll() { verifyHorizontalSelectionHandles(flow: "Scroll") }
-    @MainActor func testHorizontalSelectionHandlesInPDF() { verifyHorizontalSelectionHandles(flow: "PDF") }
-    @MainActor func testHorizontalSelectionHandlesInScrollWithSceneGeometryFixture() { verifyHorizontalSelectionHandles(flow: "Scroll", geometryFixture: true) }
-    @MainActor private func verifyHorizontalSelectionHandles(flow: String, geometryFixture: Bool = true) {
+    @MainActor private func tapBookOutsideSelectionPalette(_ app: XCUIApplication) {
+        let menu = app.scrollViews["expandedSelectionMenu"]
+        XCTAssertTrue(menu.exists)
+        let book = readingSurface(app).frame.insetBy(dx: 12, dy: 12)
+        var excluded = [menu.frame.insetBy(dx: -12, dy: -12)]
+        let chat = app.otherElements["readerChatPanel"]
+        if chat.exists { excluded.append(chat.frame) }
+        for id in ["selection-start-geometry", "selection-end-geometry"] {
+            let grip = app.descendants(matching: .any)[id].firstMatch
+            if grip.exists { excluded.append(grip.frame.insetBy(dx: -18, dy: -18)) }
+        }
+        let candidates = [0.85, 0.65, 0.4, 0.2].flatMap { y in
+            [0.5, 0.25, 0.75].map { x in CGPoint(x: book.minX + book.width * x, y: book.minY + book.height * y) }
+        }
+        guard let point = candidates.first(where: { point in !excluded.contains { $0.contains(point) } }) else {
+            XCTFail("A visible book point outside the palette and native handles is required"); return
+        }
+        XCTAssertTrue(book.contains(point))
+        XCTAssertFalse(excluded.contains { $0.contains(point) })
+        let target = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: point.x - app.frame.minX, dy: point.y - app.frame.minY))
+        let proof = XCTAttachment(string: "Book: \(book); palette including card: \(excluded[0]); exclusions: \(excluded); intended point: \(point); actual screen point: \(target.screenPoint)")
+        proof.name = "Measured book tap outside selection palette"; proof.lifetime = .keepAlways; add(proof)
+        target.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: menu); waitForExpectations(timeout: 5)
+    }
+    @MainActor func testSelectionPaletteThemesFontExtremesAndMarginsInBothFlows() {
+        continueAfterFailure = false
+        defer { orient(.portrait) }
+        for flow in ["Pages", "Scroll"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            for (theme, size, margin) in [("Day", 12, "Narrow"), ("Paper", 32, "Wide"), ("Night", 22, "Standard"), ("Sage", 19, "Standard")] {
+                openAppearance(app)
+                app.segmentedControls["appearanceTabs"].buttons["Font"].tap()
+                app.sliders["fontSize"].adjust(toNormalizedSliderPosition: Double(size - 12) / 20)
+                for _ in 0..<20 {
+                    let value = app.sliders["fontSize"].value as? String ?? ""
+                    if value == "\(size) points" { break }
+                    guard let current = Int(value.components(separatedBy: " ").first ?? "") else { break }
+                    app.buttons[current > size ? "decreaseTextSize" : "increaseTextSize"].tap()
+                }
+                XCTAssertEqual(app.sliders["fontSize"].value as? String, "\(size) points")
+                app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+                app.buttons["margins-" + margin].tap()
+                app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+                app.buttons[theme + " theme"].tap(); dismissAppearance(app)
+                selectFixturePassage(flow, app: app)
+                let menu = app.scrollViews["expandedSelectionMenu"]
+                XCTAssertTrue(menu.waitForExistence(timeout: 6))
+                for id in ["ask", "listen", "highlight", "note", "copy", "system"] {
+                    let button = app.buttons["selection-" + id]
+                    XCTAssertTrue(button.isHittable)
+                    XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: -1).contains(button.frame))
+                }
+                XCTAssertLessThanOrEqual(menu.frame.height, 165)
+                capture(flow + " " + theme + " palette at \(size) pt with " + margin + " margins", app: app)
+                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82)).tap()
+                XCTAssertFalse(menu.exists)
+            }
+            app.terminate()
+        }
+    }
+    @MainActor func testSelectionPaletteHandlesInPages() { verifyPaletteSelectionHandles(flow: "Pages") }
+    @MainActor func testSelectionPaletteHandlesInScroll() { verifyPaletteSelectionHandles(flow: "Scroll") }
+    @MainActor func testSelectionPaletteHandlesInPDF() { verifyPaletteSelectionHandles(flow: "PDF") }
+    @MainActor func testSelectionPaletteHandlesInScrollWithSceneGeometryFixture() { verifyPaletteSelectionHandles(flow: "Scroll", geometryFixture: true) }
+    @MainActor private func verifyPaletteSelectionHandles(flow: String, geometryFixture: Bool = true) {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }
@@ -464,7 +526,8 @@ final class LeafReaderUITests: XCTestCase {
                 selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
                 let menu = app.scrollViews["expandedSelectionMenu"]
                 XCTAssertTrue(menu.waitForExistence(timeout: 6))
-                XCTAssertLessThanOrEqual(menu.frame.height, 48, "Selection actions must occupy one compact row")
+                XCTAssertGreaterThanOrEqual(menu.frame.height, 100, "The palette has separate primary and secondary rows")
+                XCTAssertLessThanOrEqual(menu.frame.height, 165, "Keep the palette compact enough to leave the book visible")
                 let initial = menu.value as? String ?? ""
                 let initialLocator = app.buttons["selection-ask"].value as? String ?? ""
                 XCTAssertFalse(initial.isEmpty); XCTAssertFalse(initialLocator.isEmpty)
@@ -472,16 +535,23 @@ final class LeafReaderUITests: XCTestCase {
                     let button = app.buttons["selection-" + id]
                     return button.isHittable && menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame)
                 }
-                XCTAssertGreaterThanOrEqual(firstVisible.count, 4, "Pack at least four labelled actions in a phone row")
-                let askX = app.buttons["selection-ask"].frame.minX
-                _ = revealSelectionAction("system", app: app)
-                if !landscape { XCTAssertLessThan(app.buttons["selection-ask"].frame.minX, askX, "Hidden actions must be reached by sliding the row") }
-                _ = revealSelectionAction("ask", app: app)
-                XCTAssertEqual(menu.value as? String, initial, "Sliding the toolbar cannot change the selected text")
+                XCTAssertEqual(firstVisible.count, 6, "All six actions must be visible without horizontal paging")
+                let ask = app.buttons["selection-ask"], listen = app.buttons["selection-listen"]
+                XCTAssertEqual(ask.frame.midY, listen.frame.midY, accuracy: 1)
+                let lowerRow = ["highlight", "note", "copy", "system"].map { app.buttons["selection-" + $0] }
+                for button in [ask, listen] + lowerRow {
+                    XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+                    XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+                }
+                for button in lowerRow {
+                    XCTAssertGreaterThan(button.frame.minY, ask.frame.maxY)
+                    XCTAssertEqual(button.frame.midY, lowerRow[0].frame.midY, accuracy: 1)
+                }
+                XCTAssertEqual(menu.value as? String, initial, "Presenting the palette cannot change the selected text")
                 let handle = app.descendants(matching: .any)["selection-end-geometry"].firstMatch
                 XCTAssertTrue(handle.waitForExistence(timeout: 3))
                 XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(handle.frame), "Toolbar must leave the native handle clear")
-                capture(flow + (landscape ? " landscape" : " portrait") + " compact menu before native handle drag", app: app)
+                capture(flow + (landscape ? " landscape" : " portrait") + " action palette before native handle drag", app: app)
                 let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: handle.frame.midX, dy: handle.frame.midY))
                 start.press(forDuration: 0.7, thenDragTo: start.withOffset(CGVector(dx: 80, dy: landscape ? 0 : 35)), withVelocity: .slow, thenHoldForDuration: 0.2)
                 if !menu.waitForExistence(timeout: 4) {
@@ -510,7 +580,7 @@ final class LeafReaderUITests: XCTestCase {
                     }
                     XCTAssertGreaterThan(newRanges.reduce(0) { $0 + $1.1.length }, oldRanges.reduce(0) { $0 + $1.1.length })
                 } else { XCTAssertTrue(extended.hasPrefix(initial), "Handle drag must retain the original selected word") }
-                capture(flow + (landscape ? " landscape" : " portrait") + " native selection extended with horizontal menu", app: app)
+                capture(flow + (landscape ? " landscape" : " portrait") + " native selection extended with action palette", app: app)
                 let startHandle = app.descendants(matching: .any)["selection-start-geometry"].firstMatch
                 XCTAssertTrue(startHandle.waitForExistence(timeout: 3))
                 XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(startHandle.frame))
@@ -536,11 +606,11 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertNotEqual(app.buttons["selection-ask"].value as? String, copiedLocator)
                 capture(flow + (landscape ? " landscape" : " portrait") + " copied native selection remains adjustable", app: app)
                 // A tap explicitly finishes this range before starting another.
-                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+                tapBookOutsideSelectionPalette(app)
                 if app.buttons["closeBook"].exists { readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
                 selectFixturePassage(flow, app: app)
                 XCTAssertTrue(menu.waitForExistence(timeout: 5))
-                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+                tapBookOutsideSelectionPalette(app)
                 if app.buttons["closeBook"].exists { readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
                 let lateDismissedMenu = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
                 lateDismissedMenu.isInverted = true; waitForExpectations(timeout: 0.45)
@@ -572,9 +642,9 @@ final class LeafReaderUITests: XCTestCase {
             XCUIDevice.shared.orientation = .portrait
         }
     }
-    @MainActor func testHorizontalSelectionPrimaryActionsInPages() { verifyPrimarySelectionActions("Pages") }
-    @MainActor func testHorizontalSelectionPrimaryActionsInScroll() { verifyPrimarySelectionActions("Scroll") }
-    @MainActor func testHorizontalSelectionPrimaryActionsInPDF() { verifyPrimarySelectionActions("PDF") }
+    @MainActor func testSelectionPalettePrimaryActionsInPages() { verifyPrimarySelectionActions("Pages") }
+    @MainActor func testSelectionPalettePrimaryActionsInScroll() { verifyPrimarySelectionActions("Scroll") }
+    @MainActor func testSelectionPalettePrimaryActionsInPDF() { verifyPrimarySelectionActions("PDF") }
 
     @MainActor private func finishNativeSelectionAfterRotation(_ flow: String, expectedQuote: String, app: XCUIApplication) {
         let surface = readingSurface(app)
@@ -645,6 +715,7 @@ final class LeafReaderUITests: XCTestCase {
         revealSelectionAction("copy", app: app).tap()
         XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
         XCTAssertEqual(passage.label, copiedSelection)
+        capture(flow + " native Copy completed with selected quote intact", app: app)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.press(forDuration: 1.2)
         let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
@@ -1525,7 +1596,19 @@ final class LeafReaderUITests: XCTestCase {
         let typingHeight = panel.frame.height
         hideKeyboardAndWait()
         XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
-        input.tap()
+        // The composer has moved from above the keyboard to the reading panel.
+        // Resolve its current scene geometry and inject a real tap there rather
+        // than asking accessibility to reveal the previously focused element.
+        let reopenedInputFrame = input.frame
+        XCTAssertTrue(input.isHittable)
+        XCTAssertTrue(panel.frame.insetBy(dx: -1, dy: -1).contains(reopenedInputFrame))
+        let focusPoint = CGPoint(x: reopenedInputFrame.midX, y: reopenedInputFrame.midY)
+        let focusTarget = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: focusPoint.x - app.frame.minX, dy: focusPoint.y - app.frame.minY))
+        let focusProof = XCTAttachment(string: "App: \(app.frame); panel: \(panel.frame); input: \(reopenedInputFrame); intended point: \(focusPoint); resolved screen point: \(focusTarget.screenPoint); keyboard before: \(app.keyboards.firstMatch.exists)")
+        focusProof.name = flow + " restored composer focus geometry"; focusProof.lifetime = .keepAlways; add(focusProof)
+        capture(flow + " restored input before keyboard reopen", app: app)
+        focusTarget.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout:5))
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
