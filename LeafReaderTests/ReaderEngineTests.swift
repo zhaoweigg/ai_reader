@@ -258,7 +258,9 @@ final class ReaderEngineTests: XCTestCase {
             let passage = try XCTUnwrap(loaded)
             let name = "RealChineseLine.\(UUID().uuidString)"
             let defaults = UserDefaults(suiteName: name)!
-            let session = ReadAloudSession(defaults: defaults)
+            // Exercise real system callbacks independently of production's
+            // installed Enhanced/Premium policy (covered by quality tests).
+            let session = ReadAloudSession(defaults: defaults, speaker: SystemReadAloudSpeaker())
             defer { session.stop(); defaults.removePersistentDomain(forName: name) }
             session.followsText = true; session.speed = 2
             session.source = { [weak model] locator in try await model?.readAloudPassage(at: locator) }

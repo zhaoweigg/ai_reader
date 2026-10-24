@@ -66,25 +66,31 @@ extension ReadAloudSpeaking {
     private var last: AVSpeechUtterance?
     /// Test hook: false ignores the voice's word ranges so chunk starts alone drive progress.
     var reportsWordRanges = true
+    private let requiresHighQuality: Bool
+    private let installedVoices: () -> [AppleReadingVoice]
     var finished: (() -> Void)?
     var progressed: ((NSRange) -> Void)?
+    // Direct speaker adapters can exercise system timing with simulator voices.
+    // Production routing always opts into the strict downloaded-quality policy.
+    init(requiresHighQuality: Bool = false, installedVoices: @escaping () -> [AppleReadingVoice] = { AppleVoiceCatalog.installed }) {
+        self.requiresHighQuality = requiresHighQuality; self.installedVoices = installedVoices
+        super.init()
+    }
     func speak(_ text: String, language: String, voice: String, speed: Double) throws {
         stop()
         if synthesizer == nil {
             synthesizer = AVSpeechSynthesizer(); synthesizer?.delegate = self
         }
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio)
-        try session.setActive(true)
         let recognizer = NLLanguageRecognizer(); recognizer.processString(text)
         var detected = recognizer.dominantLanguage?.rawValue
         if detected == "zh-Hans" { detected = "zh-CN" }
         if detected == "zh-Hant" { detected = "zh-TW" }
-        let selected = AVSpeechSynthesisVoice(identifier: voice)
-            ?? AVSpeechSynthesisVoice(language: detected ?? language)
-            ?? AVSpeechSynthesisVoice(language: language)
-            ?? AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
-        guard let selected else { throw ReadAloudError.noVoice }
+        // Resolve eligibility before taking over the audio session: a missing
+        // download must leave other audio untouched.
+        let selected = try selectedVoice(identifier: voice, detectedLanguage: detected, sourceLanguage: language)
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio)
+        try session.setActive(true)
         let rate = min(AVSpeechUtteranceMaximumSpeechRate,
             max(AVSpeechUtteranceMinimumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(speed)))
         // A passage with no letters or digits yields no chunks; speak it whole.
@@ -99,6 +105,21 @@ extension ReadAloudSpeaking {
         }
         last = queue.last?.utterance
         for item in queue { synthesizer?.speak(item.utterance) }
+    }
+    private func selectedVoice(identifier: String, detectedLanguage: String?, sourceLanguage: String) throws -> AVSpeechSynthesisVoice {
+        if requiresHighQuality {
+            let language = detectedLanguage?.isEmpty == false ? detectedLanguage!
+                : sourceLanguage.isEmpty ? AVSpeechSynthesisVoice.currentLanguageCode() : sourceLanguage
+            guard let id = AppleVoiceCatalog.preferredIdentifier(selected: identifier, language: language, voices: installedVoices()),
+                  let selected = AVSpeechSynthesisVoice(identifier: id),
+                  selected.quality == .enhanced || selected.quality == .premium else { throw AppleReadingVoiceError.downloadRequired }
+            return selected
+        }
+        guard let selected = AVSpeechSynthesisVoice(identifier: identifier)
+            ?? AVSpeechSynthesisVoice(language: detectedLanguage ?? sourceLanguage)
+            ?? AVSpeechSynthesisVoice(language: sourceLanguage)
+            ?? AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode()) else { throw ReadAloudError.noVoice }
+        return selected
     }
     func pause() { synthesizer?.pauseSpeaking(at: .immediate) }
     func resume() -> Bool { synthesizer?.continueSpeaking() ?? false }
@@ -137,16 +158,23 @@ extension ReadAloudSpeaking {
         defaults.set(followsText, forKey: "audio.followsText")
         if let passage, let spokenRange { highlight?(passage, spokenRange, followsText) }
     } }
-    @Published var speed: Double { didSet { defaults.set(speed, forKey: "audio.speed"); restartVoice() } }
+    @Published var speed: Double { didSet {
+        defaults.set(speed, forKey: Self.speedKey(engine))
+        restartVoice()
+    } }
     @Published var voice: String { didSet { defaults.set(voice, forKey: "audio.voice"); restartVoice() } }
-    /// `.kokoro` speaks with the downloaded on-device model; the iPhone voice is
-    /// used for any passage the model cannot start.
-    @Published var engine: ReadAloudEngine { didSet { defaults.set(engine.rawValue, forKey: "audio.engine"); restartVoice() } }
+    /// Natural voice can fall back only to a downloaded Enhanced/Premium voice.
+    @Published var engine: ReadAloudEngine { didSet {
+        defaults.set(engine.rawValue, forKey: "audio.engine")
+        // Assign even when the rates match: speed's observer restarts the new
+        // engine exactly once, using its rate and the existing listening cursor.
+        speed = Self.savedSpeed(for: engine, defaults: defaults)
+    } }
     /// Kokoro voice id, or empty for automatic selection by the text's script.
     @Published var kokoroVoice: String { didSet { defaults.set(kokoroVoice, forKey: "audio.kokoroVoice"); restartVoice() } }
     /// True while the on-device model is generating audio that has not started playing.
     @Published private(set) var isBuffering = false
-    /// Why the last passage used the iPhone voice although the on-device engine was selected.
+    /// Why the last passage used an eligible Apple voice instead of Natural.
     @Published private(set) var fallbackReason: String?
     var voiceModel: KokoroModelStore? { (speaker as? RoutingReadAloudSpeaker)?.kokoro.store }
     var effectiveVoice: String { engine == .kokoro ? ReadAloudEngine.kokoroPrefix + kokoroVoice : voice }
@@ -173,13 +201,30 @@ extension ReadAloudSpeaking {
     var isPlaying: Bool { state == .playing || state == .loading }
     var speedLabel: String { String(format: "%g×", speed) }
 
+    private static func speedKey(_ engine: ReadAloudEngine) -> String { "audio.speed.\(engine.rawValue)" }
+    private static func savedSpeed(for engine: ReadAloudEngine, defaults: UserDefaults) -> Double {
+        let saved = defaults.double(forKey: speedKey(engine))
+        if saved.isFinite && (0.5...2).contains(saved) { return saved }
+        // Seed both independent preferences from the old shared speed once.
+        // New speed changes never overwrite that migration value or the other engine.
+        let legacy = defaults.double(forKey: "audio.speed")
+        let migrated = legacy.isFinite && (0.5...2).contains(legacy) ? legacy : 1
+        defaults.set(migrated, forKey: speedKey(engine))
+        return migrated
+    }
+
     init(bookmarkURL: URL? = nil, defaults: UserDefaults = .standard, speaker: (any ReadAloudSpeaking)? = nil) {
         self.bookmarkURL = bookmarkURL; self.defaults = defaults
-        self.speaker = speaker ?? RoutingReadAloudSpeaker(system: SystemReadAloudSpeaker(), kokoro: KokoroReadAloudSpeaker(store: .shared))
-        let savedSpeed = defaults.double(forKey: "audio.speed")
-        speed = savedSpeed.isFinite && (0.5...2).contains(savedSpeed) ? savedSpeed : 1
-        voice = defaults.string(forKey: "audio.voice") ?? ""
-        engine = ReadAloudEngine(rawValue: defaults.string(forKey: "audio.engine") ?? "") ?? .system
+        self.speaker = speaker ?? RoutingReadAloudSpeaker(system: SystemReadAloudSpeaker(requiresHighQuality: true), kokoro: KokoroReadAloudSpeaker(store: .shared))
+        let restoredEngine = ReadAloudEngine(rawValue: defaults.string(forKey: "audio.engine") ?? "") ?? .kokoro
+        let appleSpeed = Self.savedSpeed(for: .system, defaults: defaults)
+        let naturalSpeed = Self.savedSpeed(for: .kokoro, defaults: defaults)
+        speed = restoredEngine == .system ? appleSpeed : naturalSpeed
+        let savedVoice = defaults.string(forKey: "audio.voice") ?? ""
+        let eligibleVoice = AppleVoiceCatalog.installed.contains(where: { $0.id == savedVoice }) ? savedVoice : ""
+        voice = eligibleVoice
+        if savedVoice != eligibleVoice { defaults.set(eligibleVoice, forKey: "audio.voice") }
+        engine = restoredEngine
         kokoroVoice = defaults.string(forKey: "audio.kokoroVoice") ?? ""
         followsText = defaults.object(forKey: "audio.followsText") == nil || defaults.bool(forKey: "audio.followsText")
         if let bookmarkURL, let data = try? Data(contentsOf: bookmarkURL) {
@@ -199,6 +244,12 @@ extension ReadAloudSpeaking {
         }
         (self.speaker as? ReadAloudBufferingReporter)?.buffering = { [weak self] buffering in self?.isBuffering = buffering }
         (self.speaker as? RoutingReadAloudSpeaker)?.onFallback = { [weak self] reason in self?.fallbackReason = reason }
+        (self.speaker as? RoutingReadAloudSpeaker)?.failed = { [weak self] error in
+            guard let self, self.passage != nil, self.state == .playing || self.state == .paused else { return }
+            self.error = error.localizedDescription; self.state = .failed; self.isBuffering = false
+            self.saveBookmark(); self.clearHighlight()
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         notificationTokens.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
             guard (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue else { return }
             Task { @MainActor in self?.pause() }
