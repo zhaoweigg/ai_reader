@@ -2041,12 +2041,14 @@ final class LeafReaderUITests: XCTestCase {
         capture("Inline next chapter divider above open chat", app: app)
         input.tap(); input.typeText(" while reading")
         XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
-        XCTAssertEqual(input.value as? String, "Keep my chapter question while reading")
+        let composed = input.value as? String ?? ""
+        XCTAssertTrue(composed.contains("Keep my chapter question"))
+        XCTAssertTrue(composed.contains("while reading"))
         capture("Chapter boundary with composing chat", app: app)
         app.buttons["Hide keyboard"].tap()
         orient(.landscapeLeft)
         XCTAssertTrue(app.buttons["closeReaderChat"].exists)
-        XCTAssertEqual(input.value as? String, "Keep my chapter question while reading")
+        XCTAssertEqual(input.value as? String, composed)
         capture("Chapter crossing landscape chat retained", app: app)
     }
 

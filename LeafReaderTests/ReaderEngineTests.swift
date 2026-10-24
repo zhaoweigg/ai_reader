@@ -711,17 +711,17 @@ final class ReaderEngineTests: XCTestCase {
                         prefs.horizontalMargin = [8, 20, 48][variant]; prefs.theme = [.day, .paper, .night][variant]
                         let metrics = try await web.callAsyncJavaScript("""
                             const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-                            window.Leaf.applyPreferences(settings);await sleep(100);
+                            window.Leaf.applyPreferences(settings);await Promise.all(r.getContents().map(c=>c.doc.fonts.ready));await sleep(100);
                             const current=r.getContents()[0],doc=current.doc,frame=doc.defaultView.frameElement,container=frame.parentElement.parentElement;
                             const divider=frame.parentElement.previousElementSibling;
                             const present=divider?.matches('.chapter-divider')===true;
-                            const p=doc.querySelector('p').getBoundingClientRect(),width=doc.defaultView.innerWidth;
-                            const css=doc.defaultView.getComputedStyle(doc.body);
+                            const widths=[...doc.querySelector('p').getClientRects()].map(rect=>rect.width),width=doc.defaultView.innerWidth;
+                            const css=doc.defaultView.getComputedStyle(doc.body),target=r.getContents().find(c=>c.index===1)?.doc;
                             return {present,labels:[...container.querySelectorAll('.chapter-divider')].map(el=>el.textContent),
                                 clear:!present||divider.getBoundingClientRect().bottom<=frame.parentElement.getBoundingClientRect().top+1,
-                                height:present?divider.getBoundingClientRect().height:0,width:p.width,viewportWidth:width,
+                                height:present?divider.getBoundingClientRect().height:0,widths,viewportWidth:width,currentIndex:current.index,
                                 expectedWidth:parseFloat(css.width)-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight),
-                                visible:window.Leaf.isLocationVisible(window.dividerCFI),sameText:view.resolveCFI(window.dividerCFI).anchor(doc).toString()===window.dividerText,
+                                visible:window.Leaf.isLocationVisible(window.dividerCFI),sameText:!!target&&view.resolveCFI(window.dividerCFI).anchor(target).toString()===window.dividerText,
                                 documents:r.getContents().length,landscape:innerWidth>innerHeight};
                             """, arguments: ["settings": prefs.payload], in: nil, contentWorld: .page) as? [String: Any]
                         let row = try XCTUnwrap(metrics)
@@ -729,24 +729,39 @@ final class ReaderEngineTests: XCTestCase {
                         for key in ["clear", "visible", "sameText"] { XCTAssertEqual(row[key] as? Bool, true, "\(key) \(font) \(size): \(row)") }
                         XCTAssertEqual(row["landscape"] as? Bool, viewport.width > viewport.height)
                         XCTAssertLessThanOrEqual(row["documents"] as? Int ?? 99, scrolling ? 3 : 1)
-                        XCTAssertEqual(try XCTUnwrap(row["width"] as? Double), try XCTUnwrap(row["expectedWidth"] as? Double), accuracy: 2, "The divider must not reserve a text gutter: \(row)")
+                        let expectedWidth = try XCTUnwrap(row["expectedWidth"] as? Double)
+                        for width in try XCTUnwrap(row["widths"] as? [Double]) { XCTAssertEqual(width, expectedWidth, accuracy: 2, "Each text column must keep its normal width: \(row)") }
                         if scrolling { XCTAssertEqual(row["height"] as? Double ?? 0, 52, accuracy: 1) }
                         else { XCTAssertEqual((row["labels"] as? [String])?.count, 0) }
-                        if [12, 22, 32].contains(size) {
-                            _ = try await web.callAsyncJavaScript("""
-                                const r=document.querySelector('foliate-view').renderer,doc=r.getContents()[0].doc,frame=doc.defaultView.frameElement,container=frame.parentElement.parentElement,divider=frame.parentElement.previousElementSibling;
-                                if(divider?.matches('.chapter-divider')){container.scrollTop+=divider.getBoundingClientRect().top-container.getBoundingClientRect().top-container.clientHeight*.4;await new Promise(resolve=>setTimeout(resolve,60));}
-                                """, arguments: [:], in: nil, contentWorld: .page)
-                            let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
-                            let shot = XCTAttachment(image: try XCTUnwrap(image)); shot.name = "Divider \(Int(viewport.width))x\(Int(viewport.height)) scroll=\(scrolling) \(font) \(size)pt \(prefs.theme)"; shot.lifetime = .keepAlways; add(shot)
-                            _ = try await web.callAsyncJavaScript("await document.querySelector('foliate-view').goTo(window.dividerCFI);", arguments: [:], in: nil, contentWorld: .page)
-                        }
                         count += 1
                     }
                 }
             }
         }
-        XCTAssertEqual(count, 252); XCTAssertNil(model.error)
+        XCTAssertEqual(count, 252)
+        // Screenshot framing intentionally moves away from the saved passage.
+        // Do it after the uninterrupted reflow checks, never between font changes.
+        for viewport in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
+            window?.frame.size = viewport; try await Task.sleep(for: .milliseconds(250))
+            for scrolling in [true, false] {
+                for (variant, font) in ["Georgia", "Palatino", "System"].enumerated() {
+                    for size in [12, 22, 32] {
+                        var prefs = base; prefs.scrolling = scrolling; prefs.font = font; prefs.fontSize = Double(size)
+                        prefs.horizontalMargin = [8, 20, 48][variant]; prefs.theme = [.day, .paper, .night][variant]
+                        _ = try await web.callAsyncJavaScript("""
+                            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+                            window.Leaf.applyPreferences(settings);await view.goTo(window.dividerCFI);
+                            await Promise.all(r.getContents().map(c=>c.doc.fonts.ready));await sleep(300);
+                            const doc=r.getContents().find(c=>c.index===1).doc,frame=doc.defaultView.frameElement,container=frame.parentElement.parentElement,divider=frame.parentElement.previousElementSibling;
+                            if(divider?.matches('.chapter-divider')){container.scrollTop+=divider.getBoundingClientRect().top-container.getBoundingClientRect().top-container.clientHeight*.4;await sleep(100);}
+                            """, arguments: ["settings": prefs.payload], in: nil, contentWorld: .page)
+                        let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
+                        let shot = XCTAttachment(image: try XCTUnwrap(image)); shot.name = "Divider \(Int(viewport.width))x\(Int(viewport.height)) scroll=\(scrolling) \(font) \(size)pt \(prefs.theme)"; shot.lifetime = .keepAlways; add(shot)
+                    }
+                }
+            }
+        }
+        XCTAssertNil(model.error)
     }
 
     func testEPUBRendersSearchesAndRestoresPosition() async throws {
