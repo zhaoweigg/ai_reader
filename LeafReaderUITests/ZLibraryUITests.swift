@@ -2,14 +2,20 @@ import XCTest
 import UIKit
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1";app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = "1"
         if feedFailure { app.launchEnvironment["LEAF_UI_ZLIB_FEED_FAILURE"] = "1" }
         if let details { app.launchEnvironment["LEAF_UI_ZLIB_DETAILS"] = details }
-        app.launch();return app
+        if sceneGeometry { app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = "1" }
+        app.launch()
+        if sceneGeometry {
+            registerSceneGeometryCleanup(app: app)
+            setReaderOrientation(.portrait, app: app)
+        }
+        return app
     }
     @MainActor private func capture(_ name:String) {
         let attachment = XCTAttachment(screenshot:XCUIScreen.main.screenshot());attachment.name = name;attachment.lifetime = .keepAlways;add(attachment)
@@ -116,7 +122,8 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
     }
     @MainActor func testSearchOrderInNightLandscapeFailureRetryAndRelaunch() {
-        let app = launch()
+        continueAfterFailure = false
+        let app = launch(sceneGeometry: true)
         app.tabBars.buttons["Settings"].tap();app.buttons["Night theme"].tap();app.tabBars.buttons["Library"].tap()
         app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
@@ -131,7 +138,7 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["zlibraryClearSearch"].tap()
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
-        XCUIDevice.shared.orientation = .landscapeLeft
+        setReaderOrientation(.landscapeLeft, app: app)
         expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);waitForExpectations(timeout:5)
         XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
         capture("Popular feed without search sorting Night landscape")
@@ -142,7 +149,7 @@ final class ZLibraryUITests: XCTestCase {
         capture("Search order menu Night landscape")
         app.buttons["Best match"].firstMatch.tap()
         XCTAssertTrue(app.buttons["zlibrarySearchOrder"].label.contains("Best match"))
-        app.terminate();XCUIDevice.shared.orientation = .portrait;app.launch()
+        app.terminate();app.launch();setReaderOrientation(.portrait, app: app)
         app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
         XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
@@ -209,7 +216,8 @@ final class ZLibraryUITests: XCTestCase {
         }
     }
     @MainActor func testBookCardsShowSizesRatingsAndHonestMissingDataInDarkAppearance() {
-        let app = launch()
+        continueAfterFailure = false
+        let app = launch(sceneGeometry: true)
         app.tabBars.buttons["Settings"].tap()
         app.buttons["Night theme"].tap()
         XCTAssertTrue(app.buttons["Night theme"].isSelected)
@@ -223,7 +231,7 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(unrated.label.contains("PDF · 2.4 MB"))
         XCTAssertTrue(unrated.label.contains("No rating provided"))
         capture("Catalog metadata dark portrait")
-        XCUIDevice.shared.orientation = .landscapeLeft
+        setReaderOrientation(.landscapeLeft, app: app)
         expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app)
         waitForExpectations(timeout:5)
         let scroll = app.scrollViews.firstMatch
@@ -238,7 +246,7 @@ final class ZLibraryUITests: XCTestCase {
             XCTAssertLessThanOrEqual(card.frame.maxY,scroll.frame.maxY - 4)
         }
         capture("Catalog metadata dark landscape")
-        XCUIDevice.shared.orientation = .portrait
+        setReaderOrientation(.portrait, app: app)
         expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app)
         waitForExpectations(timeout:5)
         app.swipeDown()
@@ -414,10 +422,11 @@ final class ZLibraryUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
-        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_REPEAT_GUARD": "1"]
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_REPEAT_GUARD": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1"]
+        registerSceneGeometryCleanup(app: app)
         for landscape in [false, true] {
-            XCUIDevice.shared.orientation = landscape ? .landscapeRight : .portrait
             app.launch()
+            setReaderOrientation(landscape ? .landscapeRight : .portrait, app: app)
             if landscape {
                 expectation(for: NSPredicate { _, _ in app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height }, evaluatedWith: app)
                 waitForExpectations(timeout: 10)
@@ -453,10 +462,12 @@ final class ZLibraryUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
     @MainActor func testSearchSucceedsWhilePopularRedirectDiagnosisRemainsReadable() {
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
-        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_POPULAR_REDIRECT": "1"]
-        XCUIDevice.shared.orientation = .portrait; app.launch()
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_POPULAR_REDIRECT": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1"]
+        registerSceneGeometryCleanup(app: app)
+        app.launch(); setReaderOrientation(.portrait, app: app)
         app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
         app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
@@ -474,11 +485,11 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(details.label.contains("access-check marker: DiamWall"))
         XCTAssertFalse(details.label.contains("fixture-only"))
         capture("Popular307 diagnostic after successful search portrait")
-        // Start a new scene in landscape; require actual interface geometry,
-        // not just the simulator's reported physical-device orientation.
+        // Request actual scene geometry after relaunch; keep the window assertion
+        // independent of the simulator's physical-device motion delivery.
         app.terminate()
-        XCUIDevice.shared.orientation = .landscapeRight
         app.launch()
+        setReaderOrientation(.landscapeRight, app: app)
         let window = app.windows.firstMatch
         expectation(for: NSPredicate { _, _ in window.frame.width > window.frame.height }, evaluatedWith: window)
         waitForExpectations(timeout: 10)
