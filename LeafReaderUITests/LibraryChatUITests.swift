@@ -7,6 +7,9 @@ final class LibraryChatUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mock ? "1" : "0"
         app.launchEnvironment["LEAF_UI_EMPTY_LIBRARY"] = empty ? "1" : "0"
+        // Rotation goes through the public scene-geometry fixture: simulated
+        // device motion alone does not reliably reach UIKit on every simulator.
+        app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = "1"
         app.launch()
         XCTAssertTrue(app.buttons["openLibraryChat"].waitForExistence(timeout: 10))
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
@@ -222,7 +225,7 @@ final class LibraryChatUITests: XCTestCase {
     @MainActor func testLibraryLauncherMovementThemesRotationAndPanelSizing() {
         XCUIDevice.shared.orientation = .portrait
         let app = launch()
-        defer { XCUIDevice.shared.orientation = .portrait }
+        registerSceneGeometryCleanup(app: app)
         let launcher = app.buttons["openLibraryChat"]
         let center = launcher.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         center.press(forDuration: 0.65, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.4)))
@@ -257,8 +260,7 @@ final class LibraryChatUITests: XCTestCase {
         input(app).tap(); input(app).typeText("Keep my draft through rotation")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         capture("Library expanded panel with keyboard")
-        XCUIDevice.shared.orientation = .landscapeLeft
-        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 5)
+        setReaderOrientation(.landscapeLeft, app: app)
         XCTAssertTrue(input(app).isHittable)
         XCTAssertTrue(app.buttons["closeReaderChat"].isHittable)
         XCTAssertEqual(input(app).value as? String, "Keep my draft through rotation")
@@ -266,8 +268,7 @@ final class LibraryChatUITests: XCTestCase {
         app.buttons["Hide keyboard"].tap()
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.frame.maxY)
         capture("Library landscape chat")
-        XCUIDevice.shared.orientation = .portrait
-        expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 5)
+        setReaderOrientation(.portrait, app: app)
         XCTAssertEqual(panel.frame.height, expanded, accuracy: 3)
         XCTAssertEqual(input(app).value as? String, "Keep my draft through rotation")
         handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.1,

@@ -110,9 +110,7 @@ final class KokoroSynthesisWorker: @unchecked Sendable {
         let sentences = KokoroSentenceSplitter.split(text)
         guard !sentences.isEmpty else { throw ReadAloudError.noText }
         let speaker = (KokoroVoiceCatalog.voice(id: voice) ?? KokoroVoiceCatalog.automaticVoice(for: text, language: language)).speaker
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio)
-        try session.setActive(true)
+        try ReadAloudAudioSession.activate()
         let job = KokoroJob(); self.job = job
         remaining = sentences.count; synthesisDone = false; isBuffering = true
         worker.synthesize(sentences, directory: store.modelDirectory, speaker: speaker, speed: speed, job: job, deliver: { sentence, audio in

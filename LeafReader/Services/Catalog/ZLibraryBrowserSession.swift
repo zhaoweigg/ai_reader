@@ -95,11 +95,10 @@ import WebKit
             if contains(url) {
                 let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
                 let matching = cookies.filter { cookie in
-                    let path = url.path.isEmpty ? "/" : url.path
-                    return cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == origin.host
+                    cookie.hostDomain == origin.host
                         && (cookie.expiresDate.map { $0 > Date() } ?? true)
                         && (!cookie.isSecure || url.scheme == "https")
-                        && (path == cookie.path || (path.hasPrefix(cookie.path) && (cookie.path.hasSuffix("/") || path.dropFirst(cookie.path.count).hasPrefix("/"))))
+                        && ZLibraryWebsiteCookie.pathMatches(cookiePath: cookie.path, url: url)
                 }.sorted { $0.path.count > $1.path.count }
                 let header = HTTPCookie.requestHeaderFields(with: matching)["Cookie"]
                 guard matching.count <= 64, (header?.utf8.count ?? 0) <= 16384 else { throw ZLibraryError.response }
@@ -113,7 +112,7 @@ import WebKit
                     if let key = item.key as? String, let value = item.value as? String { result[key] = value }
                 }
                 for cookie in payload.challengeCookies + HTTPCookie.cookies(withResponseHeaderFields: fields, for: responseURL)
-                    where cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == origin.host {
+                    where cookie.hostDomain == origin.host {
                     await webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie)
                 }
                 await contextChanged?(nil)

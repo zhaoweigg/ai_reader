@@ -2,12 +2,10 @@ import { makeBook } from './foliate/view.js';
 import { openBookSource } from './book-source.js';
 import { createAnnotations } from './annotations.js';
 import { readAloudChunk, revealReadAloud, clearReadAloud, setSpokenRange, clearSpokenRange } from './read-aloud.js';
+import { languageText, contributor } from './metadata-text.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const languageText = value => typeof value === 'string' ? value : value ? languageText(Object.values(value)[0]) : '';
-const contributor = value => Array.isArray(value) ? value.map(contributor).filter(Boolean).join(', ')
-    : typeof value === 'string' ? value : languageText(value?.name);
 let view;
 let annotationLayer;
 let searchGeneration;

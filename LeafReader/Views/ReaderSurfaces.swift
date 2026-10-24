@@ -2,6 +2,21 @@ import SwiftUI
 import WebKit
 import PDFKit
 
+extension ReaderModel {
+    /// The selection palette's view of this model. Every closure holds the model
+    /// weakly; a surface drops the hooks when it is dismantled.
+    var selectionHooks: ReaderSelectionHooks {
+        ReaderSelectionHooks(
+            theme: { [weak self] in self?.preferences?.theme ?? .day },
+            context: { [weak self] in self?.selectedReadingContext() },
+            action: { [weak self] intent, snapshot in self?.askAboutSelection(intent, context: snapshot) },
+            annotation: { [weak self] in self?.selectedAnnotationSelection() },
+            annotate: { [weak self] intent, snapshot in self?.annotateSelection(intent, selection: snapshot) },
+            listeningPosition: { [weak self] in self?.listeningSelectionPosition() },
+            listen: { [weak self] locator in self?.listeningRequest = ReaderListeningRequest(locator: locator) })
+    }
+}
+
 @MainActor private func installReaderGestures(on view: UIView, target: NSObject, delegate: UIGestureRecognizerDelegate, tap action: Selector, pan panAction: Selector) {
     let tap = UITapGestureRecognizer(target: target, action: action)
     let doubleTap = UITapGestureRecognizer()
@@ -30,14 +45,8 @@ struct WebBookSurface: UIViewRepresentable {
         configuration.setURLSchemeHandler(ReaderAssetHandler(bookURL: url, format: format, assets: assets), forURLScheme: "leaf-reader")
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         let view = ReaderWebView(frame: .zero, configuration: configuration)
-        view.selectionTheme = { [weak model] in model?.preferences?.theme ?? .day }
-        view.selectionContext = { [weak model] in model?.selectedReadingContext() }
+        view.selectionHooks = model.selectionHooks
         view.prepareSelection = { [weak model] in await model?.refreshSelectedWebContext() }
-        view.onSelectionAction = { [weak model] intent, snapshot in model?.askAboutSelection(intent, context: snapshot) }
-        view.listeningPosition = { [weak model] in model?.listeningSelectionPosition() }
-        view.onListen = { [weak model] locator in model?.listeningRequest = ReaderListeningRequest(locator: locator) }
-        view.annotationSelection = { [weak model] in model?.selectedAnnotationSelection() }
-        view.onAnnotationAction = { [weak model] intent, snapshot in model?.annotateSelection(intent, selection: snapshot) }
         view.isOpaque = false
         view.backgroundColor = UIColor(preferences.theme.background)
         view.clipsToBounds = true
@@ -64,14 +73,8 @@ struct WebBookSurface: UIViewRepresentable {
         view.navigationDelegate = nil
         view.scrollView.delegate = nil
         coordinator.onReaderTap = nil
-        (view as? ReaderWebView)?.listeningPosition = nil
-        (view as? ReaderWebView)?.selectionTheme = nil
-        (view as? ReaderWebView)?.onListen = nil
-        (view as? ReaderWebView)?.selectionContext = nil
+        (view as? ReaderWebView)?.selectionHooks = ReaderSelectionHooks()
         (view as? ReaderWebView)?.prepareSelection = nil
-        (view as? ReaderWebView)?.onSelectionAction = nil
-        (view as? ReaderWebView)?.annotationSelection = nil
-        (view as? ReaderWebView)?.onAnnotationAction = nil
         if coordinator.model.webView === view { coordinator.model.webView = nil }
         view.stopLoading()
         view.evaluateJavaScript("window.Leaf?.close()") { [weak view] _, _ in
@@ -126,13 +129,7 @@ struct PDFBookSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> PDFView {
         context.coordinator.onReaderTap = onReaderTap
         let view = ReaderPDFView()
-        view.selectionTheme = { [weak model] in model?.preferences?.theme ?? .day }
-        view.selectionContext = { [weak model] in model?.selectedReadingContext() }
-        view.onSelectionAction = { [weak model] intent, snapshot in model?.askAboutSelection(intent, context: snapshot) }
-        view.listeningPosition = { [weak model] in model?.listeningSelectionPosition() }
-        view.onListen = { [weak model] locator in model?.listeningRequest = ReaderListeningRequest(locator: locator) }
-        view.annotationSelection = { [weak model] in model?.selectedAnnotationSelection() }
-        view.onAnnotationAction = { [weak model] intent, snapshot in model?.annotateSelection(intent, selection: snapshot) }
+        view.selectionHooks = model.selectionHooks
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
@@ -149,13 +146,7 @@ struct PDFBookSurface: UIViewRepresentable {
     }
     static func dismantleUIView(_ view: PDFView, coordinator: Coordinator) {
         coordinator.onReaderTap = nil
-        (view as? ReaderPDFView)?.listeningPosition = nil
-        (view as? ReaderPDFView)?.selectionTheme = nil
-        (view as? ReaderPDFView)?.onListen = nil
-        (view as? ReaderPDFView)?.selectionContext = nil
-        (view as? ReaderPDFView)?.onSelectionAction = nil
-        (view as? ReaderPDFView)?.annotationSelection = nil
-        (view as? ReaderPDFView)?.onAnnotationAction = nil
+        (view as? ReaderPDFView)?.selectionHooks = ReaderSelectionHooks()
         view.document = nil
         if coordinator.model.pdfView === view { coordinator.model.pdfView = nil }
     }

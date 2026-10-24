@@ -111,11 +111,7 @@ final class ChatGPTAccountStore: ObservableObject {
         do {
             let updated = try await refresh.value
             guard !blocked.contains(accountID) else { throw ChatGPTError.signInRequired }
-            if revisions[accountID] != revision {
-                guard let current = accounts.first(where: { $0.id == accountID }), let tokens = current.tokens else { throw ChatGPTError.signInRequired }
-                guard current.canUsePlan else { throw ChatGPTError.permissionMissing }
-                return tokens.accessToken
-            }
+            if revisions[accountID] != revision { return try currentAccessToken(accountID) }
             var values = accounts
             guard let index = values.firstIndex(where: { $0.id == accountID }), values[index].tokens != nil else { throw ChatGPTError.signInRequired }
             values[index] = updated
@@ -124,16 +120,19 @@ final class ChatGPTAccountStore: ObservableObject {
             guard updated.canUsePlan else { throw ChatGPTError.permissionMissing }
             return token
         } catch ChatGPTError.invalidRefresh {
-            if revisions[accountID] != revision {
-                guard let current = accounts.first(where: { $0.id == accountID }), let tokens = current.tokens else { throw ChatGPTError.signInRequired }
-                guard current.canUsePlan else { throw ChatGPTError.permissionMissing }
-                return tokens.accessToken
-            }
+            if revisions[accountID] != revision { return try currentAccessToken(accountID) }
             var values = accounts
             if let index = values.firstIndex(where: { $0.id == accountID }) { values[index].tokens = nil }
             try persist(values, selected: selectedID); accounts = values; cancelRequests(accountID)
             throw ChatGPTError.invalidRefresh
         }
+    }
+    /// The stored token after a sign-in or sign-out replaced the account mid-refresh;
+    /// the refreshed token belongs to a session that no longer exists.
+    private func currentAccessToken(_ accountID: String) throws -> String {
+        guard let current = accounts.first(where: { $0.id == accountID }), let tokens = current.tokens else { throw ChatGPTError.signInRequired }
+        guard current.canUsePlan else { throw ChatGPTError.permissionMissing }
+        return tokens.accessToken
     }
     func loadModels() async {
         guard let id = selectedID, !isLoadingModels else { return }

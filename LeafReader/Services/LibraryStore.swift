@@ -48,15 +48,8 @@ final class LibraryStore: ObservableObject {
             let existing = Set(books.map(\.fingerprint))
             do {
                 let imported = try await Task.detached(priority: .userInitiated) { try disk.prepareImport(url, existing: existing) }.value
-                do {
-                    try disk.save(books + [imported])
-                    books.append(imported)
-                    await refreshMetadata(imported.id)
-                    importCount += 1
-                } catch {
-                    try? disk.removeFiles(imported)
-                    throw error
-                }
+                try await commit(imported, on: disk)
+                importCount += 1
             } catch { failures.append("\(url.lastPathComponent): \(error.localizedDescription)") }
         }
         isImporting = false
@@ -88,11 +81,17 @@ final class LibraryStore: ObservableObject {
         book.catalogSource = catalogID
         if !title.isEmpty { book.title = title }
         if !author.isEmpty { book.author = author }
+        try await commit(book, on: disk)
+        importCount = 1
+        return self.book(book.id) ?? book
+    }
+
+    /// Publishes a prepared import only after the manifest holds it; a failed
+    /// manifest write removes the copied files again. Metadata loads afterwards.
+    private func commit(_ book: Book, on disk: LibraryDisk) async throws {
         do { try disk.save(books + [book]); books.append(book) }
         catch { try? disk.removeFiles(book); throw error }
         await refreshMetadata(book.id)
-        importCount = 1
-        return self.book(book.id) ?? book
     }
 
     func refreshMissingMetadata() async {

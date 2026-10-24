@@ -366,7 +366,7 @@ private struct ZLibrarySignInWebView: UIViewRepresentable {
         }
         var fixture = false
         #if DEBUG
-        fixture = store.isPreview && ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_WEBSITE_FIXTURE"] == "1"
+        fixture = store.isPreview && UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE")
         #endif
         browser.presentWebsite(fixture: fixture)
         return browser.webView

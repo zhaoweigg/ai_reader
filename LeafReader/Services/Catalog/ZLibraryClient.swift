@@ -69,9 +69,18 @@ struct ZLibraryWebsiteCookie: Codable, Equatable {
     }
     func applies(to url: URL, now: Date = Date()) -> Bool {
         guard valid, expires.map({ $0 > now }) ?? true else { return false }
+        return Self.pathMatches(cookiePath: path, url: url)
+    }
+    /// RFC 6265 path matching: the cookie path is the request path itself or one of its directory prefixes.
+    static func pathMatches(cookiePath path: String, url: URL) -> Bool {
         let requestPath = url.path.isEmpty ? "/" : url.path
         return requestPath == path || (requestPath.hasPrefix(path) && (path.hasSuffix("/") || requestPath.dropFirst(path.count).hasPrefix("/")))
     }
+}
+
+extension HTTPCookie {
+    /// The cookie's domain as a bare host, for comparison with an origin host.
+    var hostDomain: String { domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
 }
 
 struct ZLibrarySession: Codable, Equatable {
@@ -515,7 +524,7 @@ private final class ZLibraryTransfer: NSObject, URLSessionDataDelegate, @uncheck
     private static func challengeCookies(_ response: HTTPURLResponse, for url: URL) -> [HTTPCookie]? {
         guard let host = url.host?.lowercased(), let fields = response.allHeaderFields as? [String: String] else { return nil }
         return HTTPCookie.cookies(withResponseHeaderFields: fields, for: url).filter { cookie in
-            let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            let domain = cookie.hostDomain.lowercased()
             return host == domain || host.hasSuffix("." + domain)
         }
     }

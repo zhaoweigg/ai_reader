@@ -104,11 +104,30 @@ final class ZLibraryStore: ObservableObject {
         #if DEBUG
         isPreview = client.map { $0 is UITestZLibraryClient } ?? false
         #endif
-        do { session = try credentials.read(account: origin.url.absoluteString).flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode(ZLibrarySession.self, from: $0) }
-            if session?.valid != true { session = nil }
+        do {
+            session = try savedSession(for: origin)
             websiteUserAgent = session?.userAgent
             accountName = session == nil ? "" : "Saved account"
         } catch { connectionError = "Leaf could not read your saved connection. Unlock your device and try again." }
+    }
+    /// The Keychain session of an origin; an unreadable or invalid record counts as none.
+    private func savedSession(for origin: ZLibraryOrigin) throws -> ZLibrarySession? {
+        let saved = try credentials.read(account: origin.url.absoluteString)
+            .flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONDecoder().decode(ZLibrarySession.self, from: $0) }
+        return saved?.valid == true ? saved : nil
+    }
+    private func store(_ session: ZLibrarySession, for origin: ZLibraryOrigin) throws {
+        let encoded = try JSONEncoder().encode(session)
+        try credentials.write(String(decoding: encoded, as: UTF8.self), account: origin.url.absoluteString)
+    }
+    /// Discards every in-flight request, cached page and status that belonged to
+    /// the previous account or origin.
+    private func resetCatalog() {
+        generation = UUID(); clearSnapshots(); downloadTask?.cancel(); downloadTask = nil
+        cancelCatalogLoad(); searchPage = 0; canLoadMore = false; searchLimitReached = false
+        books = []; error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
+        loading = false; verifying = false; downloadingID = nil; progress = nil
     }
     func changeAddress(_ address: String) async throws {
         let next = try ZLibraryOrigin(address)
@@ -116,8 +135,7 @@ final class ZLibraryStore: ObservableObject {
         try await disconnect()
         signInData = nil
         origin = next; defaults.set(next.url.absoluteString, forKey: "zlibrary.origin")
-        session = try credentials.read(account: next.url.absoluteString).flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode(ZLibrarySession.self, from: $0) }
-        if session?.valid != true { session = nil }
+        session = try savedSession(for: next)
         websiteUserAgent = session?.userAgent
     }
     func clearWebsite() async {
@@ -129,11 +147,8 @@ final class ZLibraryStore: ObservableObject {
     }
     func disconnect() async throws {
         try credentials.write(nil, account: origin.url.absoluteString)
-        generation = UUID(); clearSnapshots(); downloadTask?.cancel(); downloadTask = nil
-        cancelCatalogLoad(); activeQuery = ""; searchPage = 0; canLoadMore = false; searchLimitReached = false
-        session = nil; connected = false; accountName = ""; remaining = nil; books = []; error = nil; connectionError = nil
-        requestDiagnostic = nil; websiteAccessNeeded = false
-        loading = false; verifying = false; downloadingID = nil; progress = nil
+        resetCatalog(); activeQuery = ""
+        session = nil; connected = false; accountName = ""; remaining = nil; connectionError = nil
         await clearWebsite()
     }
     func connect(_ candidate: ZLibrarySession) async -> Bool {
@@ -145,14 +160,10 @@ final class ZLibraryStore: ObservableObject {
             let profile = try await client.profile(origin: source, session: candidate)
             try Task.checkCancellation()
             guard token == generation else { return false }
-            let encoded = try JSONEncoder().encode(candidate)
-            do { try credentials.write(String(decoding: encoded, as: UTF8.self), account: source.url.absoluteString) }
+            do { try store(candidate, for: source) }
             catch { throw ZLibraryError.service("Leaf could not save the Z-Library session in Keychain. Your existing connection was kept.") }
             // Discard responses started with the old account (including anonymous feed loads).
-            generation = UUID(); clearSnapshots(); downloadTask?.cancel(); downloadTask = nil
-            cancelCatalogLoad(); searchPage = 0; canLoadMore = false; searchLimitReached = false
-            loading = false; verifying = false; downloadingID = nil; progress = nil; books = []
-            error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
+            resetCatalog()
             session = candidate; connected = true; accountName = profile.name; remaining = profile.remaining
             return true
         } catch {
@@ -162,10 +173,9 @@ final class ZLibraryStore: ObservableObject {
     }
     func cookieCandidate(_ cookies: [HTTPCookie]) -> ZLibrarySession? {
         let trusted = cookies.filter { cookie in
-            let domain = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
             // This cookie store belongs to an HTTPS-only sign-in view. Verify account identity
             // over HTTPS even when the website omits Secure on its own issued cookies.
-            return domain == origin.url.host && (cookie.expiresDate.map { $0 > Date() } ?? true)
+            cookie.hostDomain == origin.url.host && (cookie.expiresDate.map { $0 > Date() } ?? true)
         }
         guard let user = trusted.first(where: { $0.name == "remix_userid" }), let key = trusted.first(where: { $0.name == "remix_userkey" }) else { return nil }
         let context = trusted.filter { !["remix_userid", "remix_userkey"].contains($0.name) }.map {
@@ -188,8 +198,7 @@ final class ZLibraryStore: ObservableObject {
               let candidate = cookieCandidate(cookies),
               candidate.userID == existing.userID, candidate.userKey == existing.userKey,
               candidate != existing else { return }
-        let encoded = try JSONEncoder().encode(candidate)
-        try credentials.write(String(decoding: encoded, as: UTF8.self), account: source.url.absoluteString)
+        try store(candidate, for: source)
         session = candidate
     }
     func seedWebsite() async {
@@ -217,8 +226,7 @@ final class ZLibraryStore: ObservableObject {
         for context in session.websiteCookies ?? [] where context.valid && (context.expires.map { $0 > Date() } ?? true) {
             guard token == generation else { return }
             if browser == nil, cookies.contains(where: {
-                $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == source.url.host &&
-                $0.name == context.name && $0.path == context.path && ($0.expiresDate.map { $0 > Date() } ?? true)
+                $0.hostDomain == source.url.host && $0.name == context.name && $0.path == context.path && ($0.expiresDate.map { $0 > Date() } ?? true)
             }) { continue }
             var properties: [HTTPCookiePropertyKey: Any] = [.domain: source.url.host!, .path: context.path, .name: context.name, .value: context.value, .secure: "TRUE"]
             if let expires = context.expires { properties[.expires] = expires }
@@ -276,10 +284,7 @@ final class ZLibraryStore: ObservableObject {
             // Keychain may have been locked during app initialization. Retry on use
             // rather than making the user reconnect an account that is still saved.
             if session == nil {
-                session = try credentials.read(account: source.url.absoluteString)
-                    .flatMap { $0.data(using: .utf8) }
-                    .flatMap { try? JSONDecoder().decode(ZLibrarySession.self, from: $0) }
-                if session?.valid != true { session = nil }
+                session = try savedSession(for: source)
                 websiteUserAgent = session?.userAgent
                 connectionError = nil
             }
@@ -388,35 +393,34 @@ final class ZLibraryStore: ObservableObject {
 struct UITestZLibraryClient: ZLibraryServing {
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
         try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()
-        if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_DETAILS"] == "failure" { throw ZLibraryError.metadata }
+        if UITesting.environment("LEAF_UI_ZLIB_DETAILS") == "failure" { throw ZLibraryError.metadata }
         return ZLibraryBook(remoteID: book.remoteID, hash: book.hash, title: book.title, author: book.author,
-                            fileExtension: ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_DETAILS"] == "unsupported" ? "djvu" : "epub",
+                            fileExtension: UITesting.environment("LEAF_UI_ZLIB_DETAILS") == "unsupported" ? "djvu" : "epub",
                             size: "1 MB", language: "English", year: "2026", coverURL: book.coverURL,
                             rating: book.rating, ratingCount: book.ratingCount, qualityScore: book.qualityScore)
     }
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile { ZLibraryProfile(name:"Preview account",remaining:5) }
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook] {
         try await guardRepeatedRequest("popular-" + (session?.userID ?? "anonymous"), path: "book/most-popular", session: session)
-        if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_WEBSITE_FIXTURE"] == "1", let session,
+        if UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE"), let session,
            session.userAgent == nil || session.websiteCookies?.contains(where: { $0.name == "site_access" && $0.value == "refreshed-preview" }) != true {
             throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
         }
-        if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_FEED_FAILURE"] == "1", session != nil {
+        if UITesting.flag("LEAF_UI_ZLIB_FEED_FAILURE"), session != nil {
             throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
         }
-        if ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_POPULAR_REDIRECT"] == "1", session != nil {
+        if UITesting.flag("LEAF_UI_ZLIB_POPULAR_REDIRECT"), session != nil {
             let transport = UITestPopularRedirectTransport()
             return try await ZLibraryClient(transport: transport).popular(origin: origin, session: session)
         }
         return sampleBooks()
     }
     private func guardRepeatedRequest(_ key: String, path: String, session: ZLibrarySession?) async throws {
-        guard ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_REPEAT_GUARD"] == "1",
-              await UITestCatalogRequestHistory.shared.repeated(key) else { return }
+        guard UITesting.flag("LEAF_UI_ZLIB_REPEAT_GUARD"), await UITestCatalogRequestHistory.shared.repeated(key) else { return }
         _ = try await ZLibraryClient(transport: UITestPopularRedirectTransport()).object(path, origin: try ZLibraryOrigin("https://catalog.example"), session: session, form: path == "book/search" ? ["message": "fixture"] : nil)
     }
     private func sampleBooks() -> [ZLibraryBook] {
-        let sparse = ProcessInfo.processInfo.environment["LEAF_UI_ZLIB_DETAILS"] != nil
+        let sparse = UITesting.environment("LEAF_UI_ZLIB_DETAILS") != nil
         return [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:sparse ? "" : "epub",size:sparse ? "" : "1.8 MB",language:sparse ? "" : "English",year:sparse ? "" : "2026",coverURL:nil,rating:4.6,ratingCount:52,qualityScore:4.2),
          ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"2.4 MB",language:"English",year:"2026",coverURL:nil)]
     }

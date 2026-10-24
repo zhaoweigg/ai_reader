@@ -8,6 +8,10 @@ enum ReaderSelectionIntent: String, CaseIterable {
     var title: String {
         switch self { case .ask: return "Ask a question"; case .explain: return "Explain selection"; case .summarize: return "Summarize selection" }
     }
+    /// The label of the chat shortcut that prepares this intent's draft.
+    var shortTitle: String {
+        switch self { case .ask: return "Ask Leaf"; case .explain: return "Explain"; case .summarize: return "Summarize" }
+    }
     func prompt(for text: String) -> String {
         let chinese = ReaderChatMessage.usesChinese(text)
         switch self {
@@ -27,18 +31,33 @@ struct ReaderSelectionRequest: Identifiable, Equatable {
 enum ReaderAnnotationIntent: Equatable { case highlight, note }
 struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String }
 
-@MainActor private func showSelectionMenu(view: UIView, presenter: ReaderSelectionMenuPresenter, theme: ReadingTheme, context: ReadingChatContext?, action: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?, annotation: BookAnnotationSelection?, annotate: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?, position: String?, listen: ((String) -> Void)?) {
+/// What a book surface asks the reader model when its native selection settles.
+/// Getters snapshot the current selection; the optional handlers perform an
+/// action and are the only ones that can be missing (then the menu is not shown).
+struct ReaderSelectionHooks {
+    var theme: () -> ReadingTheme = { .day }
+    var context: () -> ReadingChatContext? = { nil }
+    var action: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?
+    var annotation: () -> BookAnnotationSelection? = { nil }
+    var annotate: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?
+    var listeningPosition: () -> String? = { nil }
+    var listen: ((String) -> Void)?
+}
+
+@MainActor private func showSelectionMenu(on view: UIView, presenter: ReaderSelectionMenuPresenter, hooks: ReaderSelectionHooks) {
+    let context = hooks.context()
     #if DEBUG
     readerSelectionMenuTrace("request", source: view, context: context?.isEmpty == false)
     #endif
-    guard let context, !context.isEmpty, let action else { return }
+    guard let context, !context.isEmpty, let action = hooks.action else { return }
+    let annotation = hooks.annotation()
     var actions = [ReaderSelectionAction(title: "Ask Leaf", image: "leaf", id: "ask") { action(.ask, context) }]
-    if let position, let listen {
-        actions.append(ReaderSelectionAction(title: "Listen from here", image: "headphones", id: "listen") { listen(position) })
+    if let position = hooks.listeningPosition(), let listen = hooks.listen {
+        actions.append(ReaderSelectionAction(title: "Listen from here", compactTitle: "Listen", image: "headphones", id: "listen") { listen(position) })
     }
-    if let annotation, let annotate {
+    if let annotation, let annotate = hooks.annotate {
         actions.append(ReaderSelectionAction(title: "Highlight", image: "highlighter", id: "highlight") { annotate(.highlight, annotation) })
-        actions.append(ReaderSelectionAction(title: "Add Note", image: "square.and.pencil", id: "note") { annotate(.note, annotation) })
+        actions.append(ReaderSelectionAction(title: "Add Note", compactTitle: "Note", image: "square.and.pencil", id: "note") { annotate(.note, annotation) })
     }
     let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view
@@ -55,25 +74,20 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
         presenter?.observeCopiedSelection()
     })
     #if DEBUG
-    if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+    if UITesting.isActive {
         let identity = (view is PDFView && annotation?.pdfRanges.isEmpty == false)
             ? context.locator + "|" + (annotation?.pdfRanges.map { "\($0.page):\($0.location):\($0.length)" }.joined(separator: ",") ?? "")
             : context.locator
         for index in actions.indices { actions[index].testLocator = identity }
     }
     #endif
-    presenter.schedule(on: view, actions: actions, theme: theme, selectedText: context.text)
+    presenter.schedule(on: view, actions: actions, theme: hooks.theme(), selectedText: context.text)
 }
 
 private extension UIView {
     var selectionCharacterRanges: [PDFAnnotationRange] {
         guard let pdf = self as? PDFView, let document = pdf.document, let selection = pdf.currentSelection else { return [] }
-        return selection.pages.flatMap { page in
-            (0..<selection.numberOfTextRanges(on: page)).map { index in
-                let range = selection.range(at: index, on: page)
-                return PDFAnnotationRange(page: document.index(for: page), location: range.location, length: range.length)
-            }
-        }
+        return selection.annotationRanges(in: document)
     }
     var selectionStatusBarOwner: UIViewController? {
         var responder: UIResponder? = self
@@ -145,12 +159,17 @@ private extension UIView {
 
 private struct ReaderSelectionAction {
     let title: String
+    /// The label on the palette button; the full title stays the accessibility label.
+    let compactTitle: String
     let image: String
     let id: String
     let perform: () -> Void
     #if DEBUG
     var testLocator: String?
     #endif
+    init(title: String, compactTitle: String? = nil, image: String, id: String, perform: @escaping () -> Void) {
+        self.title = title; self.compactTitle = compactTitle ?? title; self.image = image; self.id = id; self.perform = perform
+    }
 }
 
 /// Observes completion without recognizing a gesture. WebKit/PDFKit keep sole
@@ -252,7 +271,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
                 }
             }
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+            if UITesting.isActive {
                 orientationObserver = NotificationCenter.default.addObserver(forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main) { [weak source] _ in
                     Task { @MainActor in readerSelectionMenuTrace("deviceOrientationChanged", source: source) }
                 }
@@ -262,6 +281,16 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
             }
             #endif
         }
+    }
+    /// Follows the source into and out of a window: observing its selection while
+    /// attached and tearing everything down when it leaves.
+    func windowDidChange(for source: UIView, request: @escaping () async -> Void) {
+        if source.window == nil { detach() } else { observeSelection(on: source, request: request) }
+    }
+    /// The passive native-selection observer presents Leaf's palette; a book
+    /// surface must never expose a second, stock toolbar from UIKit's cached hierarchy.
+    static func suppressStockMenu(_ builder: UIMenuBuilder) {
+        builder.replaceChildren(ofMenu: .root) { _ in [] }
     }
     func detach() {
         #if DEBUG
@@ -524,7 +553,7 @@ private final class ReaderSelectionOverlayView: UIView {
         for (index, action) in actions.enumerated() {
             let button = UIButton(type: .system)
             var configuration = UIButton.Configuration.plain()
-            configuration.title = action.id == "listen" ? "Listen" : action.id == "note" ? "Note" : action.title
+            configuration.title = action.compactTitle
             configuration.image = UIImage(systemName: action.image)
             configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 19, weight: .regular)
             configuration.imagePlacement = .top
@@ -596,7 +625,7 @@ private final class ReaderSelectionOverlayView: UIView {
         scrollView.isScrollEnabled = contentHeight > scrollView.bounds.height
         scrollView.contentOffset = .zero
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+        if UITesting.isActive {
             // Geometry only, for real native handle drags; this does not create
             // a selection or intercept touches in the book.
             var markers: [UIAccessibilityElement] = []
@@ -636,66 +665,39 @@ private final class ReaderSelectionOverlayView: UIView {
 
 final class ReaderWebView: WKWebView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
+    var selectionHooks = ReaderSelectionHooks()
+    /// Refreshes the renderer's selection snapshot before the palette reads it.
     var prepareSelection: (() async -> Void)?
     func selectionDidChange() { selectionMenu.selectionDidChange() }
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { selectionMenu.detach() }
-        else {
-            selectionMenu.observeSelection(on: self) { [weak self] in
-                let prepare = self?.prepareSelection
-                await prepare?()
-                guard !Task.isCancelled, let self, self.window != nil else { return }
-                self.showSelectionActions()
-            }
+        selectionMenu.windowDidChange(for: self) { [weak self] in
+            let prepare = self?.prepareSelection
+            await prepare?()
+            guard !Task.isCancelled, let self, self.window != nil else { return }
+            showSelectionMenu(on: self, presenter: self.selectionMenu, hooks: self.selectionHooks)
         }
     }
-    var selectionTheme: (() -> ReadingTheme)?
-    var listeningPosition: (() -> String?)?
-    var onListen: ((String) -> Void)?
-    var selectionContext: (() -> ReadingChatContext?)?
-    var onSelectionAction: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?
-    var annotationSelection: (() -> BookAnnotationSelection?)?
-    var onAnnotationAction: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
-        // The passive native-selection observer presents Leaf's palette.
-        // Never expose a second, stock toolbar from UIKit's cached hierarchy.
-        builder.replaceChildren(ofMenu: .root) { _ in [] }
-    }
-    private func showSelectionActions() {
-        showSelectionMenu(view: self, presenter: selectionMenu, theme: selectionTheme?() ?? .day, context: selectionContext?(), action: onSelectionAction, annotation: annotationSelection?(), annotate: onAnnotationAction, position: listeningPosition?(), listen: onListen)
+        ReaderSelectionMenuPresenter.suppressStockMenu(builder)
     }
 }
 
 final class ReaderPDFView: PDFView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
+    var selectionHooks = ReaderSelectionHooks()
     var isHandlingNativeSelectionGesture: Bool { selectionMenu.isHandlingNativeSelectionGesture }
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { selectionMenu.detach() }
-        else {
-            selectionMenu.observeSelection(on: self) { [weak self] in
-                guard !Task.isCancelled, let self, self.window != nil else { return }
-                self.showSelectionActions()
-            }
+        selectionMenu.windowDidChange(for: self) { [weak self] in
+            guard !Task.isCancelled, let self, self.window != nil else { return }
+            showSelectionMenu(on: self, presenter: self.selectionMenu, hooks: self.selectionHooks)
         }
     }
-    var selectionTheme: (() -> ReadingTheme)?
-    var listeningPosition: (() -> String?)?
-    var onListen: ((String) -> Void)?
-    var selectionContext: (() -> ReadingChatContext?)?
-    var onSelectionAction: ((ReaderSelectionIntent, ReadingChatContext) -> Void)?
-    var annotationSelection: (() -> BookAnnotationSelection?)?
-    var onAnnotationAction: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
-        // The passive native-selection observer presents Leaf's palette.
-        // Never expose a second, stock toolbar from UIKit's cached hierarchy.
-        builder.replaceChildren(ofMenu: .root) { _ in [] }
-    }
-    private func showSelectionActions() {
-        showSelectionMenu(view: self, presenter: selectionMenu, theme: selectionTheme?() ?? .day, context: selectionContext?(), action: onSelectionAction, annotation: annotationSelection?(), annotate: onAnnotationAction, position: listeningPosition?(), listen: onListen)
+        ReaderSelectionMenuPresenter.suppressStockMenu(builder)
     }
 }
 
@@ -705,8 +707,7 @@ private let selectionMenuTraceQueue = DispatchQueue(label: "Leaf.SelectionMenuTr
 @MainActor private var selectionMenuTraceStarted = false
 /// Bounded, boolean-only UI-test evidence. No book text, quotes, CFIs, or credentials.
 @MainActor func readerSelectionMenuTrace(_ event: String, source: UIView?, context: Bool? = nil, point: CGPoint? = nil, target: UIView? = nil, duration: TimeInterval? = nil, distance: CGFloat? = nil) {
-    guard ProcessInfo.processInfo.arguments.contains("--ui-testing"),
-          let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+    guard UITesting.isActive, let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
     let url = cache.appendingPathComponent("SelectionMenuUITestTrace.json")
     let reset = !selectionMenuTraceStarted; selectionMenuTraceStarted = true
     let input = source?.selectionFirstResponder as? UITextInput

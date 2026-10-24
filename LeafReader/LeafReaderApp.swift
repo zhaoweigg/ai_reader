@@ -17,22 +17,20 @@ struct LeafReaderApp: App {
         var chatCredentials = KeychainChatCredentials()
         var catalogClient: (any ZLibraryServing)?
         #if DEBUG
-        let process = ProcessInfo.processInfo
-        if process.arguments.contains("--ui-testing"),
-           let value = process.environment["LEAF_UI_TEST_ID"], let id = UUID(uuidString: value) {
+        if let id = UITesting.testID {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUITests/\(id.uuidString)", isDirectory: true)
-            seedSamples = process.environment["LEAF_UI_EMPTY_LIBRARY"] != "1"
+            seedSamples = !UITesting.flag("LEAF_UI_EMPTY_LIBRARY")
             chatCredentials.service = "com.leafreader.uitests.\(id.uuidString)"
-            if process.environment["LEAF_UI_CHAT_MOCK"] == "1" {
-                chatProvider = UITestChatProvider(slow: process.environment["LEAF_UI_CHAT_SLOW"] == "1")
+            if UITesting.flag("LEAF_UI_CHAT_MOCK") {
+                chatProvider = UITestChatProvider(slow: UITesting.flag("LEAF_UI_CHAT_SLOW"))
             }
-            defaults = UserDefaults(suiteName: "com.leafreader.uitests.\(id.uuidString)") ?? .standard
-            if process.environment["LEAF_UI_CHATGPT_CONNECTED"] == "1" {
+            defaults = UITesting.defaults
+            if UITesting.flag("LEAF_UI_CHATGPT_CONNECTED") {
                 chatGPT = ChatGPTAccountStore.uiTestConnected(defaults: defaults, credentials: chatCredentials)
             }
-            if process.environment["LEAF_UI_ZLIB_MOCK"] == "1" {
+            if UITesting.flag("LEAF_UI_ZLIB_MOCK") {
                 catalogClient = UITestZLibraryClient()
-                if process.environment["LEAF_UI_ZLIB_WEBSITE_FIXTURE"] == "1" {
+                if UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE") {
                     defaults.set("https://catalog.example", forKey: "zlibrary.origin")
                 }
             }

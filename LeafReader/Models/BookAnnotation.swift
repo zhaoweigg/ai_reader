@@ -57,7 +57,7 @@ struct BookAnnotation: Identifiable, Codable, Equatable {
               note.count <= 20_000, chapter.count <= 300, locator.count <= 8_000,
               fraction.isFinite, (0...1).contains(fraction) else { return false }
         if pdfRanges.isEmpty { return locator.hasPrefix("epubcfi(") && locator.hasSuffix(")") }
-        return pdfRanges.count <= 128 && pdfRanges.allSatisfy(\.valid) && locator == "pdf:\(pdfRanges[0].page)"
+        return pdfRanges.count <= 128 && pdfRanges.allSatisfy(\.valid) && locator == PDFLocator.page(pdfRanges[0].page)
     }
     func matches(_ selection: BookAnnotationSelection) -> Bool {
         locator == selection.locator && pdfRanges == selection.pdfRanges
