@@ -428,16 +428,34 @@ final class LeafReaderUITests: XCTestCase {
         evidence.name = flow + " native selection gesture target"; evidence.lifetime = .keepAlways; add(evidence)
         target.press(forDuration: 1.2)
     }
-    @MainActor private func revealSelectionAction(_ id: String, app: XCUIApplication) -> XCUIElement {
-        let menu = app.scrollViews["expandedSelectionMenu"], button = app.buttons["selection-" + id]
+    @MainActor private func assertFiveActionRibbon(_ app: XCUIApplication) {
+        let menu = app.scrollViews["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
-        for _ in 0..<4 {
-            if button.isHittable && menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame) { return button }
-            if button.frame.midX < menu.frame.midX { menu.swipeRight() } else { menu.swipeLeft() }
+        let identifiers = ["ask", "listen", "highlight", "note", "copy"]
+        XCTAssertEqual(menu.buttons.count, identifiers.count, "Exactly the five approved actions appear, without overflow")
+        let row = app.buttons["selection-ask"].frame, bounds = menu.frame
+        for id in identifiers {
+            let button = app.buttons["selection-" + id]
+            XCTAssertTrue(button.isHittable, "Action is immediately available: " + id)
+            let frame = button.frame
+            XCTAssertTrue(bounds.insetBy(dx: -1, dy: -1).contains(frame), "No action needs horizontal paging: " + id)
+            XCTAssertGreaterThanOrEqual(frame.width, 44)
+            XCTAssertGreaterThanOrEqual(frame.height, 44)
+            XCTAssertEqual(frame.midY, row.midY, accuracy: 1, "Every action belongs to the same row")
         }
-        XCTAssertTrue(button.isHittable, "Selection action must be reachable: " + id)
-        XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame), "Action must scroll fully into view: " + id)
-        return button
+        XCTAssertGreaterThanOrEqual(bounds.height, 44)
+        XCTAssertLessThanOrEqual(bounds.height, 84, "Keep the reference design's compact single row")
+        for id in ["system", "more", "lookup", "translate", "share", "back"] {
+            XCTAssertFalse(app.buttons["selection-" + id].exists, "No overflow or unapproved action: " + id)
+        }
+        XCTAssertEqual(app.menuItems.count, 0, "The reader never presents the stock selection toolbar")
+        for (label, identifier) in [("Copy", "selection-copy"), ("Look Up", "selection-lookup"), ("Translate", "selection-translate"), ("Leaf actions", "selection-none")] {
+            XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", label, identifier)).firstMatch.exists, "No stock selection action: " + label)
+        }
+    }
+    @MainActor private func revealSelectionAction(_ id: String, app: XCUIApplication) -> XCUIElement {
+        assertFiveActionRibbon(app)
+        return app.buttons["selection-" + id]
     }
     @MainActor private func tapBookOutsideSelectionPalette(_ app: XCUIApplication) {
         let menu = app.scrollViews["expandedSelectionMenu"]
@@ -488,12 +506,7 @@ final class LeafReaderUITests: XCTestCase {
                 selectFixturePassage(flow, app: app)
                 let menu = app.scrollViews["expandedSelectionMenu"]
                 XCTAssertTrue(menu.waitForExistence(timeout: 6))
-                for id in ["ask", "listen", "highlight", "note", "copy", "system"] {
-                    let button = app.buttons["selection-" + id]
-                    XCTAssertTrue(button.isHittable)
-                    XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: -1).contains(button.frame))
-                }
-                XCTAssertLessThanOrEqual(menu.frame.height, 165)
+                assertFiveActionRibbon(app)
                 capture(flow + " " + theme + " palette at \(size) pt with " + margin + " margins", app: app)
                 readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82)).tap()
                 XCTAssertFalse(menu.exists)
@@ -526,27 +539,10 @@ final class LeafReaderUITests: XCTestCase {
                 selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
                 let menu = app.scrollViews["expandedSelectionMenu"]
                 XCTAssertTrue(menu.waitForExistence(timeout: 6))
-                XCTAssertGreaterThanOrEqual(menu.frame.height, 100, "The palette has separate primary and secondary rows")
-                XCTAssertLessThanOrEqual(menu.frame.height, 165, "Keep the palette compact enough to leave the book visible")
+                assertFiveActionRibbon(app)
                 let initial = menu.value as? String ?? ""
                 let initialLocator = app.buttons["selection-ask"].value as? String ?? ""
                 XCTAssertFalse(initial.isEmpty); XCTAssertFalse(initialLocator.isEmpty)
-                let firstVisible = ["ask", "listen", "highlight", "note", "copy", "system"].filter { id in
-                    let button = app.buttons["selection-" + id]
-                    return button.isHittable && menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame)
-                }
-                XCTAssertEqual(firstVisible.count, 6, "All six actions must be visible without horizontal paging")
-                let ask = app.buttons["selection-ask"], listen = app.buttons["selection-listen"]
-                XCTAssertEqual(ask.frame.midY, listen.frame.midY, accuracy: 1)
-                let lowerRow = ["highlight", "note", "copy", "system"].map { app.buttons["selection-" + $0] }
-                for button in [ask, listen] + lowerRow {
-                    XCTAssertGreaterThanOrEqual(button.frame.width, 44)
-                    XCTAssertGreaterThanOrEqual(button.frame.height, 44)
-                }
-                for button in lowerRow {
-                    XCTAssertGreaterThan(button.frame.minY, ask.frame.maxY)
-                    XCTAssertEqual(button.frame.midY, lowerRow[0].frame.midY, accuracy: 1)
-                }
                 XCTAssertEqual(menu.value as? String, initial, "Presenting the palette cannot change the selected text")
                 let handle = app.descendants(matching: .any)["selection-end-geometry"].firstMatch
                 XCTAssertTrue(handle.waitForExistence(timeout: 3))
@@ -554,11 +550,8 @@ final class LeafReaderUITests: XCTestCase {
                 capture(flow + (landscape ? " landscape" : " portrait") + " action palette before native handle drag", app: app)
                 let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: handle.frame.midX, dy: handle.frame.midY))
                 start.press(forDuration: 0.7, thenDragTo: start.withOffset(CGVector(dx: 80, dy: landscape ? 0 : 35)), withVelocity: .slow, thenHoldForDuration: 0.2)
-                if !menu.waitForExistence(timeout: 4) {
-                    let leaf = app.menuItems["Leaf actions"].exists ? app.menuItems["Leaf actions"] : app.buttons["Leaf actions"]
-                    XCTAssertTrue(leaf.waitForExistence(timeout: 3)); leaf.tap()
-                }
-                XCTAssertTrue(menu.waitForExistence(timeout: 4))
+                XCTAssertTrue(menu.waitForExistence(timeout: 5), "Native grip changes must restore the ribbon directly")
+                assertFiveActionRibbon(app)
                 let extended = menu.value as? String ?? ""
                 XCTAssertGreaterThan(extended.count, initial.count, "Dragging the real native end handle must extend the passage in " + flow)
                 let extendedLocator = app.buttons["selection-ask"].value as? String ?? ""
@@ -679,7 +672,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(passage.label, selected)
         let originalLocator = app.buttons["selection-ask"].value as? String ?? ""
         XCTAssertFalse(originalLocator.isEmpty)
-        for id in ["ask", "listen", "highlight", "note", "copy"] { _ = revealSelectionAction(id, app: app) }
+        assertFiveActionRibbon(app)
         XCTAssertEqual(menu.value as? String, selected)
         XCTAssertEqual(app.buttons["selection-ask"].value as? String, originalLocator)
         capture(flow + " expanded selection menu all actions", app: app)
@@ -698,7 +691,7 @@ final class LeafReaderUITests: XCTestCase {
         let landscapeLocator = app.buttons["selection-ask"].value as? String ?? ""
         XCTAssertFalse(landscapeSelection.isEmpty); XCTAssertFalse(landscapeLocator.isEmpty)
         XCTAssertEqual(passage.label, landscapeSelection)
-        for id in ["ask", "listen", "highlight", "note", "copy"] { _ = revealSelectionAction(id, app: app) }
+        assertFiveActionRibbon(app)
         XCTAssertEqual(menu.value as? String, landscapeSelection)
         XCTAssertEqual(app.buttons["selection-ask"].value as? String, landscapeLocator)
         capture(flow + " expanded selection menu landscape", app: app)
@@ -732,11 +725,11 @@ final class LeafReaderUITests: XCTestCase {
         selectFixturePassage("Pages", app: app)
         let menu = app.scrollViews["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
-        for id in ["ask", "listen", "highlight", "note", "copy", "system"] { _ = revealSelectionAction(id, app: app) }
+        assertFiveActionRibbon(app)
         XCTAssertFalse(app.menuItems["Leaf actions"].exists || app.buttons["Leaf actions"].exists, "The native toolbar must not cover the expanded actions")
         let firstSelection = menu.value as? String ?? ""
         XCTAssertFalse(firstSelection.isEmpty)
-        capture("Selection overlay receives all six actions", app: app)
+        capture("Selection ribbon receives all five actions", app: app)
         revealSelectionAction("copy", app: app).tap(); XCTAssertFalse(menu.exists)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.typeText("Keep my menu question")
@@ -771,82 +764,30 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["chatSelectedPassage"].label, changedSelection)
         capture("Selection window cleared and question restored after reopening", app: app)
     }
-    @MainActor func testMoreStaysInPaletteInPages() { verifyMorePalette("Pages") }
-    @MainActor func testMoreStaysInPaletteInScroll() { verifyMorePalette("Scroll") }
-    @MainActor func testMoreStaysInPaletteInPDF() { verifyMorePalette("PDF") }
-    @MainActor private func verifyMorePalette(_ flow: String) {
+    @MainActor func testFiveActionRibbonHasNoOverflowOrStockToolbarInPages() { verifyFiveActionRibbon("Pages") }
+    @MainActor func testFiveActionRibbonHasNoOverflowOrStockToolbarInScroll() { verifyFiveActionRibbon("Scroll") }
+    @MainActor func testFiveActionRibbonHasNoOverflowOrStockToolbarInPDF() { verifyFiveActionRibbon("PDF") }
+    @MainActor private func verifyFiveActionRibbon(_ flow: String) {
         continueAfterFailure = false
         let app = launchApp(); openSelectionFixture(flow, app: app)
         defer { orient(.portrait) }
         for landscape in [false, true] {
             if landscape { orient(.landscapeLeft) }
-            selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
-            let menu = app.scrollViews["expandedSelectionMenu"]
-            XCTAssertTrue(menu.waitForExistence(timeout: 6))
-            let selected = menu.value as? String ?? ""
-            let locator = app.buttons["selection-ask"].value as? String ?? ""
-            XCTAssertFalse(selected.isEmpty); XCTAssertFalse(locator.isEmpty)
-            for _ in 0..<2 {
-                app.buttons["selection-system"].tap()
-                XCTAssertTrue(app.buttons["selection-back"].waitForExistence(timeout: 4))
-                XCTAssertEqual(menu.label, "More selection actions")
-                XCTAssertEqual(menu.value as? String, selected)
-                XCTAssertEqual(app.buttons["selection-ask"].value as? String, locator)
-                for id in ["ask", "listen", "lookup", "translate", "share", "back"] {
-                    let button = app.buttons["selection-" + id]
-                    XCTAssertTrue(button.isHittable)
-                    XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: -1).contains(button.frame))
-                    XCTAssertGreaterThanOrEqual(button.frame.width, 44)
-                    XCTAssertGreaterThanOrEqual(button.frame.height, 44)
-                }
-                XCTAssertEqual(app.menuItems.count, 0, "More must never expose UIKit's old selection bar")
-                for (label, identifier) in [("Copy", "selection-copy"), ("Look Up", "selection-lookup"), ("Translate", "selection-translate")] {
-                    let stock = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", label, identifier)).firstMatch
-                    XCTAssertFalse(stock.exists, "No duplicate stock selection action: " + label)
-                }
-                capture(flow + (landscape ? " landscape" : " portrait") + " More stays in palette", app: app)
-                app.buttons["selection-back"].tap()
-                XCTAssertTrue(app.buttons["selection-system"].exists)
-                XCTAssertFalse(app.buttons["selection-lookup"].exists)
-                XCTAssertEqual(menu.value as? String, selected)
+            for cycle in 0..<2 {
+                selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
+                let menu = app.scrollViews["expandedSelectionMenu"]
+                assertFiveActionRibbon(app)
+                let selected = menu.value as? String ?? ""
+                let locator = app.buttons["selection-ask"].value as? String ?? ""
+                XCTAssertFalse(selected.isEmpty); XCTAssertFalse(locator.isEmpty)
+                XCTAssertEqual(menu.value as? String, selected, "Showing the ribbon must retain the selected passage")
+                capture(flow + (landscape ? " landscape" : " portrait") + " five-action ribbon cycle \(cycle + 1)", app: app)
+                tapBookOutsideSelectionPalette(app)
+                XCTAssertEqual(app.menuItems.count, 0, "Dismissing the ribbon must not reveal a cached stock toolbar")
+                if app.buttons["closeBook"].exists { readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
             }
-            capture(flow + (landscape ? " landscape" : " portrait") + " Back restores primary palette", app: app)
-            tapBookOutsideSelectionPalette(app)
-            XCTAssertEqual(app.menuItems.count, 0)
         }
-    }
-    @MainActor func testPaletteLookupAndShareOpenWithoutStockSelectionBar() {
-        continueAfterFailure = false
-        let app = launchApp(); openSelectionFixture("Pages", app: app)
-        selectFixturePassage("Pages", app: app)
-        app.buttons["selection-system"].tap(); app.buttons["selection-lookup"].tap()
-        XCTAssertTrue(app.otherElements["selectionLookupSheet"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.menuItems.count, 0)
-        capture("Palette Look Up opens dictionary directly", app: app)
-        app.buttons["Done"].tap()
-        selectFixturePassage("Pages", app: app)
-        app.buttons["selection-system"].tap(); app.buttons["selection-share"].tap()
-        let sheet = app.otherElements["selectionShareSheet"]
-        XCTAssertTrue(sheet.waitForExistence(timeout: 5)); XCTAssertEqual(app.menuItems.count, 0)
-        capture("Palette Share opens share sheet directly", app: app)
-        sheet.swipeDown()
-        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: sheet); waitForExpectations(timeout: 5)
-        XCTAssertTrue(app.webViews["bookWebView"].exists)
-    }
-    @MainActor func testPaletteTranslateOpensWithoutStockSelectionBar() {
-        continueAfterFailure = false
-        let app = launchApp(); openSelectionFixture("Pages", app: app)
-        selectFixturePassage("Pages", app: app)
-        app.buttons["selection-system"].tap(); app.buttons["selection-translate"].tap()
-        let close = app.buttons["closeSelectionTranslation"]
-        XCTAssertTrue(close.waitForExistence(timeout: 5))
-        XCTAssertEqual(app.menuItems.count, 0)
-        XCTAssertFalse(app.scrollViews["expandedSelectionMenu"].exists)
-        capture("Palette Translate opens directly without old selection toolbar", app: app)
-        if close.isHittable { close.tap() }
-        else { app.swipeDown() }
-        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: close); waitForExpectations(timeout: 5)
-        XCTAssertTrue(app.webViews["bookWebView"].exists)
+        app.terminate()
     }
     @MainActor func testSpeechProgressHighlightsVisibleTextInPagesScrollAndPDF() {
         continueAfterFailure = false

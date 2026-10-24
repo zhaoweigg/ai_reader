@@ -1,6 +1,4 @@
 import UIKit
-import SwiftUI
-import Translation
 import UIKit.UIGestureRecognizerSubclass
 import WebKit
 import PDFKit
@@ -56,25 +54,6 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
         #endif
         presenter?.observeCopiedSelection()
     })
-    var more = [ReaderSelectionAction(title: "Look Up", image: "character.book.closed", id: "lookup") { [weak view] in
-        let sheet = UIReferenceLibraryViewController(term: context.text)
-        sheet.view.accessibilityIdentifier = "selectionLookupSheet"
-        view?.presentSelectionUtility(sheet)
-    }]
-    if #available(iOS 17.4, *) {
-        more.append(ReaderSelectionAction(title: "Translate", image: "translate", id: "translate") { [weak view] in
-            view?.presentSelectionUtility(ReaderSelectionTranslationController(text: context.text))
-        })
-    }
-    more.append(ReaderSelectionAction(title: "Share", image: "square.and.arrow.up", id: "share") { [weak view] in
-        guard let view else { return }
-        let sheet = UIActivityViewController(activityItems: [context.text], applicationActivities: nil)
-        sheet.view.accessibilityIdentifier = "selectionShareSheet"
-        sheet.popoverPresentationController?.sourceView = view
-        sheet.popoverPresentationController?.sourceRect = view.selectionAnchor
-        view.presentSelectionUtility(sheet)
-    })
-    actions.append(ReaderSelectionAction(title: "More", image: "ellipsis", id: "system", perform: {}, children: more))
     #if DEBUG
     if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
         let identity = (view is PDFView && annotation?.pdfRanges.isEmpty == false)
@@ -87,12 +66,6 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
 }
 
 private extension UIView {
-    func presentSelectionUtility(_ controller: UIViewController) {
-        guard let owner = selectionStatusBarOwner, owner.viewIfLoaded?.window != nil else { return }
-        var presenter = owner
-        while let presented = presenter.presentedViewController { presenter = presented }
-        presenter.present(controller, animated: true)
-    }
     var selectionCharacterRanges: [PDFAnnotationRange] {
         guard let pdf = self as? PDFView, let document = pdf.document, let selection = pdf.currentSelection else { return [] }
         return selection.pages.flatMap { page in
@@ -175,7 +148,6 @@ private struct ReaderSelectionAction {
     let image: String
     let id: String
     let perform: () -> Void
-    var children: [ReaderSelectionAction] = []
     #if DEBUG
     var testLocator: String?
     #endif
@@ -479,37 +451,6 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         return requestTask != nil || adjustingSelectionHandle
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
-
-}
-
-@available(iOS 17.4, *)
-private struct ReaderSelectionTranslation: View {
-    let text: String
-    let close: () -> Void
-    @State private var isPresented = false
-    var body: some View {
-        NavigationStack {
-            ScrollView { Text(text).padding().frame(maxWidth: .infinity, alignment: .leading) }
-                .navigationTitle("Translate").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close", action: close).accessibilityIdentifier("closeSelectionTranslation") } }
-        }
-            .accessibilityIdentifier("selectionTranslationHost")
-            .translationPresentation(isPresented: $isPresented, text: text)
-            .onAppear { isPresented = true }
-            .onChange(of: isPresented) { wasPresented, presented in
-                if wasPresented && !presented { close() }
-            }
-    }
-}
-
-@available(iOS 17.4, *)
-private final class ReaderSelectionTranslationController: UIHostingController<ReaderSelectionTranslation> {
-    init(text: String) {
-        super.init(rootView: ReaderSelectionTranslation(text: text, close: {}))
-        rootView = ReaderSelectionTranslation(text: text, close: { [weak self] in self?.dismiss(animated: false) })
-        modalPresentationStyle = .pageSheet
-    }
-    @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
 private final class ReaderSelectionWindow: UIWindow {
@@ -531,14 +472,7 @@ private final class ReaderSelectionOverlayView: UIView {
 }
 
 @MainActor private final class ReaderSelectionActionsController: UIViewController {
-    private var rootActions: [ReaderSelectionAction]
-    private var showsMore = false
-    private var actions: [ReaderSelectionAction] {
-        guard showsMore else { return rootActions }
-        let primary = rootActions.filter { $0.id == "ask" || $0.id == "listen" }
-        let utilities = rootActions.first { $0.id == "system" }?.children ?? []
-        return primary + utilities + [ReaderSelectionAction(title: "Back", image: "chevron.backward", id: "back", perform: {})]
-    }
+    private var actions: [ReaderSelectionAction]
     var choose: ((() -> Void) -> Void)?
     let scrollView = UIScrollView()
     private var buttons: [UIButton] = []
@@ -551,7 +485,7 @@ private final class ReaderSelectionOverlayView: UIView {
     override var prefersStatusBarHidden: Bool { hidesStatusBar }
     override var preferredStatusBarStyle: UIStatusBarStyle { statusBarStyle }
     init(actions: [ReaderSelectionAction], theme: ReadingTheme, source: UIView) {
-        self.rootActions = actions; self.theme = theme; self.source = source
+        self.actions = actions; self.theme = theme; self.source = source
         let status = source.window?.windowScene?.statusBarManager
         var hiddenOwner = source.selectionStatusBarOwner, styleOwner = hiddenOwner
         while let child = hiddenOwner?.childForStatusBarHidden { hiddenOwner = child }
@@ -581,50 +515,44 @@ private final class ReaderSelectionOverlayView: UIView {
         rebuildButtons()
     }
     func update(actions: [ReaderSelectionAction], selectedText: String) {
-        self.rootActions = actions; scrollView.accessibilityValue = selectedText
+        self.actions = actions; scrollView.accessibilityValue = selectedText
         rebuildButtons(); view.setNeedsLayout()
     }
     private func rebuildButtons() {
         for child in buttons.map({ $0 as UIView }) + dividers { child.removeFromSuperview() }
         buttons = []; dividers = []
-        scrollView.accessibilityLabel = showsMore ? "More selection actions" : "Selection actions"
         for (index, action) in actions.enumerated() {
-            let primary = action.id == "ask" || action.id == "listen"
             let button = UIButton(type: .system)
             var configuration = UIButton.Configuration.plain()
-            configuration.title = action.id == "listen" ? "Listen" : action.id == "note" ? "Note" : action.id == "system" ? "More" : action.title
+            configuration.title = action.id == "listen" ? "Listen" : action.id == "note" ? "Note" : action.title
             configuration.image = UIImage(systemName: action.image)
-            configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: primary ? 17 : 19, weight: .regular)
-            configuration.imagePlacement = primary ? .leading : .top
-            configuration.imagePadding = primary ? 8 : 5
-            configuration.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: 5, bottom: 7, trailing: 5)
-            configuration.baseForegroundColor = UIColor(action.id == "ask" ? theme.onAccent : theme.foreground)
-            configuration.background.backgroundColor = action.id == "ask" ? UIColor(theme.accent) : primary ? UIColor(theme.accent).withAlphaComponent(0.1) : .clear
-            configuration.background.cornerRadius = 14
+            configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 19, weight: .regular)
+            configuration.imagePlacement = .top
+            configuration.imagePadding = 5
+            configuration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 3, bottom: 6, trailing: 3)
+            configuration.baseForegroundColor = UIColor(action.id == "ask" ? theme.accent : theme.foreground)
             configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
                 var result = attributes
-                result.font = UIFontMetrics(forTextStyle: primary ? .subheadline : .caption1).scaledFont(
-                    for: .systemFont(ofSize: primary ? 15 : 11, weight: primary ? .medium : .regular), maximumPointSize: primary ? 20 : 16)
+                result.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
+                    for: .systemFont(ofSize: 12, weight: action.id == "ask" ? .semibold : .regular), maximumPointSize: 16)
                 return result
             }
             button.configuration = configuration
             button.titleLabel?.adjustsFontForContentSizeCategory = true
+            button.titleLabel?.numberOfLines = 1
+            button.titleLabel?.adjustsFontSizeToFitWidth = true
+            button.titleLabel?.minimumScaleFactor = 0.75
             button.accessibilityLabel = action.title; button.accessibilityIdentifier = "selection-" + action.id
             #if DEBUG
             if action.id == "ask" { button.accessibilityValue = action.testLocator }
             #endif
             button.addAction(UIAction { [weak self] _ in
                 guard let self, index < self.actions.count else { return }
-                let action = self.actions[index]
-                if action.id == "back" || !action.children.isEmpty {
-                    self.showsMore = action.id != "back"
-                    self.rebuildButtons(); self.view.setNeedsLayout()
-                    UIAccessibility.post(notification: .layoutChanged, argument: self.buttons.first)
-                } else { self.choose?(action.perform) }
+                self.choose?(self.actions[index].perform)
             }, for: .touchUpInside)
             scrollView.addSubview(button); buttons.append(button)
         }
-        let line = UIView(); line.backgroundColor = UIColor(theme.foreground).withAlphaComponent(0.1)
+        let line = UIView(); line.backgroundColor = UIColor(theme.foreground).withAlphaComponent(0.1); line.isUserInteractionEnabled = false
         scrollView.addSubview(line); dividers = [line]
     }
 
@@ -634,14 +562,9 @@ private final class ReaderSelectionOverlayView: UIView {
         let safe = view.bounds.inset(by: view.safeAreaInsets).insetBy(dx: 12, dy: 8)
         let anchor = source.convert(source.selectionAnchor, to: view)
         let handles = source.selectionHandles.map { source.convert($0, to: view) }
-        let primaryIndices = actions.indices.filter { actions[$0].id == "ask" || actions[$0].id == "listen" }
-        let secondaryIndices = actions.indices.filter { !primaryIndices.contains($0) }
-        let primaryHeight = max(48, ceil(primaryIndices.map { buttons[$0].intrinsicContentSize.height }.max() ?? 48))
-        let secondaryHeight = max(56, ceil(secondaryIndices.map { buttons[$0].intrinsicContentSize.height }.max() ?? 56))
-        let secondaryTop = primaryHeight + 13
-        let contentHeight = secondaryTop + secondaryHeight
-        let height = min(contentHeight + 16, safe.height)
-        let width = min(360, safe.width)
+        let contentHeight = max(56, ceil(buttons.map { $0.intrinsicContentSize.height }.max() ?? 56))
+        let height = min(contentHeight + 12, safe.height)
+        let width = min(420, safe.width)
         // Prefer above the entire selection, with enough clearance for its
         // start knob. If it reaches the top, place below its end knob instead.
         let selectionTop = min(anchor.minY, handles.map(\.minY).min() ?? anchor.minY)
@@ -660,22 +583,18 @@ private final class ReaderSelectionOverlayView: UIView {
         overlay.card.frame = frame
         overlay.card.layer.shadowPath = UIBezierPath(roundedRect: overlay.card.bounds, cornerRadius: 22).cgPath
         material.frame = overlay.card.bounds
-        scrollView.frame = overlay.card.bounds.insetBy(dx: 8, dy: 8)
+        scrollView.frame = overlay.card.bounds.insetBy(dx: 6, dy: 6)
         let rowWidth = scrollView.bounds.width
-        let primaryWidth = (rowWidth - CGFloat(max(0, primaryIndices.count - 1)) * 8) / CGFloat(max(1, primaryIndices.count))
-        for (column, index) in primaryIndices.enumerated() {
-            buttons[index].frame = CGRect(x: CGFloat(column) * (primaryWidth + 8), y: 0, width: primaryWidth, height: primaryHeight)
+        let buttonWidth = rowWidth / CGFloat(max(1, buttons.count))
+        for (index, button) in buttons.enumerated() {
+            button.frame = CGRect(x: CGFloat(index) * buttonWidth, y: 0, width: buttonWidth, height: contentHeight)
         }
-        dividers.first?.frame = CGRect(x: 0, y: primaryHeight + 8, width: rowWidth, height: 1)
-        let secondaryWidth = rowWidth / CGFloat(max(1, secondaryIndices.count))
-        for (column, index) in secondaryIndices.enumerated() {
-            buttons[index].frame = CGRect(x: CGFloat(column) * secondaryWidth, y: secondaryTop, width: secondaryWidth, height: secondaryHeight)
-        }
-        // Only unusually short accessibility/keyboard viewports scroll, and
-        // only vertically. All six actions fit without paging in normal use.
+        // Quiet separation for the reading companion; every action remains
+        // visible in the same row, including at compact phone widths.
+        dividers.first?.frame = CGRect(x: buttonWidth, y: 6, width: 1, height: max(0, contentHeight - 12))
         scrollView.contentSize = CGSize(width: rowWidth, height: contentHeight)
         scrollView.isScrollEnabled = contentHeight > scrollView.bounds.height
-        scrollView.contentOffset = CGPoint(x: 0, y: min(scrollView.contentOffset.y, max(0, contentHeight - scrollView.bounds.height)))
+        scrollView.contentOffset = .zero
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
             // Geometry only, for real native handle drags; this does not create
