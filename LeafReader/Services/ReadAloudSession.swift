@@ -52,9 +52,20 @@ extension ReadAloudSpeaking {
     func prepare(_ text: String, language: String, voice: String, speed: Double) {}
 }
 
+/// The iPhone voice. A passage is spoken as a queue of sentence/clause-sized
+/// utterances (the Kokoro chunk limits) rather than one utterance, because only
+/// some voices report word ranges through `willSpeakRangeOfSpeechString`; with a
+/// voice that reports none, a single utterance per passage left the highlight on
+/// the passage's first line until the next passage. Every utterance start is
+/// reported exactly through `didStart`, so progress is at least per sentence
+/// with any voice and per word where the voice provides words.
 @MainActor final class SystemReadAloudSpeaker: NSObject, ReadAloudSpeaking, AVSpeechSynthesizerDelegate {
     private var synthesizer: AVSpeechSynthesizer?
-    private var current: AVSpeechUtterance?
+    /// Queued utterances with the UTF-16 offset of each chunk in the spoken text.
+    private var queue: [(utterance: AVSpeechUtterance, offset: Int, firstWord: Int)] = []
+    private var last: AVSpeechUtterance?
+    /// Test hook: false ignores the voice's word ranges so chunk starts alone drive progress.
+    var reportsWordRanges = true
     private let requiresHighQuality: Bool
     private let installedVoices: () -> [AppleReadingVoice]
     var finished: (() -> Void)?
@@ -70,21 +81,30 @@ extension ReadAloudSpeaking {
         if synthesizer == nil {
             synthesizer = AVSpeechSynthesizer(); synthesizer?.delegate = self
         }
-        let utterance = AVSpeechUtterance(string: text)
         let recognizer = NLLanguageRecognizer(); recognizer.processString(text)
         var detected = recognizer.dominantLanguage?.rawValue
         if detected == "zh-Hans" { detected = "zh-CN" }
         if detected == "zh-Hant" { detected = "zh-TW" }
         // Resolve eligibility before taking over the audio session: a missing
         // download must leave other audio untouched.
-        utterance.voice = try selectedVoice(identifier: voice, detectedLanguage: detected, sourceLanguage: language)
+        let selected = try selectedVoice(identifier: voice, detectedLanguage: detected, sourceLanguage: language)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .spokenAudio)
         try session.setActive(true)
-        utterance.rate = min(AVSpeechUtteranceMaximumSpeechRate,
+        let rate = min(AVSpeechUtteranceMaximumSpeechRate,
             max(AVSpeechUtteranceMinimumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(speed)))
-        current = utterance
-        synthesizer?.speak(utterance)
+        // A passage with no letters or digits yields no chunks; speak it whole.
+        var chunks = KokoroSentenceSplitter.split(text)
+        if chunks.isEmpty { chunks = [KokoroSentence(text: text, range: NSRange(location: 0, length: (text as NSString).length))] }
+        queue = chunks.map { chunk in
+            let utterance = AVSpeechUtterance(string: chunk.text)
+            utterance.voice = selected; utterance.rate = rate
+            let units = Array(chunk.text.utf16)
+            let word = units.firstIndex { $0 == 0x20 || $0 == 0x0A || $0 == 0x09 || $0 == 0x3000 } ?? units.count
+            return (utterance, chunk.range.location, max(1, word))
+        }
+        last = queue.last?.utterance
+        for item in queue { synthesizer?.speak(item.utterance) }
     }
     private func selectedVoice(identifier: String, detectedLanguage: String?, sourceLanguage: String) throws -> AVSpeechSynthesisVoice {
         if requiresHighQuality {
@@ -103,15 +123,23 @@ extension ReadAloudSpeaking {
     }
     func pause() { synthesizer?.pauseSpeaking(at: .immediate) }
     func resume() -> Bool { synthesizer?.continueSpeaking() ?? false }
-    func stop() { current = nil; synthesizer?.stopSpeaking(at: .immediate) }
+    func stop() { queue = []; last = nil; synthesizer?.stopSpeaking(at: .immediate) }
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        Task { @MainActor [weak self] in
+            guard let self, let item = self.queue.first(where: { $0.utterance === utterance }) else { return }
+            self.progressed?(NSRange(location: item.offset, length: item.firstWord))
+        }
+    }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor [weak self] in
-            guard let self, self.current === utterance else { return }; self.current = nil; self.finished?()
+            guard let self, self.last === utterance else { return }
+            self.queue = []; self.last = nil; self.finished?()
         }
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange, utterance: AVSpeechUtterance) {
         Task { @MainActor [weak self] in
-            guard let self, self.current === utterance else { return }; self.progressed?(characterRange)
+            guard let self, self.reportsWordRanges, let item = self.queue.first(where: { $0.utterance === utterance }) else { return }
+            self.progressed?(NSRange(location: item.offset + characterRange.location, length: characterRange.length))
         }
     }
 }

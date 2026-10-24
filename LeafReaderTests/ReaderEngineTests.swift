@@ -287,6 +287,61 @@ final class ReaderEngineTests: XCTestCase {
             let screenshot = XCTAttachment(image: try XCTUnwrap(image)); screenshot.name = "Actual Chinese speech full line scrolling=\(scrolling) offset=\(offset)"; screenshot.lifetime = .keepAlways; add(screenshot)
         }
     }
+    /// Regression for the installed-build symptom (highlight stuck on a paragraph's
+    /// first line until the next paragraph): with a voice that reports no word
+    /// ranges, real speech must still paint several different lines inside one
+    /// paragraph, through the session, the bridge and the painter, in both flows.
+    func testSpeechWithoutWordRangesPaintsSeveralLinesWithinOneParagraphInBothFlows() async throws {
+        let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "窗外")
+            let web = try XCTUnwrap(model.webView)
+            let loaded = try await model.readAloudPassage(at: "section:0")
+            let passage = try XCTUnwrap(loaded)
+            let starts = KokoroSentenceSplitter.split(passage.text).map(\.range.location)
+            XCTAssertGreaterThan(starts.count, 5, "The fixture paragraph has several sentences")
+            _ = try await web.evaluateJavaScript("""
+                window.__paints=[];const original=window.Leaf.setSpokenRange;
+                window.Leaf.setSpokenRange=async args=>{
+                    try{await original(args);
+                        const rect=document.querySelector('foliate-view').renderer.getContents()[0].overlayer.element.querySelector('[data-leaf-spoken-line] rect');
+                        window.__paints.push({location:args.location,length:args.length,y:rect?Number(rect.getAttribute('y')):null});
+                    }catch(e){window.__paints.push({location:args.location,error:String(e)});throw e;}
+                };
+                typeof window.Leaf.setSpokenRange;
+                """)
+            let speaker = SystemReadAloudSpeaker(); speaker.reportsWordRanges = false
+            let name = "LinesWithoutWords.\(UUID().uuidString)", defaults = UserDefaults(suiteName: name)!
+            let session = ReadAloudSession(defaults: defaults, speaker: speaker)
+            defer { session.stop(); defaults.removePersistentDomain(forName: name) }
+            session.followsText = true; session.speed = 2
+            session.source = { [weak model] locator in try await model?.readAloudPassage(at: locator) }
+            session.highlight = { [weak model] value, range, follow in model?.highlightReadAloud(value, range: range, follow: follow) }
+            session.start(at: passage.locator)
+            let deadline = Date().addingTimeInterval(60)
+            var painted = 0
+            while Date() < deadline, painted < 7, session.state != .failed, session.passage == nil || session.passage?.locator == passage.locator {
+                try await Task.sleep(for: .milliseconds(200))
+                painted = try await web.evaluateJavaScript("window.__paints.length") as? Int ?? 0
+            }
+            session.pause()
+            XCTAssertNil(session.error); XCTAssertEqual(session.passage?.locator, passage.locator)
+            try await Task.sleep(for: .milliseconds(300))
+            let paints = try await web.evaluateJavaScript("window.__paints") as? [[String: Any]] ?? []
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: paints, options: .prettyPrinted), uniformTypeIdentifier: "public.json")
+            attachment.name = "Spoken-line paints without word ranges scrolling=\(scrolling)"; attachment.lifetime = .keepAlways; add(attachment)
+            XCTAssertTrue(paints.allSatisfy { $0["error"] == nil }, "Bridge failures: \(paints.filter { $0["error"] != nil })")
+            let locations = paints.compactMap { $0["location"] as? Int }
+            XCTAssertTrue(Set(locations).isSubset(of: Set(starts)), "Every paint sits on a sentence start: \(locations) vs \(starts)")
+            XCTAssertGreaterThanOrEqual(Set(locations).count, 6, "Speech advanced through the paragraph's sentences: \(locations)")
+            let lines = Set(paints.compactMap { $0["y"] as? Double })
+            XCTAssertGreaterThanOrEqual(lines.count, 3, "Several different lines were painted inside the paragraph: \(paints)")
+            let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, _ in continuation.resume(returning: image) } }
+            if let image { let shot = XCTAttachment(image: image); shot.name = "Mid-paragraph highlight without word ranges scrolling=\(scrolling)"; shot.lifetime = .keepAlways; add(shot) }
+        }
+    }
     func testSpokenLinesReflowAtEverySizeInBothViewportOrientationsAndFlows() async throws {
         let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
         let model = try show(book, url: url)

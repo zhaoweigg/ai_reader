@@ -300,4 +300,91 @@ import PDFKit
         catch { XCTFail("A number-only page must use the device voice instead of blocking the rest of the book: \(error)"); return }
         await fulfillment(of: [finished], timeout: 15)
     }
+    private func systemSpeaker() -> SystemReadAloudSpeaker {
+        let speaker = SystemReadAloudSpeaker()
+        addTeardownBlock { @MainActor in speaker.stop(); try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+        return speaker
+    }
+    /// A voice that reports no word ranges must still move the highlight at every
+    /// sentence: each queued utterance's start is reported at its chunk offset.
+    func testSystemSpeakerReportsEverySentenceStartWithoutWordRanges() async throws {
+        let speaker = systemSpeaker(); speaker.reportsWordRanges = false
+        let text = "Leaf reads the first sentence. Then it reads a second one, with a clause inside. A third sentence ends the passage."
+        let starts = KokoroSentenceSplitter.split(text).map(\.range.location)
+        XCTAssertEqual(starts.count, 3)
+        var reported: [NSRange] = []
+        let finished = expectation(description: "finished once after the last chunk")
+        speaker.finished = { finished.fulfill() }
+        speaker.progressed = { reported.append($0) }
+        try speaker.speak(text, language: "en-US", voice: "", speed: 2)
+        await fulfillment(of: [finished], timeout: 40)
+        XCTAssertEqual(reported.map(\.location), starts, "One progress report per chunk, at the chunk's offset in the passage")
+        XCTAssertEqual(reported.map(\.length), [4, 4, 1], "Each report covers the chunk's first word")
+    }
+    func testChineseSystemSpeakerReportsSentenceStartsWithoutWordRanges() async throws {
+        let speaker = systemSpeaker(); speaker.reportsWordRanges = false
+        let sentences = ["第一句话很短。", "第二句话也不长，但是有一个逗号。", "第三句结束这一段。"]
+        let text = sentences.joined()
+        // Expected starts come from the sentences' own UTF-16 lengths, not from the splitter.
+        let starts = [0, (sentences[0] as NSString).length, (sentences[0] as NSString).length + (sentences[1] as NSString).length]
+        XCTAssertEqual(starts, [0, 7, 23])
+        var reported: [Int] = []
+        let finished = expectation(description: "finished once")
+        speaker.finished = { finished.fulfill() }
+        speaker.progressed = { reported.append($0.location) }
+        try speaker.speak(text, language: "zh-CN", voice: "", speed: 2)
+        await fulfillment(of: [finished], timeout: 40)
+        XCTAssertEqual(reported, starts, "One didStart report per Chinese sentence, at its UTF-16 offset")
+    }
+    /// With a voice that reports words, ranges keep their per-word cadence and are
+    /// offset into the passage, so they never restart at 0 for the second chunk.
+    func testSystemSpeakerOffsetsWordRangesIntoThePassageAcrossChunks() async throws {
+        let speaker = systemSpeaker()
+        let text = "Leaf reads the first sentence aloud. Then the second sentence follows it."
+        let second = try XCTUnwrap(KokoroSentenceSplitter.split(text).last).range.location
+        var reported: [Int] = []
+        let finished = expectation(description: "finished once")
+        speaker.finished = { finished.fulfill() }
+        speaker.progressed = { reported.append($0.location) }
+        try speaker.speak(text, language: "en-US", voice: "", speed: 2)
+        await fulfillment(of: [finished], timeout: 40)
+        XCTAssertEqual(reported, reported.sorted(), "Offsets never go backwards across chunks: \(reported)")
+        XCTAssertTrue(reported.contains(second), "The second chunk's start is reported: \(reported)")
+        XCTAssertGreaterThan(Set(reported).count, 4, "Word ranges are still reported where the voice provides them: \(reported)")
+    }
+    func testStoppingMidQueueDoesNotReportFinishAndTheNextPassageStartsFromItsFirstChunk() async throws {
+        let speaker = systemSpeaker(); speaker.reportsWordRanges = false
+        var finishes = 0
+        speaker.finished = { finishes += 1 }
+        let firstStart = expectation(description: "first chunk started"); firstStart.assertForOverFulfill = false
+        speaker.progressed = { _ in firstStart.fulfill() }
+        try speaker.speak("One sentence here. Another sentence there. And a third sentence to finish the passage.", language: "en-US", voice: "", speed: 1)
+        await fulfillment(of: [firstStart], timeout: 20)
+        speaker.stop()
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(finishes, 0, "Stopping a queued passage is not a finish")
+        var reported: [Int] = []
+        let finished = expectation(description: "second passage finished")
+        speaker.finished = { finishes += 1; finished.fulfill() }
+        speaker.progressed = { reported.append($0.location) }
+        try speaker.speak("Short one. Short two.", language: "en-US", voice: "", speed: 2)
+        await fulfillment(of: [finished], timeout: 30)
+        XCTAssertEqual(reported, [0, 11]); XCTAssertEqual(finishes, 1)
+    }
+    func testPausingBetweenChunksResumesTheQueueAndFinishesOnce() async throws {
+        let speaker = systemSpeaker(); speaker.reportsWordRanges = false
+        var reported: [Int] = []
+        let firstStart = expectation(description: "first chunk started"); firstStart.assertForOverFulfill = false
+        let finished = expectation(description: "finished once")
+        speaker.finished = { finished.fulfill() }
+        speaker.progressed = { reported.append($0.location); firstStart.fulfill() }
+        try speaker.speak("Pause after this. Resume for this one.", language: "en-US", voice: "", speed: 2)
+        await fulfillment(of: [firstStart], timeout: 20)
+        speaker.pause()
+        try await Task.sleep(for: .milliseconds(400))
+        let before = reported.count
+        XCTAssertTrue(speaker.resume())
+        await fulfillment(of: [finished], timeout: 30)
+        XCTAssertEqual(reported, [0, 18]); XCTAssertGreaterThanOrEqual(reported.count, before)
+    }
 }
