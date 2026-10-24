@@ -641,6 +641,129 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertEqual(result?["rangeText"], result?["original"], "The original DOM and CFI character offsets must stay intact")
         }
     }
+    func testChapterDividerUsesBookLanguageOutsideSelectableAndSpokenTextInBothFlows() async throws {
+        for (name, fixture, expected, opening) in [("The Art of Noticing.epub", false, "Next Chapter", "attention"), ("ChapterDividerChinese.epub", true, "下一章", "窗外")] {
+            let (book, url) = try prepare(name, format: .epub, fixtures: fixture)
+            for scrolling in [false, true] {
+                var prefs = preferences; prefs.scrolling = scrolling
+                let model = try show(book, url: url, readerPreferences: prefs)
+                try await assertOpened(model, contains: opening)
+                let web = try XCTUnwrap(model.webView)
+                let result = try await web.callAsyncJavaScript("""
+                    const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+                    await view.goTo(1);
+                    const until=performance.now()+8000;
+                    while(scrolling&&r.getContents().length<3){if(performance.now()>until)throw new Error('Neighbors not ready');await sleep(20);}
+                    await sleep(100);
+                    const current=r.getContents()[0],doc=current.doc,frame=doc.defaultView.frameElement,container=frame.parentElement.parentElement;
+                    const dividers=[...container.querySelectorAll('.chapter-divider')];
+                    const range=doc.createRange(),node=doc.querySelector('p').firstChild;
+                    range.setStart(node,2);range.setEnd(node,12);
+                    const cfi=view.getCFI(1,range),selection=doc.getSelection();selection.removeAllRanges();selection.addRange(range);
+                    const text=range.toString();
+                    const rows=dividers.map(el=>({text:el.textContent,height:el.getBoundingClientRect().height,
+                        oneLabel:el.children.length===1,beforeFrame:el.nextElementSibling?.querySelector('iframe')!=null,
+                        clear:el.getBoundingClientRect().bottom<=el.nextElementSibling.getBoundingClientRect().top+1}));
+                    const first=r.getContents().find(c=>c.index===0)?.doc.defaultView.frameElement.parentElement;
+                    const noFirstDivider=!first||!first.previousElementSibling?.matches('.chapter-divider');
+                    selection.removeAllRanges();
+                    if(scrolling&&dividers[0]){container.scrollTop+=dividers[0].getBoundingClientRect().top-container.getBoundingClientRect().top-container.clientHeight*.45;await sleep(80);}
+                    return {rows,noFirstDivider,text,sameCFI:view.resolveCFI(cfi).anchor(doc).toString()===text,
+                        untouched:!doc.body.textContent.includes('Next Chapter')&&!doc.body.textContent.includes('下一章'),documents:r.getContents().length};
+                    """, arguments: ["scrolling": scrolling], in: nil, contentWorld: .page) as? [String: Any]
+                let metrics = try XCTUnwrap(result), rows = try XCTUnwrap(metrics["rows"] as? [[String: Any]])
+                XCTAssertEqual(rows.count, scrolling ? 2 : 0)
+                for row in rows {
+                    XCTAssertEqual(row["text"] as? String, expected)
+                    XCTAssertEqual(row["height"] as? Double ?? 0, 52, accuracy: 1)
+                    for key in ["oneLabel", "beforeFrame", "clear"] { XCTAssertEqual(row[key] as? Bool, true, "\(row)") }
+                }
+                for key in ["noFirstDivider", "sameCFI", "untouched"] { XCTAssertEqual(metrics[key] as? Bool, true, "\(metrics)") }
+                XCTAssertLessThanOrEqual(metrics["documents"] as? Int ?? 99, scrolling ? 3 : 1)
+                let spoken = try await model.readAloudPassage(at: "section:1")
+                XCTAssertFalse(try XCTUnwrap(spoken).text.contains(expected))
+                let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
+                let shot = XCTAttachment(image: try XCTUnwrap(image)); shot.name = "Book-language divider \(expected) scroll=\(scrolling)"; shot.lifetime = .keepAlways; add(shot)
+                model.webView?.stopLoading(); window?.isHidden = true; window = nil
+            }
+        }
+    }
+
+    func testChapterDividerKeepsFullWidthAndCFIsAtEveryFontSizeFlowAndOrientation() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        var base = preferences; base.scrolling = true
+        let model = try show(book, url: url, readerPreferences: base)
+        try await assertOpened(model, contains: "attention")
+        let web = try XCTUnwrap(model.webView)
+        _ = try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view');await view.goTo(1);
+            const doc=view.renderer.getContents()[0].doc,range=doc.createRange(),node=doc.querySelector('p').firstChild;
+            range.setStart(node,2);range.setEnd(node,12);
+            window.dividerCFI=view.getCFI(1,range);window.dividerText=range.toString();await view.goTo(window.dividerCFI);
+            """, arguments: [:], in: nil, contentWorld: .page)
+        var count = 0
+        for viewport in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
+            window?.frame.size = viewport; try await Task.sleep(for: .milliseconds(250))
+            for scrolling in [true, false] {
+                for (variant, font) in ["Georgia", "Palatino", "System"].enumerated() {
+                    for size in 12...32 {
+                        var prefs = base; prefs.scrolling = scrolling; prefs.font = font; prefs.fontSize = Double(size)
+                        prefs.horizontalMargin = [8, 20, 48][variant]; prefs.theme = [.day, .paper, .night][variant]
+                        let metrics = try await web.callAsyncJavaScript("""
+                            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+                            window.Leaf.applyPreferences(settings);await Promise.all(r.getContents().map(c=>c.doc.fonts.ready));await sleep(100);
+                            const current=r.getContents()[0],doc=current.doc,frame=doc.defaultView.frameElement,container=frame.parentElement.parentElement;
+                            const divider=frame.parentElement.previousElementSibling;
+                            const present=divider?.matches('.chapter-divider')===true;
+                            const widths=[...doc.querySelector('p').getClientRects()].map(rect=>rect.width),width=doc.defaultView.innerWidth;
+                            const css=doc.defaultView.getComputedStyle(doc.body),target=r.getContents().find(c=>c.index===1)?.doc;
+                            return {present,labels:[...container.querySelectorAll('.chapter-divider')].map(el=>el.textContent),
+                                clear:!present||divider.getBoundingClientRect().bottom<=frame.parentElement.getBoundingClientRect().top+1,
+                                height:present?divider.getBoundingClientRect().height:0,widths,viewportWidth:width,currentIndex:current.index,
+                                expectedWidth:parseFloat(css.width)-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight),
+                                visible:window.Leaf.isLocationVisible(window.dividerCFI),sameText:!!target&&view.resolveCFI(window.dividerCFI).anchor(target).toString()===window.dividerText,
+                                documents:r.getContents().length,landscape:innerWidth>innerHeight};
+                            """, arguments: ["settings": prefs.payload], in: nil, contentWorld: .page) as? [String: Any]
+                        let row = try XCTUnwrap(metrics)
+                        XCTAssertEqual(row["present"] as? Bool, scrolling, "\(font) \(size): \(row)")
+                        for key in ["clear", "visible", "sameText"] { XCTAssertEqual(row[key] as? Bool, true, "\(key) \(font) \(size): \(row)") }
+                        XCTAssertEqual(row["landscape"] as? Bool, viewport.width > viewport.height)
+                        XCTAssertLessThanOrEqual(row["documents"] as? Int ?? 99, scrolling ? 3 : 1)
+                        let expectedWidth = try XCTUnwrap(row["expectedWidth"] as? Double)
+                        for width in try XCTUnwrap(row["widths"] as? [Double]) { XCTAssertEqual(width, expectedWidth, accuracy: 2, "Each text column must keep its normal width: \(row)") }
+                        if scrolling { XCTAssertEqual(row["height"] as? Double ?? 0, 52, accuracy: 1) }
+                        else { XCTAssertEqual((row["labels"] as? [String])?.count, 0) }
+                        count += 1
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(count, 252)
+        // Screenshot framing intentionally moves away from the saved passage.
+        // Do it after the uninterrupted reflow checks, never between font changes.
+        for viewport in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
+            window?.frame.size = viewport; try await Task.sleep(for: .milliseconds(250))
+            for scrolling in [true, false] {
+                for (variant, font) in ["Georgia", "Palatino", "System"].enumerated() {
+                    for size in [12, 22, 32] {
+                        var prefs = base; prefs.scrolling = scrolling; prefs.font = font; prefs.fontSize = Double(size)
+                        prefs.horizontalMargin = [8, 20, 48][variant]; prefs.theme = [.day, .paper, .night][variant]
+                        _ = try await web.callAsyncJavaScript("""
+                            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+                            window.Leaf.applyPreferences(settings);await view.goTo(window.dividerCFI);
+                            await Promise.all(r.getContents().map(c=>c.doc.fonts.ready));await sleep(300);
+                            const doc=r.getContents().find(c=>c.index===1).doc,frame=doc.defaultView.frameElement,container=frame.parentElement.parentElement,divider=frame.parentElement.previousElementSibling;
+                            if(divider?.matches('.chapter-divider')){container.scrollTop+=divider.getBoundingClientRect().top-container.getBoundingClientRect().top-container.clientHeight*.4;await sleep(100);}
+                            """, arguments: ["settings": prefs.payload], in: nil, contentWorld: .page)
+                        let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
+                        let shot = XCTAttachment(image: try XCTUnwrap(image)); shot.name = "Divider \(Int(viewport.width))x\(Int(viewport.height)) scroll=\(scrolling) \(font) \(size)pt \(prefs.theme)"; shot.lifetime = .keepAlways; add(shot)
+                    }
+                }
+            }
+        }
+        XCTAssertNil(model.error)
+    }
+
     func testEPUBRendersSearchesAndRestoresPosition() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         let model = try show(book, url: url)

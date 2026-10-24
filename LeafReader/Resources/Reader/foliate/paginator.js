@@ -491,6 +491,7 @@ export class Paginator extends HTMLElement {
     #scrollRendering = false
     #scrollNavigating = 0
     #scrollLoadQueue = Promise.resolve()
+    #chapterDividerLabel
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -561,6 +562,29 @@ export class Paginator extends HTMLElement {
             height: var(--leaf-book-end-space, 0px);
             pointer-events: none;
         }
+        .chapter-divider {
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            height: 52px;
+            padding: 14px var(--leaf-chapter-divider-inset, 20px) 20px;
+            max-width: 720px;
+            margin-inline: auto;
+            color: var(--leaf-chapter-divider-color, currentColor);
+            font: 400 12px/18px -apple-system, sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            pointer-events: none;
+            overflow-anchor: none;
+        }
+        .chapter-divider::before, .chapter-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: color-mix(in srgb, currentColor 23%, transparent);
+        }
+        .chapter-divider[hidden] { display: none; }
         #header {
             grid-column: 3 / 4;
             grid-row: 1;
@@ -751,6 +775,7 @@ export class Paginator extends HTMLElement {
         if (Math.abs(delta) > 0.5) this.#container.scrollTop = top + delta
     }
     #releaseScrollRecord(record) {
+        record.divider?.remove()
         if (!record.released) {
             record.cancelReady?.()
             record.released = true
@@ -770,6 +795,7 @@ export class Paginator extends HTMLElement {
         }
         this.#scrollLoads.clear()
         for (const record of this.#scrollViews.values()) {
+            record.divider?.remove()
             // The legacy display path still owns/reuses the active chapter.
             if (record.view !== this.#view) this.#releaseScrollRecord(record)
         }
@@ -791,6 +817,7 @@ export class Paginator extends HTMLElement {
         record.view.onResize = () => this.#scrollViewResized(record)
         record.height = record.view.element.getBoundingClientRect().height
         this.#scrollViews.set(this.#index, record)
+        this.#keepScrollPosition(() => this.#syncChapterDivider(record))
         this.#updateScrollEndSpace()
         this.#warmScrollWindow()
     }
@@ -800,6 +827,33 @@ export class Paginator extends HTMLElement {
         // Only the final short chapter gets room to restore its own first line
         // at the top; intermediate chapters never receive viewport-sized gaps.
         this.#container.style.setProperty('--leaf-book-end-space', `${space}px`)
+    }
+    // Chrome belongs outside the EPUB document: it must not change CFIs,
+    // selection text, search, annotations, or read-aloud passage contents.
+    setChapterDivider(labelForSection) {
+        this.#chapterDividerLabel = labelForSection
+        this.#keepScrollPosition(() => {
+            for (const record of this.#scrollViews.values()) this.#syncChapterDivider(record)
+        })
+    }
+    #syncChapterDivider(record) {
+        const first = this.sections.findIndex(section => section.linear !== 'no')
+        const label = record.index > first && record.section.linear !== 'no'
+            ? this.#chapterDividerLabel?.(record.view.document, record.index) : null
+        if (!label) { record.divider?.remove(); record.divider = null; return }
+        if (!record.divider) {
+            record.divider = document.createElement('div')
+            record.divider.className = 'chapter-divider'
+            record.divider.setAttribute('role', 'separator')
+            record.divider.append(document.createElement('span'))
+            this.#container.insertBefore(record.divider, record.view.element)
+        }
+        record.divider.firstChild.textContent = label
+        record.divider.setAttribute('aria-label', label)
+    }
+    #scrollRecordExtent(record) {
+        return record.view.element.getBoundingClientRect().height
+            + (record.divider?.getBoundingClientRect().height ?? 0)
     }
     #scrollViewExpanded(record) {
         if (this.#scrollNavigating || this.#scrollRendering || record.preparing || record.released) return
@@ -837,7 +891,7 @@ export class Paginator extends HTMLElement {
         this.#keepScrollPosition(() => {
             for (const [index, record] of this.#scrollViews) {
                 if (wanted.has(index)) continue
-                if (index < this.#index) this.#scrollPrefix += record.view.element.getBoundingClientRect().height
+                if (index < this.#index) this.#scrollPrefix += this.#scrollRecordExtent(record)
                 this.#scrollViews.delete(index)
                 this.#releaseScrollRecord(record)
             }
@@ -864,7 +918,7 @@ export class Paginator extends HTMLElement {
         })
         const later = [...this.#scrollViews.values(), ...this.#scrollLoads.values()]
             .filter(record => record.index > index).sort((a, b) => a.index - b.index)[0]
-        this.#container.insertBefore(record.view.element, later?.view.element ?? null)
+        this.#container.insertBefore(record.view.element, later?.divider ?? later?.view.element ?? null)
         this.#scrollLoads.set(index, record)
         // EPUB resources share a reference-counted loader. Serial warm-ups avoid
         // racing two uncached stylesheet/image loads and losing their URL lease.
@@ -894,8 +948,9 @@ export class Paginator extends HTMLElement {
                         position: 'relative', left: '', top: '', maxHeight: '',
                         visibility: '', pointerEvents: '', overflowAnchor: '',
                     })
+                    this.#syncChapterDivider(record)
                     if (index < this.#index) {
-                        this.#scrollPrefix = Math.max(0, this.#scrollPrefix - record.view.element.getBoundingClientRect().height)
+                        this.#scrollPrefix = Math.max(0, this.#scrollPrefix - this.#scrollRecordExtent(record))
                         if (index === 0) this.#scrollPrefix = 0
                         this.#scrollSpacer.style.height = `${this.#scrollPrefix}px`
                     }
