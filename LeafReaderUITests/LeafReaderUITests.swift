@@ -781,6 +781,97 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    @MainActor func testVoiceTypesKeepIndependentSpeedsInPagesScrollAndPDF() {
+        continueAfterFailure = false
+        defer { orient(.portrait) }
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            showReaderControls(app); app.buttons["Listen"].tap()
+            let engine = app.segmentedControls["listeningEngine"]
+            let slider = app.sliders["listeningSpeedSlider"], value = app.staticTexts["listeningSpeedValue"]
+            XCTAssertTrue(engine.waitForExistence(timeout: 5))
+            XCTAssertTrue(engine.buttons["Natural voice"].isSelected)
+            XCTAssertEqual(value.label, "1×")
+            slider.adjust(toNormalizedSliderPosition: 2.0 / 3.0)
+            XCTAssertEqual(value.label, "1.5×")
+            engine.buttons["Apple voices"].tap(); XCTAssertEqual(value.label, "1×")
+            slider.adjust(toNormalizedSliderPosition: 1.0 / 6.0)
+            XCTAssertEqual(value.label, "0.75×")
+            capture(flow + " Apple speed independent from Natural", app: app)
+            orient(.landscapeLeft)
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            XCTAssertTrue(engine.isHittable); XCTAssertEqual(value.label, "0.75×")
+            capture(flow + " independent speed settings landscape", app: app)
+            orient(.portrait)
+            engine.buttons["Natural voice"].tap(); XCTAssertEqual(value.label, "1.5×")
+            capture(flow + " Natural speed restored after switching", app: app)
+            app.navigationBars["Listen"].buttons["Done"].tap()
+            showReaderControls(app); app.buttons["closeBook"].tap()
+            app.terminate(); app.launch()
+            openSelectionFixture(flow, app: app)
+            showReaderControls(app); app.buttons["Listen"].tap()
+            XCTAssertTrue(engine.waitForExistence(timeout: 5))
+            XCTAssertTrue(engine.buttons["Natural voice"].isSelected)
+            XCTAssertEqual(value.label, "1.5×", flow + " Natural speed survives closing the book and relaunch")
+            engine.buttons["Apple voices"].tap()
+            XCTAssertEqual(value.label, "0.75×", flow + " Apple speed survives closing the book and relaunch")
+            capture(flow + " both voice speeds survive app relaunch", app: app)
+            app.terminate()
+        }
+    }
+
+    @MainActor func testPlayerSpeedChangesOnlyTheSelectedVoiceTypeInAllReaderFlows() {
+        continueAfterFailure = false
+        defer { orient(.portrait) }
+        for flow in ["Pages", "Scroll", "PDF"] {
+            let app = launchApp(naturalVoicePack: true); openSelectionFixture(flow, app: app)
+            showReaderControls(app); app.buttons["Listen"].tap()
+            let engine = app.segmentedControls["listeningEngine"]
+            let value = app.staticTexts["listeningSpeedValue"]
+            XCTAssertTrue(engine.waitForExistence(timeout: 5))
+            engine.buttons["Apple voices"].tap()
+            app.sliders["listeningSpeedSlider"].adjust(toNormalizedSliderPosition: 1.0 / 6.0)
+            XCTAssertEqual(value.label, "0.75×")
+            engine.buttons["Natural voice"].tap(); XCTAssertEqual(value.label, "1×")
+            XCTAssertTrue(app.buttons["kokoroRemove"].exists)
+            app.buttons["listenFromPage"].tap()
+            let player = app.otherElements["readerAudioPlayer"], rate = app.buttons["playbackSpeed"], pause = app.buttons["audioPlayPause"]
+            func waitForAudio() {
+                expectation(for: NSPredicate(format: "value == %@", "Listening"), evaluatedWith: player)
+                waitForExpectations(timeout: 90)
+            }
+            waitForAudio(); XCTAssertEqual(rate.value as? String, "1×")
+            rate.tap(); app.buttons["1.5×"].tap()
+            waitForAudio(); XCTAssertEqual(rate.value as? String, "1.5×")
+            pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+            capture(flow + " player updates only Natural speed", app: app)
+            app.buttons["openReaderChat"].tap()
+            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+            input.tap(); input.typeText("Keep my voice speed")
+            XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+            XCTAssertTrue(rate.isHittable); XCTAssertEqual(rate.value as? String, "1.5×")
+            capture(flow + " saved voice speed with chat and keyboard", app: app)
+            app.buttons["closeReaderChat"].tap()
+            app.buttons["listeningSettings"].tap()
+            XCTAssertEqual(value.label, "1.5×")
+            engine.buttons["Apple voices"].tap(); XCTAssertEqual(value.label, "0.75×")
+            XCTAssertTrue(app.buttons["Resume listening"].isEnabled, "Changing voice type while paused must stay paused")
+            engine.buttons["Natural voice"].tap(); XCTAssertEqual(value.label, "1.5×")
+            XCTAssertTrue(app.buttons["Resume listening"].isEnabled)
+            capture(flow + " paused engine switch restores separate rates", app: app)
+            app.buttons["resumeSavedListening"].tap()
+            waitForAudio(); XCTAssertEqual(rate.value as? String, "1.5×")
+            pause.tap()
+            orient(.landscapeLeft)
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            XCTAssertTrue(app.frame.contains(player.frame)); XCTAssertTrue(rate.isHittable)
+            XCTAssertEqual(rate.value as? String, "1.5×")
+            capture(flow + " independent player speed landscape", app: app)
+            orient(.portrait); app.buttons["stopListening"].tap()
+            app.terminate()
+        }
+    }
+
     @MainActor func testOnlyEnhancedAndPremiumAppleVoiceSettingsInPagesScrollAndPDF() {
         defer { orient(.portrait) }
         for flow in ["Pages", "Scroll", "PDF"] {
