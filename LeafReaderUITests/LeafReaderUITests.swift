@@ -439,11 +439,11 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame), "Action must scroll fully into view: " + id)
         return button
     }
-    @MainActor func testHorizontalSelectionHandlesInPages() { verifyHorizontalSelectionHandles(flow: "Pages") }
-    @MainActor func testHorizontalSelectionHandlesInScroll() { verifyHorizontalSelectionHandles(flow: "Scroll") }
-    @MainActor func testHorizontalSelectionHandlesInPDF() { verifyHorizontalSelectionHandles(flow: "PDF") }
-    @MainActor func testHorizontalSelectionHandlesInScrollWithSceneGeometryFixture() { verifyHorizontalSelectionHandles(flow: "Scroll", geometryFixture: true) }
-    @MainActor private func verifyHorizontalSelectionHandles(flow: String, geometryFixture: Bool = true) {
+    @MainActor func testSelectionPaletteHandlesInPages() { verifyPaletteSelectionHandles(flow: "Pages") }
+    @MainActor func testSelectionPaletteHandlesInScroll() { verifyPaletteSelectionHandles(flow: "Scroll") }
+    @MainActor func testSelectionPaletteHandlesInPDF() { verifyPaletteSelectionHandles(flow: "PDF") }
+    @MainActor func testSelectionPaletteHandlesInScrollWithSceneGeometryFixture() { verifyPaletteSelectionHandles(flow: "Scroll", geometryFixture: true) }
+    @MainActor private func verifyPaletteSelectionHandles(flow: String, geometryFixture: Bool = true) {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }
@@ -464,7 +464,8 @@ final class LeafReaderUITests: XCTestCase {
                 selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
                 let menu = app.scrollViews["expandedSelectionMenu"]
                 XCTAssertTrue(menu.waitForExistence(timeout: 6))
-                XCTAssertLessThanOrEqual(menu.frame.height, 48, "Selection actions must occupy one compact row")
+                XCTAssertGreaterThanOrEqual(menu.frame.height, 100, "The palette has separate primary and secondary rows")
+                XCTAssertLessThanOrEqual(menu.frame.height, 165, "Keep the palette compact enough to leave the book visible")
                 let initial = menu.value as? String ?? ""
                 let initialLocator = app.buttons["selection-ask"].value as? String ?? ""
                 XCTAssertFalse(initial.isEmpty); XCTAssertFalse(initialLocator.isEmpty)
@@ -472,16 +473,23 @@ final class LeafReaderUITests: XCTestCase {
                     let button = app.buttons["selection-" + id]
                     return button.isHittable && menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame)
                 }
-                XCTAssertGreaterThanOrEqual(firstVisible.count, 4, "Pack at least four labelled actions in a phone row")
-                let askX = app.buttons["selection-ask"].frame.minX
-                _ = revealSelectionAction("system", app: app)
-                if !landscape { XCTAssertLessThan(app.buttons["selection-ask"].frame.minX, askX, "Hidden actions must be reached by sliding the row") }
-                _ = revealSelectionAction("ask", app: app)
-                XCTAssertEqual(menu.value as? String, initial, "Sliding the toolbar cannot change the selected text")
+                XCTAssertEqual(firstVisible.count, 6, "All six actions must be visible without horizontal paging")
+                let ask = app.buttons["selection-ask"], listen = app.buttons["selection-listen"]
+                XCTAssertEqual(ask.frame.midY, listen.frame.midY, accuracy: 1)
+                let lowerRow = ["highlight", "note", "copy", "system"].map { app.buttons["selection-" + $0] }
+                for button in [ask, listen] + lowerRow {
+                    XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+                    XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+                }
+                for button in lowerRow {
+                    XCTAssertGreaterThan(button.frame.minY, ask.frame.maxY)
+                    XCTAssertEqual(button.frame.midY, lowerRow[0].frame.midY, accuracy: 1)
+                }
+                XCTAssertEqual(menu.value as? String, initial, "Presenting the palette cannot change the selected text")
                 let handle = app.descendants(matching: .any)["selection-end-geometry"].firstMatch
                 XCTAssertTrue(handle.waitForExistence(timeout: 3))
                 XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(handle.frame), "Toolbar must leave the native handle clear")
-                capture(flow + (landscape ? " landscape" : " portrait") + " compact menu before native handle drag", app: app)
+                capture(flow + (landscape ? " landscape" : " portrait") + " action palette before native handle drag", app: app)
                 let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: handle.frame.midX, dy: handle.frame.midY))
                 start.press(forDuration: 0.7, thenDragTo: start.withOffset(CGVector(dx: 80, dy: landscape ? 0 : 35)), withVelocity: .slow, thenHoldForDuration: 0.2)
                 if !menu.waitForExistence(timeout: 4) {
@@ -510,7 +518,7 @@ final class LeafReaderUITests: XCTestCase {
                     }
                     XCTAssertGreaterThan(newRanges.reduce(0) { $0 + $1.1.length }, oldRanges.reduce(0) { $0 + $1.1.length })
                 } else { XCTAssertTrue(extended.hasPrefix(initial), "Handle drag must retain the original selected word") }
-                capture(flow + (landscape ? " landscape" : " portrait") + " native selection extended with horizontal menu", app: app)
+                capture(flow + (landscape ? " landscape" : " portrait") + " native selection extended with action palette", app: app)
                 let startHandle = app.descendants(matching: .any)["selection-start-geometry"].firstMatch
                 XCTAssertTrue(startHandle.waitForExistence(timeout: 3))
                 XCTAssertFalse(menu.frame.insetBy(dx: 0, dy: -12).intersects(startHandle.frame))
@@ -572,9 +580,9 @@ final class LeafReaderUITests: XCTestCase {
             XCUIDevice.shared.orientation = .portrait
         }
     }
-    @MainActor func testHorizontalSelectionPrimaryActionsInPages() { verifyPrimarySelectionActions("Pages") }
-    @MainActor func testHorizontalSelectionPrimaryActionsInScroll() { verifyPrimarySelectionActions("Scroll") }
-    @MainActor func testHorizontalSelectionPrimaryActionsInPDF() { verifyPrimarySelectionActions("PDF") }
+    @MainActor func testSelectionPalettePrimaryActionsInPages() { verifyPrimarySelectionActions("Pages") }
+    @MainActor func testSelectionPalettePrimaryActionsInScroll() { verifyPrimarySelectionActions("Scroll") }
+    @MainActor func testSelectionPalettePrimaryActionsInPDF() { verifyPrimarySelectionActions("PDF") }
 
     @MainActor private func finishNativeSelectionAfterRotation(_ flow: String, expectedQuote: String, app: XCUIApplication) {
         let surface = readingSurface(app)
