@@ -439,6 +439,42 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: 0).contains(button.frame), "Action must scroll fully into view: " + id)
         return button
     }
+    @MainActor func testSelectionPaletteThemesFontExtremesAndMarginsInBothFlows() {
+        continueAfterFailure = false
+        defer { orient(.portrait) }
+        for flow in ["Pages", "Scroll"] {
+            let app = launchApp(); openSelectionFixture(flow, app: app)
+            for (theme, size, margin) in [("Day", 12, "Narrow"), ("Paper", 32, "Wide"), ("Night", 22, "Standard"), ("Sage", 19, "Standard")] {
+                openAppearance(app)
+                app.segmentedControls["appearanceTabs"].buttons["Font"].tap()
+                app.sliders["fontSize"].adjust(toNormalizedSliderPosition: Double(size - 12) / 20)
+                for _ in 0..<20 {
+                    let value = app.sliders["fontSize"].value as? String ?? ""
+                    if value == "\(size) points" { break }
+                    guard let current = Int(value.components(separatedBy: " ").first ?? "") else { break }
+                    app.buttons[current > size ? "decreaseTextSize" : "increaseTextSize"].tap()
+                }
+                XCTAssertEqual(app.sliders["fontSize"].value as? String, "\(size) points")
+                app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+                app.buttons["margins-" + margin].tap()
+                app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+                app.buttons[theme + " theme"].tap(); dismissAppearance(app)
+                selectFixturePassage(flow, app: app)
+                let menu = app.scrollViews["expandedSelectionMenu"]
+                XCTAssertTrue(menu.waitForExistence(timeout: 6))
+                for id in ["ask", "listen", "highlight", "note", "copy", "system"] {
+                    let button = app.buttons["selection-" + id]
+                    XCTAssertTrue(button.isHittable)
+                    XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: -1).contains(button.frame))
+                }
+                XCTAssertLessThanOrEqual(menu.frame.height, 165)
+                capture(flow + " " + theme + " palette at \(size) pt with " + margin + " margins", app: app)
+                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82)).tap()
+                XCTAssertFalse(menu.exists)
+            }
+            app.terminate()
+        }
+    }
     @MainActor func testSelectionPaletteHandlesInPages() { verifyPaletteSelectionHandles(flow: "Pages") }
     @MainActor func testSelectionPaletteHandlesInScroll() { verifyPaletteSelectionHandles(flow: "Scroll") }
     @MainActor func testSelectionPaletteHandlesInPDF() { verifyPaletteSelectionHandles(flow: "PDF") }
