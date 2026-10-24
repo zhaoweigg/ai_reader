@@ -2284,9 +2284,19 @@ final class LeafReaderUITests: XCTestCase {
         let check = app.buttons["testChatGPTBrowser"]
         for _ in 0..<3 where !check.isHittable { app.swipeUp() }
         check.tap()
-        if app.alerts.firstMatch.waitForExistence(timeout: 3), app.alerts.buttons["Continue"].exists { app.alerts.buttons["Continue"].tap() }
+        // The system asks for consent before opening the sign-in browser. On a
+        // loaded simulator that prompt can take well over 3 s; without Continue
+        // the loopback never completes and the check stays pending.
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        if springboard.alerts.firstMatch.exists, springboard.alerts.buttons["Continue"].exists { springboard.alerts.buttons["Continue"].tap() }
+        let consent = Date().addingTimeInterval(12)
+        var consented = false
+        while Date() < consent, !consented {
+            for continueButton in [app.alerts.buttons["Continue"], springboard.alerts.buttons["Continue"]] where continueButton.exists {
+                continueButton.tap(); consented = true; break
+            }
+            if !consented, app.staticTexts["chatGPTConnectionNotice"].exists { break }
+            if !consented { Thread.sleep(forTimeInterval: 0.5) }
+        }
         let notice = app.staticTexts["chatGPTConnectionNotice"]
         XCTAssertTrue(notice.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertEqual(notice.label, "Native browser callback verified.")
