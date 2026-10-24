@@ -1,4 +1,6 @@
 import UIKit
+import SwiftUI
+import Translation
 import UIKit.UIGestureRecognizerSubclass
 import WebKit
 import PDFKit
@@ -32,7 +34,6 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
     readerSelectionMenuTrace("request", source: view, context: context?.isEmpty == false)
     #endif
     guard let context, !context.isEmpty, let action else { return }
-    guard !presenter.showsSystemMenu else { return }
     var actions = [ReaderSelectionAction(title: "Ask Leaf", image: "leaf", id: "ask") { action(.ask, context) }]
     if let position, let listen {
         actions.append(ReaderSelectionAction(title: "Listen from here", image: "headphones", id: "listen") { listen(position) })
@@ -55,7 +56,25 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
         #endif
         presenter?.observeCopiedSelection()
     })
-    actions.append(ReaderSelectionAction(title: "iOS text actions", image: "ellipsis", id: "system") { [weak presenter] in presenter?.presentSystemMenu() })
+    var more = [ReaderSelectionAction(title: "Look Up", image: "character.book.closed", id: "lookup") { [weak view] in
+        let sheet = UIReferenceLibraryViewController(term: context.text)
+        sheet.view.accessibilityIdentifier = "selectionLookupSheet"
+        view?.presentSelectionUtility(sheet)
+    }]
+    if #available(iOS 17.4, *) {
+        more.append(ReaderSelectionAction(title: "Translate", image: "translate", id: "translate") { [weak view] in
+            view?.presentSelectionUtility(ReaderSelectionTranslationController(text: context.text))
+        })
+    }
+    more.append(ReaderSelectionAction(title: "Share", image: "square.and.arrow.up", id: "share") { [weak view] in
+        guard let view else { return }
+        let sheet = UIActivityViewController(activityItems: [context.text], applicationActivities: nil)
+        sheet.view.accessibilityIdentifier = "selectionShareSheet"
+        sheet.popoverPresentationController?.sourceView = view
+        sheet.popoverPresentationController?.sourceRect = view.selectionAnchor
+        view.presentSelectionUtility(sheet)
+    })
+    actions.append(ReaderSelectionAction(title: "More", image: "ellipsis", id: "system", perform: {}, children: more))
     #if DEBUG
     if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
         let identity = (view is PDFView && annotation?.pdfRanges.isEmpty == false)
@@ -68,6 +87,12 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
 }
 
 private extension UIView {
+    func presentSelectionUtility(_ controller: UIViewController) {
+        guard let owner = selectionStatusBarOwner, owner.viewIfLoaded?.window != nil else { return }
+        var presenter = owner
+        while let presented = presenter.presentedViewController { presenter = presented }
+        presenter.present(controller, animated: true)
+    }
     var selectionCharacterRanges: [PDFAnnotationRange] {
         guard let pdf = self as? PDFView, let document = pdf.document, let selection = pdf.currentSelection else { return [] }
         return selection.pages.flatMap { page in
@@ -150,6 +175,7 @@ private struct ReaderSelectionAction {
     let image: String
     let id: String
     let perform: () -> Void
+    var children: [ReaderSelectionAction] = []
     #if DEBUG
     var testLocator: String?
     #endif
@@ -187,7 +213,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     override func reset() { tracking = false; super.reset() }
 }
 
-@MainActor private final class ReaderSelectionMenuPresenter: NSObject, UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate {
+@MainActor private final class ReaderSelectionMenuPresenter: NSObject, UIGestureRecognizerDelegate {
     private weak var source: UIView?
     private weak var window: UIWindow?
     private var controller: ReaderSelectionActionsController?
@@ -201,8 +227,6 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     private var pdfSelectionObserver: NSObjectProtocol?
     private var pdfSelectionRanges: [PDFAnnotationRange] = []
     private var selectionRefreshTask: Task<Void, Never>?
-    private var systemMenuUntil = Date.distantPast
-    private var systemInteraction: UIEditMenuInteraction?
     private var selectionTouch: ReaderSelectionTouchObserver?
     private struct BookTouch {
         let start: CGPoint
@@ -225,8 +249,6 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     private var requestMenu: (() async -> Void)?
     private var requestTask: Task<Void, Never>?
     private var revision = 0
-    var showsSystemMenu: Bool { systemInteraction != nil || Date() < systemMenuUntil }
-    var usesExpandedMenu: Bool { requestTask != nil || selectionRefreshTask != nil || adjustingSelectionHandle || controller != nil }
     func observeSelection(on source: UIView, request: @escaping () async -> Void) {
         if self.source !== source { detach() }
         self.source = source; requestMenu = request
@@ -301,7 +323,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
             }
             return
         }
-        guard !showsSystemMenu, controller != nil || adjustingSelectionHandle else { return }
+        guard controller != nil || adjustingSelectionHandle else { return }
         adjustingSelectionHandle = true
         dismiss(keepingHandleObserver: true)
         let expectedRevision = revision
@@ -315,7 +337,6 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     func requestCurrentMenu() {
         guard let window = source?.window, window.windowScene?.activationState == .foregroundActive else { return }
         selectionRefreshTask?.cancel(); selectionRefreshTask = nil
-        systemMenuUntil = .distantPast
         revision += 1; let expectedRevision = revision; requestTask?.cancel()
         installOutsideObservers(on: window)
         requestTask = Task { [weak self] in
@@ -328,7 +349,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         UIMenuSystem.context.setNeedsRebuild()
     }
     private func observeBookTouch(_ phase: ReaderSelectionTouchObserver.Phase, point: CGPoint, timestamp: TimeInterval) {
-        guard let source, !showsSystemMenu else { bookTouch = nil; return }
+        guard let source else { bookTouch = nil; return }
         switch phase {
         case .began:
             completedSelectionTouchUntil = 0
@@ -407,10 +428,6 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     }
     func dismiss(keepingHandleObserver: Bool = false) {
         selectionRefreshTask?.cancel(); selectionRefreshTask = nil
-        if let interaction = systemInteraction {
-            systemInteraction = nil; interaction.dismissMenu(); interaction.view?.removeInteraction(interaction)
-        }
-        systemMenuUntil = .distantPast
         revision += 1; requestTask?.cancel(); requestTask = nil
         #if DEBUG
         readerSelectionMenuTrace("dismiss", source: source)
@@ -462,44 +479,37 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         return requestTask != nil || adjustingSelectionHandle
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
-    func presentSystemMenu() {
-        guard let source else { return }
-        systemMenuUntil = Date().addingTimeInterval(2)
-        #if DEBUG
-        readerSelectionMenuTrace("systemRequested", source: source, context: source.selectionText?.isEmpty == false)
-        #endif
-        UIMenuSystem.context.setNeedsRebuild()
-        // The WebKit-owned interaction carries its own configuration/session.
-        // Present UIKit's current responder actions without replacing that delegate.
-        let target = source.selectionFirstResponder ?? source
-        let interaction = UIEditMenuInteraction(delegate: self)
-        systemInteraction = interaction; target.addInteraction(interaction)
-        let rect = target.convert(source.selectionAnchor, from: source)
-        interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.midY)))
-    }
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]) -> UIMenu? {
-        #if DEBUG
-        readerSelectionMenuTrace("systemSuggestedActions", source: source, context: !suggestedActions.isEmpty)
-        #endif
-        return UIMenu(children: suggestedActions)
-    }
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
-        guard let source, let target = interaction.view else { return .null }
-        return target.convert(source.selectionAnchor, from: source)
-    }
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, willPresentMenuFor configuration: UIEditMenuConfiguration, animator: UIEditMenuInteractionAnimating) {
-        #if DEBUG
-        readerSelectionMenuTrace("systemWillPresent", source: source)
-        #endif
-    }
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, willDismissMenuFor configuration: UIEditMenuConfiguration, animator: UIEditMenuInteractionAnimating) {
-        animator.addCompletion { [weak self, weak interaction] in
-            guard let self, let interaction, self.systemInteraction === interaction else { return }
-            self.systemInteraction = nil; self.systemMenuUntil = .distantPast
-            interaction.view?.removeInteraction(interaction)
-            UIMenuSystem.context.setNeedsRebuild()
+
+}
+
+@available(iOS 17.4, *)
+private struct ReaderSelectionTranslation: View {
+    let text: String
+    let close: () -> Void
+    @State private var isPresented = false
+    var body: some View {
+        NavigationStack {
+            ScrollView { Text(text).padding().frame(maxWidth: .infinity, alignment: .leading) }
+                .navigationTitle("Translate").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close", action: close).accessibilityIdentifier("closeSelectionTranslation") } }
         }
+            .accessibilityIdentifier("selectionTranslationHost")
+            .translationPresentation(isPresented: $isPresented, text: text)
+            .onAppear { isPresented = true }
+            .onChange(of: isPresented) { wasPresented, presented in
+                if wasPresented && !presented { close() }
+            }
     }
+}
+
+@available(iOS 17.4, *)
+private final class ReaderSelectionTranslationController: UIHostingController<ReaderSelectionTranslation> {
+    init(text: String) {
+        super.init(rootView: ReaderSelectionTranslation(text: text, close: {}))
+        rootView = ReaderSelectionTranslation(text: text, close: { [weak self] in self?.dismiss(animated: false) })
+        modalPresentationStyle = .pageSheet
+    }
+    @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
 private final class ReaderSelectionWindow: UIWindow {
@@ -521,7 +531,14 @@ private final class ReaderSelectionOverlayView: UIView {
 }
 
 @MainActor private final class ReaderSelectionActionsController: UIViewController {
-    private var actions: [ReaderSelectionAction]
+    private var rootActions: [ReaderSelectionAction]
+    private var showsMore = false
+    private var actions: [ReaderSelectionAction] {
+        guard showsMore else { return rootActions }
+        let primary = rootActions.filter { $0.id == "ask" || $0.id == "listen" }
+        let utilities = rootActions.first { $0.id == "system" }?.children ?? []
+        return primary + utilities + [ReaderSelectionAction(title: "Back", image: "chevron.backward", id: "back", perform: {})]
+    }
     var choose: ((() -> Void) -> Void)?
     let scrollView = UIScrollView()
     private var buttons: [UIButton] = []
@@ -534,7 +551,7 @@ private final class ReaderSelectionOverlayView: UIView {
     override var prefersStatusBarHidden: Bool { hidesStatusBar }
     override var preferredStatusBarStyle: UIStatusBarStyle { statusBarStyle }
     init(actions: [ReaderSelectionAction], theme: ReadingTheme, source: UIView) {
-        self.actions = actions; self.theme = theme; self.source = source
+        self.rootActions = actions; self.theme = theme; self.source = source
         let status = source.window?.windowScene?.statusBarManager
         var hiddenOwner = source.selectionStatusBarOwner, styleOwner = hiddenOwner
         while let child = hiddenOwner?.childForStatusBarHidden { hiddenOwner = child }
@@ -564,12 +581,13 @@ private final class ReaderSelectionOverlayView: UIView {
         rebuildButtons()
     }
     func update(actions: [ReaderSelectionAction], selectedText: String) {
-        self.actions = actions; scrollView.accessibilityValue = selectedText
+        self.rootActions = actions; scrollView.accessibilityValue = selectedText
         rebuildButtons(); view.setNeedsLayout()
     }
     private func rebuildButtons() {
         for child in buttons.map({ $0 as UIView }) + dividers { child.removeFromSuperview() }
         buttons = []; dividers = []
+        scrollView.accessibilityLabel = showsMore ? "More selection actions" : "Selection actions"
         for (index, action) in actions.enumerated() {
             let primary = action.id == "ask" || action.id == "listen"
             let button = UIButton(type: .system)
@@ -597,7 +615,12 @@ private final class ReaderSelectionOverlayView: UIView {
             #endif
             button.addAction(UIAction { [weak self] _ in
                 guard let self, index < self.actions.count else { return }
-                self.choose?(self.actions[index].perform)
+                let action = self.actions[index]
+                if action.id == "back" || !action.children.isEmpty {
+                    self.showsMore = action.id != "back"
+                    self.rebuildButtons(); self.view.setNeedsLayout()
+                    UIAccessibility.post(notification: .layoutChanged, argument: self.buttons.first)
+                } else { self.choose?(action.perform) }
             }, for: .touchUpInside)
             scrollView.addSubview(button); buttons.append(button)
         }
@@ -717,23 +740,9 @@ final class ReaderWebView: WKWebView {
     var onAnnotationAction: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
-        #if DEBUG
-        readerSelectionMenuTrace(selectionMenu.showsSystemMenu ? "systemBuild" : "build", source: self, context: selectionContext?()?.isEmpty == false)
-        #endif
-        if selectionMenu.showsSystemMenu {
-            #if DEBUG
-            readerSelectionMenuTrace("systemHasDefaultItems", source: self, context: builder.menu(for: .root)?.children.isEmpty == false)
-            readerSelectionMenuTrace("systemCanCopy", source: self, context: selectionFirstResponder?.canPerformAction(#selector(UIResponderStandardEditActions.copy(_:)), withSender: nil) == true)
-            #endif
-            return
-        }
-        if selectionMenu.usesExpandedMenu {
-            builder.replaceChildren(ofMenu: .root) { _ in [] }; return
-        }
-        // Menu hierarchies are cached. The handler snapshots the current selection
-        // when invoked, including accessibility and keyboard edit-menu requests.
-        let action = UIAction(title: "Leaf actions", image: UIImage(systemName: "leaf")) { [weak self] _ in self?.selectionMenu.requestCurrentMenu() }
-        builder.insertChild(UIMenu(options: .displayInline, children: [action]), atStartOfMenu: .root)
+        // The passive native-selection observer presents Leaf's palette.
+        // Never expose a second, stock toolbar from UIKit's cached hierarchy.
+        builder.replaceChildren(ofMenu: .root) { _ in [] }
     }
     private func showSelectionActions() {
         showSelectionMenu(view: self, presenter: selectionMenu, theme: selectionTheme?() ?? .day, context: selectionContext?(), action: onSelectionAction, annotation: annotationSelection?(), annotate: onAnnotationAction, position: listeningPosition?(), listen: onListen)
@@ -762,23 +771,9 @@ final class ReaderPDFView: PDFView {
     var onAnnotationAction: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
-        #if DEBUG
-        readerSelectionMenuTrace(selectionMenu.showsSystemMenu ? "systemBuild" : "build", source: self, context: selectionContext?()?.isEmpty == false)
-        #endif
-        if selectionMenu.showsSystemMenu {
-            #if DEBUG
-            readerSelectionMenuTrace("systemHasDefaultItems", source: self, context: builder.menu(for: .root)?.children.isEmpty == false)
-            readerSelectionMenuTrace("systemCanCopy", source: self, context: selectionFirstResponder?.canPerformAction(#selector(UIResponderStandardEditActions.copy(_:)), withSender: nil) == true)
-            #endif
-            return
-        }
-        if selectionMenu.usesExpandedMenu {
-            builder.replaceChildren(ofMenu: .root) { _ in [] }; return
-        }
-        // Menu hierarchies are cached. The handler snapshots the current selection
-        // when invoked, including accessibility and keyboard edit-menu requests.
-        let action = UIAction(title: "Leaf actions", image: UIImage(systemName: "leaf")) { [weak self] _ in self?.selectionMenu.requestCurrentMenu() }
-        builder.insertChild(UIMenu(options: .displayInline, children: [action]), atStartOfMenu: .root)
+        // The passive native-selection observer presents Leaf's palette.
+        // Never expose a second, stock toolbar from UIKit's cached hierarchy.
+        builder.replaceChildren(ofMenu: .root) { _ in [] }
     }
     private func showSelectionActions() {
         showSelectionMenu(view: self, presenter: selectionMenu, theme: selectionTheme?() ?? .day, context: selectionContext?(), action: onSelectionAction, annotation: annotationSelection?(), annotate: onAnnotationAction, position: listeningPosition?(), listen: onListen)

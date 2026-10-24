@@ -771,29 +771,82 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["chatSelectedPassage"].label, changedSelection)
         capture("Selection window cleared and question restored after reopening", app: app)
     }
-    @MainActor func testExpandedSelectionMenuKeepsNativeTextActionsInAllReaderFlows() {
+    @MainActor func testMoreStaysInPaletteInPages() { verifyMorePalette("Pages") }
+    @MainActor func testMoreStaysInPaletteInScroll() { verifyMorePalette("Scroll") }
+    @MainActor func testMoreStaysInPaletteInPDF() { verifyMorePalette("PDF") }
+    @MainActor private func verifyMorePalette(_ flow: String) {
         continueAfterFailure = false
-        for flow in ["Pages", "Scroll", "PDF"] {
-            let app = launchApp(); openSelectionFixture(flow, app: app)
-            selectFixturePassage(flow, app: app)
-            XCTAssertTrue(app.buttons["selection-system"].waitForExistence(timeout: 6))
-            let selected = app.scrollViews["expandedSelectionMenu"].value as? String ?? ""
-            XCTAssertFalse(selected.isEmpty)
-            revealSelectionAction("system", app: app).tap()
-            let expanded = app.scrollViews["expandedSelectionMenu"]
-            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: expanded); waitForExpectations(timeout: 5)
-            let nativeCopy = app.menuItems["Copy"].exists ? app.menuItems["Copy"] : app.buttons["Copy"]
-            XCTAssertTrue(nativeCopy.waitForExistence(timeout: 5), "Native text actions must remain available in " + flow)
-            capture(flow + " standard iOS text actions remain available", app: app)
-            nativeCopy.tap(); app.buttons["openReaderChat"].tap()
-            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
-            input.tap(); input.press(forDuration: 1.2)
-            let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
-            XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
-            XCTAssertEqual(input.value as? String, selected, "Standard Copy must use the current native selection in " + flow)
-            capture(flow + " standard iOS Copy retains selected text", app: app)
-            app.terminate()
+        let app = launchApp(); openSelectionFixture(flow, app: app)
+        defer { orient(.portrait) }
+        for landscape in [false, true] {
+            if landscape { orient(.landscapeLeft) }
+            selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
+            let menu = app.scrollViews["expandedSelectionMenu"]
+            XCTAssertTrue(menu.waitForExistence(timeout: 6))
+            let selected = menu.value as? String ?? ""
+            let locator = app.buttons["selection-ask"].value as? String ?? ""
+            XCTAssertFalse(selected.isEmpty); XCTAssertFalse(locator.isEmpty)
+            for _ in 0..<2 {
+                app.buttons["selection-system"].tap()
+                XCTAssertTrue(app.buttons["selection-back"].waitForExistence(timeout: 4))
+                XCTAssertEqual(menu.label, "More selection actions")
+                XCTAssertEqual(menu.value as? String, selected)
+                XCTAssertEqual(app.buttons["selection-ask"].value as? String, locator)
+                for id in ["ask", "listen", "lookup", "translate", "share", "back"] {
+                    let button = app.buttons["selection-" + id]
+                    XCTAssertTrue(button.isHittable)
+                    XCTAssertTrue(menu.frame.insetBy(dx: -1, dy: -1).contains(button.frame))
+                    XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+                    XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+                }
+                XCTAssertEqual(app.menuItems.count, 0, "More must never expose UIKit's old selection bar")
+                for (label, identifier) in [("Copy", "selection-copy"), ("Look Up", "selection-lookup"), ("Translate", "selection-translate")] {
+                    let stock = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", label, identifier)).firstMatch
+                    XCTAssertFalse(stock.exists, "No duplicate stock selection action: " + label)
+                }
+                capture(flow + (landscape ? " landscape" : " portrait") + " More stays in palette", app: app)
+                app.buttons["selection-back"].tap()
+                XCTAssertTrue(app.buttons["selection-system"].exists)
+                XCTAssertFalse(app.buttons["selection-lookup"].exists)
+                XCTAssertEqual(menu.value as? String, selected)
+            }
+            capture(flow + (landscape ? " landscape" : " portrait") + " Back restores primary palette", app: app)
+            tapBookOutsideSelectionPalette(app)
+            XCTAssertEqual(app.menuItems.count, 0)
         }
+    }
+    @MainActor func testPaletteLookupAndShareOpenWithoutStockSelectionBar() {
+        continueAfterFailure = false
+        let app = launchApp(); openSelectionFixture("Pages", app: app)
+        selectFixturePassage("Pages", app: app)
+        app.buttons["selection-system"].tap(); app.buttons["selection-lookup"].tap()
+        XCTAssertTrue(app.otherElements["selectionLookupSheet"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.menuItems.count, 0)
+        capture("Palette Look Up opens dictionary directly", app: app)
+        app.buttons["Done"].tap()
+        selectFixturePassage("Pages", app: app)
+        app.buttons["selection-system"].tap(); app.buttons["selection-share"].tap()
+        let sheet = app.otherElements["selectionShareSheet"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5)); XCTAssertEqual(app.menuItems.count, 0)
+        capture("Palette Share opens share sheet directly", app: app)
+        sheet.swipeDown()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: sheet); waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.webViews["bookWebView"].exists)
+    }
+    @MainActor func testPaletteTranslateOpensWithoutStockSelectionBar() {
+        continueAfterFailure = false
+        let app = launchApp(); openSelectionFixture("Pages", app: app)
+        selectFixturePassage("Pages", app: app)
+        app.buttons["selection-system"].tap(); app.buttons["selection-translate"].tap()
+        let close = app.buttons["closeSelectionTranslation"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.menuItems.count, 0)
+        XCTAssertFalse(app.scrollViews["expandedSelectionMenu"].exists)
+        capture("Palette Translate opens directly without old selection toolbar", app: app)
+        if close.isHittable { close.tap() }
+        else { app.swipeDown() }
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: close); waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.webViews["bookWebView"].exists)
     }
     @MainActor func testSpeechProgressHighlightsVisibleTextInPagesScrollAndPDF() {
         continueAfterFailure = false
