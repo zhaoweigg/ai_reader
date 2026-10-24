@@ -1596,7 +1596,19 @@ final class LeafReaderUITests: XCTestCase {
         let typingHeight = panel.frame.height
         hideKeyboardAndWait()
         XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
-        input.tap()
+        // The composer has moved from above the keyboard to the reading panel.
+        // Resolve its current scene geometry and inject a real tap there rather
+        // than asking accessibility to reveal the previously focused element.
+        let reopenedInputFrame = input.frame
+        XCTAssertTrue(input.isHittable)
+        XCTAssertTrue(panel.frame.insetBy(dx: -1, dy: -1).contains(reopenedInputFrame))
+        let focusPoint = CGPoint(x: reopenedInputFrame.midX, y: reopenedInputFrame.midY)
+        let focusTarget = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: focusPoint.x - app.frame.minX, dy: focusPoint.y - app.frame.minY))
+        let focusProof = XCTAttachment(string: "App: \(app.frame); panel: \(panel.frame); input: \(reopenedInputFrame); intended point: \(focusPoint); resolved screen point: \(focusTarget.screenPoint); keyboard before: \(app.keyboards.firstMatch.exists)")
+        focusProof.name = flow + " restored composer focus geometry"; focusProof.lifetime = .keepAlways; add(focusProof)
+        capture(flow + " restored input before keyboard reopen", app: app)
+        focusTarget.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout:5))
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
