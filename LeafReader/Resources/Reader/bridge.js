@@ -165,6 +165,8 @@ function applyPreferences(value) {
     const line = bounded(value.lineHeight, 1.65, 1.1, 2.2);
     const horizontal = bounded(value.horizontalMargin ?? 20, 20, 8, 48);
     const vertical = bounded(value.verticalMargin ?? 12, 12, 0, 48);
+    view.renderer.style.setProperty('--leaf-chapter-divider-color', value.accent ?? value.foreground);
+    view.renderer.style.setProperty('--leaf-chapter-divider-inset', `${horizontal}px`);
     const paragraph = bounded(value.paragraphSpacing ?? 0.65, 0.65, 0, 1.5);
     const doc = view.renderer.getContents?.()[0]?.doc;
     const verticalText = doc && /^(vertical|sideways)/.test(doc.defaultView.getComputedStyle(doc.body).writingMode);
@@ -244,6 +246,10 @@ async function open(config) {
                 label:languageText(detail.tocItem?.label) || (view.isFixedLayout ? `Page ${fixedIndex + 1} of ${count}` : '') });
         });
         await view.open(book);
+        view.renderer.setChapterDivider?.(doc => {
+            const language = languageText(book.metadata?.language) || doc.documentElement.lang;
+            return /^(?:zh|zho|chi|chinese)(?:[-_ ]|$)/i.test(language.trim()) ? '下一章' : 'Next Chapter';
+        });
         let viewportStart;
         view.renderer.addEventListener('relocate', ({ detail }) => {
             const next = { index:detail.index, node:detail.range?.startContainer, offset:detail.range?.startOffset };

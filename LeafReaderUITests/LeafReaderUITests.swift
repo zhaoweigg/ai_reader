@@ -2006,6 +2006,50 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    @MainActor func testScrollChapterDividerIsInlineAndKeepsChatOpen() {
+        let app = launchApp()
+        defer { orient(.portrait) }
+        app.buttons["featuredBook"].tap()
+        openAppearance(app)
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
+        dismissAppearance(app)
+        let surface = readingSurface(app)
+        let divider = surface.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Next Chapter")).firstMatch
+        app.buttons["openReaderChat"].tap()
+        let panel = app.otherElements["readerChatPanel"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Keep my chapter question")
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+        app.buttons["Hide keyboard"].tap()
+        var visible = false
+        for _ in 0..<20 {
+            if divider.exists && divider.frame.minY > surface.frame.minY + 60 && divider.frame.maxY < panel.frame.minY {
+                visible = true; break
+            }
+            let top = max(surface.frame.minY + 110, 140)
+            let bottom = min(panel.frame.minY - 25, top + 220)
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: surface.frame.midX, dy: bottom)).press(forDuration: 0.01,
+                thenDragTo: origin.withOffset(CGVector(dx: surface.frame.midX, dy: top)),
+                withVelocity: .slow, thenHoldForDuration: 0.1)
+        }
+        XCTAssertTrue(visible, "The actual boundary divider must be visible above chat, not merely preloaded offscreen")
+        XCTAssertEqual(input.value as? String, "Keep my chapter question")
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+        capture("Inline next chapter divider above open chat", app: app)
+        input.tap(); input.typeText(" while reading")
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, "Keep my chapter question while reading")
+        capture("Chapter boundary with composing chat", app: app)
+        app.buttons["Hide keyboard"].tap()
+        orient(.landscapeLeft)
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+        XCTAssertEqual(input.value as? String, "Keep my chapter question while reading")
+        capture("Chapter crossing landscape chat retained", app: app)
+    }
+
     @MainActor func testScrollSwipesReachNextChapterAndPreviousChapter() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()
