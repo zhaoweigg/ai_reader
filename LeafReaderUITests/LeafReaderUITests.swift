@@ -620,12 +620,24 @@ final class LeafReaderUITests: XCTestCase {
                 let title = app.staticTexts["readerChapterTitle"], originalPage = title.label
                 XCTAssertFalse(originalPage.isEmpty)
                 let surface = readingSurface(app)
-                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+                func tapBookInScene(_ fraction: CGFloat) {
+                    // Like the native-grip checks, use measured scene points:
+                    // element-relative taps can retain the pre-rotation transform.
+                    let frame = surface.frame
+                    let point = CGPoint(x: frame.minX + frame.width * fraction, y: frame.midY)
+                    XCTAssertTrue(frame.contains(point))
+                    let target = app.coordinate(withNormalizedOffset: .zero)
+                        .withOffset(CGVector(dx: point.x - app.frame.minX, dy: point.y - app.frame.minY))
+                    let proof = XCTAttachment(string: "Book: \(frame); intended scene point: \(point); actual screen point: \(target.screenPoint)")
+                    proof.name = "PDF post-selection scene tap \(fraction)"; proof.lifetime = .keepAlways; add(proof)
+                    target.tap()
+                }
+                tapBookInScene(0.5)
+                tapBookInScene(0.95)
                 showReaderControls(app)
                 XCTAssertNotEqual(title.label, originalPage, "A normal right-edge tap must advance after selection closes")
-                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-                surface.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
+                tapBookInScene(0.5)
+                tapBookInScene(0.05)
                 showReaderControls(app)
                 XCTAssertEqual(title.label, originalPage, "A normal left-edge tap must return to the original PDF page")
                 capture("PDF ordinary edge navigation resumes after native selection", app: app)
@@ -774,7 +786,9 @@ final class LeafReaderUITests: XCTestCase {
         for landscape in [false, true] {
             if landscape { orient(.landscapeLeft) }
             for cycle in 0..<2 {
-                selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
+                // PDFKit retains native handles after tap-away. Selecting
+                // another word starts a fresh range instead of pressing a grip.
+                selectFixturePassage(flow, app: app, pdfWordOffset: cycle == 0 ? 0.15 : 0.55)
                 let menu = app.scrollViews["expandedSelectionMenu"]
                 assertFiveActionRibbon(app)
                 let selected = menu.value as? String ?? ""
