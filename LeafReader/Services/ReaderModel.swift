@@ -142,15 +142,9 @@ final class ReaderModel: NSObject, ObservableObject {
     func selectedAnnotationSelection() -> BookAnnotationSelection? {
         guard isReady, !isLocked, error == nil else { return nil }
         if let pdfView, let document = pdfView.document, let selected = pdfView.currentSelection, let text = selected.string {
-            var ranges: [PDFAnnotationRange] = []
-            for page in selected.pages {
-                for index in 0..<selected.numberOfTextRanges(on: page) {
-                    let range = selected.range(at: index, on: page)
-                    ranges.append(PDFAnnotationRange(page: document.index(for: page), location: range.location, length: range.length))
-                }
-            }
+            let ranges = selected.annotationRanges(in: document)
             guard let first = ranges.first else { return nil }
-            let selection = BookAnnotationSelection(text: text, locator: "pdf:\(first.page)", chapter: "Page \(first.page + 1)", fraction: document.pageCount > 1 ? Double(first.page) / Double(document.pageCount - 1) : 0, pdfRanges: ranges)
+            let selection = BookAnnotationSelection(text: text, locator: PDFLocator.page(first.page), chapter: "Page \(first.page + 1)", fraction: document.pageCount > 1 ? Double(first.page) / Double(document.pageCount - 1) : 0, pdfRanges: ranges)
             return selection.annotation().valid ? selection : nil
         }
         guard !selectionTooLong, let selectedWebLocator else { return nil }
@@ -313,7 +307,7 @@ final class ReaderModel: NSObject, ObservableObject {
             searchResults = results.prefix(200).compactMap { selection in
                 guard let page = selection.pages.first else { return nil }
                 let index = doc.index(for: page)
-                return BookSearchResult(label: "Page \(index + 1)", excerpt: selection.selectionsByLine().compactMap(\.string).joined(separator: " "), locator: "pdf:\(index)")
+                return BookSearchResult(label: "Page \(index + 1)", excerpt: selection.selectionsByLine().compactMap(\.string).joined(separator: " "), locator: PDFLocator.page(index))
             }
             isSearching = false
         } else { evaluate("search", ["query": text, "generation": searchGeneration]) }
@@ -341,7 +335,7 @@ final class ReaderModel: NSObject, ObservableObject {
     }
     private func finishPDFSetup(_ view: PDFView) {
         guard let doc = view.document else { return }
-        chapters = (0..<doc.pageCount).map { Chapter(label: "Page \($0 + 1)", href: "pdf:\($0)") }
+        chapters = (0..<doc.pageCount).map { Chapter(label: "Page \($0 + 1)", href: PDFLocator.page($0)) }
         if !locator.isEmpty { navigatePDF(locator) }
         else if let first = doc.page(at: 0) { view.go(to: first) }
         isReady = true
@@ -352,15 +346,15 @@ final class ReaderModel: NSObject, ObservableObject {
         synchronizeAnnotations()
     }
     private func navigatePDF(_ target: String) {
-        guard target.hasPrefix("pdf:"), let index = Int(target.dropFirst(4)), let page = pdfView?.document?.page(at: index) else { return }
+        guard let index = PDFLocator.pageIndex(target), let page = pdfView?.document?.page(at: index) else { return }
         pdfView?.go(to: page)
     }
     func pdfPageChanged() {
         guard isReady, let view = pdfView, let doc = view.document, let page = view.currentPage else { return }
         let index = doc.index(for: page)
         guard index != NSNotFound else { return }
-        if locator != "pdf:\(index)" { hideControls() }
-        locator = "pdf:\(index)"; fraction = doc.pageCount > 1 ? Double(index) / Double(doc.pageCount - 1) : 0
+        if locator != PDFLocator.page(index) { hideControls() }
+        locator = PDFLocator.page(index); fraction = doc.pageCount > 1 ? Double(index) / Double(doc.pageCount - 1) : 0
         chapterTitle = "Page \(index + 1) of \(doc.pageCount)"
         library.setPosition(bookID, locator: locator, fraction: fraction)
         synchronizeAnnotations()

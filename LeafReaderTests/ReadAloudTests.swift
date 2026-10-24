@@ -267,7 +267,9 @@ import PDFKit
         let next = try XCTUnwrap(nextValue)
         XCTAssertTrue(next.text.contains("Next chapter text")); XCTAssertEqual(next.locator, "pdf:2:0")
         let end = try await PDFReadAloudSource.passage(in: document, at: next.nextLocator); XCTAssertNil(end)
-        XCTAssertNil(PDFReadAloudSource.cursor("pdf:-1:0")); XCTAssertNil(PDFReadAloudSource.cursor("pdf:0:-1"))
+        XCTAssertNil(PDFLocator.cursor("pdf:-1:0")); XCTAssertNil(PDFLocator.cursor("pdf:0:-1"))
+        XCTAssertEqual(PDFLocator.pageIndex("pdf:4"), 4); XCTAssertEqual(PDFLocator.pageIndex("pdf:4:120"), 4)
+        XCTAssertNil(PDFLocator.pageIndex("epubcfi(/6/4)")); XCTAssertEqual(PDFLocator.cursor(PDFLocator.position(page: 2, offset: 9))?.offset, 9)
     }
     func testSystemVoiceProducesRealAudioBuffers() async throws {
         let synthesizer = AVSpeechSynthesizer()

@@ -1,10 +1,8 @@
 import { makeBook } from './foliate/view.js';
 import { openBookSource } from './book-source.js';
+import { languageText, contributor } from './metadata-text.js';
 
 const post = value => window.webkit.messageHandlers.leafMetadata.postMessage(value);
-const languageText = value => typeof value === 'string' ? value : value ? languageText(Object.values(value)[0]) : '';
-const contributor = value => Array.isArray(value) ? value.map(contributor).filter(Boolean).join(', ')
-    : typeof value === 'string' ? value : languageText(value?.name);
 
 async function coverPNG(blob) {
     if (!blob || blob.size > 8 * 1024 * 1024) return null;

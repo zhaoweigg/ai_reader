@@ -9,53 +9,20 @@ struct LibraryChatOverlay: View {
     let onChoose: () -> Void
     @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var settings: AISettingsStore
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @AppStorage("library.chatHeightFraction") private var heightFraction = 1.0 / 3
-    @AppStorage("library.chatComposingHeightFraction") private var composingFraction = -1.0
-    @State private var resizeOrigin: CGFloat?
-    @State private var resizedHeight: CGFloat?
     @State private var panel: Panel?
     private enum Panel: String, Identifiable { case settings, button; var id: String { rawValue } }
 
     var body: some View {
-        GeometryReader { geometry in
-            let full = max(fullHeight, geometry.size.height)
-            let composing = geometry.size.height < full - 80
-            let limits = ReaderChatSizing.bounds(fullHeight: full, availableHeight: geometry.size.height,
-                composing: composing, hasSelection: session.selectedContext != nil)
-            let preferred = ReaderChatSizing.height(fraction: composing ? composingFraction : heightFraction,
-                fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: session.selectedContext != nil)
-            let height = min(limits.upperBound, max(limits.lowerBound, resizedHeight ?? preferred))
-            ReaderChatPanel(session: session, bookTitle: book?.title ?? "", isComposing: composing,
-                context: book == nil ? .general : .libraryBook, onChooseConversation: onChoose,
-                onClose: onClose, onSettings: { session.stop(); panel = .settings }, onButtonSettings: { panel = .button },
-                onSend: {
-                    session.send(settings: settings, missingContextNotice: nil) {
-                        // A quoted draft already has its own snapshot. Otherwise only
-                        // the selected book's metadata is sent, never an unseen passage.
-                        book.map { ReadingChatContext(title: $0.title, author: $0.author, chapter: "", text: "", source: "library_metadata", locator: "") }
-                    }
-                }, onResize: { translation, ended in
-                    if resizeOrigin == nil { resizeOrigin = height }
-                    let next = min(limits.upperBound, max(limits.lowerBound, (resizeOrigin ?? height) - translation))
-                    resizedHeight = next
-                    if ended { save(next, full: full, composing: composing) }
-                }, onResizeStep: { step in
-                    save(min(limits.upperBound, max(limits.lowerBound, height + step)), full: full, composing: composing)
-                }, onResetSize: {
-                    if composing { composingFraction = -1 } else { heightFraction = 1.0 / 3 }
-                    resizeOrigin = nil; resizedHeight = nil
-                })
-                .frame(height: height)
-                .background {
-                    if reduceTransparency { theme.canvas }
-                    else { Rectangle().fill(.ultraThinMaterial) }
+        ResizableChatPanel(session: session, location: .library, fullHeight: fullHeight, bookTitle: book?.title ?? "",
+            context: book == nil ? .general : .libraryBook, onChooseConversation: onChoose,
+            onClose: onClose, onSettings: { session.stop(); panel = .settings }, onButtonSettings: { panel = .button },
+            onSend: {
+                session.send(settings: settings, missingContextNotice: nil) {
+                    // A quoted draft already has its own snapshot. Otherwise only
+                    // the selected book's metadata is sent, never an unseen passage.
+                    book.map { ReadingChatContext(title: $0.title, author: $0.author, chapter: "", text: "", source: "library_metadata", locator: "") }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-                .padding(8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .onChange(of: geometry.size) { _, _ in resizeOrigin = nil; resizedHeight = nil }
-        }
+            })
         .sheet(item: $panel) { value in
             NavigationStack {
                 Group {
@@ -68,13 +35,6 @@ struct LibraryChatOverlay: View {
                 }
             }.environment(\.leafTheme, theme).tint(theme.accent)
         }
-    }
-
-    private func save(_ height: CGFloat, full: CGFloat, composing: Bool) {
-        guard full > 0 else { return }
-        if composing { composingFraction = Double(height / full) }
-        else { heightFraction = Double(height / full) }
-        resizeOrigin = nil; resizedHeight = nil
     }
 }
 

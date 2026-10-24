@@ -63,7 +63,7 @@ struct ChatGPTConnectionView: View {
             if let error = accounts.error { Text(error).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("chatGPTConnectionError") }
             if let notice = accounts.notice { Text(notice).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("chatGPTConnectionNotice") }
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--ui-testing"), ProcessInfo.processInfo.environment["LEAF_UI_CHATGPT_BROWSER"] == "1" {
+            if UITesting.flag("LEAF_UI_CHATGPT_BROWSER") {
                 Button("Verify native browser callback") { Task { await accounts.testBrowserLoopback() } }
                     .accessibilityIdentifier("testChatGPTBrowser")
             }

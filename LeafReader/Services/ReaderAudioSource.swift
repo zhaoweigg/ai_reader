@@ -5,7 +5,7 @@ import PDFKit
 @MainActor extension ReaderModel {
     func highlightReadAloud(_ passage: ReadAloudPassage?, range: NSRange, follow: Bool) {
         if let pdfView {
-            guard let passage, let cursor = PDFReadAloudSource.cursor(passage.locator),
+            guard let passage, let cursor = PDFLocator.cursor(passage.locator),
                   let page = pdfView.document?.page(at: cursor.page), range.location != NSNotFound,
                   let selection = page.selection(for: NSRange(location: cursor.offset + range.location, length: min(1, range.length))) else {
                 pdfView.highlightedSelections = nil
@@ -50,7 +50,7 @@ import PDFKit
     }
     func revealReadAloud(at position: String) async {
         guard isReady else { return }
-        if let pdfView, let document = pdfView.document, let cursor = PDFReadAloudSource.cursor(position),
+        if let pdfView, let document = pdfView.document, let cursor = PDFLocator.cursor(position),
            let page = document.page(at: cursor.page) {
             let rect = page.characterBounds(at: min(cursor.offset, max(0, page.numberOfCharacters - 1)))
             if !rect.isEmpty { pdfView.go(to: rect, on: page) }
@@ -64,7 +64,7 @@ import PDFKit
         if let pdfView, let document = pdfView.document, let selection = pdfView.currentSelection,
            let page = selection.pages.first, selection.numberOfTextRanges(on: page) > 0 {
             let range = selection.range(at: 0, on: page)
-            if range.location != NSNotFound { return "pdf:\(document.index(for: page)):\(range.location)" }
+            if range.location != NSNotFound { return PDFLocator.position(page: document.index(for: page), offset: range.location) }
         }
         return selectedReadingContext()?.locator
     }
@@ -73,20 +73,13 @@ import PDFKit
         let rect = view.convert(view.bounds, to: page).intersection(page.bounds(for: view.displayBox))
         let selection = page.selection(for: rect)
         let offset = selection.flatMap { $0.numberOfTextRanges(on: page) > 0 ? $0.range(at: 0, on: page).location : nil }
-        return "pdf:\(document.index(for: page)):\(offset == NSNotFound ? 0 : offset ?? 0)"
+        return PDFLocator.position(page: document.index(for: page), offset: offset == NSNotFound ? 0 : offset ?? 0)
     }
 }
 
 enum PDFReadAloudSource {
-    static func cursor(_ position: String) -> (page: Int, offset: Int)? {
-        let parts = position.split(separator: ":")
-        guard parts.count >= 2, parts[0] == "pdf", let page = Int(parts[1]), page >= 0 else { return nil }
-        let offset = parts.count > 2 ? Int(parts[2]) : 0
-        guard let offset, offset >= 0 else { return nil }
-        return (page, offset)
-    }
     @MainActor static func passage(in document: PDFDocument, at position: String) async throws -> ReadAloudPassage? {
-        guard let start = cursor(position), start.page < document.pageCount else { return nil }
+        guard let start = PDFLocator.cursor(position), start.page < document.pageCount else { return nil }
         for index in start.page..<document.pageCount {
             try Task.checkCancellation()
             let text = (document.page(at: index)?.string ?? "") as NSString
@@ -102,9 +95,9 @@ enum PDFReadAloudSource {
                 }
                 let range = NSRange(location: offset, length: end - offset)
                 let content = text.substring(with: range)
-                let next = end == text.length ? "pdf:\(index + 1):0" : "pdf:\(index):\(end)"
+                let next = end == text.length ? PDFLocator.position(page: index + 1, offset: 0) : PDFLocator.position(page: index, offset: end)
                 if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    return ReadAloudPassage(text: content, locator: "pdf:\(index):\(offset)", nextLocator: next,
+                    return ReadAloudPassage(text: content, locator: PDFLocator.position(page: index, offset: offset), nextLocator: next,
                         language: "", label: "Page \(index + 1)")
                 }
                 offset = end

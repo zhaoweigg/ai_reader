@@ -20,7 +20,6 @@ struct ReaderContent: View {
     @StateObject private var audio: ReadAloudSession
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var library: LibraryStore
@@ -35,10 +34,6 @@ struct ReaderContent: View {
     @State private var panel: ReaderPanel?
     @State private var chatIsPresented = false
     @State private var chatButtonIsMoving = false
-    @AppStorage("reader.chatHeightFraction") private var chatHeightFraction = 1.0 / 3
-    @AppStorage("reader.chatComposingHeightFraction") private var chatComposingHeightFraction = -1.0
-    @State private var chatResizeOrigin: CGFloat?
-    @State private var chatResizedHeight: CGFloat?
     @StateObject private var chat: ReaderChatSession
     @EnvironmentObject private var aiSettings: AISettingsStore
     @State private var bookViewportHeight: CGFloat = 0
@@ -57,11 +52,10 @@ struct ReaderContent: View {
     init(book: Book, url: URL, library: LibraryStore, initialLocator: String?) {
         self.book = book; self.url = url
         _model = StateObject(wrappedValue: ReaderModel(bookID: book.id, library: library, initialLocator: initialLocator))
-        var defaults = UserDefaults.standard
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--ui-testing"), let id = ProcessInfo.processInfo.environment["LEAF_UI_TEST_ID"] {
-            defaults = UserDefaults(suiteName: "com.leafreader.uitests.\(id)") ?? .standard
-        }
+        let defaults = UITesting.defaults
+        #else
+        let defaults = UserDefaults.standard
         #endif
         _audio = StateObject(wrappedValue: ReadAloudSession(bookmarkURL: library.disk?.root.appendingPathComponent("Audio/\(book.id.uuidString).json"), defaults: defaults))
         _chat = StateObject(wrappedValue: ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true), conversation: book.fingerprint))
@@ -148,48 +142,19 @@ struct ReaderContent: View {
         // Keep only the book full-height; the overlay uses the keyboard safe area.
         .ignoresSafeArea(.keyboard)
         .overlay {
-            GeometryReader { geometry in
-                if chatIsPresented {
-                    let fullHeight = max(bookViewportHeight, geometry.size.height)
-                    let composing = geometry.size.height < fullHeight - 80
-                    let limits = ReaderChatSizing.bounds(fullHeight: fullHeight, availableHeight: geometry.size.height, composing: composing, hasSelection: chat.selectedContext != nil)
-                    let preferred = ReaderChatSizing.height(fraction: composing ? chatComposingHeightFraction : chatHeightFraction,
-                        fullHeight: fullHeight, availableHeight: geometry.size.height, composing: composing, hasSelection: chat.selectedContext != nil)
-                    let height = min(limits.upperBound, max(limits.lowerBound, chatResizedHeight ?? preferred))
-                    ReaderChatPanel(session: chat, bookTitle: book.title, isComposing: composing, onClose: {
-                        chatIsPresented = false
-                        model.clearNativeSelection()
-                        model.hideControls()
-                    }, onSettings: {
-                        chat.stop()
-                        panel = .aiSettings
-                    }, onButtonSettings: {
-                        panel = .buttonAppearance
-                    }, onSend: {
-                        chat.send(settings: aiSettings) { try await model.readingChatContext() }
-                    }, onResize: { translation, ended in
-                        if chatResizeOrigin == nil { chatResizeOrigin = height }
-                        let resized = min(limits.upperBound, max(limits.lowerBound, (chatResizeOrigin ?? height) - translation))
-                        chatResizedHeight = resized
-                        if ended { saveChatHeight(resized, fullHeight: fullHeight, composing: composing) }
-                    }, onResizeStep: { step in
-                        saveChatHeight(min(limits.upperBound, max(limits.lowerBound, height + step)), fullHeight: fullHeight, composing: composing)
-                    }, onResetSize: {
-                        if composing { chatComposingHeightFraction = -1 } else { chatHeightFraction = 1.0 / 3 }
-                        chatResizeOrigin = nil; chatResizedHeight = nil
-                    })
-                    .frame(height: height)
-                    .background {
-                        if reduceTransparency { theme.background }
-                        else { Rectangle().fill(.ultraThinMaterial) }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .onChange(of: geometry.size) { _, _ in chatResizeOrigin = nil; chatResizedHeight = nil }
-                    .onDisappear { chatResizeOrigin = nil; chatResizedHeight = nil }
-                }
+            if chatIsPresented {
+                ResizableChatPanel(session: chat, location: .reader, fullHeight: bookViewportHeight, bookTitle: book.title, onClose: {
+                    chatIsPresented = false
+                    model.clearNativeSelection()
+                    model.hideControls()
+                }, onSettings: {
+                    chat.stop()
+                    panel = .aiSettings
+                }, onButtonSettings: {
+                    panel = .buttonAppearance
+                }, onSend: {
+                    chat.send(settings: aiSettings) { try await model.readingChatContext() }
+                })
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showsControls)
@@ -290,12 +255,6 @@ struct ReaderContent: View {
     }
     private func updateViewport(_ size: CGSize) {
         bookViewportHeight = size.height
-    }
-    private func saveChatHeight(_ height: CGFloat, fullHeight: CGFloat, composing: Bool) {
-        guard fullHeight > 0 else { return }
-        if composing { chatComposingHeightFraction = Double(height / fullHeight) }
-        else { chatHeightFraction = Double(height / fullHeight) }
-        chatResizeOrigin = nil; chatResizedHeight = nil
     }
     private func handleBookTap() -> Bool {
         guard chatIsPresented else { return false }

@@ -38,6 +38,20 @@ enum ReadAloudError: LocalizedError {
     }
 }
 
+/// The shared audio session of both speech engines.
+enum ReadAloudAudioSession {
+    /// Takes the spoken-audio playback category; other apps' audio ducks or pauses.
+    static func activate() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio)
+        try session.setActive(true)
+    }
+    /// Hands audio back to other apps. A failure leaves nothing to recover, so it is ignored.
+    static func deactivate() {
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+}
+
 @MainActor protocol ReadAloudSpeaking: AnyObject {
     var finished: (() -> Void)? { get set }
     var progressed: ((NSRange) -> Void)? { get set }
@@ -88,9 +102,7 @@ extension ReadAloudSpeaking {
         // Resolve eligibility before taking over the audio session: a missing
         // download must leave other audio untouched.
         let selected = try selectedVoice(identifier: voice, detectedLanguage: detected, sourceLanguage: language)
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio)
-        try session.setActive(true)
+        try ReadAloudAudioSession.activate()
         let rate = min(AVSpeechUtteranceMaximumSpeechRate,
             max(AVSpeechUtteranceMinimumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(speed)))
         // A passage with no letters or digits yields no chunks; speak it whole.
@@ -246,9 +258,9 @@ extension ReadAloudSpeaking {
         (self.speaker as? RoutingReadAloudSpeaker)?.onFallback = { [weak self] reason in self?.fallbackReason = reason }
         (self.speaker as? RoutingReadAloudSpeaker)?.failed = { [weak self] error in
             guard let self, self.passage != nil, self.state == .playing || self.state == .paused else { return }
-            self.error = error.localizedDescription; self.state = .failed; self.isBuffering = false
-            self.saveBookmark(); self.clearHighlight()
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            self.fail(error); self.isBuffering = false
+            self.saveBookmark()
+            ReadAloudAudioSession.deactivate()
         }
         notificationTokens.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
             guard (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue else { return }
@@ -291,7 +303,7 @@ extension ReadAloudSpeaking {
     func stop() {
         saveBookmark(); cancelWork(); state = .idle; isPresented = false
         passage = nil; error = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        ReadAloudAudioSession.deactivate()
     }
     private func cancelWork() {
         clearHighlight()
@@ -318,7 +330,7 @@ extension ReadAloudSpeaking {
                     state = .finished; bookmark = nil
                     clearHighlight()
                     clearSource?()
-                    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                    ReadAloudAudioSession.deactivate()
                     if let bookmarkURL { try? FileManager.default.removeItem(at: bookmarkURL) }
                     return
                 }
@@ -336,8 +348,7 @@ extension ReadAloudSpeaking {
                 if state != .paused { speakCurrent() }
             } catch {
                 guard !Task.isCancelled, generation == token else { return }
-                self.error = error.localizedDescription; state = .failed
-                clearHighlight()
+                fail(error)
             }
         }
     }
@@ -361,7 +372,12 @@ extension ReadAloudSpeaking {
                 let locator = passage.locator
                 revealTask = Task { [weak self] in guard !Task.isCancelled else { return }; await self?.reveal?(locator) }
             }
-        } catch { self.error = error.localizedDescription; state = .failed; clearHighlight() }
+        } catch { fail(error) }
+    }
+    /// Reports an error for the current passage; the cursor is kept so Resume can retry it.
+    private func fail(_ error: Error) {
+        self.error = error.localizedDescription; state = .failed
+        clearHighlight()
     }
     private func advance() {
         guard let passage else { return }

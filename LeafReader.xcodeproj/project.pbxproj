@@ -26,6 +26,7 @@
 		40137AAE22983BAD512DC3BF /* KokoroSpeechTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C494CF7B965049F41D1A360F /* KokoroSpeechTests.swift */; };
 		426155C7059E798D7A043711 /* UITestSceneGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC121F68853537778A0E3CC2 /* UITestSceneGeometry.swift */; };
 		449C6B3DFB9DA3812BCFBB09 /* libc++.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E9C79FC755BD7B61574177 /* libc++.tbd */; };
+		450FBFE809E2396034EBDCD9 /* UITesting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C217626C6A54DF6B51455E7 /* UITesting.swift */; };
 		45A8DCDD2BA104372550136B /* ReaderModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7679CE530CAB3E1CBC7BF6 /* ReaderModel.swift */; };
 		48197B9BA6699E9830F76310 /* AddBooksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBECD7296E1A713FB8FE684C /* AddBooksView.swift */; };
 		48A42EA6731C8ED591702A66 /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 04DE0EA9FD13D33E62324BDB /* libbz2.tbd */; };
@@ -52,6 +53,7 @@
 		88921C02F99C02FBC5B4505E /* ReaderPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA375CCD5FE2A2A6CEEDDF5B /* ReaderPreferences.swift */; };
 		9110C50975F238750DA3ED00 /* BookMetadataLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8899A77310F180B812766D5D /* BookMetadataLoader.swift */; };
 		93E967055EC1E395AC160A13 /* ZLibraryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */; };
+		947743E6063F4E9D0D1D36CD /* PDFLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A2C9B67F8B3D6FC34ACF98 /* PDFLocator.swift */; };
 		94989906649C2E04E90425C6 /* AppleVoiceCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC9000E9711E46C768A8470 /* AppleVoiceCatalog.swift */; };
 		965F9070210F18463495A4F4 /* ZLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27735E21F07ADCA25D2777AC /* ZLibraryStore.swift */; };
 		973AB757D5F2D3E1BA34EF5D /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782B9AF3266BE06B1B489337 /* ReaderView.swift */; };
@@ -135,6 +137,7 @@
 		3BAAB2D0ADFB4B6AD2057EFA /* ChatGPTSubscriptionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTSubscriptionProvider.swift; sourceTree = "<group>"; };
 		3F39761621E9910A989FEB3A /* KokoroReadAloudSpeaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroReadAloudSpeaker.swift; sourceTree = "<group>"; };
 		3FD904DA89A963355B4AFD5B /* AnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationTests.swift; sourceTree = "<group>"; };
+		43A2C9B67F8B3D6FC34ACF98 /* PDFLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFLocator.swift; sourceTree = "<group>"; };
 		53EF7C81ECA87AA792CB61CD /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
 		56D4D8913088D871C0A664F5 /* ReaderAudioSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAudioSource.swift; sourceTree = "<group>"; };
 		5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryChatUITests.swift; sourceTree = "<group>"; };
@@ -155,6 +158,7 @@
 		95E3F1CC0A69A7431FDFC29B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		96E14EF665D316B3CB3BA361 /* ChatModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModels.swift; sourceTree = "<group>"; };
 		988B12B05A25D8C389A2D249 /* BookMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookMetadataTests.swift; sourceTree = "<group>"; };
+		9C217626C6A54DF6B51455E7 /* UITesting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITesting.swift; sourceTree = "<group>"; };
 		AA375CCD5FE2A2A6CEEDDF5B /* ReaderPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderPreferences.swift; sourceTree = "<group>"; };
 		AE07B9A1522472930DD1E8D6 /* ChatGPTConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTConnectionView.swift; sourceTree = "<group>"; };
 		B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTests.swift; sourceTree = "<group>"; };
@@ -324,6 +328,7 @@
 				53EF7C81ECA87AA792CB61CD /* Book.swift */,
 				FDFDA3B1B04E80DC6E19DE41 /* BookAnnotation.swift */,
 				96E14EF665D316B3CB3BA361 /* ChatModels.swift */,
+				43A2C9B67F8B3D6FC34ACF98 /* PDFLocator.swift */,
 				AA375CCD5FE2A2A6CEEDDF5B /* ReaderPreferences.swift */,
 			);
 			path = Models;
@@ -335,6 +340,7 @@
 				95E3F1CC0A69A7431FDFC29B /* Assets.xcassets */,
 				3B2353C4D9FAFA8345A327A7 /* LeafReader-Bridging-Header.h */,
 				F09FE5DD36BCC4F16362E9EA /* LeafReaderApp.swift */,
+				9C217626C6A54DF6B51455E7 /* UITesting.swift */,
 				B8C25FF5E306598174EE9D6A /* Models */,
 				DCD99CCCE4A022ACC18B9F56 /* Services */,
 				6C5506B57EFD762D7D9FB597 /* Views */,
@@ -552,6 +558,7 @@
 				51E73A18348FB06EA3C85062 /* LibraryDisk.swift in Sources */,
 				21ED9AF526E865E9547836E5 /* LibraryStore.swift in Sources */,
 				78A529FF823C019A8445E417 /* LibraryView.swift in Sources */,
+				947743E6063F4E9D0D1D36CD /* PDFLocator.swift in Sources */,
 				4B9CCD168963BB4BB85D5646 /* ReadAloudSession.swift in Sources */,
 				3FD99BFAA6C100E30E07044C /* ReaderAnnotationsView.swift in Sources */,
 				BA394ED9A589ADD27030CB7E /* ReaderAppearancePanel.swift in Sources */,
@@ -570,6 +577,7 @@
 				BE304B8B6ABD0D54C31DA0B1 /* TarBzip2Extractor.swift in Sources */,
 				11F98810E05BCDC675C839EC /* ThemePicker.swift in Sources */,
 				426155C7059E798D7A043711 /* UITestSceneGeometry.swift in Sources */,
+				450FBFE809E2396034EBDCD9 /* UITesting.swift in Sources */,
 				D9CC609F0D4142FA91D26A0A /* ZLibraryBrowserSession.swift in Sources */,
 				F3F8B6B6F653CF0B900E74CE /* ZLibraryClient.swift in Sources */,
 				965F9070210F18463495A4F4 /* ZLibraryStore.swift in Sources */,

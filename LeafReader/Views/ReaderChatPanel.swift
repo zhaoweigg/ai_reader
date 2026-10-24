@@ -212,6 +212,82 @@ struct ReaderChatLauncher: View {
     }
 }
 
+/// Hosts the chat panel at the bottom of its container at the saved, resizable
+/// height of one placement. Reading and keyboard-open heights are stored
+/// separately per placement; a drag of the grabber resizes within the bounds
+/// `ReaderChatSizing` allows for the current viewport.
+struct ResizableChatPanel: View {
+    @ObservedObject var session: ReaderChatSession
+    let location: ReaderChatLauncher.Location
+    /// The full viewport height, measured outside the keyboard safe area.
+    let fullHeight: CGFloat
+    let bookTitle: String
+    let context: ReaderChatPanel.Context
+    let onChooseConversation: (() -> Void)?
+    let onClose: () -> Void
+    let onSettings: () -> Void
+    let onButtonSettings: () -> Void
+    let onSend: () -> Void
+    @Environment(\.leafTheme) private var theme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage private var heightFraction: Double
+    @AppStorage private var composingHeightFraction: Double
+    @State private var resizeOrigin: CGFloat?
+    @State private var resizedHeight: CGFloat?
+
+    init(session: ReaderChatSession, location: ReaderChatLauncher.Location, fullHeight: CGFloat, bookTitle: String,
+         context: ReaderChatPanel.Context = .reader, onChooseConversation: (() -> Void)? = nil,
+         onClose: @escaping () -> Void, onSettings: @escaping () -> Void, onButtonSettings: @escaping () -> Void, onSend: @escaping () -> Void) {
+        self.session = session; self.location = location; self.fullHeight = fullHeight; self.bookTitle = bookTitle
+        self.context = context; self.onChooseConversation = onChooseConversation
+        self.onClose = onClose; self.onSettings = onSettings; self.onButtonSettings = onButtonSettings; self.onSend = onSend
+        _heightFraction = AppStorage(wrappedValue: 1.0 / 3, "\(location.storagePrefix).chatHeightFraction")
+        _composingHeightFraction = AppStorage(wrappedValue: -1, "\(location.storagePrefix).chatComposingHeightFraction")
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let full = max(fullHeight, geometry.size.height)
+            let composing = geometry.size.height < full - 80
+            let hasSelection = session.selectedContext != nil
+            let limits = ReaderChatSizing.bounds(fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection)
+            let preferred = ReaderChatSizing.height(fraction: composing ? composingHeightFraction : heightFraction,
+                fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection)
+            let height = min(limits.upperBound, max(limits.lowerBound, resizedHeight ?? preferred))
+            ReaderChatPanel(session: session, bookTitle: bookTitle, isComposing: composing, context: context, onChooseConversation: onChooseConversation,
+                onClose: onClose, onSettings: onSettings, onButtonSettings: onButtonSettings, onSend: onSend,
+                onResize: { translation, ended in
+                    if resizeOrigin == nil { resizeOrigin = height }
+                    let resized = min(limits.upperBound, max(limits.lowerBound, (resizeOrigin ?? height) - translation))
+                    resizedHeight = resized
+                    if ended { save(resized, fullHeight: full, composing: composing) }
+                }, onResizeStep: { step in
+                    save(min(limits.upperBound, max(limits.lowerBound, height + step)), fullHeight: full, composing: composing)
+                }, onResetSize: {
+                    if composing { composingHeightFraction = -1 } else { heightFraction = 1.0 / 3 }
+                    resizeOrigin = nil; resizedHeight = nil
+                })
+                .frame(height: height)
+                .background {
+                    if reduceTransparency { location == .reader ? theme.background : theme.canvas }
+                    else { Rectangle().fill(.ultraThinMaterial) }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .onChange(of: geometry.size) { _, _ in resizeOrigin = nil; resizedHeight = nil }
+                .onDisappear { resizeOrigin = nil; resizedHeight = nil }
+        }
+    }
+    private func save(_ height: CGFloat, fullHeight: CGFloat, composing: Bool) {
+        guard fullHeight > 0 else { return }
+        if composing { composingHeightFraction = Double(height / fullHeight) }
+        else { heightFraction = Double(height / fullHeight) }
+        resizeOrigin = nil; resizedHeight = nil
+    }
+}
+
 struct ReaderChatPanel: View {
     enum Context { case reader, libraryBook, general }
     @Environment(\.leafTheme) private var theme
@@ -441,14 +517,14 @@ struct ReaderChatPanel: View {
         HStack(spacing: compact ? 4 : 8) {
             ForEach([ReaderSelectionIntent.explain, .summarize], id: \.rawValue) { intent in
                 Button { session.prepareSelectionPrompt(intent) } label: {
-                    Text(intent == .explain ? "Explain" : "Summarize")
+                    Text(intent.shortTitle)
                         .font(.caption.weight(.medium)).lineLimit(1).fixedSize()
                         .foregroundStyle(accent).padding(.horizontal, compact ? 10 : 14).frame(height: 44)
                         .background(accent.opacity(0.08), in: Capsule())
                         .overlay(Capsule().stroke(accent.opacity(0.2), lineWidth: 0.75))
                 }
                 .buttonStyle(.plain).accessibilityLabel(intent.title)
-                .accessibilityIdentifier(intent == .explain ? "explainChatSelection" : "summarizeChatSelection")
+                .accessibilityIdentifier("\(intent.rawValue)ChatSelection")
             }
         }
     }
