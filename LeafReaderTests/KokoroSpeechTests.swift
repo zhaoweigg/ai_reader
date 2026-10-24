@@ -426,4 +426,66 @@ final class FakeArchiveDownloader: KokoroArchiveDownloading, @unchecked Sendable
         XCTAssertEqual(restored.engine, .kokoro); XCTAssertEqual(restored.kokoroVoice, "zf_001")
         session.stop()
     }
+
+    // MARK: - Real engine playback while paused (QA66-002)
+
+    private func silence(seconds: Double) -> KokoroAudio {
+        KokoroAudio(samples: [Float](repeating: 0, count: Int(24_000 * seconds)), sampleRate: 24_000)
+    }
+    /// A chunk delivered while paused must neither restart the engine nor start playing.
+    func testEnginePlayerStaysSilentWhenChunksArriveWhilePaused() async throws {
+        let player = AudioEnginePlayer()
+        try player.prepare(sampleRate: 24_000)
+        var starts = 0, finishes = 0
+        player.enqueue(silence(seconds: 1.5), onStart: { starts += 1 }, onFinish: { finishes += 1 })
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(starts, 1); XCTAssertTrue(player.isEngineRunning)
+        player.pause()
+        try player.prepare(sampleRate: 24_000)
+        player.enqueue(silence(seconds: 0.5), onStart: { starts += 1 }, onFinish: { finishes += 1 })
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertFalse(player.isEngineRunning, "A chunk arriving while paused must not resume playback")
+        XCTAssertEqual(starts, 1); XCTAssertEqual(finishes, 0)
+        try player.resume()
+        try await Task.sleep(for: .seconds(2.5))
+        XCTAssertEqual(finishes, 2, "Both chunks play after resume"); XCTAssertEqual(starts, 2)
+        player.stop()
+    }
+    /// The node reports pending chunks as consumed when the system stops the
+    /// engine while paused; they are not finished and play again after resume.
+    func testEnginePlayerIgnoresCompletionsFromAnEngineStopWhilePaused() async throws {
+        let player = AudioEnginePlayer()
+        try player.prepare(sampleRate: 24_000)
+        var starts = 0, finishes = 0
+        player.enqueue(silence(seconds: 1.5), onStart: { starts += 1 }, onFinish: { finishes += 1 })
+        player.enqueue(silence(seconds: 0.5), onStart: { starts += 1 }, onFinish: { finishes += 1 })
+        try await Task.sleep(for: .milliseconds(300))
+        player.pause()
+        player.stopEngineForTesting()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(finishes, 0, "An engine stop while paused must not finish the queued chunks")
+        XCTAssertEqual(starts, 1)
+        try player.resume()
+        try await Task.sleep(for: .seconds(2.8))
+        XCTAssertEqual(finishes, 2, "The interrupted chunks play again after resume"); XCTAssertEqual(starts, 3)
+        player.stop()
+    }
+    /// A chunk that fully played before the pause still counts as finished.
+    func testEnginePlayerCountsChunksRenderedBeforeThePause() async throws {
+        let player = AudioEnginePlayer()
+        try player.prepare(sampleRate: 24_000)
+        var starts = 0, finishes = 0
+        player.enqueue(silence(seconds: 0.3), onStart: { starts += 1 }, onFinish: { finishes += 1 })
+        player.enqueue(silence(seconds: 1.5), onStart: { starts += 1 }, onFinish: { finishes += 1 })
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertEqual(finishes, 1); XCTAssertEqual(starts, 2)
+        player.pause()
+        player.stopEngineForTesting()
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(finishes, 1)
+        try player.resume()
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertEqual(finishes, 2); XCTAssertEqual(starts, 3)
+        player.stop()
+    }
 }
