@@ -43,9 +43,16 @@ struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String 
     }
     let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view
-    actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder, weak presenter] in
+    actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder, weak presenter, weak view] in
+        #if DEBUG
+        readerSelectionMenuTrace("copyInvokedWithMatchingSnapshot", source: view, context: copiedText == context.text)
+        readerSelectionMenuTrace("copyNativeRangeStillMatchesMenu", source: view, context: view?.selectionText == context.text)
+        #endif
         if let copiedText { UIPasteboard.general.string = copiedText }
         else { responder?.perform(#selector(UIResponderStandardEditActions.copy(_:)), with: nil) }
+        #if DEBUG
+        if let copiedText { readerSelectionMenuTrace("copyClipboardMatchesSnapshot", source: view, context: UIPasteboard.general.string == copiedText) }
+        #endif
         presenter?.observeCopiedSelection()
     })
     actions.append(ReaderSelectionAction(title: "iOS text actions", image: "ellipsis", id: "system") { [weak presenter] in presenter?.presentSystemMenu() })
@@ -513,14 +520,13 @@ private final class ReaderSelectionOverlayView: UIView {
     }
 }
 
-@MainActor private final class ReaderSelectionActionsController: UIViewController, UIScrollViewDelegate {
+@MainActor private final class ReaderSelectionActionsController: UIViewController {
     private var actions: [ReaderSelectionAction]
     var choose: ((() -> Void) -> Void)?
     let scrollView = UIScrollView()
     private var buttons: [UIButton] = []
     private var dividers: [UIView] = []
-    private let leadingHint = UIImageView(image: UIImage(systemName: "chevron.left"))
-    private let trailingHint = UIImageView(image: UIImage(systemName: "chevron.right"))
+    private let material = UIVisualEffectView(effect: nil)
     private let theme: ReadingTheme
     private weak var source: UIView?
     private let hidesStatusBar: Bool
@@ -543,19 +549,18 @@ private final class ReaderSelectionOverlayView: UIView {
         super.viewDidLoad()
         let overlay = view as! ReaderSelectionOverlayView
         overlay.addSubview(overlay.card); overlay.card.addSubview(scrollView)
-        overlay.card.backgroundColor = UIColor(theme.surface); overlay.card.layer.cornerRadius = 14
+        overlay.card.backgroundColor = .clear; overlay.card.layer.cornerRadius = 22
         overlay.card.layer.shadowColor = UIColor.black.cgColor; overlay.card.layer.shadowOpacity = 0.16
-        overlay.card.layer.shadowRadius = 12; overlay.card.layer.shadowOffset = CGSize(width: 0, height: 3)
-        scrollView.delegate = self; scrollView.showsHorizontalScrollIndicator = false
+        overlay.card.layer.shadowRadius = 16; overlay.card.layer.shadowOffset = CGSize(width: 0, height: 5)
+        material.effect = UIAccessibility.isReduceTransparencyEnabled ? nil : UIBlurEffect(style: .systemThinMaterial)
+        material.contentView.backgroundColor = UIColor(theme.surface).withAlphaComponent(UIAccessibility.isReduceTransparencyEnabled ? 1 : 0.8)
+        material.layer.cornerRadius = 22; material.clipsToBounds = true; material.isUserInteractionEnabled = false
+        overlay.card.insertSubview(material, at: 0)
+        scrollView.showsHorizontalScrollIndicator = false; scrollView.showsVerticalScrollIndicator = false
         scrollView.isDirectionalLockEnabled = true; scrollView.contentInsetAdjustmentBehavior = .never
         scrollView.accessibilityIdentifier = "expandedSelectionMenu"
         scrollView.accessibilityLabel = "Selection actions"
-        scrollView.accessibilityHint = "Swipe left or right for more actions."
-        for hint in [leadingHint, trailingHint] {
-            hint.tintColor = UIColor(theme.foreground).withAlphaComponent(0.55)
-            hint.contentMode = .scaleAspectFit; hint.isUserInteractionEnabled = false
-            hint.isAccessibilityElement = false; overlay.card.addSubview(hint)
-        }
+        scrollView.accessibilityHint = "Choose an action for the selected passage."
         rebuildButtons()
     }
     func update(actions: [ReaderSelectionAction], selectedText: String) {
@@ -565,12 +570,27 @@ private final class ReaderSelectionOverlayView: UIView {
     private func rebuildButtons() {
         for child in buttons.map({ $0 as UIView }) + dividers { child.removeFromSuperview() }
         buttons = []; dividers = []
-        let font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: .systemFont(ofSize: 14, weight: .medium), maximumPointSize: 20)
         for (index, action) in actions.enumerated() {
+            let primary = action.id == "ask" || action.id == "listen"
             let button = UIButton(type: .system)
-            let compact = action.id == "listen" ? "Listen" : action.id == "note" ? "Note" : action.id == "system" ? "More" : action.title
-            button.setTitle(compact, for: .normal); button.setTitleColor(UIColor(theme.foreground), for: .normal)
-            button.titleLabel?.font = font; button.titleLabel?.adjustsFontForContentSizeCategory = true
+            var configuration = UIButton.Configuration.plain()
+            configuration.title = action.id == "listen" ? "Listen" : action.id == "note" ? "Note" : action.id == "system" ? "More" : action.title
+            configuration.image = UIImage(systemName: action.image)
+            configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: primary ? 17 : 19, weight: .regular)
+            configuration.imagePlacement = primary ? .leading : .top
+            configuration.imagePadding = primary ? 8 : 5
+            configuration.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: 5, bottom: 7, trailing: 5)
+            configuration.baseForegroundColor = UIColor(action.id == "ask" ? theme.onAccent : theme.foreground)
+            configuration.background.backgroundColor = action.id == "ask" ? UIColor(theme.accent) : primary ? UIColor(theme.accent).withAlphaComponent(0.1) : .clear
+            configuration.background.cornerRadius = 14
+            configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+                var result = attributes
+                result.font = UIFontMetrics(forTextStyle: primary ? .subheadline : .caption1).scaledFont(
+                    for: .systemFont(ofSize: primary ? 15 : 11, weight: primary ? .medium : .regular), maximumPointSize: primary ? 20 : 16)
+                return result
+            }
+            button.configuration = configuration
+            button.titleLabel?.adjustsFontForContentSizeCategory = true
             button.accessibilityLabel = action.title; button.accessibilityIdentifier = "selection-" + action.id
             #if DEBUG
             if action.id == "ask" { button.accessibilityValue = action.testLocator }
@@ -580,23 +600,25 @@ private final class ReaderSelectionOverlayView: UIView {
                 self.choose?(self.actions[index].perform)
             }, for: .touchUpInside)
             scrollView.addSubview(button); buttons.append(button)
-            if index < actions.count - 1 {
-                let line = UIView(); line.backgroundColor = UIColor(theme.foreground).withAlphaComponent(0.12)
-                scrollView.addSubview(line); dividers.append(line)
-            }
         }
+        let line = UIView(); line.backgroundColor = UIColor(theme.foreground).withAlphaComponent(0.1)
+        scrollView.addSubview(line); dividers = [line]
     }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         guard let source, let overlay = view as? ReaderSelectionOverlayView else { return }
         let safe = view.bounds.inset(by: view.safeAreaInsets).insetBy(dx: 12, dy: 8)
         let anchor = source.convert(source.selectionAnchor, to: view)
         let handles = source.selectionHandles.map { source.convert($0, to: view) }
-        let widths = buttons.map { max(44, ceil($0.intrinsicContentSize.width) + 20) }
-        let contentWidth = widths.reduce(0, +) + CGFloat(max(0, buttons.count - 1))
-        let height = max(44, ceil(buttons.first?.titleLabel?.font.lineHeight ?? 17) + 16)
-        let width = min(contentWidth + 16, safe.width)
-        let overflow = contentWidth + 16 > width
+        let primaryIndices = actions.indices.filter { actions[$0].id == "ask" || actions[$0].id == "listen" }
+        let secondaryIndices = actions.indices.filter { !primaryIndices.contains($0) }
+        let primaryHeight = max(48, ceil(primaryIndices.map { buttons[$0].intrinsicContentSize.height }.max() ?? 48))
+        let secondaryHeight = max(56, ceil(secondaryIndices.map { buttons[$0].intrinsicContentSize.height }.max() ?? 56))
+        let secondaryTop = primaryHeight + 13
+        let contentHeight = secondaryTop + secondaryHeight
+        let height = min(contentHeight + 16, safe.height)
+        let width = min(360, safe.width)
         // Prefer above the entire selection, with enough clearance for its
         // start knob. If it reaches the top, place below its end knob instead.
         let selectionTop = min(anchor.minY, handles.map(\.minY).min() ?? anchor.minY)
@@ -613,18 +635,24 @@ private final class ReaderSelectionOverlayView: UIView {
         // Even an unusually short viewport must pass handle touches through.
         overlay.selectionHandleRects = handles
         overlay.card.frame = frame
-        let inset: CGFloat = overflow ? 18 : 8
-        scrollView.frame = overlay.card.bounds.insetBy(dx: inset, dy: 0)
-        var x: CGFloat = 0
-        for (index, button) in buttons.enumerated() {
-            button.frame = CGRect(x: x, y: 0, width: widths[index], height: height); x += widths[index]
-            if index < dividers.count { dividers[index].frame = CGRect(x: x, y: 12, width: 1, height: height - 24); x += 1 }
+        overlay.card.layer.shadowPath = UIBezierPath(roundedRect: overlay.card.bounds, cornerRadius: 22).cgPath
+        material.frame = overlay.card.bounds
+        scrollView.frame = overlay.card.bounds.insetBy(dx: 8, dy: 8)
+        let rowWidth = scrollView.bounds.width
+        let primaryWidth = (rowWidth - CGFloat(max(0, primaryIndices.count - 1)) * 8) / CGFloat(max(1, primaryIndices.count))
+        for (column, index) in primaryIndices.enumerated() {
+            buttons[index].frame = CGRect(x: CGFloat(column) * (primaryWidth + 8), y: 0, width: primaryWidth, height: primaryHeight)
         }
-        scrollView.contentSize = CGSize(width: contentWidth, height: height)
-        scrollView.contentOffset.x = min(max(0, scrollView.contentOffset.x), max(0, contentWidth - scrollView.bounds.width))
-        leadingHint.frame = CGRect(x: 5, y: 16, width: 8, height: height - 32)
-        trailingHint.frame = CGRect(x: width - 13, y: 16, width: 8, height: height - 32)
-        updateScrollHints()
+        dividers.first?.frame = CGRect(x: 0, y: primaryHeight + 8, width: rowWidth, height: 1)
+        let secondaryWidth = rowWidth / CGFloat(max(1, secondaryIndices.count))
+        for (column, index) in secondaryIndices.enumerated() {
+            buttons[index].frame = CGRect(x: CGFloat(column) * secondaryWidth, y: secondaryTop, width: secondaryWidth, height: secondaryHeight)
+        }
+        // Only unusually short accessibility/keyboard viewports scroll, and
+        // only vertically. All six actions fit without paging in normal use.
+        scrollView.contentSize = CGSize(width: rowWidth, height: contentHeight)
+        scrollView.isScrollEnabled = contentHeight > scrollView.bounds.height
+        scrollView.contentOffset = CGPoint(x: 0, y: min(scrollView.contentOffset.y, max(0, contentHeight - scrollView.bounds.height)))
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
             // Geometry only, for real native handle drags; this does not create
@@ -661,11 +689,7 @@ private final class ReaderSelectionOverlayView: UIView {
         }
         #endif
     }
-    func scrollViewDidScroll(_ scrollView: UIScrollView) { updateScrollHints() }
-    private func updateScrollHints() {
-        leadingHint.isHidden = scrollView.contentOffset.x <= 1
-        trailingHint.isHidden = scrollView.contentOffset.x + scrollView.bounds.width >= scrollView.contentSize.width - 1
-    }
+
 }
 
 final class ReaderWebView: WKWebView {
