@@ -23,7 +23,7 @@ struct ReaderAudioPlayer: View {
                         Button(String(format: "%g×", speed)) { session.speed = speed }
                     }
                 } label: { Text(session.speedLabel).font(.caption.weight(.semibold)).frame(minWidth: 38, minHeight: 44) }
-                    .accessibilityLabel("Playback speed").accessibilityIdentifier("playbackSpeed")
+                    .accessibilityLabel("Playback speed").accessibilityValue(session.speedLabel).accessibilityIdentifier("playbackSpeed")
                 Button { session.previous() } label: { Image(systemName: "backward.end.fill").frame(width: 36, height: 44) }
                     .disabled(!session.canGoBack).accessibilityLabel("Previous passage").accessibilityIdentifier("audioPrevious")
                 Button { session.togglePlayback() } label: {
@@ -104,16 +104,16 @@ struct ReaderAudioSettings: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     }.accessibilityIdentifier("appleVoiceDownloadGuidance")
                 }
-                HStack { Text("Speed"); Spacer(); Text(session.speedLabel).monospacedDigit().foregroundStyle(.secondary) }
+                HStack { Text("Speed"); Spacer(); Text(session.speedLabel).monospacedDigit().foregroundStyle(.secondary).accessibilityIdentifier("listeningSpeedValue") }
                 Slider(value: $session.speed, in: 0.5...2, step: 0.25) { Text("Playback speed") }
                     .accessibilityIdentifier("listeningSpeedSlider")
                 Toggle("Follow the spoken passage", isOn: $session.followsText)
                     .accessibilityIdentifier("followSpokenText")
             } header: { Text("Voice and speed") } footer: {
                 if session.engine == .kokoro {
-                    Text("Natural voice runs on your iPhone for Chinese and English. No account is needed, and no text leaves the device. If it cannot start, Leaf can use a downloaded Enhanced or Premium Apple voice. Basic voices are not used. Playback pauses in the background; your listening position is saved.")
+                    Text("Apple and Natural voices remember separate speeds. Natural voice runs on your iPhone for Chinese and English. No account is needed, and no text leaves the device. If it cannot start, Leaf can use a downloaded Enhanced or Premium Apple voice. Basic voices are not used. Playback pauses in the background; your listening position is saved.")
                 } else {
-                    Text("Only downloaded Enhanced and Premium Apple voices are used. Automatic prefers Premium for the text’s language. Add voices in iPhone Accessibility settings. Playback pauses in the background; your listening position is saved.")
+                    Text("Apple and Natural voices remember separate speeds. Only downloaded Enhanced and Premium Apple voices are used. Automatic prefers Premium for the text’s language. Add voices in iPhone Accessibility settings. Playback pauses in the background; your listening position is saved.")
                 }
             }.listRowBackground(theme.surface)
             Section {

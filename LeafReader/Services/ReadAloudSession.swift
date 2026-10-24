@@ -130,10 +130,18 @@ extension ReadAloudSpeaking {
         defaults.set(followsText, forKey: "audio.followsText")
         if let passage, let spokenRange { highlight?(passage, spokenRange, followsText) }
     } }
-    @Published var speed: Double { didSet { defaults.set(speed, forKey: "audio.speed"); restartVoice() } }
+    @Published var speed: Double { didSet {
+        defaults.set(speed, forKey: Self.speedKey(engine))
+        restartVoice()
+    } }
     @Published var voice: String { didSet { defaults.set(voice, forKey: "audio.voice"); restartVoice() } }
     /// Natural voice can fall back only to a downloaded Enhanced/Premium voice.
-    @Published var engine: ReadAloudEngine { didSet { defaults.set(engine.rawValue, forKey: "audio.engine"); restartVoice() } }
+    @Published var engine: ReadAloudEngine { didSet {
+        defaults.set(engine.rawValue, forKey: "audio.engine")
+        // Assign even when the rates match: speed's observer restarts the new
+        // engine exactly once, using its rate and the existing listening cursor.
+        speed = Self.savedSpeed(for: engine, defaults: defaults)
+    } }
     /// Kokoro voice id, or empty for automatic selection by the text's script.
     @Published var kokoroVoice: String { didSet { defaults.set(kokoroVoice, forKey: "audio.kokoroVoice"); restartVoice() } }
     /// True while the on-device model is generating audio that has not started playing.
@@ -165,16 +173,30 @@ extension ReadAloudSpeaking {
     var isPlaying: Bool { state == .playing || state == .loading }
     var speedLabel: String { String(format: "%g×", speed) }
 
+    private static func speedKey(_ engine: ReadAloudEngine) -> String { "audio.speed.\(engine.rawValue)" }
+    private static func savedSpeed(for engine: ReadAloudEngine, defaults: UserDefaults) -> Double {
+        let saved = defaults.double(forKey: speedKey(engine))
+        if saved.isFinite && (0.5...2).contains(saved) { return saved }
+        // Seed both independent preferences from the old shared speed once.
+        // New speed changes never overwrite that migration value or the other engine.
+        let legacy = defaults.double(forKey: "audio.speed")
+        let migrated = legacy.isFinite && (0.5...2).contains(legacy) ? legacy : 1
+        defaults.set(migrated, forKey: speedKey(engine))
+        return migrated
+    }
+
     init(bookmarkURL: URL? = nil, defaults: UserDefaults = .standard, speaker: (any ReadAloudSpeaking)? = nil) {
         self.bookmarkURL = bookmarkURL; self.defaults = defaults
         self.speaker = speaker ?? RoutingReadAloudSpeaker(system: SystemReadAloudSpeaker(requiresHighQuality: true), kokoro: KokoroReadAloudSpeaker(store: .shared))
-        let savedSpeed = defaults.double(forKey: "audio.speed")
-        speed = savedSpeed.isFinite && (0.5...2).contains(savedSpeed) ? savedSpeed : 1
+        let restoredEngine = ReadAloudEngine(rawValue: defaults.string(forKey: "audio.engine") ?? "") ?? .kokoro
+        let appleSpeed = Self.savedSpeed(for: .system, defaults: defaults)
+        let naturalSpeed = Self.savedSpeed(for: .kokoro, defaults: defaults)
+        speed = restoredEngine == .system ? appleSpeed : naturalSpeed
         let savedVoice = defaults.string(forKey: "audio.voice") ?? ""
         let eligibleVoice = AppleVoiceCatalog.installed.contains(where: { $0.id == savedVoice }) ? savedVoice : ""
         voice = eligibleVoice
         if savedVoice != eligibleVoice { defaults.set(eligibleVoice, forKey: "audio.voice") }
-        engine = ReadAloudEngine(rawValue: defaults.string(forKey: "audio.engine") ?? "") ?? .kokoro
+        engine = restoredEngine
         kokoroVoice = defaults.string(forKey: "audio.kokoroVoice") ?? ""
         followsText = defaults.object(forKey: "audio.followsText") == nil || defaults.bool(forKey: "audio.followsText")
         if let bookmarkURL, let data = try? Data(contentsOf: bookmarkURL) {
