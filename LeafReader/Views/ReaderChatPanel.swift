@@ -55,25 +55,26 @@ import GameController
             "hardwareKeyboardConnected": GCKeyboard.coalesced != nil,
             "windows": windows.map { window -> [String: Any] in
                 var state: [String: Any] = ["class": String(describing: type(of: window)), "key": window.isKeyWindow,
-                    "hidden": window.isHidden, "frame": NSStringFromCGRect(window.frame)]
+                    "hidden": window.isHidden, "frame": String(describing: window.frame)]
                 if let responder = firstResponder(in: window) {
                     state["responderClass"] = String(describing: type(of: responder))
                     state["responderIdentifier"] = responder.accessibilityIdentifier ?? ""
                     let frame = responder.convert(responder.bounds, to: window)
-                    state["responderFrame"] = NSStringFromCGRect(frame)
+                    state["responderFrame"] = String(describing: frame)
                     if let hit = window.hitTest(CGPoint(x: frame.midX, y: frame.midY), with: nil) {
                         state["responderCenterHitClass"] = String(describing: type(of: hit))
                     }
                 }
                 return state
             }]
-        if let keyboardFrame { row["keyboardFrame"] = NSStringFromCGRect(keyboardFrame) }
+        if let keyboardFrame { row["keyboardFrame"] = String(describing: keyboardFrame) }
+        guard let rowData = try? JSONSerialization.data(withJSONObject: row) else { return }
         let url = cache.appendingPathComponent("ReaderComposerUITestTrace.json")
         writes.async {
             var rows: [[String: Any]] = []
             if let data = try? Data(contentsOf: url), let previous = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                previous["testID"] as? String == testID { rows = previous["rows"] as? [[String: Any]] ?? [] }
-            rows.append(row)
+            if let row = try? JSONSerialization.jsonObject(with: rowData) as? [String: Any] { rows.append(row) }
             let value: [String: Any] = ["testID": testID, "rows": Array(rows.suffix(400))]
             if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) { try? data.write(to: url, options: .atomic) }
         }
