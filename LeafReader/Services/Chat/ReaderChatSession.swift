@@ -19,6 +19,7 @@ final class ReaderChatSession: ObservableObject {
     private var traceStore: AgentTraceStore?
     private var traceSource = (provider: "", model: "")
     private var agentLimits = AgentLimits()
+    private var contextLimits = ReadingContextLimits()
     private var recordTraces = false
     private var historyRequired = false
     private var historyReadable = true
@@ -260,8 +261,8 @@ final class ReaderChatSession: ObservableObject {
                     toolbox.limits = agentLimits
                     toolbox.activity = { [weak self] text in if self?.generation == token { self?.activity = text } }
                     do {
-                        let request = ChatRequest.conversation(history, harness: .agent)
-                        recorder?.context(system: request.system, turns: request.turns, detail: Self.traceDetail(asked?.context, boundary: book.boundary, limits: agentLimits))
+                        let request = ChatRequest.conversation(history, harness: .agent, limits: contextLimits)
+                        recorder?.context(system: request.system, turns: request.turns, detail: Self.traceDetail(asked?.context?.bounded(contextLimits), boundary: book.boundary, limits: agentLimits))
                         // A highlighted name is searched before the model answers, so a
                         // “who is this” reply always starts from the book, not the chat.
                         let question = history.last(where: \.isUser)
@@ -291,8 +292,8 @@ final class ReaderChatSession: ObservableObject {
                     trace.steps = ["looked up “\(recall.term)” (\(recall.excerpts.count))"]
                     recorder?.lookup(recall)
                 }
-                truncated = try await stream(ChatRequest.conversation(history, earlierMessages: earlier), provider: provider, into: id, token: token,
-                                             recorder: recorder, detail: Self.traceDetail(asked?.context, boundary: nil, limits: nil))
+                truncated = try await stream(ChatRequest.conversation(history, earlierMessages: earlier, limits: contextLimits), provider: provider, into: id, token: token,
+                                             recorder: recorder, detail: Self.traceDetail(asked?.context?.bounded(contextLimits), boundary: nil, limits: nil))
             }
             guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
             messages[index].trace = trace
@@ -346,7 +347,7 @@ final class ReaderChatSession: ObservableObject {
         throw ChatError.interrupted
     }
     private func adopt(_ configuration: ChatConfiguration) {
-        agentLimits = configuration.agentLimits; recordTraces = configuration.recordTraces
+        agentLimits = configuration.agentLimits; contextLimits = configuration.contextLimits; recordTraces = configuration.recordTraces
         traceSource = (configuration.provider.title, configuration.profile.model)
     }
     static func traceDetail(_ context: ReadingChatContext?, boundary: BookTextBoundary?, limits: AgentLimits?) -> String {
@@ -378,8 +379,8 @@ final class ReaderChatSession: ObservableObject {
         }
         activity = nil
         try Task.checkCancellation()
-        return try await stream(ChatRequest.conversation(history, earlierMessages: earlier), provider: provider, into: id, token: token,
-                                recorder: recorder, detail: Self.traceDetail(history.last(where: \.isUser)?.context, boundary: nil, limits: nil))
+        return try await stream(ChatRequest.conversation(history, earlierMessages: earlier, limits: contextLimits), provider: provider, into: id, token: token,
+                                recorder: recorder, detail: Self.traceDetail(history.last(where: \.isUser)?.context?.bounded(contextLimits), boundary: nil, limits: nil))
     }
     private func append(_ text: String, to id: UUID, token: UUID) {
         guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }

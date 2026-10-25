@@ -40,8 +40,8 @@ targets:
       path: LeafReader/Info.plist
       properties:
         CFBundleDisplayName: Leaf
-        CFBundleShortVersionString: "1.20.1"
-        CFBundleVersion: "80"
+        CFBundleShortVersionString: "1.21.0"
+        CFBundleVersion: "81"
         NSMicrophoneUsageDescription: Use the microphone to dictate an editable question in Ask Leaf. Recording stops when you stop dictation or leave the chat.
         NSSpeechRecognitionUsageDescription: Turn your voice into text for Ask Leaf. Speech may be processed by Apple when on-device recognition is unavailable.
         UILaunchScreen: {}

@@ -1760,6 +1760,12 @@ final class LeafReaderUITests: XCTestCase {
         conversationTool.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(conversationTool.value as? String, "0")
         capture("Agent limits in AI settings", app: app)
+        let contextCharacters = app.descendants(matching: .any)["contextCharacters"].firstMatch
+        for _ in 0..<4 where !(contextCharacters.exists && contextCharacters.isHittable) { app.swipeUp() }
+        app.buttons["contextCharacters-Decrement"].tap()
+        XCTAssertTrue(app.staticTexts["11,000 chars"].exists)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "up to 11,000 characters")).firstMatch.exists)
+        capture("Reading context limits in AI settings", app: app)
         let save = app.buttons["saveAISettings"]
         for _ in 0..<6 where !save.isHittable { app.swipeUp() }
         save.tap()
@@ -1778,6 +1784,8 @@ final class LeafReaderUITests: XCTestCase {
         app.tabBars.buttons["Settings"].tap()
         for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
         app.buttons["openAISettings"].tap()
+        for _ in 0..<6 where !(contextCharacters.exists && contextCharacters.isHittable) { app.swipeUp() }
+        XCTAssertTrue(app.staticTexts["11,000 chars"].exists, "The reading context limit is saved")
         let traces = app.buttons["openAgentTraces"]
         for _ in 0..<8 where !(traces.exists && traces.isHittable) { app.swipeUp() }
         traces.tap()
