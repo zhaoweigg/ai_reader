@@ -66,8 +66,8 @@ final class ZLibraryUITests: XCTestCase {
             let bottom = app.frame.maxY - 24
             if element.isHittable && frame.minY >= top && frame.maxY <= bottom { return }
             let up = frame.maxY > bottom
-            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: up ? 0.68 : 0.43))
-            let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: up ? 0.43 : 0.68))
+            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.68 : 0.43))
+            let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.43 : 0.68))
             start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
         }
         XCTAssertTrue(element.isHittable)

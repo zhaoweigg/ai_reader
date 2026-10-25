@@ -374,7 +374,11 @@ final class ZLibraryStore: ObservableObject {
         }
         // Hold a cancellable task: a query change cancels network work as well as rejecting stale results.
         catalogTask = task
-        await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
+        // The load belongs to the catalog, not to the view action awaiting it. SwiftUI cancels a
+        // refresh or .task when the content it shows changes; forwarding that cancelled the current
+        // request and suppressed its error, leaving an empty catalog (QA76-002). Replacing a load and
+        // leaving Discover cancel it explicitly through cancelCatalogLoad.
+        await task.value
     }
     private func performLoad(query: String, feed: ZLibraryFeed, page: Int, order: ZLibrarySearchOrder, append: Bool, request: UUID, token: UUID, source: ZLibraryOrigin) async {
         defer {

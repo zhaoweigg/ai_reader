@@ -1151,6 +1151,27 @@ private final class CatalogURLProtocol: URLProtocol {
         await store.reload() // Explicit refresh, rather than restoring navigation state.
         XCTAssertFalse(store.connected);XCTAssertFalse(store.websiteAccessNeeded)
     }
+    func testCancelledRefreshCallerCannotEmptyTheCatalogOrHideItsError() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let failure = ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
+        client.popularError = failure
+        await store.loadPopular()
+        XCTAssertNotNil(store.error)
+        client.popularError = nil; client.suspendPopular = true
+        // SwiftUI cancels a refresh task when the content it shows changes (QA76-002).
+        let refresh = Task { await store.reload() }
+        try await wait { client.popularContinuation != nil }
+        refresh.cancel()
+        client.popularContinuation?.resume(throwing: failure)
+        await refresh.value
+        XCTAssertNotNil(store.error, "The refreshed failure must be shown, not an empty catalog")
+        XCTAssertEqual(store.requestDiagnostic, failure.diagnostic)
+        XCTAssertFalse(store.loading)
+        client.suspendPopular = false; client.popularBooks = [book]
+        let again = Task { await store.reload() }
+        again.cancel(); await again.value
+        XCTAssertEqual(store.books, [book]); XCTAssertNil(store.error)
+    }
     func testAnonymousFeedFailureCannotUndoACompletedSignIn() async throws {
         let client = CatalogService(), (store,_,_) = store(client)
         client.suspendPopular = true
