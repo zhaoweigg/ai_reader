@@ -1,13 +1,14 @@
 import AVFoundation
 import Speech
 import Combine
+import NaturalLanguage
 
 enum DictationLanguage: String, CaseIterable, Identifiable {
     case system, mandarin, traditionalChinese, cantonese, english
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .system: return "Device language"
+        case .system: return "Automatic · book or device"
         case .mandarin: return "中文 · 普通话"
         case .traditionalChinese: return "中文 · 國語"
         case .cantonese: return "中文 · 廣東話"
@@ -22,6 +23,24 @@ enum DictationLanguage: String, CaseIterable, Identifiable {
         case .cantonese: return "zh-HK"
         case .english: return "en-US"
         }
+    }
+    func resolvedLocale(bookTitle: String, selectedText: String? = nil, deviceLanguage: String? = nil) -> String {
+        guard self == .system else { return locale }
+        // The phone's interface language doesn't tell us which language a reader
+        // wants to speak. Chinese book/quote context takes precedence in Automatic.
+        for text in [bookTitle, selectedText ?? ""] where !text.isEmpty {
+            let detector = NLLanguageRecognizer()
+            detector.processString(String(text.prefix(256)))
+            if detector.dominantLanguage == .simplifiedChinese { return "zh-CN" }
+            if detector.dominantLanguage == .traditionalChinese { return "zh-TW" }
+        }
+        return deviceLanguage ?? locale
+    }
+    static func shortLabel(locale: String) -> String {
+        let code = locale.lowercased().replacingOccurrences(of: "_", with: "-")
+        if code.hasPrefix("yue") || code.hasPrefix("zh-hk") { return "粤语" }
+        if code.hasPrefix("zh") { return "中文" }
+        return String(code.prefix(2)).uppercased()
     }
 }
 
@@ -53,6 +72,10 @@ enum ChatDictationError: LocalizedError, Equatable {
     private var recognizer: SFSpeechRecognizer?
     private var hasTap = false
     private var ownsAudioSession = false
+    #if DEBUG
+    var testAudioFile: URL?
+    private var fileRequest: SFSpeechURLRecognitionRequest?
+    #endif
 
     func authorize() async throws {
         let microphone = await AVAudioApplication.requestRecordPermission()
@@ -69,6 +92,14 @@ enum ChatDictationError: LocalizedError, Equatable {
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)), recognizer.isAvailable else {
             throw ChatDictationError.unavailable
         }
+        #if DEBUG
+        if let testAudioFile {
+            let request = SFSpeechURLRecognitionRequest(url: testAudioFile)
+            fileRequest = request; self.recognizer = recognizer
+            recognize(request, with: recognizer, update: update, failure: failure)
+            return
+        }
+        #endif
         // Synchronous: pause Leaf's read-aloud before taking the audio session.
         NotificationCenter.default.post(name: ChatDictationSession.willRecord, object: nil)
         let audio = AVAudioSession.sharedInstance()
@@ -78,24 +109,29 @@ enum ChatDictationError: LocalizedError, Equatable {
             ownsAudioSession = true
             let engine = AVAudioEngine(), request = SFSpeechAudioBufferRecognitionRequest()
             self.engine = engine; self.request = request; self.recognizer = recognizer
-            request.shouldReportPartialResults = true
-            request.taskHint = .dictation
-            request.addsPunctuation = true
-            request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
             let input = engine.inputNode, format = input.outputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else { throw ChatDictationError.noMicrophone }
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
             hasTap = true
-            task = recognizer.recognitionTask(with: request) { result, error in
-                let text = result?.bestTranscription.formattedString, final = result?.isFinal ?? false
-                Task { @MainActor in
-                    if let text { update(text, final) }
-                    if let error, !final { failure(error) }
-                }
-            }
+            recognize(request, with: recognizer, update: update, failure: failure)
             engine.prepare()
             try engine.start()
         } catch { cancel(); throw error }
+    }
+
+    private func recognize(_ request: SFSpeechRecognitionRequest, with recognizer: SFSpeechRecognizer,
+                           update: @escaping (String, Bool) -> Void, failure: @escaping (Error) -> Void) {
+        request.shouldReportPartialResults = true
+        request.taskHint = .dictation
+        request.addsPunctuation = true
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        task = recognizer.recognitionTask(with: request) { result, error in
+            let text = result?.bestTranscription.formattedString, final = result?.isFinal ?? false
+            Task { @MainActor in
+                if let text { update(text, final) }
+                if let error, !final { failure(error) }
+            }
+        }
     }
 
     func finish() {
@@ -106,6 +142,9 @@ enum ChatDictationError: LocalizedError, Equatable {
         stopCapture()
         request?.endAudio(); task?.cancel()
         task = nil; request = nil; recognizer = nil
+        #if DEBUG
+        fileRequest = nil
+        #endif
     }
     private func stopCapture() {
         if hasTap { engine?.inputNode.removeTap(onBus: 0); hasTap = false }
@@ -123,6 +162,7 @@ enum ChatDictationError: LocalizedError, Equatable {
     @Published private(set) var state: State = .idle
     @Published var error: String?
     @Published private(set) var needsSettings = false
+    @Published private(set) var localeIdentifier: String?
     var isActive: Bool { state != .idle }
     var status: String {
         switch state {
@@ -148,21 +188,32 @@ enum ChatDictationError: LocalizedError, Equatable {
     }
     private static func makeRecognizer() -> any ChatDictationRecognizing {
         #if DEBUG
+        if let encoded = UITesting.environment("LEAF_UI_DICTATION_NATIVE_AUDIO") {
+            guard let audio = Data(base64Encoded: encoded) else { return UnavailableDictationFixture() }
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("native-mandarin-dictation.m4a")
+            do {
+                try audio.write(to: url)
+                let recognizer = AppleChatDictationRecognizer(); recognizer.testAudioFile = url
+                return recognizer
+            } catch { return UnavailableDictationFixture() }
+        }
         if UITesting.flag("LEAF_UI_DICTATION_MOCK") { return FixtureChatDictationRecognizer() }
         #endif
         return AppleChatDictationRecognizer()
     }
 
-    func start(draft: String, language: DictationLanguage, apply: @escaping (String) -> Void) {
+    func start(draft: String, language: DictationLanguage, bookTitle: String = "", selectedText: String? = nil, apply: @escaping (String) -> Void) {
         guard !isActive else { return }
         error = nil; needsSettings = false; baseDraft = draft; transcript = ""; applyDraft = apply
         let generation = UUID(); token = generation; state = .authorizing
+        let locale = language.resolvedLocale(bookTitle: bookTitle, selectedText: selectedText)
+        localeIdentifier = locale
         operation = Task { [weak self] in
             guard let self else { return }
             do {
                 try await recognizer.authorize()
                 guard token == generation, !Task.isCancelled else { return }
-                try recognizer.start(locale: language.locale, update: { [weak self] text, final in
+                try recognizer.start(locale: locale, update: { [weak self] text, final in
                     guard let self, self.token == generation, self.isActive else { return }
                     self.transcript = text
                     self.applyDraft?(Self.appending(text, to: self.baseDraft))
@@ -223,18 +274,27 @@ enum ChatDictationError: LocalizedError, Equatable {
 }
 
 #if DEBUG
+@MainActor private final class UnavailableDictationFixture: ChatDictationRecognizing {
+    func authorize() async throws { throw ChatDictationError.unavailable }
+    func start(locale: String, update: @escaping (String, Bool) -> Void, failure: @escaping (Error) -> Void) throws { throw ChatDictationError.unavailable }
+    func finish() { }
+    func cancel() { }
+}
 /// Deterministic transcript events for UI checks, never a substitute for physical microphone QA.
 @MainActor private final class FixtureChatDictationRecognizer: ChatDictationRecognizing {
     private var update: ((String, Bool) -> Void)?
+    private var transcript = ""
     func authorize() async throws { }
     func start(locale: String, update: @escaping (String, Bool) -> Void, failure: @escaping (Error) -> Void) throws {
         self.update = update
+        transcript = locale.hasPrefix("zh") || locale.hasPrefix("yue") ? "帮我解释这段文字" : "Explain this passage"
         Task { @MainActor [weak self] in
             await Task.yield()
-            self?.update?("帮我解释这段文字", false)
+            guard let self else { return }
+            update(self.transcript, false)
         }
     }
-    func finish() { update?("帮我解释这段文字。", true) }
+    func finish() { update?(transcript + (transcript.hasPrefix("帮") ? "。" : "."), true) }
     func cancel() { update = nil }
 }
 #endif

@@ -51,6 +51,28 @@ import XCTest
         XCTAssertEqual(DictationLanguage.traditionalChinese.locale, "zh-TW")
         XCTAssertEqual(DictationLanguage.cantonese.locale, "zh-HK")
     }
+    func testAutomaticUsesChineseBookOrQuoteOnAnEnglishPhone() {
+        XCTAssertEqual(DictationLanguage.system.resolvedLocale(bookTitle: "十日终焉", deviceLanguage: "en-US"), "zh-CN")
+        XCTAssertEqual(DictationLanguage.system.resolvedLocale(bookTitle: "紅樓夢", deviceLanguage: "en-US"), "zh-TW")
+        XCTAssertEqual(DictationLanguage.system.resolvedLocale(bookTitle: "A Book", selectedText: "请解释这段文字，我想了解这个人物。", deviceLanguage: "en-US"), "zh-CN")
+        XCTAssertEqual(DictationLanguage.system.resolvedLocale(bookTitle: "A Book", deviceLanguage: "en-GB"), "en-GB")
+    }
+    func testExplicitLanguageOverridesBookAndDevice() {
+        XCTAssertEqual(DictationLanguage.english.resolvedLocale(bookTitle: "十日终焉", deviceLanguage: "zh-CN"), "en-US")
+        XCTAssertEqual(DictationLanguage.mandarin.resolvedLocale(bookTitle: "A Book", deviceLanguage: "en-US"), "zh-CN")
+        XCTAssertEqual(DictationLanguage.cantonese.resolvedLocale(bookTitle: "A Book", deviceLanguage: "en-US"), "zh-HK")
+    }
+    func testAutomaticPassesMandarinToRecognizerForChineseBook() async throws {
+        let backend = DictationRecognizerProbe()
+        let voice = ChatDictationSession(recognizer: backend)
+        var draft = ""
+        voice.start(draft: draft, language: .system, bookTitle: "十日终焉") { draft = $0 }
+        try await wait { voice.state == .recording }
+        XCTAssertEqual(backend.locale, "zh-CN")
+        XCTAssertEqual(voice.localeIdentifier, "zh-CN")
+        backend.update?("这个人物是谁？", true)
+        XCTAssertEqual(draft, "这个人物是谁？")
+    }
     func testStopAcceptsFinalRevisionButNeverLateResults() async throws {
         let backend = DictationRecognizerProbe(), session: ChatDictationSession
         session = ChatDictationSession(recognizer: backend)
