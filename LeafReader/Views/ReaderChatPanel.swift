@@ -47,8 +47,17 @@ private struct ChatHistoryInteraction: ViewModifier {
     @Binding var following: ChatScrollFollowing
     @GestureState private var dragging = false
 
+    static var usesNativeTracking: Bool {
+        guard #available(iOS 18, *) else { return false }
+        #if DEBUG
+        return !UITesting.flag("LEAF_UI_CHAT_SCROLL_LEGACY")
+        #else
+        return true
+        #endif
+    }
+
     func body(content: Content) -> some View {
-        if #available(iOS 18, *) {
+        if #available(iOS 18, *), Self.usesNativeTracking {
             content
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height
@@ -531,7 +540,7 @@ struct ReaderChatPanel: View {
                         .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
                         .modifier(ChatHistoryInteraction(following: $scrollFollowing))
                         .onPreferenceChange(ChatHistoryBottomDistance.self) { distance in
-                            if #unavailable(iOS 18), let distance { scrollFollowing.updateBottomDistance(distance) }
+                            if !ChatHistoryInteraction.usesNativeTracking, let distance { scrollFollowing.updateBottomDistance(distance) }
                         }
                         .onChange(of: session.messages.last?.text) { _, _ in
                             if scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
