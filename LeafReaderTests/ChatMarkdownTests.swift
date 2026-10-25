@@ -7,7 +7,8 @@ final class ChatMarkdownTests: XCTestCase {
         let view = UITextView(); view.isScrollEnabled = false
         let coordinator = SelectableChatText.Coordinator()
         let traits = UITraitCollection(preferredContentSizeCategory: .large)
-        let source = String(repeating: "这是**李香玲**，云瑶的队友。\n\n- 保留线索。\n", count: 28)
+        let paragraph = String(repeating: "这是**李香玲**，云瑶的队友。", count: 4)
+        let source = String(repeating: paragraph + "\n\n- 保留线索。\n", count: 28)
         coordinator.update(source: source, markdown: true, traits: traits, in: view)
         let portrait = coordinator.fittedSize(width: 350, in: view)
         let landscape = coordinator.fittedSize(width: 700, in: view)
@@ -19,6 +20,14 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertEqual(coordinator.formatCount, 1)
         XCTAssertEqual(coordinator.measurementCount, 2)
         XCTAssertGreaterThan(portrait.height, landscape.height)
+        for width: CGFloat in [350, 700] {
+            let size = coordinator.fittedSize(width: width, in: view)
+            view.frame = CGRect(origin: .zero, size: size)
+            view.layoutIfNeeded()
+            let lastLine = view.caretRect(for: view.endOfDocument)
+            XCTAssertGreaterThan(lastLine.height, 0)
+            XCTAssertLessThanOrEqual(lastLine.maxY, size.height + 1, "Cached height must contain the final rendered line at both widths")
+        }
     }
 
     @MainActor func testChangedTextFormattingAndDynamicTypeInvalidateCachedLayout() {
