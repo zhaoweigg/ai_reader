@@ -33,6 +33,7 @@
 		450FBFE809E2396034EBDCD9 /* UITesting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C217626C6A54DF6B51455E7 /* UITesting.swift */; };
 		45A8DCDD2BA104372550136B /* ReaderModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7679CE530CAB3E1CBC7BF6 /* ReaderModel.swift */; };
 		48197B9BA6699E9830F76310 /* AddBooksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBECD7296E1A713FB8FE684C /* AddBooksView.swift */; };
+		48596F0F4CFC8E414023BAE2 /* Mandarin.m4a in Resources */ = {isa = PBXBuildFile; fileRef = F271C8C2F1E75C60658A4C34 /* Mandarin.m4a */; };
 		48A42EA6731C8ED591702A66 /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 04DE0EA9FD13D33E62324BDB /* libbz2.tbd */; };
 		4B9CCD168963BB4BB85D5646 /* ReadAloudSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B903372F35178474AE142CA2 /* ReadAloudSession.swift */; };
 		4E578E713AA3E88189174E7E /* SimulatorIsolationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29BA80C5301FC8CBF3A19A35 /* SimulatorIsolationUITests.swift */; };
@@ -208,6 +209,7 @@
 		EB3AB44E4ACA1C37A7A07CAE /* LeafReaderUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LeafReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		EC47A3E67B25E6750339FC1E /* RoutingReadAloudSpeaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingReadAloudSpeaker.swift; sourceTree = "<group>"; };
 		F09FE5DD36BCC4F16362E9EA /* LeafReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeafReaderApp.swift; sourceTree = "<group>"; };
+		F271C8C2F1E75C60658A4C34 /* Mandarin.m4a */ = {isa = PBXFileReference; path = Mandarin.m4a; sourceTree = "<group>"; };
 		F78BD46E1F8885737AFD65E8 /* KokoroVoiceCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroVoiceCatalog.swift; sourceTree = "<group>"; };
 		F9567239B01E0D6638DA1D06 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		FC7F6702710B8ED091479F1B /* ZLibraryBrowserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryBrowserTests.swift; sourceTree = "<group>"; };
@@ -312,6 +314,7 @@
 				1B92EE29A85D2F11CB7CE6D7 /* SceneGeometryFixture.swift */,
 				29BA80C5301FC8CBF3A19A35 /* SimulatorIsolationUITests.swift */,
 				613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */,
+				BC9B32F297B552978296BFE8 /* Fixtures */,
 			);
 			path = LeafReaderUITests;
 			sourceTree = "<group>";
@@ -378,6 +381,14 @@
 				6C5506B57EFD762D7D9FB597 /* Views */,
 			);
 			path = LeafReader;
+			sourceTree = "<group>";
+		};
+		BC9B32F297B552978296BFE8 /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				F271C8C2F1E75C60658A4C34 /* Mandarin.m4a */,
+			);
+			path = Fixtures;
 			sourceTree = "<group>";
 		};
 		D49756E852EE562C7B99FCB2 /* Frameworks */ = {
@@ -466,6 +477,7 @@
 			buildConfigurationList = F045444526CD05D68A61760B /* Build configuration list for PBXNativeTarget "LeafReaderUITests" */;
 			buildPhases = (
 				4D47A7E709CE3E0EBC2394CF /* Sources */,
+				07E5BB947FD443D66449EAC9 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -525,6 +537,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		07E5BB947FD443D66449EAC9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				48596F0F4CFC8E414023BAE2 /* Mandarin.m4a in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		1F86FD4903A2F96EC3E4EEA6 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;

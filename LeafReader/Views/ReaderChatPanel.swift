@@ -318,6 +318,10 @@ struct ReaderChatPanel: View {
 
     private var accent: Color { theme.accent }
     private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var spokenLocale: String {
+        if dictation.isActive, let active = dictation.localeIdentifier { return active }
+        return (DictationLanguage(rawValue: dictationLanguage) ?? .system).resolvedLocale(bookTitle: bookTitle, selectedText: session.selectedContext?.text)
+    }
     private var contextHint: String {
         switch context {
         case .reader: return settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off."
@@ -358,6 +362,16 @@ struct ReaderChatPanel: View {
                         if !isComposing { selectionActions(compact: true) }
                     } else { Text("Ask Leaf").font(.subheadline.weight(.semibold)).foregroundStyle(accent).lineLimit(1) }
                     Spacer(minLength: 4)
+                    Menu { dictationLanguagePicker } label: {
+                        HStack(spacing: 3) {
+                            Text(DictationLanguage.shortLabel(locale: spokenLocale))
+                            Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                        }.font(.caption.weight(.medium)).foregroundStyle(accent).frame(minWidth: 44, minHeight: 44)
+                    }
+                    .disabled(dictation.isActive)
+                    .accessibilityLabel("Dictation language")
+                    .accessibilityValue(DictationLanguage(rawValue: dictationLanguage)?.title ?? "Automatic")
+                    .accessibilityIdentifier("dictationLanguageButton")
                     if let onChooseConversation, !isComposing {
                         Button { dictation.cancel(); onChooseConversation() } label: {
                             HStack(spacing: 4) {
@@ -568,7 +582,7 @@ struct ReaderChatPanel: View {
     private func toggleDictation() {
         if dictation.isActive { dictation.finish(); return }
         inputFocused = false
-        dictation.start(draft: session.draft, language: DictationLanguage(rawValue: dictationLanguage) ?? .system) { [weak session] text in
+        dictation.start(draft: session.draft, language: DictationLanguage(rawValue: dictationLanguage) ?? .system, bookTitle: bookTitle, selectedText: session.selectedContext?.text) { [weak session] text in
             session?.draft = text
         }
     }

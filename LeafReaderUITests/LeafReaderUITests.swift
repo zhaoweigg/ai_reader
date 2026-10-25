@@ -1,4 +1,5 @@
 import XCTest
+import Speech
 
 final class LeafReaderUITests: XCTestCase {
     private var geometryApp: XCUIApplication?
@@ -6,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -17,6 +18,10 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_MARKDOWN"] = markdown ? "1" : "0"
         app.launchEnvironment["LEAF_UI_DICTATION_MOCK"] = dictation ? "1" : "0"
+        if nativeDictation {
+            let audio = Bundle(for: LeafReaderUITests.self).url(forResource: "Mandarin", withExtension: "m4a")!
+            app.launchEnvironment["LEAF_UI_DICTATION_NATIVE_AUDIO"] = try! Data(contentsOf: audio).base64EncodedString()
+        }
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
         app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
@@ -1400,6 +1405,43 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testDictationAddsAnEditableDraftInScroll() { verifyDictation(flow: "Scroll") }
     @MainActor func testDictationAddsAnEditableDraftInPDF() { verifyDictation(flow: "PDF") }
 
+    @MainActor func testNativeMandarinSpeechRecognitionFromAudio() async throws {
+        #if targetEnvironment(simulator)
+        // A simulator without Apple's speech service cannot validate real ASR.
+        // Keep this separate from the app's locale/draft UI checks; never replace
+        // the native result with a mock or turn an app recognition error into a pass.
+        guard SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))?.isAvailable == true else {
+            throw XCTSkip("Apple's zh-CN speech service is unavailable in this simulator runtime. Real Mandarin recognition requires a physical-device check.")
+        }
+        #endif
+        let app = launchApp(nativeDictation: true)
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        app.buttons["openReaderChat"].tap()
+        app.buttons["dictationLanguageButton"].tap()
+        app.buttons["中文 · 普通话"].tap()
+        app.buttons["dictateChatQuestion"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let deadline = Date().addingTimeInterval(45)
+        while Date() < deadline {
+            if springboard.alerts.buttons["Allow"].firstMatch.exists { springboard.alerts.buttons["Allow"].firstMatch.tap() }
+            let text = input.value as? String ?? ""
+            if text.contains("文字"), text.contains("解释") {
+                let transcript = XCTAttachment(string: text); transcript.name = "Actual Apple Mandarin transcript"; transcript.lifetime = .keepAlways; add(transcript)
+                capture("Native Apple recognizer transcribes Mandarin audio", app: app)
+                return
+            }
+            if app.alerts["Dictation unavailable"].exists {
+                capture("Native Mandarin recognition error", app: app)
+                XCTFail(app.alerts["Dictation unavailable"].debugDescription)
+                return
+            }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        capture("Native Mandarin recognition timeout", app: app)
+        XCTFail("Apple speech recognition did not return Chinese text from the prerecorded Mandarin fixture")
+    }
+
     @MainActor private func verifyDictation(flow: String) {
         continueAfterFailure = false
         let app = launchApp(dictation: true)
@@ -1416,9 +1458,12 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(selected.isEmpty)
         let mic = app.buttons["dictateChatQuestion"]
         XCTAssertTrue(mic.isHittable); XCTAssertGreaterThanOrEqual(mic.frame.width, 44)
-        mic.press(forDuration: 1)
+        let language = app.buttons["dictationLanguageButton"]
+        XCTAssertTrue(language.isHittable)
+        language.tap()
         let mandarin = app.buttons["中文 · 普通话"].exists ? app.buttons["中文 · 普通话"] : app.menuItems["中文 · 普通话"]
         XCTAssertTrue(mandarin.waitForExistence(timeout: 5)); mandarin.tap()
+        XCTAssertEqual(language.value as? String, "中文 · 普通话")
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.typeText("Remember: ")
         mic.tap()
