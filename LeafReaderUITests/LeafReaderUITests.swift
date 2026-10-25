@@ -1394,6 +1394,116 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testChatEdgeResizesInScroll() { verifyChatResize(flow: "Scroll") }
     @MainActor func testChatEdgeResizesInPDF() { verifyChatResize(flow: "PDF") }
 
+    @MainActor func testKeyboardKeepsHistoryVisibleInPages() { verifyKeyboardHistory(flow: "Pages") }
+    @MainActor func testKeyboardKeepsHistoryVisibleInScroll() { verifyKeyboardHistory(flow: "Scroll") }
+    @MainActor func testKeyboardKeepsHistoryVisibleInPDF() { verifyKeyboardHistory(flow: "PDF") }
+
+    @MainActor private func verifyKeyboardHistory(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp()
+        defer { orient(.portrait) }
+        openSelectionFixture(flow, app: app); waitForBook(app); showReaderControls(app)
+        app.buttons["toggleBookmark"].tap()
+        let surface = readingSurface(app), originalFrame = surface.frame
+        app.buttons["openReaderChat"].tap()
+        for question in ["First remembered question", "Second remembered question", "Latest remembered question"] {
+            sendChatQuestion(question, app: app)
+            expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+            waitForExpectations(timeout: 5)
+        }
+        selectFixturePassage(flow, app: app)
+        let quote = app.staticTexts["chatSelectedPassage"]
+        XCTAssertTrue(quote.waitForExistence(timeout: 5)); let selected = quote.label
+        let panel = app.otherElements["readerChatPanel"], history = app.scrollViews["chatMessageHistory"]
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        let readingHeight = panel.frame.height
+        func focusInput() {
+            // Resolve current scene geometry after the keyboard moved the composer.
+            let frame = input.frame
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: frame.midX - app.frame.minX, dy: frame.midY - app.frame.minY)).tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        }
+        func assertHistoryAndBook() {
+            XCTAssertTrue(history.exists, "Never remove existing messages while composing")
+            XCTAssertGreaterThanOrEqual(history.frame.height, 20, "Keep a readable, scrollable message viewport even in landscape")
+            XCTAssertLessThanOrEqual(history.frame.maxY, input.frame.minY + 2)
+            XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
+            XCTAssertGreaterThan(panel.frame.minY - surface.frame.minY, app.frame.width > app.frame.height ? 8 : app.frame.height * 0.2)
+            XCTAssertTrue(input.isHittable); XCTAssertTrue(app.buttons["Hide keyboard"].isHittable)
+            XCTAssertEqual(quote.label, selected)
+        }
+        func latestReplyIsVisible() {
+            let replies = app.staticTexts.matching(identifier: "chatReply").allElementsBoundByIndex
+            XCTAssertFalse(replies.isEmpty)
+            XCTAssertTrue(replies.last!.isHittable)
+            XCTAssertGreaterThan(replies.last!.frame.intersection(history.frame).height, 10)
+        }
+        func hideKeyboard() {
+            app.buttons["Hide keyboard"].tap()
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
+            waitForExpectations(timeout: 5)
+        }
+        func resize(_ delta: CGFloat) {
+            let handle = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+            let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: delta)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+        }
+        focusInput(); input.typeText("Keep this followup draft")
+        assertHistoryAndBook(); latestReplyIsVisible()
+        XCTAssertEqual(surface.frame.width, originalFrame.width, accuracy: 2)
+        XCTAssertEqual(surface.frame.height, originalFrame.height, accuracy: 2)
+        capture(flow + " history visible with keyboard and quote", app: app)
+        let first = app.staticTexts.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", "First remembered question")).firstMatch
+        for _ in 0..<5 {
+            if first.exists && first.isHittable && first.frame.intersection(history.frame).height > 10 { break }
+            history.swipeDown()
+        }
+        XCTAssertTrue(first.isHittable); XCTAssertGreaterThan(first.frame.intersection(history.frame).height, 10)
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "Browsing older chat must keep typing available")
+        XCTAssertEqual(input.value as? String, "Keep this followup draft")
+        capture(flow + " earlier messages scroll above keyboard", app: app)
+        hideKeyboard(); XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
+        focusInput(); latestReplyIsVisible()
+        resize(500); assertHistoryAndBook()
+        capture(flow + " minimum keyboard panel retains history", app: app)
+        resize(-500); assertHistoryAndBook()
+        let typingHeight = panel.frame.height
+        capture(flow + " maximum keyboard panel retains book", app: app)
+        hideKeyboard(); XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
+        focusInput(); XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
+        orient(.landscapeLeft); assertHistoryAndBook(); latestReplyIsVisible()
+        capture(flow + " landscape keyboard history and quote", app: app)
+        orient(.portrait); assertHistoryAndBook()
+        XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists); XCTAssertTrue(app.keyboards.firstMatch.exists)
+        XCTAssertEqual(input.value as? String, "Keep this followup draft")
+        hideKeyboard()
+        let header = app.descendants(matching: .any)["readerChatHeader"].firstMatch
+        let top = header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        top.press(forDuration: 0.01, thenDragTo: top.withOffset(CGVector(dx: 0, dy: 100)), withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+        showReaderControls(app); XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
+        app.buttons["closeBook"].tap(); app.terminate(); app.launch()
+        if flow == "PDF" {
+            let card = app.buttons["book-Notes from the Coast"]
+            for _ in 0..<5 where !card.isHittable { app.scrollViews.firstMatch.swipeUp() }
+            card.tap()
+        } else { app.buttons["featuredBook"].tap() }
+        waitForBook(app); showReaderControls(app)
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark", "Composing must preserve the saved reading passage")
+        app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
+        XCTAssertEqual(quote.label, selected); XCTAssertEqual(input.value as? String, "Keep this followup draft")
+        focusInput(); assertHistoryAndBook(); latestReplyIsVisible()
+        XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
+        capture(flow + " keyboard history draft and sizes restored", app: app)
+        app.buttons["closeReaderChat"].tap()
+        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+    }
+
     @MainActor func testChatStaysOpenWhileSelectingTextInBothFlows() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()
@@ -2249,7 +2359,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
         XCTAssertGreaterThan(panel.frame.minY - surface.frame.minY, app.frame.height * 0.25,
                              "Keep a readable portion of the book visible while composing")
-        XCTAssertLessThan(panel.frame.height, app.frame.height * 0.25)
+        XCTAssertLessThan(panel.frame.height, app.frame.height * 0.4, "Typing leaves room for both conversation history and book text")
         XCTAssertEqual(surface.frame.height, height, accuracy: 1)
         let right = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: 0.18))
         let left = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.18, dy: 0.18))
