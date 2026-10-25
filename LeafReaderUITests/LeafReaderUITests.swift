@@ -2830,13 +2830,24 @@ final class LeafReaderUITests: XCTestCase {
         let after = metrics()
         let work = XCTAttachment(string: "Before: \(before)\nAfter: \(after)")
         work.name = flow + " quick swipe rendering work"; work.lifetime = .keepAlways; add(work)
+        XCTAssertLessThanOrEqual((after["formats"] as? Int ?? .max) - (before["formats"] as? Int ?? 0), 2,
+                                 "Warm history must not repeatedly parse Markdown during swipes")
+        XCTAssertLessThanOrEqual((after["measurements"] as? Int ?? .max) - (before["measurements"] as? Int ?? 0), 4,
+                                 "Warm history must reuse its measured text layout during swipes")
         XCTAssertNotEqual(before["offset"] as? Double, after["offset"] as? Double, "A quick swipe must actually move history")
         XCTAssertEqual(readingSurface(app).frame, bookFrame)
         XCTAssertTrue(app.buttons["closeReaderChat"].exists)
         capture(flow + " quick chat swipe portrait", app: app)
+        // The very long selectable reply makes AX snapshots slow. Close it
+        // while requesting scene geometry, then verify restored history at the
+        // new width. Streaming/selection cases separately rotate an open panel.
+        app.buttons["closeReaderChat"].tap()
         orient(.landscapeLeft)
+        app.buttons["openReaderChat"].tap()
         history.swipeDown(velocity: .fast)
+        XCTAssertGreaterThan(history.frame.width, 500)
         capture(flow + " quick chat swipe landscape", app: app)
+        app.buttons["closeReaderChat"].tap()
         orient(.portrait)
     }
 

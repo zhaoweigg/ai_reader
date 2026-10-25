@@ -1,25 +1,28 @@
 import SwiftUI
 import AVFoundation
 
-struct ChatScrollFollowing {
+struct ChatScrollFollowing: Equatable {
     private(set) var followsLatest = true
     private var dragging = false
-    private var bottomDistance: CGFloat = 0
+    private var atBottom = true
 
     mutating func beginDragging() { dragging = true; followsLatest = false }
-    mutating func endDragging() { dragging = false; followsLatest = bottomDistance <= 4 }
+    mutating func endDragging() { dragging = false; followsLatest = atBottom }
     mutating func updateBottomDistance(_ distance: CGFloat) {
-        bottomDistance = distance
+        updateAtBottom(distance <= 4)
+    }
+    mutating func updateAtBottom(_ atBottom: Bool) {
+        self.atBottom = atBottom
         // Appending text can move the bottom away. Only a user drag pauses
         // following; reaching the bottom again resumes it, including momentum.
-        if !dragging, distance <= 4 { followsLatest = true }
+        if !dragging, atBottom { followsLatest = true }
     }
     mutating func resume() { followsLatest = true }
 }
 
-private struct ChatHistoryBottomDistance: PreferenceKey {
-    static var defaultValue: CGFloat? = nil
-    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
+private struct ChatHistoryAtBottom: PreferenceKey {
+    static var defaultValue: Bool? = nil
+    static func reduce(value: inout Bool?, nextValue: () -> Bool?) { value = nextValue() ?? value }
 }
 
 #if DEBUG
@@ -159,9 +162,11 @@ private struct ChatHistoryInteraction: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 18, *), Self.usesNativeTracking {
             content
-                .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                    geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height
-                } action: { _, distance in following.updateBottomDistance(distance) }
+                // Only crossing the bottom threshold changes follow state.
+                // Publishing every pixel invalidates the chat during the swipe.
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height <= 4
+                } action: { _, atBottom in following.updateAtBottom(atBottom) }
                 .onScrollPhaseChange { _, phase, context in
                     switch phase {
                     case .tracking, .interacting, .decelerating: following.beginDragging()
@@ -176,11 +181,11 @@ private struct ChatHistoryInteraction: ViewModifier {
         } else {
             content
                 .simultaneousGesture(DragGesture(minimumDistance: 8)
-                    .updating($dragging) { _, dragging, _ in dragging = true }
-                    .onChanged { _ in following.beginDragging() })
+                    .updating($dragging) { _, dragging, _ in dragging = true })
                 .onChange(of: dragging) { _, dragging in
                     // Let the final content-offset preference arrive first.
-                    if !dragging { DispatchQueue.main.async { following.endDragging() } }
+                    if dragging { following.beginDragging() }
+                    else { DispatchQueue.main.async { following.endDragging() } }
                 }
         }
     }
@@ -636,15 +641,17 @@ struct ReaderChatPanel: View {
                                 }
                             }.padding(.vertical, 2)
                                 .background {
-                                    GeometryReader { content in
-                                        Color.clear.preference(key: ChatHistoryBottomDistance.self,
-                                            value: content.frame(in: .named("chatHistoryViewport")).maxY - viewport.size.height)
-                                            .overlay {
-                                                #if DEBUG
-                                                Color.clear.preference(key: ChatHistoryMeasuredOffset.self,
-                                                    value: -content.frame(in: .named("chatHistoryViewport")).minY)
-                                                #endif
-                                            }
+                                    if !ChatHistoryInteraction.usesNativeTracking {
+                                        GeometryReader { content in
+                                            Color.clear.preference(key: ChatHistoryAtBottom.self,
+                                                value: content.frame(in: .named("chatHistoryViewport")).maxY - viewport.size.height <= 4)
+                                                .overlay {
+                                                    #if DEBUG
+                                                    Color.clear.preference(key: ChatHistoryMeasuredOffset.self,
+                                                        value: -content.frame(in: .named("chatHistoryViewport")).minY)
+                                                    #endif
+                                                }
+                                        }
                                     }
                                 }
                         }
@@ -658,8 +665,8 @@ struct ReaderChatPanel: View {
                         .modifier(ChatSwipeMeasurement())
                         #endif
                         .modifier(ChatHistoryInteraction(following: $scrollFollowing))
-                        .onPreferenceChange(ChatHistoryBottomDistance.self) { distance in
-                            if !ChatHistoryInteraction.usesNativeTracking, let distance { scrollFollowing.updateBottomDistance(distance) }
+                        .onPreferenceChange(ChatHistoryAtBottom.self) { atBottom in
+                            if !ChatHistoryInteraction.usesNativeTracking, let atBottom { scrollFollowing.updateAtBottom(atBottom) }
                         }
                         .onChange(of: session.messages.last?.text) { _, _ in
                             if selectedMessage == nil, scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
