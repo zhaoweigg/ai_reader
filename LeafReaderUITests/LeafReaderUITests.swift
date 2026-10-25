@@ -6,7 +6,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -15,6 +15,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_MARKDOWN"] = markdown ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
         app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
@@ -2344,6 +2345,64 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(notice.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertEqual(notice.label, "Native browser callback verified.")
         capture("ChatGPT native browser callback", app: app)
+    }
+
+    @MainActor func testMarkdownReplyInPages() { verifyMarkdownReply(flow: "Pages") }
+    @MainActor func testMarkdownReplyInScroll() { verifyMarkdownReply(flow: "Scroll") }
+    @MainActor func testMarkdownReplyInPDF() { verifyMarkdownReply(flow: "PDF") }
+    @MainActor func testMarkdownReplyInLibrary() { verifyMarkdownReply(flow: "Library") }
+
+    @MainActor private func verifyMarkdownReply(flow: String) {
+        let app = launchApp(markdown: true)
+        if flow == "Library" { app.buttons["openLibraryChat"].tap() }
+        else {
+            if flow == "PDF" {
+                let search = app.textFields["librarySearch"]
+                XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
+                app.buttons["book-Notes from the Coast"].tap()
+            } else { app.buttons["featuredBook"].tap() }
+            waitForBook(app)
+            if flow != "PDF" {
+                openAppearance(app)
+                app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+                app.segmentedControls["readingFlow"].buttons[flow].tap()
+                app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+                app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+                dismissAppearance(app)
+            }
+            app.buttons["openReaderChat"].tap()
+        }
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap(); input.typeText("Literal **question**"); app.buttons["sendReaderChat"].tap()
+        let reply = app.staticTexts.matching(identifier: "chatReply").firstMatch
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "尾句。"), evaluatedWith: reply)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(reply.label.contains("这是李香玲，云瑶的队友。"))
+        XCTAssertTrue(reply.label.contains("• 第一条")); XCTAssertTrue(reply.label.contains("let value = 1"))
+        XCTAssertFalse(reply.label.contains("**")); XCTAssertFalse(reply.label.contains("```")); XCTAssertFalse(reply.label.contains("##"))
+        let handle = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+        let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.32)), withVelocity: .slow, thenHoldForDuration: 0.1)
+        // The compact history lazily removes an offscreen question after a long
+        // reply. Reveal it before checking the deliberately literal user text.
+        let question = app.staticTexts.matching(identifier: "chatQuestion").firstMatch
+        if !question.exists { app.scrollViews["chatMessageHistory"].swipeDown() }
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        XCTAssertEqual(question.label, "Literal **question**")
+        capture(flow + " formatted Markdown portrait", app: app)
+        input.tap(); input.typeText("Draft after formatted reply")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        capture(flow + " Markdown while composing", app: app)
+        app.buttons["Hide keyboard"].tap()
+        orient(.landscapeLeft)
+        capture(flow + " formatted Markdown landscape", app: app)
+        orient(.portrait)
+        app.buttons["closeReaderChat"].tap()
+        app.buttons[flow == "Library" ? "openLibraryChat" : "openReaderChat"].tap()
+        XCTAssertTrue(reply.waitForExistence(timeout: 5))
+        XCTAssertTrue(reply.label.contains("这是李香玲"))
+        XCTAssertEqual(input.value as? String, "Draft after formatted reply")
     }
 
     @MainActor private func openFeaturedChat(_ app: XCUIApplication) {
