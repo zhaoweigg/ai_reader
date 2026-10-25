@@ -1573,7 +1573,12 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(quote.waitForExistence(timeout: 5)); let selected = quote.label
         let panel = app.otherElements["readerChatPanel"], history = app.scrollViews["chatMessageHistory"]
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
-        let readingHeight = panel.frame.height
+        let initialReadingHeight = panel.frame.height
+        var readingHeight = initialReadingHeight
+        XCTAssertGreaterThan(initialReadingHeight, app.frame.height * 0.28)
+        XCTAssertLessThan(initialReadingHeight, app.frame.height * 0.40, "The dock leaves most of the screen for the book")
+        XCTAssertGreaterThanOrEqual(panel.frame.maxY, app.frame.maxY - 24, "No unused bottom safe-area gap below the reader chat")
+        capture(flow + " lower reading dock at approved height", app: app)
         func focusInput(typing text: String? = nil) {
             // Resolve current scene geometry after the keyboard moved the composer.
             let frame = input.frame
@@ -1616,6 +1621,18 @@ final class LeafReaderUITests: XCTestCase {
             start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: endY - handle.frame.midY)), withVelocity: .slow, thenHoldForDuration: 0.1)
             XCTAssertTrue(app.buttons["closeReaderChat"].exists)
         }
+        resize(500)
+        XCTAssertLessThan(panel.frame.height, initialReadingHeight)
+        XCTAssertTrue(input.isHittable)
+        capture(flow + " minimum reading dock", app: app)
+        resize(-700)
+        XCTAssertGreaterThan(panel.frame.height, initialReadingHeight + 100)
+        XCTAssertLessThan(panel.frame.height, app.frame.height * 0.9)
+        XCTAssertTrue(input.isHittable)
+        capture(flow + " maximum reading dock", app: app)
+        resize(panel.frame.height - initialReadingHeight)
+        XCTAssertEqual(panel.frame.height, initialReadingHeight, accuracy: 15)
+        readingHeight = panel.frame.height
         focusInput(typing: "Keep this followup draft")
         assertHistoryAndBook(); latestReplyIsVisible()
         XCTAssertEqual(surface.frame.width, originalFrame.width, accuracy: 2)
@@ -2953,6 +2970,7 @@ final class LeafReaderUITests: XCTestCase {
         capture("Cleared conversation after restart", app: app)
     }
     @MainActor func testPartialChatRestoresStoppedAfterRestart() {
+        defer { orient(.portrait) }
         let app = launchApp(slowChat: true); openFeaturedChat(app)
         sendChatQuestion("Keep my partial reply", app: app)
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
@@ -2962,6 +2980,14 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Retry"].exists)
         XCTAssertEqual(app.buttons["sendReaderChat"].label, "Send message")
         capture("Interrupted reply retained with Retry after restart", app: app)
+        orient(.landscapeLeft)
+        let history = app.scrollViews["chatMessageHistory"]
+        let reply = app.textViews.matching(identifier: "chatReply").firstMatch
+        XCTAssertGreaterThanOrEqual(history.frame.height, 20, "A stopped-reply notice must leave readable history in the compact dock")
+        XCTAssertGreaterThan(reply.frame.intersection(history.frame).height, 15)
+        XCTAssertTrue(app.buttons["Retry"].isHittable)
+        XCTAssertTrue(app.buttons["sendReaderChat"].exists)
+        capture("Compact landscape stopped reply keeps history above Retry notice", app: app)
     }
 
     @MainActor func testChatStopAndRetryKeepOneQuestion() {
