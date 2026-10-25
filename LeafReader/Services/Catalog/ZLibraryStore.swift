@@ -346,13 +346,15 @@ final class ZLibraryStore: ObservableObject {
         guard !activeQuery.isEmpty, canLoadMore, !loading else { return }
         await loadCatalog(query: activeQuery, append: true)
     }
-    func cancelCatalogLoad() {
+    func cancelCatalogLoad(_ reason: String = "replaced") {
+        if catalogTask != nil { traceCatalogLoad("cancel \(reason)", request: catalogRequest) }
         catalogTask?.cancel(); catalogTask = nil; catalogRequest = UUID(); loading = false
     }
     private func loadCatalog(query: String, append: Bool = false, refresh: Bool = false) async {
         if loading && query == activeQuery { return }
         cancelCatalogLoad()
         let request = catalogRequest, token = generation, source = origin, order = searchOrder, feed = self.feed
+        traceCatalogLoad("start \(query.isEmpty ? feed.rawValue : "search")\(refresh ? " refresh" : "")\(append ? " more" : "")", request: request)
         activeQuery = query; retryNextPage = append
         error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
         recommendationConnectionRequired = false
@@ -423,6 +425,7 @@ final class ZLibraryStore: ObservableObject {
             snapshots[key] = CatalogSnapshot(books: books, page: searchPage, canLoadMore: canLoadMore, limitReached: searchLimitReached)
             touch(key); showingSavedResults = false
         } catch {
+            traceCatalogLoad("failed current=\(token == generation && request == catalogRequest) cancelled=\(Task.isCancelled || Self.isCancellation(error))", request: request)
             if token == generation && request == catalogRequest && !Task.isCancelled && !Self.isCancellation(error) {
                 let issue = ZLibraryRequestFailure.issue(error)
                 if issue == .signInRequired {
@@ -457,13 +460,20 @@ final class ZLibraryStore: ObservableObject {
         try await saveWebsiteContext()
         traceCatalogLoad("website ready", request: request)
     }
-    private func traceCatalogLoad(_ event: String, request: UUID) {
+    func traceCatalogLoad(_ event: String, request: UUID? = nil) {
         #if DEBUG
         // Offline UI fixtures can trace lifecycle stalls without logging queries,
         // account identities, cookies or any real network response.
-        if UITesting.flag("LEAF_UI_ZLIB_MOCK") { print("[ZLibraryLoad] \(request) \(event)") }
+        guard UITesting.flag("LEAF_UI_ZLIB_MOCK") else { return }
+        let id = request.map { String($0.uuidString.prefix(4)) } ?? "view"
+        print("[ZLibraryLoad] \(id) \(event)")
+        // Shown to UI tests that opt in, so a failure report carries the sequence.
+        if UITesting.flag("LEAF_UI_ZLIB_TRACE") { loadTrace = Array((loadTrace + ["\(id) \(event)"]).suffix(24)) }
         #endif
     }
+    #if DEBUG
+    @Published private(set) var loadTrace: [String] = []
+    #endif
     func details(_ book: ZLibraryBook) async throws -> ZLibraryBook {
         if let cached = (books + shelf).first(where: { $0.id == book.id }), !cached.fileExtension.isEmpty { return cached }
         let token = generation, source = origin

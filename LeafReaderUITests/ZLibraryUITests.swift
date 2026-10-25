@@ -56,6 +56,11 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(element.exists)
         let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
         for _ in 0..<12 {
+            guard element.exists else {
+                // Report the catalog load sequence that removed the element (LEAF_UI_ZLIB_TRACE).
+                let trace = app.descendants(matching: .any)["zlibraryLoadTrace"].firstMatch
+                return XCTFail("Catalog element disappeared while revealing it. Load trace: \(trace.exists ? trace.label : "unavailable")")
+            }
             let frame = element.frame
             let top = app.navigationBars["Z-Library"].frame.maxY + 8
             let bottom = app.frame.maxY - 24
@@ -557,7 +562,7 @@ final class ZLibraryUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
-        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_POPULAR_REDIRECT": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1"]
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_POPULAR_REDIRECT": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1", "LEAF_UI_ZLIB_TRACE": "1"]
         registerSceneGeometryCleanup(app: app)
         app.launch(); setReaderOrientation(.portrait, app: app)
         openDiscover(app)
