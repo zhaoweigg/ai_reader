@@ -307,11 +307,7 @@ final class ZLibraryStore: ObservableObject {
             }
             // Restore Keychain account cookies that WebKit treats as session-only,
             // while retaining any newer persistent browser access cookies.
-            traceCatalogLoad("seed website", request: request)
-            await seedWebsite()
-            traceCatalogLoad("save website context", request: request)
-            try await saveWebsiteContext()
-            traceCatalogLoad("website ready", request: request)
+            try await prepareCatalogWebsiteContext(request: request)
             try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
             let saved = session
             if let saved, !connected {
@@ -361,6 +357,22 @@ final class ZLibraryStore: ObservableObject {
                 }
             }
         }
+    }
+    private func prepareCatalogWebsiteContext(request: UUID) async throws {
+        #if DEBUG
+        // Ordinary offline fixtures use account IDs from the fake client, not
+        // browser cookies. Keep them independent of WebKit network-process IPC.
+        // Dedicated website fixtures continue to exercise real cookie storage.
+        if isPreview && !UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE") {
+            traceCatalogLoad("offline client: browser context not required", request: request)
+            return
+        }
+        #endif
+        traceCatalogLoad("seed website", request: request)
+        await seedWebsite()
+        traceCatalogLoad("save website context", request: request)
+        try await saveWebsiteContext()
+        traceCatalogLoad("website ready", request: request)
     }
     private func traceCatalogLoad(_ event: String, request: UUID) {
         #if DEBUG
