@@ -2,6 +2,35 @@ import SwiftUI
 
 /// Keep the stored reply unchanged; formatting belongs only to its presentation.
 enum ChatMarkdown {
+    /// Bridge semantic Markdown explicitly: SwiftUI Font attributes do not
+    /// become UIFont attributes in a UITextView. Ranges use UTF-16, as UIKit does.
+    static func selectableText(_ source: String, markdown: Bool = true, traits: UITraitCollection? = nil) -> NSAttributedString {
+        let rendered = markdown ? render(source) : AttributedString(source)
+        let result = NSMutableAttributedString(string: "")
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        for run in rendered.runs {
+            let inline = run.inlinePresentationIntent
+            let components = run.presentationIntent?.components ?? []
+            let code = inline?.contains(.code) == true || components.contains { if case .codeBlock = $0.kind { return true }; return false }
+            let heading = components.contains { if case .header = $0.kind { return true }; return false }
+            let base = UIFont.preferredFont(forTextStyle: heading ? .headline : .subheadline, compatibleWith: traits)
+            let font = code ? UIFont.monospacedSystemFont(ofSize: base.pointSize, weight: .regular) : base
+            var fontTraits = font.fontDescriptor.symbolicTraits
+            if inline?.contains(.stronglyEmphasized) == true { fontTraits.insert(.traitBold) }
+            if inline?.contains(.emphasized) == true { fontTraits.insert(.traitItalic) }
+            let descriptor = font.fontDescriptor.withSymbolicTraits(fontTraits) ?? font.fontDescriptor
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont(descriptor: descriptor, size: font.pointSize),
+                .foregroundColor: UIColor.label, .paragraphStyle: paragraph
+            ]
+            if let link = run.link { attributes[.link] = link }
+            if inline?.contains(.strikethrough) == true { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+            result.append(NSAttributedString(string: String(rendered[run.range].characters), attributes: attributes))
+        }
+        return result
+    }
+
     static func render(_ source: String) -> AttributedString {
         guard let parsed = try? AttributedString(markdown: source) else { return AttributedString(source) }
         var result = AttributedString()
