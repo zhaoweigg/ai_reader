@@ -30,6 +30,7 @@ private final class ScriptedAgentProvider: ToolChatProvider {
     var rounds: [[AgentEvent]]
     var failure: Error?
     var requests: [(items: [AgentItem], allowTools: Bool, system: String)] = []
+    var offered: [[String]] = []
     var plainRequests: [ChatRequest] = []
     init(_ rounds: [[AgentEvent]], failure: Error? = nil) { self.rounds = rounds; self.failure = failure }
     func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
@@ -40,6 +41,7 @@ private final class ScriptedAgentProvider: ToolChatProvider {
     }
     func streamAgent(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool) -> AsyncThrowingStream<AgentEvent, Error> {
         requests.append((items, allowTools, system))
+        offered.append(tools.map(\.name))
         let failure = self.failure
         let events = rounds.isEmpty ? [.text("Done."), .finished(truncated: false)] : rounds.removeFirst()
         return AsyncThrowingStream { continuation in
@@ -306,5 +308,94 @@ final class ReadingAgentTests: XCTestCase {
         guard case .toolCalls(_, let calls) = quiet.requests[1].items.dropLast().last else { return XCTFail("The follow-up subject is searched") }
         XCTAssertEqual(calls.first?.arguments, #"{"terms":["白虎"]}"#)
         XCTAssertFalse(quiet.requests[1].items.contains { if case .toolCalls(_, let calls) = $0 { return calls.contains { $0.arguments.contains("再说一遍") } }; return false })
+    }
+
+    func testConfiguredLimitsCapCallsRoundsResultsAndTools() async throws {
+        let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
+        var limits = AgentLimits(); limits.maxToolCalls = 2; limits.maxRounds = 3; limits.resultsPerSearch = 1
+        limits.disabledTools = ["list_chapters", "search_conversation"]
+        let toolbox = ReadingAgentToolbox(book: ReadingAgentBook(index: index, boundary: boundary(sections))) { _ in "{}" }
+        toolbox.limits = limits
+        let search = AgentToolCall(id: "a", name: "search_book", arguments: #"{"terms":["白虎"]}"#)
+        let provider = ScriptedAgentProvider([[.toolCall(search), .toolCall(search), .finished(truncated: false)], [.text("答。"), .finished(truncated: false)]])
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "白虎是谁？")], harness: .agent)
+        _ = try await ReadingAgentRunner.run(provider: provider, request: request, toolbox: toolbox, limits: limits, onText: { _ in }, onWithdraw: {})
+        XCTAssertEqual(provider.requests.map(\.allowTools), [true, false])
+        XCTAssertEqual(provider.offered.first, ["search_book", "read_passage"])
+        guard case .toolResults(let results) = provider.requests[1].items.last else { return XCTFail("Missing results") }
+        let hits = (try JSONSerialization.jsonObject(with: Data(results[0].output.utf8)) as? [String: Any])?["results"] as? [Any]
+        XCTAssertEqual(hits?.count, 1)
+        let off = try await toolbox.run(AgentToolCall(id: "b", name: "list_chapters", arguments: "{}"))
+        XCTAssertTrue(off.contains("turned off"))
+        limits.seedSearch = false; toolbox.limits = limits
+        let seed = try await toolbox.seed("白虎", followUp: nil)
+        XCTAssertTrue(seed.isEmpty)
+    }
+
+    func testSavedLimitsClampAndDefaultTracesOn() throws {
+        let saved = #"{"provider":"anthropic","agentLimits":{"maxToolCalls":99,"maxRounds":1,"passageLength":2500,"disabledTools":["read_passage"]}}"#
+        let configuration = try JSONDecoder().decode(ChatConfiguration.self, from: Data(saved.utf8))
+        XCTAssertEqual(configuration.agentLimits.maxToolCalls, 16); XCTAssertEqual(configuration.agentLimits.maxRounds, 2)
+        XCTAssertEqual(configuration.agentLimits.passageLength, 2500); XCTAssertEqual(configuration.agentLimits.resultsPerSearch, 6)
+        XCTAssertEqual(configuration.agentLimits.tools.map(\.name), ["search_book", "list_chapters", "search_conversation"])
+        XCTAssertTrue(configuration.recordTraces)
+        XCTAssertEqual(try JSONDecoder().decode(ChatConfiguration.self, from: Data("{}".utf8)).agentLimits, AgentLimits())
+    }
+
+    func testTokenUsageIsDecodedForAllThreeProviders() async throws {
+        func collect(_ provider: HTTPChatProvider) async throws -> [AgentEvent] {
+            var events: [AgentEvent] = []
+            for try await event in provider.streamAgent(system: "S", items: [.turn(ChatTurn(role: "user", content: "Q"))], tools: AgentTool.all, allowTools: true) { events.append(event) }
+            return events
+        }
+        var profile = ChatProviderKind.chatCompletions.defaultProfile; profile.model = "test-model"
+        let completions = HTTPChatProvider(kind: .chatCompletions, profile: profile, apiKey: "k", transport: ScriptedTransport(lines: [
+            #"data: {"choices":[{"delta":{"content":"Hi"}}]}"#, "",
+            #"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#, "",
+            #"data: {"choices":[],"usage":{"prompt_tokens":1500,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":1024},"completion_tokens_details":{"reasoning_tokens":4}}}"#, "",
+            "data: [DONE]", ""]))
+        let completionEvents = try await collect(completions)
+        XCTAssertTrue(completionEvents.contains(.usage(TokenUsage(input: 1500, output: 12, cachedInput: 1024, reasoning: 4))))
+        let request = try completions.makeAgentRequest(system: "S", items: [.turn(ChatTurn(role: "user", content: "Q"))], tools: AgentTool.all, allowTools: true)
+        XCTAssertNotNil((try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])?["stream_options"])
+
+        let anthropic = HTTPChatProvider(kind: .anthropic, profile: ChatProviderKind.anthropic.defaultProfile, apiKey: "k", transport: ScriptedTransport(lines: [
+            #"data: {"type":"message_start","message":{"usage":{"input_tokens":2100,"cache_read_input_tokens":2000,"output_tokens":1}}}"#, "",
+            #"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#, "",
+            #"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":33}}"#, "",
+            #"data: {"type":"message_stop"}"#, ""]))
+        let anthropicEvents = try await collect(anthropic)
+        XCTAssertEqual(anthropicEvents, [.text("Hi"), .usage(TokenUsage(input: 2100, output: 33, cachedInput: 2000)), .finished(truncated: false)])
+
+        XCTAssertEqual(try ChatGPTSubscriptionProvider.decodeAgent(#"{"type":"response.completed","response":{"usage":{"input_tokens":900,"output_tokens":40,"input_tokens_details":{"cached_tokens":512},"output_tokens_details":{"reasoning_tokens":16}}}}"#),
+                       [.usage(TokenUsage(input: 900, output: 40, cachedInput: 512, reasoning: 16)), .finished(truncated: false)])
+        let plain = HTTPChatProvider(kind: .anthropic, profile: ChatProviderKind.anthropic.defaultProfile, apiKey: "k")
+        let toolless = try JSONSerialization.jsonObject(with: plain.makeAgentRequest(system: "S", items: [.turn(ChatTurn(role: "user", content: "Q"))], tools: [], allowTools: false).httpBody!) as? [String: Any]
+        XCTAssertNil(toolless?["tools"]); XCTAssertNil(toolless?["tool_choice"])
+    }
+
+    func testAgentAnswerIsTracedWithStepsTimingAndTokensAndKeptOnDevice() async throws {
+        let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
+        let directory = try folder(), store = AgentTraceStore(directory: directory)
+        let call = AgentToolCall(id: "c1", name: "read_passage", arguments: #"{"section":0}"#)
+        let provider = ScriptedAgentProvider([[.text("Let me check."), .toolCall(call), .usage(TokenUsage(input: 1000, output: 20)), .finished(truncated: false)],
+                                              [.text("守门统领。"), .usage(TokenUsage(input: 1500, output: 8, cachedInput: 900)), .finished(truncated: false)]])
+        let session = ReaderChatSession()
+        session.attachSelection(ReadingChatContext(title: "测试", author: "", chapter: "第四章", text: "白虎", source: "selection", locator: "here", progress: 0.6))
+        session.draft = "这是谁"
+        session.send(settings: try settings(provider, harness: .agent), agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) },
+                     traces: store) { nil }
+        try await wait { !session.isSending && store.traces.count == 1 }
+        let trace = try XCTUnwrap(store.traces.first)
+        XCTAssertEqual(trace.steps.map(\.kind), [.context, .seed, .round, .tool, .answer])
+        XCTAssertEqual(trace.steps[2].withdrawn, "Let me check.")
+        XCTAssertEqual(trace.usage, TokenUsage(input: 2500, output: 28, cachedInput: 900))
+        XCTAssertEqual(trace.selection, "白虎"); XCTAssertEqual(trace.bookTitle, "测试"); XCTAssertEqual(trace.limits, AgentLimits())
+        XCTAssertTrue(trace.steps[0].payload.contains("SYSTEM\n"))
+        XCTAssertTrue(trace.steps[0].detail.contains("boundary §4"))
+        XCTAssertEqual(AgentTraceStore(directory: directory).traces.first?.id, trace.id)
+        for _ in 0..<60 { store.add(trace) }
+        XCTAssertEqual(store.traces.count, AgentTraceStore.limit)
+        store.clear(); XCTAssertTrue(AgentTraceStore(directory: directory).traces.isEmpty)
     }
 }

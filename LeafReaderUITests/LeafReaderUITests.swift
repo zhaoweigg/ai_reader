@@ -1609,6 +1609,64 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["openAISettings"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Library"].tap()
     }
+    @MainActor func testAgentLimitsApplyAndTraceViewerShowsStepsAndTokens() {
+        continueAfterFailure = false
+        let app = launchApp()
+        chooseChatHarness("Book search agent (Claude)", app: app)
+        app.tabBars.buttons["Settings"].tap()
+        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.buttons["openAISettings"].tap()
+        let calls = app.descendants(matching: .any)["agentMaxToolCalls"].firstMatch
+        for _ in 0..<6 where !(calls.exists && calls.isHittable) { app.swipeUp() }
+        app.buttons["agentMaxToolCalls-Increment"].tap()
+        let conversationTool = app.switches["agentTool-search_conversation"]
+        for _ in 0..<4 where !(conversationTool.exists && conversationTool.isHittable) { app.swipeUp() }
+        conversationTool.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(conversationTool.value as? String, "0")
+        capture("Agent limits in AI settings", app: app)
+        let save = app.buttons["saveAISettings"]
+        for _ in 0..<6 where !save.isHittable { app.swipeUp() }
+        save.tap()
+        XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap(); input.typeText("Remind me about attention")
+        app.buttons["sendReaderChat"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch.waitForExistence(timeout: 30))
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+        app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
+        app.tabBars.buttons["Settings"].tap()
+        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.buttons["openAISettings"].tap()
+        let traces = app.buttons["openAgentTraces"]
+        for _ in 0..<8 where !(traces.exists && traces.isHittable) { app.swipeUp() }
+        traces.tap()
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "agentTrace-")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.label.contains("Remind me about attention"), row.label)
+        capture("Agent traces list", app: app)
+        row.tap()
+        let summary = app.descendants(matching: .any)["agentTraceSummary"].firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        XCTAssertTrue(summary.label.contains("input tokens"), summary.label)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "9 calls")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Tool result · search_book"].exists)
+        capture("Agent trace detail", app: app)
+        // Steps load lazily; collect each round's usage line while scrolling.
+        let usage = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "agentTraceStepUsage-"))
+        var roundsWithUsage = Set<String>()
+        for attempt in 0..<4 {
+            usage.allElementsBoundByIndex.forEach { roundsWithUsage.insert($0.identifier) }
+            if roundsWithUsage.count >= 2 { break }
+            if attempt < 3 { app.swipeUp() }
+        }
+        XCTAssertGreaterThanOrEqual(roundsWithUsage.count, 2, "\(roundsWithUsage)")
+        capture("Agent trace detail steps", app: app)
+    }
     @MainActor func testBookSearchAgentInPagesComparedWithPrefetchedEvidence() { verifyBookSearchAgent(flow: "Pages") }
     @MainActor func testBookSearchAgentInScrollNightLandscape() { verifyBookSearchAgent(flow: "Scroll") }
     @MainActor func testBookSearchAgentInPDF() { verifyBookSearchAgent(flow: "PDF") }
@@ -2713,7 +2771,10 @@ final class LeafReaderUITests: XCTestCase {
         for _ in 0..<4 where !sharing.isHittable { app.swipeUp() }
         sharing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(sharing.value as? String, "0")
-        app.buttons["saveAISettings"].tap()
+        // Agent troubleshooting sits between Reading context and Save.
+        let save = app.buttons["saveAISettings"]
+        for _ in 0..<4 where !save.isHittable { app.swipeUp() }
+        save.tap()
         XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
         app.terminate(); app.launch()
         app.tabBars.buttons["Settings"].tap()

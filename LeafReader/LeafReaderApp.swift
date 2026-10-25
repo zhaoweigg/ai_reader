@@ -6,6 +6,7 @@ struct LeafReaderApp: App {
     @StateObject private var library: LibraryStore
     @StateObject private var aiSettings: AISettingsStore
     @StateObject private var catalog: ZLibraryStore
+    @StateObject private var agentTraces: AgentTraceStore
     private let readingDefaults: UserDefaults
 
     init() {
@@ -43,7 +44,9 @@ struct LeafReaderApp: App {
             catalogDiscovery = false
         }
         #endif
-        _library = StateObject(wrappedValue: LibraryStore(root: root, seedSamples: seedSamples))
+        let libraryStore = LibraryStore(root: root, seedSamples: seedSamples)
+        _library = StateObject(wrappedValue: libraryStore)
+        _agentTraces = StateObject(wrappedValue: AgentTraceStore(directory: libraryStore.disk?.root.appendingPathComponent("AgentTraces", isDirectory: true)))
         _aiSettings = StateObject(wrappedValue: AISettingsStore(defaults: defaults, credentials: chatCredentials, providerOverride: chatProvider, chatGPTOverride: chatGPT))
         var catalogCredentials = chatCredentials
         catalogCredentials.service += ".zlibrary"
@@ -53,7 +56,7 @@ struct LeafReaderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
+            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(agentTraces).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
                 #if DEBUG
                 .background(UITestSceneGeometryBridge())
                 #endif

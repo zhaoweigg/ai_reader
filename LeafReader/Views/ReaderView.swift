@@ -36,6 +36,7 @@ struct ReaderContent: View {
     @State private var chatButtonIsMoving = false
     @StateObject private var chat: ReaderChatSession
     @EnvironmentObject private var aiSettings: AISettingsStore
+    @EnvironmentObject private var agentTraces: AgentTraceStore
     @State private var bookViewportHeight: CGFloat = 0
     @State private var password = ""
     @State private var seek = 0.0
@@ -157,7 +158,7 @@ struct ReaderContent: View {
                         try await model.recallBookContext(term: term, context: context)
                     }, agentBook: { context in
                         try await model.readingAgentBook(for: context)
-                    }) { try await model.readingChatContext() }
+                    }, traces: agentTraces) { try await model.readingChatContext() }
                 })
             }
         }

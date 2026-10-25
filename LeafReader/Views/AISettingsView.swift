@@ -59,6 +59,7 @@ struct AISettingsView: View {
                 } header: { Text("Book context") } footer: {
                     Text(configuration.harness.summary + " Each reply shows which one answered.")
                 }
+                if configuration.harness == .agent { AgentLimitsSection(configuration: $configuration) }
                 Section("Reading context") {
                     Toggle("Include current passage", isOn: $configuration.sharePage).accessibilityIdentifier("aiSharePage")
                     Text(configuration.harness == .agent
@@ -76,6 +77,7 @@ struct AISettingsView: View {
                         }
                     }
                 }
+                AgentTroubleshootingSection(configuration: $configuration)
                 if let error { Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("aiSettingsError") } }
                 if saved { Section { Label("AI settings saved", systemImage: "checkmark.circle").foregroundStyle(theme.accent) } }
                 Section {
