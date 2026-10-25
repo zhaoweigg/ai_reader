@@ -281,4 +281,30 @@ final class ReadingAgentTests: XCTestCase {
         try await wait { !evidence.isSending && evidence.messages.count == 2 }
         XCTAssertEqual(evidence.messages.last?.trace?.caption, "Pre-fetched evidence · looked up “白虎” (1)")
     }
+
+    func testHighlightedNameAndFollowUpsAreSearchedBeforeTheModelAnswers() async throws {
+        let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
+        let agentBook: @MainActor (ReadingChatContext) async throws -> ReadingAgentBook? = { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) }
+        // A model that answers at once, without calling tools itself.
+        let quiet = ScriptedAgentProvider([[.text("守门统领。"), .finished(truncated: false)], [.text("还是守门统领。"), .finished(truncated: false)]])
+        let settings = try settings(quiet, harness: .agent)
+        let session = ReaderChatSession()
+        session.attachSelection(ReadingChatContext(title: "测试", author: "", chapter: "第四章", text: "白虎", source: "selection", locator: "here", progress: 0.6))
+        session.draft = "这是谁"
+        session.send(settings: settings, agentBook: agentBook) { nil }
+        try await wait { !session.isSending && session.messages.count == 2 }
+        guard case .toolResults(let results) = quiet.requests.first?.items.last else { return XCTFail("The name is searched before the first model request") }
+        XCTAssertTrue(results.first?.output.contains("第一章") == true)
+        XCTAssertTrue(quiet.requests[0].system.contains("text is exactly what the reader highlighted"))
+        XCTAssertTrue(session.messages.last?.trace?.caption.contains("searched “白虎”") == true)
+
+        session.draft = "再说一遍是谁"
+        session.send(settings: settings, agentBook: agentBook) {
+            ReadingChatContext(title: "测试", author: "", chapter: "第四章", text: "大家都在大厅里。", source: "page", locator: "here", progress: 0.6)
+        }
+        try await wait { !session.isSending && session.messages.count == 4 }
+        guard case .toolCalls(_, let calls) = quiet.requests[1].items.dropLast().last else { return XCTFail("The follow-up subject is searched") }
+        XCTAssertEqual(calls.first?.arguments, #"{"terms":["白虎"]}"#)
+        XCTAssertFalse(quiet.requests[1].items.contains { if case .toolCalls(_, let calls) = $0 { return calls.contains { $0.arguments.contains("再说一遍") } }; return false })
+    }
 }

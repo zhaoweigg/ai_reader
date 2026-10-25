@@ -347,6 +347,40 @@ final class ChatTests: XCTestCase {
         XCTAssertNil(ReadingBookRecall.lookupTerm(question: "Who is he?", context: page))
         XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "我忘了“白虎”的身份", context: page), "白虎")
     }
+    func testFollowUpPhrasingIsNotANameAndKeepsThePreviousSubject() {
+        let page = ReadingChatContext(title: "十日终焉", author: "", chapter: "第408章", text: "接连死去的两个队友……", source: "page", locator: "")
+        for question in ["再说一遍是谁", "所以他到底是谁", "那个人是谁", "她是谁"] {
+            XCTAssertNil(ReadingBookRecall.lookupTerm(question: question, context: page), question)
+            XCTAssertEqual(ReadingBookRecall.lookupTerm(question: question, context: page, previous: "林檎"), "林檎", question)
+        }
+        XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "再说一遍白虎是谁", context: page, previous: "林檎"), "白虎")
+        XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "林檎是谁", context: page, previous: "白虎"), "林檎")
+        let earlier = ReaderChatMessage(isUser: true, text: "这是谁", context: ReadingChatContext(title: "", author: "", chapter: "", text: "林檎", source: "selection", locator: ""))
+        XCTAssertEqual(ReaderChatSession.previousSubject([earlier, ReaderChatMessage(isUser: false, text: "心理咨询师")]), "林檎")
+    }
+    func testEvidenceFollowUpLooksUpThePreviousSubjectNotThePhrase() async throws {
+        let provider = ControlledChatProvider(), (settings, _, _) = settings(provider)
+        let session = ReaderChatSession()
+        session.attachSelection(ReadingChatContext(title: "测试", author: "", chapter: "第三章", text: "林檎", source: "selection", locator: "a", progress: 0.4))
+        session.draft = "这是谁"
+        var terms: [String] = []
+        let recall: @MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall? = { term, _ in
+            terms.append(term)
+            return ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "林檎是心理咨询师。")], scannedSections: 2, totalSections: 2, complete: true)
+        }
+        session.send(settings: settings, recall: recall) { nil }
+        try await wait { provider.requests.count == 1 }
+        provider.continuations[0].yield(.text("心理咨询师。")); provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
+        try await wait { !session.isSending }
+        session.draft = "再说一遍是谁"
+        session.send(settings: settings, recall: recall) {
+            ReadingChatContext(title: "测试", author: "", chapter: "第三章", text: "接连死去的两个队友。", source: "page", locator: "b", progress: 0.4)
+        }
+        try await wait { provider.requests.count == 2 }
+        XCTAssertEqual(terms, ["林檎", "林檎"])
+        XCTAssertTrue(provider.requests[1].turns.last?.content.contains("林檎是心理咨询师。") == true)
+        session.stop()
+    }
     func testMovingBackInBookOmitsRecentDiscussionBeyondCurrentPosition() {
         var later = context; later.progress = 0.9
         var now = context; now.progress = 0.2

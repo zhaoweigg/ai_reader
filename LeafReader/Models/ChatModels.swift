@@ -92,19 +92,27 @@ struct ReadingBookRecall: Codable, Equatable {
             ReadingBookExcerpt(chapter: String($0.chapter.prefix(100)), text: String($0.text.prefix(500)))
         }, scannedSections: max(0, scannedSections), totalSections: max(0, totalSections), complete: complete)
     }
-    static func lookupTerm(question: String, context: ReadingChatContext) -> String? {
+    /// The name to look up for a reminder question. `previous` is the subject of
+    /// the reader's last lookup, kept for follow-ups such as “再说一遍是谁”.
+    static func lookupTerm(question: String, context: ReadingChatContext, previous: String? = nil) -> String? {
         let recall = question.range(of: "回忆|忘|角色|人物|是谁|谁是|前情|之前|以前|身份|来历|关系|remind|remember|forgot|character|relationship|backstory|who (?:is|was)|earlier|recap", options: [.regularExpression, .caseInsensitive]) != nil
         guard recall else { return nil }
         let selected = context.text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "“”「」『』\"'，,：:、")))
-        let generic: Set<String> = ["a", "an", "the", "he", "she", "it", "they", "him", "her", "them", "this", "that", "他", "她", "它", "他们", "她们", "这个", "那个"]
+        let generic: Set<String> = ["a", "an", "the", "he", "she", "it", "they", "him", "her", "them", "this", "that", "他", "她", "它", "他们", "她们", "这个", "那个",
+                                    "这人", "那人", "此人", "这个人", "那个人", "这位", "那位", "对方", "他是", "她是"]
         if context.source == "selection", (2...40).contains(selected.count), !generic.contains(selected.lowercased()), !selected.contains(where: { "。！？!?\n".contains($0) }) { return selected }
         for pattern in ["[“「『\"]([^”」』\"]{2,40})[”」』\"]", "([\\p{Han}]{2,8})(?:是谁|的身份)", "(?i:who (?:is|was)) ([A-Z][a-z]+(?: [A-Z][a-z]+)?)"] {
             guard let regex = try? NSRegularExpression(pattern: pattern), let match = regex.firstMatch(in: question, range: NSRange(question.startIndex..., in: question)),
                   let range = Range(match.range(at: 1), in: question) else { continue }
-            let candidate = String(question[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !generic.contains(candidate.lowercased()) { return candidate }
+            var candidate = String(question[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Words before “是谁” are often phrasing, not a name: “再说一遍是谁”, “所以他到底是谁”.
+            for filler in ["再说一遍", "再说一次", "再讲一遍", "再讲一次", "说一下", "请问", "所以", "那么", "刚才", "到底", "究竟", "这个", "那个", "他", "她", "它"] {
+                while candidate.hasPrefix(filler) { candidate.removeFirst(filler.count) }
+                while candidate.hasSuffix(filler) { candidate.removeLast(filler.count) }
+            }
+            if candidate.count >= 2, !generic.contains(candidate.lowercased()) { return candidate }
         }
-        return nil
+        return previous
     }
 }
 
@@ -181,6 +189,7 @@ struct ChatRequest {
     static let agentSystemPrompt = """
     You are Leaf, a thoughtful reading companion inside an e-book reader. Answer the reader's actual question in their language; use the book's language when the question does not establish one. Be concise unless asked for detail.
     Each reader question comes with reading_context: the book, chapter, the selected text or visible page, nearby text, and approximate reading progress. That is where the reader is now.
+    When reading_context.source is "selection", text is exactly what the reader highlighted, and the question is about it: "这是谁", "是谁" or "who is this" asks who the highlighted name is, even if the earlier discussion was about someone else. preceding_text and following_text are only nearby context, never the subject. A question that refers back, such as "再说一遍" or "again", continues the subject of the earlier discussion. Leaf may already have searched the book for the highlighted name or that subject; read those results first, then search or read more when they do not establish the answer.
     You have tools that read this book on the reader's device: search_book, read_passage, list_chapters and search_conversation. They only see text from the start of the book up to the reader's current position. Use them whenever the answer depends on anything outside the supplied passage: who a character is, what happened earlier, relationships, places, objects, callbacks, or questions such as "remind me". Do not use them when the passage itself answers the question, such as the meaning of a word or sentence, a translation, or tone.
     Search well: give search_book several alternatives in one call, such as the full name, short name, nickname, title or role, and distinctive related words. For Chinese, use exact characters, including two-character short forms. Check where results come from: identity is usually established at the first mentions and in key scenes, so use read_passage around the most informative results before answering. When results are empty or thin, try other terms, such as another name or a related place or event, before concluding that the book has not mentioned it. Use at most about six tool calls, and write nothing to the reader until you have finished using tools.
     Answer with the direct answer first, then a short supported recap. Cite chapter labels for key evidence, for example (第12章) or (Chapter 3). Distinguish what the text states from your interpretation. Never invent quotations, events or relationships; if the text you found does not establish something, say so plainly.

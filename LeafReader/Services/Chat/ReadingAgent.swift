@@ -96,6 +96,23 @@ final class ReadingAgentToolbox {
         }
     }
 
+    /// A selection short enough to be a name or term, without sentence punctuation.
+    nonisolated static func nameLike(_ text: String) -> String? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "“”「」『』\"'，,：:、")))
+        let pronouns: Set<String> = ["he", "she", "it", "they", "him", "her", "them", "this", "that", "他", "她", "它", "他们", "她们", "这个", "那个"]
+        guard (2...40).contains(value.count), !pronouns.contains(value.lowercased()),
+              !value.contains(where: { "。！？!?\n".contains($0) }) else { return nil }
+        return value
+    }
+    /// Leaf's own first search, for a highlighted name or a follow-up's subject,
+    /// presented to the model as an earlier tool call it can build on.
+    func seed(_ selection: String?, followUp: String?) async throws -> [AgentItem] {
+        guard let term = selection.flatMap(Self.nameLike) ?? followUp.flatMap(Self.nameLike) else { return [] }
+        let call = AgentToolCall(id: "call_leaf_seed", name: "search_book", arguments: Self.json(["terms": [term]]))
+        let output = try await run(call)
+        return [.toolCalls(text: "", calls: [call]), .toolResults([AgentToolResult(id: call.id, name: call.name, output: output)])]
+    }
+
     static func terms(_ arguments: [String: Any]) -> [String] {
         var raw = arguments["terms"] as? [Any] ?? []
         // Accept a single query string from models that ignore the array schema.
@@ -185,9 +202,9 @@ enum ReadingAgentRunner {
     /// Runs tool rounds, then streams the final answer. Text from a round that
     /// ends in tool calls is withdrawn: it is preamble, not the answer.
     @MainActor
-    static func run(provider: any ToolChatProvider, request: ChatRequest, toolbox: ReadingAgentToolbox,
+    static func run(provider: any ToolChatProvider, request: ChatRequest, toolbox: ReadingAgentToolbox, seed: [AgentItem] = [],
                     onText: (String) -> Void, onWithdraw: () -> Void) async throws -> Outcome {
-        var items = request.turns.map(AgentItem.turn)
+        var items = request.turns.map(AgentItem.turn) + seed
         var used = 0
         for round in 0..<maxRounds {
             let allowTools = used < maxCalls && round < maxRounds - 1
