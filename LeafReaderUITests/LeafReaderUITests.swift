@@ -1447,7 +1447,8 @@ final class LeafReaderUITests: XCTestCase {
         func resize(_ delta: CGFloat) {
             let handle = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
             let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: delta)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            let endY = min(app.frame.maxY - 24, max(app.frame.minY + 24, handle.frame.midY + delta))
+            start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: endY - handle.frame.midY)), withVelocity: .slow, thenHoldForDuration: 0.1)
             XCTAssertTrue(app.buttons["closeReaderChat"].exists)
         }
         focusInput(); input.typeText("Keep this followup draft")
