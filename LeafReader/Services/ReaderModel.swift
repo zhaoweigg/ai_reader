@@ -44,6 +44,7 @@ final class ReaderModel: NSObject, ObservableObject {
     private var lastAutomaticRecovery: Date?
     private var memoryWarningObserver: NSObjectProtocol?
     private var pdfSelectionObserver: NSObjectProtocol?
+    private var initialPDFPage: Int?
     private var memoryWarningCount = 0
     private static let logger = Logger(subsystem: "com.weizhao.leafreader", category: "ReaderLifecycle")
 
@@ -424,6 +425,7 @@ final class ReaderModel: NSObject, ObservableObject {
         for (page, annotation) in renderedPDFAnnotations { page.removeAnnotation(annotation) }
         renderedPDFAnnotations = []; renderedPDFPages = []; renderedPDFValues = []
         pdfView = view
+        initialPDFPage = nil
         pdfSelectionObserver = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: view, queue: .main) { [weak self, weak view] _ in
             Task { @MainActor [weak self, weak view] in
                 guard let self, let view, self.pdfView === view else { return }
@@ -443,21 +445,44 @@ final class ReaderModel: NSObject, ObservableObject {
     private func finishPDFSetup(_ view: PDFView) {
         guard let doc = view.document else { return }
         chapters = (0..<doc.pageCount).map { Chapter(label: "Page \($0 + 1)", href: PDFLocator.page($0)) }
-        if !locator.isEmpty { navigatePDF(locator) }
-        else if let first = doc.page(at: 0) { view.go(to: first) }
+        initialPDFPage = min(max(0, PDFLocator.pageIndex(locator) ?? 0), max(0, doc.pageCount - 1))
+        if let reader = view as? ReaderPDFView {
+            reader.afterInitialLayout = { [weak self, weak view] in
+                guard self?.initialPDFPage != nil else { return }
+                // PDFKit needs its first real bounds before go(to:) is reliable.
+                // Defer publishing until the current UIKit layout completes.
+                Task { @MainActor [weak self, weak view] in
+                    guard let view else { return }
+                    self?.restoreInitialPDFPage(in: view)
+                }
+            }
+        }
         isReady = true
         if let cover = doc.page(at: 0)?.thumbnail(of: CGSize(width: 300, height: 440), for: .cropBox).pngData() {
             library.setMetadata(bookID, title: nil, author: nil, cover: cover)
         }
-        pdfPageChanged()
+        restoreInitialPDFPage(in: view)
         synchronizeAnnotations()
+    }
+    private func restoreInitialPDFPage(in view: PDFView) {
+        guard pdfView === view, let index = initialPDFPage, view.bounds.width > 0, view.bounds.height > 0,
+              let doc = view.document, let page = doc.page(at: index) else { return }
+        view.layoutDocumentView()
+        view.go(to: page)
+        guard view.currentPage === page else { return }
+        initialPDFPage = nil
+        (view as? ReaderPDFView)?.afterInitialLayout = nil
+        pdfPageChanged()
     }
     private func navigatePDF(_ target: String) {
         guard let index = PDFLocator.pageIndex(target), let page = pdfView?.document?.page(at: index) else { return }
+        initialPDFPage = nil
         pdfView?.go(to: page)
     }
     func pdfPageChanged() {
-        guard isReady, let view = pdfView, let doc = view.document, let page = view.currentPage else { return }
+        guard isReady, let view = pdfView, let doc = view.document else { return }
+        if initialPDFPage != nil { restoreInitialPDFPage(in: view); return }
+        guard let page = view.currentPage else { return }
         let index = doc.index(for: page)
         guard index != NSNotFound else { return }
         if locator != PDFLocator.page(index) { hideControls() }

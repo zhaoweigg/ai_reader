@@ -147,6 +147,7 @@ struct PDFBookSurface: UIViewRepresentable {
     static func dismantleUIView(_ view: PDFView, coordinator: Coordinator) {
         coordinator.onReaderTap = nil
         (view as? ReaderPDFView)?.selectionHooks = ReaderSelectionHooks()
+        (view as? ReaderPDFView)?.afterInitialLayout = nil
         view.document = nil
         if coordinator.model.pdfView === view { coordinator.model.pdfView = nil }
     }

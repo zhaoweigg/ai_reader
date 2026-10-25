@@ -3,15 +3,19 @@ import SwiftUI
 enum ReaderChatSizing {
     static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> ClosedRange<CGFloat> {
         let usable = max(0, availableHeight - 16)
-        let minimum: CGFloat = fullHeight < 500 ? 132 : (composing ? (hasSelection ? 216 : 176) : (hasSelection ? 260 : 200))
-        let lower = min(minimum, usable)
-        return lower...max(lower, min(fullHeight * 0.85, usable * 0.88))
+        // Leave actual book text above an expanded portrait composer, rather
+        // than just the status area or the chapter's top whitespace.
+        let bookReserve = composing && fullHeight >= 500 ? min(220, fullHeight * 0.26, max(0, usable - 176)) : 0
+        let maximum = min(fullHeight * 0.85, usable * 0.88, max(0, usable - bookReserve))
+        let minimum: CGFloat = composing ? (fullHeight < 500 ? 176 : (hasSelection ? 256 : 224)) : (fullHeight < 500 ? 132 : (hasSelection ? 260 : 200))
+        let lower = min(minimum, maximum)
+        return lower...maximum
     }
     static func height(fraction: Double, fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> CGFloat {
         let limits = bounds(fullHeight: fullHeight, availableHeight: availableHeight, composing: composing, hasSelection: hasSelection)
         let desired: CGFloat
         if composing, !fraction.isFinite || fraction <= 0 {
-            desired = min(fullHeight / 3, max(hasSelection ? 216 : 176, availableHeight * 0.35))
+            desired = max(limits.lowerBound, min(fullHeight / 3, availableHeight * 0.5))
         } else { desired = fullHeight * CGFloat(fraction.isFinite && fraction > 0 ? fraction : 1.0 / 3) }
         return min(limits.upperBound, max(limits.lowerBound, desired))
     }
@@ -320,11 +324,11 @@ struct ReaderChatPanel: View {
 
     var body: some View {
         GeometryReader { geometry in
-            content(compact: geometry.size.height < 200, showsHistory: geometry.size.height >= 200 && (!isComposing || geometry.size.height >= 300))
+            content(compact: geometry.size.height < 200)
         }
     }
-    private func content(compact: Bool, showsHistory: Bool) -> some View {
-        VStack(spacing: compact ? 4 : 8) {
+    private func content(compact: Bool) -> some View {
+        VStack(spacing: compact ? 2 : 8) {
             VStack(spacing: 0) {
                 Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
                     .frame(maxWidth: .infinity).frame(height: 12)
@@ -342,7 +346,7 @@ struct ReaderChatPanel: View {
                     .accessibilityAction(named: "Close chat", close)
                 HStack(spacing: 6) {
                     Image(systemName: "leaf.fill").font(.system(size: 15, weight: .medium)).foregroundStyle(accent).accessibilityHidden(true)
-                    if compact, let selection = session.selectedContext {
+                    if compact || isComposing, let selection = session.selectedContext {
                         Text(selection.text).font(.caption).lineLimit(1).layoutPriority(-1).accessibilityIdentifier("chatSelectedPassage")
                         Button { session.removeSelection() } label: { Image(systemName: "xmark.circle").frame(width: 44, height: 44) }
                             .accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
@@ -393,8 +397,7 @@ struct ReaderChatPanel: View {
                 .accessibilityIdentifier("readerChatHeader")
             }
 
-            if !showsHistory { Spacer(minLength: 0) }
-            if showsHistory {
+            Group {
                 if session.hasEarlierMessages || session.hasNewerMessages {
                     HStack {
                         Button("Earlier") { session.loadEarlier() }
@@ -436,10 +439,16 @@ struct ReaderChatPanel: View {
                         }.padding(.vertical, 2)
                     }
                     .defaultScrollAnchor(.bottom)
-                    .scrollDismissesKeyboard(.interactively)
+                    .scrollDismissesKeyboard(isComposing ? .never : .interactively)
                     .accessibilityIdentifier("chatMessageHistory")
                     .onChange(of: session.messages.last?.text) { _, _ in
                         if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                    .onChange(of: inputFocused) { _, focused in
+                        if focused, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                    .onChange(of: isComposing) { _, composing in
+                        if composing, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }.frame(maxHeight: .infinity)
                 if let historyError = session.historyError {
@@ -464,7 +473,7 @@ struct ReaderChatPanel: View {
                 }
             }
 
-            if !compact, let selection = session.selectedContext {
+            if !compact, !isComposing, let selection = session.selectedContext {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "text.quote").foregroundStyle(accent).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
@@ -488,7 +497,7 @@ struct ReaderChatPanel: View {
                     .font(.subheadline).lineLimit(1...(compact ? 1 : 3))
                     .focused($inputFocused).submitLabel(.send)
                     .onSubmit(send)
-                    .padding(.leading, 14).padding(.vertical, 12)
+                    .padding(.leading, 14).padding(.vertical, compact ? 6 : 12)
                     .accessibilityIdentifier("readerChatInput")
                 Button(action: session.isSending ? session.stop : send) {
                     Image(systemName: session.isSending ? "stop.fill" : "arrow.up").font(.system(size: 19, weight: .medium))
@@ -499,11 +508,11 @@ struct ReaderChatPanel: View {
                 .buttonStyle(.plain).disabled(question.isEmpty && !session.isSending)
                 .accessibilityLabel(session.isSending ? "Stop response" : "Send message").accessibilityIdentifier("sendReaderChat")
             }
-            .padding(4)
+            .padding(compact ? 0 : 4)
             .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 28))
             .overlay(RoundedRectangle(cornerRadius: 28).stroke(.secondary.opacity(0.3), lineWidth: 0.75))
         }
-        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, compact ? 4 : 8)
+        .padding(.horizontal, 16).padding(.top, compact ? 0 : 4).padding(.bottom, compact ? 2 : 8)
         .foregroundStyle(.primary).tint(accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
         .accessibilityAction(.escape, close)
