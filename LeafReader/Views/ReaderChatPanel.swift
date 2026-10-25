@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 enum ReaderChatSizing {
     static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> ClosedRange<CGFloat> {
@@ -295,6 +296,10 @@ struct ResizableChatPanel: View {
 struct ReaderChatPanel: View {
     enum Context { case reader, libraryBook, general }
     @Environment(\.leafTheme) private var theme
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
+    @StateObject private var dictation = ChatDictationSession()
+    @AppStorage("chat.dictationLanguage") private var dictationLanguage = DictationLanguage.system.rawValue
     @ObservedObject var session: ReaderChatSession
     @EnvironmentObject private var settings: AISettingsStore
     let bookTitle: String
@@ -354,7 +359,7 @@ struct ReaderChatPanel: View {
                     } else { Text("Ask Leaf").font(.subheadline.weight(.semibold)).foregroundStyle(accent).lineLimit(1) }
                     Spacer(minLength: 4)
                     if let onChooseConversation, !isComposing {
-                        Button(action: onChooseConversation) {
+                        Button { dictation.cancel(); onChooseConversation() } label: {
                             HStack(spacing: 4) {
                                 Text(context == .general ? "General chat" : bookTitle).lineLimit(1)
                                 Image(systemName: "chevron.down")
@@ -362,15 +367,19 @@ struct ReaderChatPanel: View {
                         }.accessibilityLabel("Choose conversation").accessibilityValue(context == .general ? "General chat" : bookTitle)
                             .accessibilityIdentifier("chooseLibraryConversation")
                     }
-                    if context == .reader && !isComposing && !compact {
+                    if dictation.isActive {
+                        Text(dictation.status).font(.caption).foregroundStyle(accent).lineLimit(1)
+                            .accessibilityIdentifier("chatDictationStatus")
+                    } else if context == .reader && !isComposing && !compact {
                         Text(settings.configuration.profile.model).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
                     if !isComposing && !compact {
                         Menu {
-                            Button("AI settings", systemImage: "gearshape", action: onSettings)
-                            Button("Floating button",systemImage:"circle.lefthalf.filled",action:onButtonSettings)
+                            dictationLanguagePicker
+                            Button("AI settings", systemImage: "gearshape") { dictation.cancel(); onSettings() }
+                            Button("Floating button",systemImage:"circle.lefthalf.filled") { dictation.cancel(); onButtonSettings() }
                                 .accessibilityIdentifier("configureChatButton")
-                            Button("Clear conversation", systemImage: "trash", role: .destructive) { confirmsClear = true }
+                            Button("Clear conversation", systemImage: "trash", role: .destructive) { dictation.cancel(); confirmsClear = true }
                                 .accessibilityIdentifier("requestClearConversation")
                         } label: {
                             Image(systemName: "ellipsis").frame(width: 44, height: 44)
@@ -496,16 +505,29 @@ struct ReaderChatPanel: View {
                 TextField(session.selectedContext != nil ? "Ask about the selected text…" : context == .general ? "Ask Leaf…" : context == .libraryBook ? "Ask about this book…" : "Ask about this page…", text: $session.draft, axis: .vertical)
                     .font(.subheadline).lineLimit(1...(compact ? 1 : 3))
                     .focused($inputFocused).submitLabel(.send)
+                    .disabled(dictation.isActive)
                     .onSubmit(send)
                     .padding(.leading, 14).padding(.vertical, compact ? 6 : 12)
                     .accessibilityIdentifier("readerChatInput")
+                Button(action: toggleDictation) {
+                    Image(systemName: dictation.isActive ? "stop.circle.fill" : "mic")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(dictation.isActive ? Color.red : accent)
+                        .frame(width: 44, height: 44).contentShape(Circle())
+                }
+                .buttonStyle(.plain).disabled(session.isSending)
+                .accessibilityLabel(dictation.isActive ? "Stop dictation" : "Dictate question")
+                .accessibilityValue(dictation.isActive ? dictation.status : (DictationLanguage(rawValue: dictationLanguage) ?? .system).title)
+                .accessibilityHint("Speak to add text to your draft. Stop and review it before sending. Touch and hold to choose a language.")
+                .accessibilityIdentifier("dictateChatQuestion")
+                .contextMenu { dictationLanguagePicker }
                 Button(action: session.isSending ? session.stop : send) {
                     Image(systemName: session.isSending ? "stop.fill" : "arrow.up").font(.system(size: 19, weight: .medium))
                         .foregroundStyle(question.isEmpty && !session.isSending ? Color.secondary : theme.onAccent)
                         .frame(width: 44, height: 44)
                         .background(question.isEmpty && !session.isSending ? accent.opacity(0.1) : accent, in: Circle())
                 }
-                .buttonStyle(.plain).disabled(question.isEmpty && !session.isSending)
+                .buttonStyle(.plain).disabled(dictation.isActive || (question.isEmpty && !session.isSending))
                 .accessibilityLabel(session.isSending ? "Stop response" : "Send message").accessibilityIdentifier("sendReaderChat")
             }
             .padding(compact ? 0 : 4)
@@ -516,11 +538,39 @@ struct ReaderChatPanel: View {
         .foregroundStyle(.primary).tint(accent)
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
         .accessibilityAction(.escape, close)
+        .onDisappear { dictation.cancel() }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { dictation.suspend(background: phase == .background) } }
+        .onChange(of: ObjectIdentifier(session)) { _, _ in dictation.cancel() }
+        .onChange(of: dictationLanguage) { _, _ in dictation.cancel() }
+        .onReceive(NotificationCenter.default.publisher(for: ReadAloudAudioSession.willActivate)) { _ in dictation.cancel() }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
+            if (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue { dictation.cancel() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { notification in
+            if (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue { dictation.cancel() }
+        }
+        .alert("Dictation unavailable", isPresented: Binding(get: { dictation.error != nil }, set: { if !$0 { dictation.error = nil } })) {
+            if dictation.needsSettings { Button("Open Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) } } }
+            Button("OK", role: .cancel) { dictation.error = nil }
+        } message: { Text(dictation.error ?? "") }
         .confirmationDialog(context == .general ? "Clear your general conversation?" : "Clear this book’s conversation?", isPresented: $confirmsClear, titleVisibility: .visible) {
             Button("Clear conversation", role: .destructive) { session.clear() }
                 .accessibilityIdentifier("confirmClearConversation")
             Button("Cancel", role: .cancel) {}
         } message: { Text(context == .general ? "This deletes the general chat’s saved messages and draft from this device. Book conversations are kept." : "This deletes this book’s saved messages and draft from this device.") }
+    }
+
+    private var dictationLanguagePicker: some View {
+        Picker("Dictation language", selection: $dictationLanguage) {
+            ForEach(DictationLanguage.allCases) { language in Text(language.title).tag(language.rawValue) }
+        }.accessibilityIdentifier("dictationLanguage")
+    }
+    private func toggleDictation() {
+        if dictation.isActive { dictation.finish(); return }
+        inputFocused = false
+        dictation.start(draft: session.draft, language: DictationLanguage(rawValue: dictationLanguage) ?? .system) { [weak session] text in
+            session?.draft = text
+        }
     }
 
     private func selectionActions(compact: Bool) -> some View {
@@ -546,12 +596,13 @@ struct ReaderChatPanel: View {
     }
 
     private func close() {
+        dictation.cancel()
         inputFocused = false
         onClose()
     }
 
     private func send() {
-        guard !question.isEmpty, !session.isSending else { return }
+        guard !question.isEmpty, !session.isSending, !dictation.isActive else { return }
         inputFocused = false
         onSend()
     }

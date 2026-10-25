@@ -25,6 +25,7 @@
 		36730BF910AF1DBF55AE4EA9 /* ChatProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2776E6B6192B8E7EC19E4B8F /* ChatProvider.swift */; };
 		36F755B418C2FEF435D15F7C /* AgentTraceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE2ACC3497C3F4EA3FBBB31B /* AgentTraceViews.swift */; };
 		396307293181749082A3EC8A /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E54628DCA060E482092CC828 /* Accelerate.framework */; };
+		3CE4DD0B4CCDD09FF1146D4D /* ChatDictationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63D0097D2F2FDE06A85F710B /* ChatDictationTests.swift */; };
 		3FD99BFAA6C100E30E07044C /* ReaderAnnotationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7B596C7A37807FDBC583EA2 /* ReaderAnnotationsView.swift */; };
 		40137AAE22983BAD512DC3BF /* KokoroSpeechTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C494CF7B965049F41D1A360F /* KokoroSpeechTests.swift */; };
 		426155C7059E798D7A043711 /* UITestSceneGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC121F68853537778A0E3CC2 /* UITestSceneGeometry.swift */; };
@@ -65,6 +66,7 @@
 		9FDFD316CCFF5922818A3F5A /* Reader in Resources */ = {isa = PBXBuildFile; fileRef = 6C58276EB1F4A939EEC2C0D2 /* Reader */; };
 		A09C3F2A4E802FDB0B0BCA75 /* AnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FD904DA89A963355B4AFD5B /* AnnotationTests.swift */; };
 		A0F241BB7DE8E32BBDA9E790 /* sherpa-onnx.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = EAA7D1682D716B3839C5C03A /* sherpa-onnx.xcframework */; };
+		A1D006D09F935A9B62AD1EA9 /* ChatDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C0FAFC34AC96D5DA6976E5 /* ChatDictation.swift */; };
 		A1FEA668D10DF089A1F8BE31 /* BookTextIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44915C2A5A181E23DE9282E7 /* BookTextIndex.swift */; };
 		A5B8969ABBA1389CFB410349 /* AgentTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4168EBE42F18B58B1646D72 /* AgentTrace.swift */; };
 		B3112B6445A1C3A0F805B724 /* ChatGPTConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE07B9A1522472930DD1E8D6 /* ChatGPTConnectionView.swift */; };
@@ -156,6 +158,7 @@
 		5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryChatUITests.swift; sourceTree = "<group>"; };
 		5E6DF2E83336FF008A3ECB0C /* ZLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryTests.swift; sourceTree = "<group>"; };
 		613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryUITests.swift; sourceTree = "<group>"; };
+		63D0097D2F2FDE06A85F710B /* ChatDictationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDictationTests.swift; sourceTree = "<group>"; };
 		6850C7062B504A73A5242F98 /* ChatGPTBrowserSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTBrowserSignIn.swift; sourceTree = "<group>"; };
 		6AB29A7913A706F43291361B /* BookmarksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarksView.swift; sourceTree = "<group>"; };
 		6C58276EB1F4A939EEC2C0D2 /* Reader */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Reader; path = LeafReader/Resources/Reader; sourceTree = SOURCE_ROOT; };
@@ -168,6 +171,7 @@
 		8AF0B59C16AA23A2176C159D /* ChatHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHistoryTests.swift; sourceTree = "<group>"; };
 		8BEDAE49739E86E86ABC4D4D /* Fixtures */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Fixtures; path = LeafReaderTests/Fixtures; sourceTree = SOURCE_ROOT; };
 		8C08F80E36FE291CCF5E4C18 /* LeafReaderTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LeafReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		93C0FAFC34AC96D5DA6976E5 /* ChatDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDictation.swift; sourceTree = "<group>"; };
 		95E3F1CC0A69A7431FDFC29B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		96E14EF665D316B3CB3BA361 /* ChatModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModels.swift; sourceTree = "<group>"; };
 		988B12B05A25D8C389A2D249 /* BookMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookMetadataTests.swift; sourceTree = "<group>"; };
@@ -243,6 +247,7 @@
 				A4168EBE42F18B58B1646D72 /* AgentTrace.swift */,
 				2711FF9B669B7E4658B2DAE6 /* AISettingsStore.swift */,
 				44915C2A5A181E23DE9282E7 /* BookTextIndex.swift */,
+				93C0FAFC34AC96D5DA6976E5 /* ChatDictation.swift */,
 				229584F749B3CCD25F03CD5A /* ChatGPTAccountStore.swift */,
 				6850C7062B504A73A5242F98 /* ChatGPTBrowserSignIn.swift */,
 				CEC6851EC27447414454AFF7 /* ChatGPTOAuth.swift */,
@@ -317,6 +322,7 @@
 				3FD904DA89A963355B4AFD5B /* AnnotationTests.swift */,
 				BBBFEF84FF9F66E74AF30D17 /* AppleVoiceCatalogTests.swift */,
 				988B12B05A25D8C389A2D249 /* BookMetadataTests.swift */,
+				63D0097D2F2FDE06A85F710B /* ChatDictationTests.swift */,
 				379B84A8D58BA66045270D3C /* ChatGPTTests.swift */,
 				8AF0B59C16AA23A2176C159D /* ChatHistoryTests.swift */,
 				A536CA4524C2454C20024AEF /* ChatMarkdownTests.swift */,
@@ -570,6 +576,7 @@
 				9110C50975F238750DA3ED00 /* BookMetadataLoader.swift in Sources */,
 				A1FEA668D10DF089A1F8BE31 /* BookTextIndex.swift in Sources */,
 				54061AFBEC9BA1100163F4BA /* BookmarksView.swift in Sources */,
+				A1D006D09F935A9B62AD1EA9 /* ChatDictation.swift in Sources */,
 				65B49DB9ADAD380F69073981 /* ChatGPTAccountStore.swift in Sources */,
 				021B49041E40EA7358E662DB /* ChatGPTBrowserSignIn.swift in Sources */,
 				B3112B6445A1C3A0F805B724 /* ChatGPTConnectionView.swift in Sources */,
@@ -625,6 +632,7 @@
 				A09C3F2A4E802FDB0B0BCA75 /* AnnotationTests.swift in Sources */,
 				5DCC8CC47046C8BCE3454EE8 /* AppleVoiceCatalogTests.swift in Sources */,
 				E7140E31D841ADAE2EB508AF /* BookMetadataTests.swift in Sources */,
+				3CE4DD0B4CCDD09FF1146D4D /* ChatDictationTests.swift in Sources */,
 				B3EC6DAD8A1755A253168FE5 /* ChatGPTTests.swift in Sources */,
 				4FFA5D443B98E1E4B80522B2 /* ChatHistoryTests.swift in Sources */,
 				5727AF09338FB8CFB5DA3339 /* ChatMarkdownTests.swift in Sources */,
