@@ -80,7 +80,9 @@ import XCTest
         let session = ChatDictationSession(recognizer: backend)
         session.start(draft: "Keep me", language: .english) { _ in XCTFail("Cancelled permission must not change the draft") }
         try await wait { backend.authorization != nil }
-        session.cancel(); backend.authorization?.resume(); backend.authorization = nil
+        session.suspend(background: false)
+        XCTAssertEqual(session.state, .authorizing, "A first-use permission dialog may make the app inactive")
+        session.suspend(background: true); backend.authorization?.resume(); backend.authorization = nil
         await Task.yield()
         XCTAssertFalse(session.isActive); XCTAssertEqual(backend.starts, 0)
     }
@@ -91,7 +93,7 @@ import XCTest
         session.start(draft: draft, language: .english) { draft = $0 }
         try await wait { session.state == .recording }
         backend.update?("this name", false); let old = backend.update
-        session.cancel(); XCTAssertEqual(draft, "Remember this name")
+        session.suspend(background: false); XCTAssertEqual(draft, "Remember this name")
         session.start(draft: draft, language: .english) { draft = $0 }
         try await wait { session.state == .recording }
         old?("discard me", true); XCTAssertEqual(session.state, .recording)

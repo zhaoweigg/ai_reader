@@ -539,7 +539,7 @@ struct ReaderChatPanel: View {
         .accessibilityElement(children: .contain).accessibilityIdentifier("readerChatPanel")
         .accessibilityAction(.escape, close)
         .onDisappear { dictation.cancel() }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { dictation.cancel() } }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { dictation.suspend(background: phase == .background) } }
         .onChange(of: ObjectIdentifier(session)) { _, _ in dictation.cancel() }
         .onChange(of: dictationLanguage) { _, _ in dictation.cancel() }
         .onReceive(NotificationCenter.default.publisher(for: ReadAloudAudioSession.willActivate)) { _ in dictation.cancel() }

@@ -194,6 +194,11 @@ enum ChatDictationError: LocalizedError, Equatable {
         }
     }
     /// Closing/backgrounding keeps text already transcribed, but accepts no late results.
+    func suspend(background: Bool) {
+        // A system permission dialog can temporarily deactivate the scene.
+        // It must be allowed to finish the first-use authorization sequence.
+        if background || state != .authorizing { cancel() }
+    }
     func cancel() {
         token = UUID(); operation?.cancel(); operation = nil; timeout?.cancel(); timeout = nil
         recognizer.cancel(); state = .idle; applyDraft = nil
