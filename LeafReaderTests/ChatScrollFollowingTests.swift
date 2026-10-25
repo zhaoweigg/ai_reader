@@ -2,6 +2,21 @@ import XCTest
 @testable import LeafReader
 
 final class ChatScrollFollowingTests: XCTestCase {
+    func testOffsetsWithinTheSameRegionDoNotChangeViewState() {
+        var state = ChatScrollFollowing()
+        state.beginDragging(); state.updateBottomDistance(100)
+        let earlier = state
+        for distance in stride(from: 101, through: 800, by: 1) {
+            state.updateBottomDistance(CGFloat(distance))
+            XCTAssertEqual(state, earlier, "Scrolling within history must not publish every pixel into panel state")
+        }
+        state.updateBottomDistance(0); state.endDragging()
+        let latest = state
+        for distance in [-20.0, -5, 0, 2, 4] {
+            state.updateBottomDistance(distance)
+            XCTAssertEqual(state, latest)
+        }
+    }
     func testGrowingReplyDoesNotDisableFollowingWithoutUserScroll() {
         var state = ChatScrollFollowing()
         state.updateBottomDistance(180)

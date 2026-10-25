@@ -3,6 +3,67 @@ import UIKit
 @testable import LeafReader
 
 final class ChatMarkdownTests: XCTestCase {
+    @MainActor func testScrollUpdatesReuseFormattedReplyAndMeasuredWidths() {
+        let view = UITextView(); view.isScrollEnabled = false
+        let coordinator = SelectableChatText.Coordinator()
+        let traits = UITraitCollection(preferredContentSizeCategory: .large)
+        let paragraph = String(repeating: "这是**李香玲**，云瑶的队友。", count: 4)
+        let source = String(repeating: paragraph + "\n\n- 保留线索。\n", count: 28)
+        coordinator.update(source: source, markdown: true, traits: traits, in: view)
+        let portrait = coordinator.fittedSize(width: 350, in: view)
+        let landscape = coordinator.fittedSize(width: 700, in: view)
+        for _ in 0..<100 {
+            coordinator.update(source: source, markdown: true, traits: traits, in: view)
+            XCTAssertEqual(coordinator.fittedSize(width: 350, in: view), portrait)
+            XCTAssertEqual(coordinator.fittedSize(width: 700, in: view), landscape)
+        }
+        XCTAssertEqual(coordinator.formatCount, 1)
+        XCTAssertEqual(coordinator.measurementCount, 2)
+        XCTAssertGreaterThan(portrait.height, landscape.height)
+        for width: CGFloat in [350, 700] {
+            let size = coordinator.fittedSize(width: width, in: view)
+            view.frame = CGRect(origin: .zero, size: size)
+            view.layoutIfNeeded()
+            let lastLine = view.caretRect(for: view.endOfDocument)
+            XCTAssertGreaterThan(lastLine.height, 0)
+            XCTAssertLessThanOrEqual(lastLine.maxY, size.height + 1, "Cached height must contain the final rendered line at both widths")
+        }
+    }
+
+    @MainActor func testChangedTextFormattingAndDynamicTypeInvalidateCachedLayout() {
+        let view = UITextView(); view.isScrollEnabled = false
+        let coordinator = SelectableChatText.Coordinator()
+        let normal = UITraitCollection(preferredContentSizeCategory: .large)
+        let source = String(repeating: "**人物**和线索。", count: 20)
+        coordinator.update(source: source, markdown: true, traits: normal, in: view)
+        let original = coordinator.fittedSize(width: 300, in: view)
+        coordinator.update(source: source, markdown: true, traits: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge), in: view)
+        XCTAssertGreaterThan(coordinator.fittedSize(width: 300, in: view).height, original.height)
+        coordinator.update(source: "**literal**", markdown: false, traits: normal, in: view)
+        XCTAssertEqual(view.text, "**literal**")
+        XCTAssertLessThan(coordinator.fittedSize(width: 300, in: view).height, original.height)
+        coordinator.update(source: "**literal**", markdown: true, traits: normal, in: view)
+        XCTAssertEqual(view.text, "literal")
+        XCTAssertEqual(coordinator.formatCount, 4)
+    }
+
+    @MainActor func testCachedLayoutKeepsSelectionAndAppliesDeferredStreamingText() {
+        let view = UITextView(); view.isScrollEnabled = false
+        let coordinator = SelectableChatText.Coordinator()
+        let traits = UITraitCollection(preferredContentSizeCategory: .large)
+        coordinator.update(source: "第一句 selected passage", markdown: true, traits: traits, in: view)
+        let original = coordinator.fittedSize(width: 300, in: view)
+        let range = (view.text as NSString).range(of: "selected passage")
+        view.selectedRange = range; coordinator.textViewDidChangeSelection(view)
+        let latest = "第一句 selected passage\n\n" + String(repeating: "新增**一句**。", count: 80)
+        coordinator.update(source: latest, markdown: true, traits: traits, in: view)
+        XCTAssertEqual(view.selectedRange, range)
+        XCTAssertEqual(coordinator.fittedSize(width: 300, in: view), original)
+        coordinator.endSelection(in: view)
+        XCTAssertGreaterThan(coordinator.fittedSize(width: 300, in: view).height, original.height)
+        XCTAssertEqual(view.text, ChatMarkdown.selectableText(latest).string)
+    }
+
     func testNativeSelectableReplyKeepsUnicodeFormattingAndLinks() {
         let native = ChatMarkdown.selectableText("## 人物\n\n🌿这是**李香玲**，*重点*与 `code`。[来源](https://example.com)\n\n- 第一条\n- 第二条")
         XCTAssertEqual(native.string, "人物\n\n🌿这是李香玲，重点与 code。来源\n\n• 第一条\n• 第二条")

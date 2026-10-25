@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -19,6 +19,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_MARKDOWN"] = markdown ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_STREAM"] = scrollStream ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_LEGACY"] = legacyScroll ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_SCROLL_PERF"] = scrollPerformance ? "1" : "0"
         app.launchEnvironment["LEAF_UI_DICTATION_MOCK"] = dictation ? "1" : "0"
         if nativeDictation {
             let audio = Bundle(for: LeafReaderUITests.self).url(forResource: "Mandarin", withExtension: "m4a")!
@@ -2794,6 +2795,60 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(notice.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertEqual(notice.label, "Native browser callback verified.")
         capture("ChatGPT native browser callback", app: app)
+    }
+
+    @MainActor func testQuickChatHistorySwipeInPages() { verifyQuickChatHistorySwipe(flow: "Pages") }
+    @MainActor func testQuickChatHistorySwipeInScroll() { verifyQuickChatHistorySwipe(flow: "Scroll") }
+    @MainActor func testQuickChatHistorySwipeInPDF() { verifyQuickChatHistorySwipe(flow: "PDF") }
+
+    @MainActor private func verifyQuickChatHistorySwipe(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(scrollPerformance: true)
+        openSelectionFixture(flow, app: app); waitForBook(app)
+        let bookFrame = readingSurface(app).frame
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"]
+        input.tap(); input.typeText("回顾人物和线索"); app.buttons["sendReaderChat"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 10)
+        let history = app.scrollViews["chatMessageHistory"]
+        let probe = app.descendants(matching: .any)["uitestChatSwipeWork"].firstMatch
+        XCTAssertTrue(probe.waitForExistence(timeout: 5))
+        func metrics() -> [String: Any] {
+            let data = (probe.value as? String ?? "").data(using: .utf8) ?? Data()
+            return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        }
+        history.swipeDown(velocity: .fast) // Warm visible text and lazy layout.
+        history.swipeUp(velocity: .fast)
+        let before = metrics()
+        let options = XCTMeasureOptions(); options.iterationCount = 1
+        measure(metrics: [XCTOSSignpostMetric.scrollingAndDecelerationMetric], options: options) {
+            history.swipeDown(velocity: .fast)
+            history.swipeDown(velocity: .fast)
+            history.swipeUp(velocity: .fast)
+        }
+        let after = metrics()
+        let work = XCTAttachment(string: "Before: \(before)\nAfter: \(after)")
+        work.name = flow + " quick swipe rendering work"; work.lifetime = .keepAlways; add(work)
+        XCTAssertLessThanOrEqual((after["formats"] as? Int ?? .max) - (before["formats"] as? Int ?? 0), 2,
+                                 "Warm history must not repeatedly parse Markdown during swipes")
+        XCTAssertLessThanOrEqual((after["measurements"] as? Int ?? .max) - (before["measurements"] as? Int ?? 0), 4,
+                                 "Warm history must reuse its measured text layout during swipes")
+        XCTAssertNotEqual(before["offset"] as? Double, after["offset"] as? Double, "A quick swipe must actually move history")
+        XCTAssertEqual(readingSurface(app).frame, bookFrame)
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+        capture(flow + " quick chat swipe portrait", app: app)
+        // The very long selectable reply makes AX snapshots slow. Close it
+        // while requesting scene geometry, then verify restored history at the
+        // new width. Streaming/selection cases separately rotate an open panel.
+        app.buttons["closeReaderChat"].tap()
+        orient(.landscapeLeft)
+        app.buttons["openReaderChat"].tap()
+        history.swipeDown(velocity: .fast)
+        XCTAssertGreaterThan(history.frame.width, 500)
+        capture(flow + " quick chat swipe landscape", app: app)
+        app.buttons["closeReaderChat"].tap()
+        orient(.portrait)
     }
 
     @MainActor func testStreamingScrollAtOwnPaceInPages() { verifyStreamingScroll(flow: "Pages") }
