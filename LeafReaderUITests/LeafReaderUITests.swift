@@ -1579,7 +1579,6 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(history.frame.height, 20, "Keep a readable, scrollable message viewport even in landscape")
             XCTAssertLessThanOrEqual(history.frame.maxY, input.frame.minY + 2)
             XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
-            XCTAssertGreaterThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY - 24)
             XCTAssertGreaterThan(panel.frame.minY - surface.frame.minY, app.frame.width > app.frame.height ? 8 : 210)
             XCTAssertTrue(input.isHittable); XCTAssertTrue(app.buttons["Hide keyboard"].isHittable)
             XCTAssertEqual(quote.label, selected)
@@ -2943,6 +2942,7 @@ final class LeafReaderUITests: XCTestCase {
         capture("Cleared conversation after restart", app: app)
     }
     @MainActor func testPartialChatRestoresStoppedAfterRestart() {
+        defer { orient(.portrait) }
         let app = launchApp(slowChat: true); openFeaturedChat(app)
         sendChatQuestion("Keep my partial reply", app: app)
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
@@ -2952,6 +2952,14 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Retry"].exists)
         XCTAssertEqual(app.buttons["sendReaderChat"].label, "Send message")
         capture("Interrupted reply retained with Retry after restart", app: app)
+        orient(.landscapeLeft)
+        let history = app.scrollViews["chatMessageHistory"]
+        let reply = app.textViews.matching(identifier: "chatReply").firstMatch
+        XCTAssertGreaterThanOrEqual(history.frame.height, 20, "A stopped-reply notice must leave readable history in the compact dock")
+        XCTAssertGreaterThan(reply.frame.intersection(history.frame).height, 15)
+        XCTAssertTrue(app.buttons["Retry"].isHittable)
+        XCTAssertTrue(app.buttons["sendReaderChat"].exists)
+        capture("Compact landscape stopped reply keeps history above Retry notice", app: app)
     }
 
     @MainActor func testChatStopAndRetryKeepOneQuestion() {

@@ -3,18 +3,20 @@ import AVFoundation
 
 enum ReaderChatSizing {
     static let dockedReadingFraction = 0.36
-    static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> ClosedRange<CGFloat> {
+    static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool, hasStatus: Bool = false) -> ClosedRange<CGFloat> {
         let usable = max(0, availableHeight - 16)
         // Leave actual book text above an expanded portrait composer, rather
         // than just the status area or the chapter's top whitespace.
         let bookReserve = composing && fullHeight >= 500 ? min(220, fullHeight * 0.26, max(0, usable - 176)) : 0
         let maximum = min(fullHeight * 0.85, usable * 0.88, max(0, usable - bookReserve))
-        let minimum: CGFloat = composing ? (fullHeight < 500 ? 176 : (hasSelection ? 256 : 224)) : (fullHeight < 500 ? 132 : (hasSelection ? 260 : 200))
+        // A stopped reply's notice and Retry row must not consume every
+        // message line in a compact landscape panel.
+        let minimum: CGFloat = composing ? (fullHeight < 500 ? 176 : (hasSelection ? 256 : 224)) : (fullHeight < 500 ? (hasStatus ? 176 : 132) : (hasSelection ? 260 : 200))
         let lower = min(minimum, maximum)
         return lower...maximum
     }
-    static func height(fraction: Double, fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> CGFloat {
-        let limits = bounds(fullHeight: fullHeight, availableHeight: availableHeight, composing: composing, hasSelection: hasSelection)
+    static func height(fraction: Double, fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool, hasStatus: Bool = false) -> CGFloat {
+        let limits = bounds(fullHeight: fullHeight, availableHeight: availableHeight, composing: composing, hasSelection: hasSelection, hasStatus: hasStatus)
         let desired: CGFloat
         if composing, !fraction.isFinite || fraction <= 0 {
             desired = max(limits.lowerBound, min(fullHeight / 3, availableHeight * 0.5))
@@ -259,9 +261,10 @@ struct ResizableChatPanel: View {
             let full = max(fullHeight, geometry.size.height)
             let composing = geometry.size.height < full - 80
             let hasSelection = session.selectedContext != nil
-            let limits = ReaderChatSizing.bounds(fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection)
+            let hasStatus = session.notice != nil || session.error != nil || session.historyError != nil
+            let limits = ReaderChatSizing.bounds(fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection, hasStatus: hasStatus)
             let preferred = ReaderChatSizing.height(fraction: composing ? composingHeightFraction : heightFraction,
-                fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection)
+                fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection, hasStatus: hasStatus)
             let height = min(limits.upperBound, max(limits.lowerBound, resizedHeight ?? preferred))
             ReaderChatPanel(session: session, bookTitle: bookTitle, isComposing: composing, context: context, onChooseConversation: onChooseConversation,
                 onClose: onClose, onSettings: onSettings, onButtonSettings: onButtonSettings, onSend: onSend,
