@@ -1,6 +1,84 @@
 import SwiftUI
 import AVFoundation
 
+struct ChatScrollFollowing {
+    private(set) var followsLatest = true
+    private var dragging = false
+    private var bottomDistance: CGFloat = 0
+
+    mutating func beginDragging() { dragging = true; followsLatest = false }
+    mutating func endDragging() { dragging = false; followsLatest = bottomDistance <= 4 }
+    mutating func updateBottomDistance(_ distance: CGFloat) {
+        bottomDistance = distance
+        // Appending text can move the bottom away. Only a user drag pauses
+        // following; reaching the bottom again resumes it, including momentum.
+        if !dragging, distance <= 4 { followsLatest = true }
+    }
+    mutating func resume() { followsLatest = true }
+}
+
+private struct ChatHistoryBottomDistance: PreferenceKey {
+    static var defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
+}
+
+#if DEBUG
+private struct ChatHistoryMeasuredOffset: PreferenceKey {
+    static var defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
+}
+
+private struct ChatHistoryTestMetrics: Equatable {
+    var offset: CGFloat = 0
+    var contentHeight: CGFloat = 0
+    var viewportHeight: CGFloat = 0
+}
+
+private struct ChatHistoryOffsetProbe: UIViewRepresentable {
+    let value: String
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isAccessibilityElement = true
+        view.accessibilityIdentifier = "uitestChatHistoryGeometry"
+        view.accessibilityLabel = "UI test chat scroll offset"
+        return view
+    }
+    func updateUIView(_ view: UIView, context: Context) { view.accessibilityValue = value }
+}
+#endif
+
+/// Native text views clip their accessibility bounds to the screen. UI tests
+/// measure the independently laid-out history instead of those clipped bounds.
+private struct ChatHistoryTestMeasurement: ViewModifier {
+    let following: Bool
+    let selected: Bool
+    #if DEBUG
+    @State private var metrics = ChatHistoryTestMetrics()
+    private var probe: some View {
+        ChatHistoryOffsetProbe(value: "{\"offset\":\(metrics.offset),\"contentHeight\":\(metrics.contentHeight),\"viewportHeight\":\(metrics.viewportHeight),\"following\":\(following),\"selected\":\(selected)}")
+            .frame(width: 1, height: 1).allowsHitTesting(false)
+    }
+    #endif
+    func body(content: Content) -> some View {
+        #if DEBUG
+        if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
+            if #available(iOS 18, *) {
+                content.onScrollGeometryChange(for: ChatHistoryTestMetrics.self) { geometry in
+                    ChatHistoryTestMetrics(offset: geometry.contentOffset.y, contentHeight: geometry.contentSize.height,
+                                           viewportHeight: geometry.containerSize.height)
+                } action: { _, value in metrics = value }
+                    .overlay(alignment: .topLeading) { probe }
+            } else {
+                content.onPreferenceChange(ChatHistoryMeasuredOffset.self) { if let value = $0 { metrics.offset = value } }
+                    .overlay(alignment: .topLeading) { probe }
+            }
+        } else { content }
+        #else
+        content
+        #endif
+    }
+}
+
 enum ReaderChatSizing {
     static let dockedReadingFraction = 0.36
     static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool, hasStatus: Bool = false) -> ClosedRange<CGFloat> {
@@ -22,6 +100,49 @@ enum ReaderChatSizing {
             desired = max(limits.lowerBound, min(fullHeight / 3, availableHeight * 0.5))
         } else { desired = fullHeight * CGFloat(fraction.isFinite && fraction > 0 ? fraction : 1.0 / 3) }
         return min(limits.upperBound, max(limits.lowerBound, desired))
+    }
+}
+
+private struct ChatHistoryInteraction: ViewModifier {
+    @Binding var following: ChatScrollFollowing
+    @GestureState private var dragging = false
+
+    static var usesNativeTracking: Bool {
+        guard #available(iOS 18, *) else { return false }
+        #if DEBUG
+        return !UITesting.flag("LEAF_UI_CHAT_SCROLL_LEGACY")
+        #else
+        return true
+        #endif
+    }
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *), Self.usesNativeTracking {
+            content
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height
+                } action: { _, distance in following.updateBottomDistance(distance) }
+                .onScrollPhaseChange { _, phase, context in
+                    switch phase {
+                    case .tracking, .interacting, .decelerating: following.beginDragging()
+                    case .idle:
+                        let geometry = context.geometry
+                        following.updateBottomDistance(geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height)
+                        following.endDragging()
+                    case .animating: break
+                    @unknown default: break
+                    }
+                }
+        } else {
+            content
+                .simultaneousGesture(DragGesture(minimumDistance: 8)
+                    .updating($dragging) { _, dragging, _ in dragging = true }
+                    .onChanged { _ in following.beginDragging() })
+                .onChange(of: dragging) { _, dragging in
+                    // Let the final content-offset preference arrive first.
+                    if !dragging { DispatchQueue.main.async { following.endDragging() } }
+                }
+        }
     }
 }
 
@@ -323,6 +444,7 @@ struct ReaderChatPanel: View {
     let onResetSize: () -> Void
     @FocusState private var inputFocused: Bool
     @State private var confirmsClear = false
+    @State private var scrollFollowing = ChatScrollFollowing()
     @State private var selectedMessage: UUID?
 
     private var accent: Color { theme.accent }
@@ -447,43 +569,74 @@ struct ReaderChatPanel: View {
                     }.font(.caption)
                 }
                 ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(session.messages) { message in
-                                HStack {
-                                    if message.isUser { Spacer(minLength: 32) }
-                                    ReaderChatMessageBubble(message: message, accent: accent,
-                                                            activity: message.id == session.messages.last?.id ? session.activity : nil) { selected in
-                                        if selected { selectedMessage = message.id }
-                                        else if selectedMessage == message.id { selectedMessage = nil }
-                                    }
-                                    if !message.isUser { Spacer(minLength: 0) }
-                                }.id(message.id)
-                            }
-                            if session.messages.isEmpty && session.selectedContext == nil {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    if context == .reader {
-                                        Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
-                                            .font(.subheadline)
-                                    }
-                                    Text(contextHint)
-                                        .font(.caption).foregroundStyle(.secondary)
-                                    Button("AI settings", action: onSettings).font(.subheadline)
+                    GeometryReader { viewport in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(session.messages) { message in
+                                    HStack {
+                                        if message.isUser { Spacer(minLength: 32) }
+                                        ReaderChatMessageBubble(message: message, accent: accent,
+                                                                activity: message.id == session.messages.last?.id ? session.activity : nil) { selected in
+                                            if selected { selectedMessage = message.id }
+                                            else if selectedMessage == message.id { selectedMessage = nil }
+                                        }
+                                        if !message.isUser { Spacer(minLength: 0) }
+                                    }.id(message.id)
                                 }
+                                if session.messages.isEmpty && session.selectedContext == nil {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        if context == .reader {
+                                            Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
+                                                .font(.subheadline)
+                                        }
+                                        Text(contextHint)
+                                            .font(.caption).foregroundStyle(.secondary)
+                                        Button("AI settings", action: onSettings).font(.subheadline)
+                                    }
+                                }
+                            }.padding(.vertical, 2)
+                                .background {
+                                    GeometryReader { content in
+                                        Color.clear.preference(key: ChatHistoryBottomDistance.self,
+                                            value: content.frame(in: .named("chatHistoryViewport")).maxY - viewport.size.height)
+                                            .overlay {
+                                                #if DEBUG
+                                                Color.clear.preference(key: ChatHistoryMeasuredOffset.self,
+                                                    value: -content.frame(in: .named("chatHistoryViewport")).minY)
+                                                #endif
+                                            }
+                                    }
+                                }
+                        }
+                        .coordinateSpace(name: "chatHistoryViewport")
+                        .defaultScrollAnchor(.bottom)
+                        .scrollDismissesKeyboard(isComposing ? .never : .interactively)
+                        .accessibilityIdentifier("chatMessageHistory")
+                        .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
+                        .modifier(ChatHistoryTestMeasurement(following: scrollFollowing.followsLatest, selected: selectedMessage != nil))
+                        .modifier(ChatHistoryInteraction(following: $scrollFollowing))
+                        .onPreferenceChange(ChatHistoryBottomDistance.self) { distance in
+                            if !ChatHistoryInteraction.usesNativeTracking, let distance { scrollFollowing.updateBottomDistance(distance) }
+                        }
+                        .onChange(of: session.messages.last?.text) { _, _ in
+                            if selectedMessage == nil, scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                        .onChange(of: session.isSending) { _, sending in
+                            if sending {
+                                scrollFollowing.resume()
+                                if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                             }
-                        }.padding(.vertical, 2)
-                    }
-                    .defaultScrollAnchor(.bottom)
-                    .scrollDismissesKeyboard(isComposing ? .never : .interactively)
-                    .accessibilityIdentifier("chatMessageHistory")
-                    .onChange(of: session.messages.last?.text) { _, _ in
-                        if selectedMessage == nil, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                    .onChange(of: inputFocused) { _, focused in
-                        if focused, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                    .onChange(of: isComposing) { _, composing in
-                        if composing, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                        .onChange(of: ObjectIdentifier(session)) { _, _ in
+                            scrollFollowing = ChatScrollFollowing()
+                            if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                        .onChange(of: inputFocused) { _, focused in
+                            if focused, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                        .onChange(of: isComposing) { _, composing in
+                            if composing, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
                     }
                 }.frame(maxHeight: .infinity)
                 if let historyError = session.historyError {
