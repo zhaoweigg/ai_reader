@@ -55,6 +55,7 @@ extension HTTPChatProvider: ToolChatProvider {
                                 state.textLength += text.count
                                 guard state.textLength <= 64000 else { throw ChatError.tooLarge }
                             case .toolCall: state.calls += 1
+                            case .usage: break
                             case .finished:
                                 guard state.textLength > 0 || state.calls > 0 else { throw ChatError.emptyResponse }
                                 continuation.yield(event); continuation.finish(); return
@@ -73,6 +74,7 @@ extension HTTPChatProvider: ToolChatProvider {
         var truncated = false
         var textLength = 0
         var calls = 0
+        var usage = TokenUsage()
         // Tool calls arrive in fragments, keyed by index, until they are complete.
         var pending: [Int: (id: String, name: String, arguments: String)] = [:]
         mutating func flush() -> [AgentEvent] {
@@ -104,7 +106,13 @@ extension HTTPChatProvider: ToolChatProvider {
             case "content_block_stop":
                 guard let call = state.pending.removeValue(forKey: index), !call.name.isEmpty else { return [] }
                 return [.toolCall(AgentToolCall(id: call.id, name: call.name, arguments: call.arguments.isEmpty ? "{}" : call.arguments))]
-            case "message_stop": return state.flush() + [.finished(truncated: state.truncated)]
+            case "message_start":
+                let usage = (object["message"] as? [String: Any])?["usage"] as? [String: Any]
+                state.usage.input = usage?["input_tokens"] as? Int
+                state.usage.cachedInput = usage?["cache_read_input_tokens"] as? Int
+                return []
+            case "message_stop":
+                return state.flush() + (state.usage.isEmpty ? [] : [.usage(state.usage)]) + [.finished(truncated: state.truncated)]
             default: break
             }
         } else if let choice = (object["choices"] as? [[String: Any]])?.first {
@@ -131,6 +139,16 @@ extension HTTPChatProvider: ToolChatProvider {
         // Completions end tool calls with a finish reason before [DONE].
         if kind == .chatCompletions, (object["choices"] as? [[String: Any]])?.first?["finish_reason"] as? String == "tool_calls" {
             events += state.flush()
+        }
+        // Token usage: Anthropic reports output in message_delta; Completions in a final usage chunk.
+        if kind == .anthropic, object["type"] as? String == "message_delta", let usage = object["usage"] as? [String: Any] {
+            state.usage.output = usage["output_tokens"] as? Int
+        }
+        if kind == .chatCompletions, let usage = object["usage"] as? [String: Any] {
+            let reported = TokenUsage(input: usage["prompt_tokens"] as? Int, output: usage["completion_tokens"] as? Int,
+                                      cachedInput: (usage["prompt_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int,
+                                      reasoning: (usage["completion_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int)
+            if !reported.isEmpty { events.insert(.usage(reported), at: 0) }
         }
         return events
     }
