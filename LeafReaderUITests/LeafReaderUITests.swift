@@ -1346,7 +1346,7 @@ final class LeafReaderUITests: XCTestCase {
                 let other = action == "explainChatSelection" ? "summarizeChatSelection" : "explainChatSelection"
                 app.buttons[other].tap(); app.buttons[action].tap()
                 XCTAssertEqual(input.value as? String, prompt, "Switching shortcuts replaces the prior preset")
-                XCTAssertFalse(app.staticTexts["chatQuestion"].exists, "A shortcut prepares an editable draft")
+                XCTAssertFalse(app.textViews["chatQuestion"].exists, "A shortcut prepares an editable draft")
                 if flow == "Scroll" {
                     self.orient(.landscapeLeft)
 
@@ -1528,7 +1528,7 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " unsent dictated draft restored", app: app)
         app.buttons["sendReaderChat"].tap()
         let sentText = (unsent ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        XCTAssertTrue(app.staticTexts.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", sentText)).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", sentText)).firstMatch.waitForExistence(timeout: 5))
     }
 
     @MainActor func testKeyboardKeepsHistoryVisibleInPages() { verifyKeyboardHistory(flow: "Pages") }
@@ -1579,7 +1579,7 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertEqual(quote.label, selected)
         }
         func latestReplyIsVisible() {
-            let replies = app.staticTexts.matching(identifier: "chatReply").allElementsBoundByIndex
+            let replies = app.textViews.matching(identifier: "chatReply").allElementsBoundByIndex
             XCTAssertFalse(replies.isEmpty)
             XCTAssertTrue(replies.last!.isHittable)
             XCTAssertGreaterThan(replies.last!.frame.intersection(history.frame).height, 10)
@@ -1601,7 +1601,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(surface.frame.width, originalFrame.width, accuracy: 2)
         XCTAssertEqual(surface.frame.height, originalFrame.height, accuracy: 2)
         capture(flow + " history visible with keyboard and quote", app: app)
-        let first = app.staticTexts.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", "First remembered question")).firstMatch
+        let first = app.textViews.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", "First remembered question")).firstMatch
         for _ in 0..<5 {
             if first.exists && first.isHittable && first.frame.intersection(history.frame).height > 10 { break }
             history.swipeDown()
@@ -1907,7 +1907,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(passage.label.isEmpty)
         let quote = passage.label
         XCTAssertEqual(input.value as? String,"Why does the author say this?")
-        XCTAssertFalse(app.staticTexts["chatQuestion"].exists,"Quoting must not send the draft")
+        XCTAssertFalse(app.textViews["chatQuestion"].exists,"Quoting must not send the draft")
         XCTAssertTrue(app.buttons["closeReaderChat"].exists)
         capture(flow + " selection automatically quoted with native menu",app:app)
         input.tap();input.typeText(" In this passage.")
@@ -2671,7 +2671,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "Summarize this page", "Keep the unsent question when returning to the book")
         input.tap()
         app.buttons["sendReaderChat"].tap()
-        let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Test reply:")).firstMatch
+        let reply = app.textViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Test reply:")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 5))
         XCTAssertEqual(surface.frame.height, height, accuracy: 1)
         app.buttons["closeReaderChat"].tap()
@@ -2754,7 +2754,31 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testMarkdownReplyInPDF() { verifyMarkdownReply(flow: "PDF") }
     @MainActor func testMarkdownReplyInLibrary() { verifyMarkdownReply(flow: "Library") }
 
-    @MainActor private func verifyMarkdownReply(flow: String) {
+    @MainActor func testChatTextSelectionInPages() { verifyMarkdownReply(flow: "Pages", selectText: true) }
+    @MainActor func testChatTextSelectionInScroll() { verifyMarkdownReply(flow: "Scroll", selectText: true) }
+    @MainActor func testChatTextSelectionInPDF() { verifyMarkdownReply(flow: "PDF", selectText: true) }
+    @MainActor func testChatTextSelectionInLibrary() { verifyMarkdownReply(flow: "Library", selectText: true) }
+
+    @MainActor func testChatSelectionSurvivesStreamingInPages() {
+        continueAfterFailure = false
+        let app = launchApp(slowChat: true)
+        openSelectionFixture("Pages", app: app)
+        app.buttons["openReaderChat"].tap()
+        sendChatQuestion("Keep this selection while replying", app: app)
+        app.buttons["Hide keyboard"].tap()
+        let reply = app.textViews.matching(identifier: "chatReply").firstMatch
+        expectation(for: NSPredicate(format: "label == %@", "Test reply: "), evaluatedWith: reply)
+        waitForExpectations(timeout: 5)
+        copyChatWord(reply, expected: "Test", flow: "Streaming Pages", app: app) {
+            expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+            waitForExpectations(timeout: 40)
+            XCTAssertEqual(reply.label, "Test reply: ", "Incoming text must not replace a native selection")
+        }
+        XCTAssertTrue(reply.label.contains("Consider what the passage states"), "The completed reply must appear when selection ends")
+    }
+
+    @MainActor private func verifyMarkdownReply(flow: String, selectText: Bool = false) {
+        continueAfterFailure = false
         let app = launchApp(markdown: true)
         if flow == "Library" { app.buttons["openLibraryChat"].tap() }
         else {
@@ -2777,22 +2801,32 @@ final class LeafReaderUITests: XCTestCase {
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("Literal **question**"); app.buttons["sendReaderChat"].tap()
-        let reply = app.staticTexts.matching(identifier: "chatReply").firstMatch
+        let reply = app.textViews.matching(identifier: "chatReply").firstMatch
         expectation(for: NSPredicate(format: "label CONTAINS %@", "尾句。"), evaluatedWith: reply)
         waitForExpectations(timeout: 10)
         XCTAssertTrue(reply.label.contains("这是李香玲，云瑶的队友。"))
         XCTAssertTrue(reply.label.contains("• 第一条")); XCTAssertTrue(reply.label.contains("let value = 1"))
         XCTAssertFalse(reply.label.contains("**")); XCTAssertFalse(reply.label.contains("```")); XCTAssertFalse(reply.label.contains("##"))
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
         let handle = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
         let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.32)), withVelocity: .slow, thenHoldForDuration: 0.1)
         // The compact history lazily removes an offscreen question after a long
         // reply. Reveal it before checking the deliberately literal user text.
-        let question = app.staticTexts.matching(identifier: "chatQuestion").firstMatch
+        let question = app.textViews.matching(identifier: "chatQuestion").firstMatch
         if !question.exists { app.scrollViews["chatMessageHistory"].swipeDown() }
         XCTAssertTrue(question.waitForExistence(timeout: 5))
         XCTAssertEqual(question.label, "Literal **question**")
         capture(flow + " formatted Markdown portrait", app: app)
+        if selectText {
+            let bookFrame = flow == "Library" ? app.buttons["featuredBook"].frame : readingSurface(app).frame
+            copyChatWord(question, expected: "Literal", flow: flow, app: app)
+            // Select the rendered Chinese heading, rather than copying Markdown
+            // source or using an application test hook to change the clipboard.
+            copyChatWord(reply, expected: "人物", flow: flow, app: app)
+            XCTAssertEqual(flow == "Library" ? app.buttons["featuredBook"].frame : readingSurface(app).frame, bookFrame)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+        }
         input.tap(); input.typeText("Draft after formatted reply")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         capture(flow + " Markdown while composing", app: app)
@@ -2807,6 +2841,32 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "Draft after formatted reply")
     }
 
+    @MainActor private func copyChatWord(_ text: XCUIElement, expected: String, flow: String, app: XCUIApplication, beforeCopy: (() -> Void)? = nil) {
+        let history = app.scrollViews["chatMessageHistory"]
+        // A long reply can leave its opening line just above the lazy history.
+        history.swipeDown()
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        let point = text.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 14, dy: 9))
+        point.press(forDuration: 1.2)
+        let copy = app.menuItems["Copy"].exists ? app.menuItems["Copy"] : app.buttons["Copy"]
+        if !copy.waitForExistence(timeout: 5) {
+            capture(flow + " missing native chat Copy menu", app: app)
+            let state = XCTAttachment(string: app.debugDescription); state.lifetime = .keepAlways; add(state)
+            XCTFail("Long-pressing a chat word must show the native Copy menu"); return
+        }
+        capture(flow + " native chat selection " + expected, app: app)
+        beforeCopy?()
+        copy.tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.press(forDuration: 1.2)
+        let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+        XCTAssertEqual(input.value as? String, expected, "Copy must contain only the selected word, not the entire chat message")
+        capture(flow + " partial chat selection pasted " + expected, app: app)
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: expected.count))
+        app.buttons["Hide keyboard"].tap()
+    }
+
     @MainActor private func openFeaturedChat(_ app: XCUIApplication) {
         app.buttons["featuredBook"].tap(); waitForBook(app)
         app.buttons["openReaderChat"].tap()
@@ -2815,7 +2875,7 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor private func sendChatQuestion(_ question: String, app: XCUIApplication) {
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.typeText(question); app.buttons["sendReaderChat"].tap()
-        let reply = app.staticTexts.matching(identifier: "chatReply").firstMatch
+        let reply = app.textViews.matching(identifier: "chatReply").firstMatch
         expectation(for: NSPredicate(format: "label CONTAINS %@", "Test reply:"), evaluatedWith: reply)
         waitForExpectations(timeout: 10)
     }
@@ -2829,12 +2889,12 @@ final class LeafReaderUITests: XCTestCase {
         input.tap(); input.typeText("An unsent followup")
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
         openFeaturedChat(app)
-        XCTAssertTrue(app.staticTexts["Remember this question"].exists)
+        XCTAssertTrue(app.textViews["Remember this question"].exists)
         let restoredInput = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         XCTAssertEqual(restoredInput.value as? String, "An unsent followup")
         app.terminate(); app.launch(); openFeaturedChat(app)
-        XCTAssertTrue(app.staticTexts["Remember this question"].exists)
-        XCTAssertTrue(app.staticTexts.matching(identifier: "chatReply").firstMatch.label.contains("Test reply:"))
+        XCTAssertTrue(app.textViews["Remember this question"].exists)
+        XCTAssertTrue(app.textViews.matching(identifier: "chatReply").firstMatch.label.contains("Test reply:"))
         let restartedInput = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         XCTAssertEqual(restartedInput.value as? String, "An unsent followup")
         capture("Conversation and draft restored after restart", app: app)
@@ -2848,13 +2908,13 @@ final class LeafReaderUITests: XCTestCase {
         capture("Clear conversation confirmation", app: app)
         if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
         else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap() }
-        XCTAssertTrue(app.staticTexts["A question to clear"].exists)
+        XCTAssertTrue(app.textViews["A question to clear"].exists)
         app.buttons["chatOptions"].tap(); app.buttons["requestClearConversation"].tap()
         app.buttons["confirmClearConversation"].firstMatch.tap()
-        XCTAssertFalse(app.staticTexts["A question to clear"].exists)
+        XCTAssertFalse(app.textViews["A question to clear"].exists)
         app.terminate(); app.launch(); openFeaturedChat(app)
-        XCTAssertFalse(app.staticTexts.matching(identifier: "chatQuestion").firstMatch.exists)
-        XCTAssertFalse(app.staticTexts.matching(identifier: "chatReply").firstMatch.exists)
+        XCTAssertFalse(app.textViews.matching(identifier: "chatQuestion").firstMatch.exists)
+        XCTAssertFalse(app.textViews.matching(identifier: "chatReply").firstMatch.exists)
         capture("Cleared conversation after restart", app: app)
     }
     @MainActor func testPartialChatRestoresStoppedAfterRestart() {
@@ -2862,8 +2922,8 @@ final class LeafReaderUITests: XCTestCase {
         sendChatQuestion("Keep my partial reply", app: app)
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
         app.terminate(); app.launch(); openFeaturedChat(app)
-        XCTAssertTrue(app.staticTexts["Keep my partial reply"].exists)
-        XCTAssertTrue(app.staticTexts.matching(identifier: "chatReply").firstMatch.label.contains("Test reply:"))
+        XCTAssertTrue(app.textViews["Keep my partial reply"].exists)
+        XCTAssertTrue(app.textViews.matching(identifier: "chatReply").firstMatch.label.contains("Test reply:"))
         XCTAssertTrue(app.buttons["Retry"].exists)
         XCTAssertEqual(app.buttons["sendReaderChat"].label, "Send message")
         capture("Interrupted reply retained with Retry after restart", app: app)
@@ -2885,7 +2945,7 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["Retry"].tap()
         expectation(for: NSPredicate(format: "label == %@", "Stop response"), evaluatedWith: action)
         waitForExpectations(timeout: 5)
-        XCTAssertEqual(app.staticTexts.matching(identifier: "chatQuestion").count, 1)
+        XCTAssertEqual(app.textViews.matching(identifier: "chatQuestion").count, 1)
         action.tap()
         capture("AI stopped reply with retry", app: app)
         app.buttons["closeReaderChat"].tap()
@@ -2931,7 +2991,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(error.waitForExistence(timeout: 5))
         XCTAssertTrue(error.label.contains("Add your API key"))
         XCTAssertEqual(input.value as? String, "Explain this passage")
-        XCTAssertFalse(app.staticTexts["chatQuestion"].exists)
+        XCTAssertFalse(app.textViews["chatQuestion"].exists)
         capture("AI missing key preserves draft", app: app)
         app.buttons["closeReaderChat"].tap()
         XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))

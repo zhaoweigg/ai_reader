@@ -1,7 +1,45 @@
 import XCTest
+import UIKit
 @testable import LeafReader
 
 final class ChatMarkdownTests: XCTestCase {
+    func testNativeSelectableReplyKeepsUnicodeFormattingAndLinks() {
+        let native = ChatMarkdown.selectableText("## 人物\n\n🌿这是**李香玲**，*重点*与 `code`。[来源](https://example.com)\n\n- 第一条\n- 第二条")
+        XCTAssertEqual(native.string, "人物\n\n🌿这是李香玲，重点与 code。来源\n\n• 第一条\n• 第二条")
+        let text = native.string as NSString
+        let bold = native.attribute(.font, at: text.range(of: "李香玲").location, effectiveRange: nil) as? UIFont
+        XCTAssertTrue(bold?.fontDescriptor.symbolicTraits.contains(.traitBold) == true)
+        let italic = native.attribute(.font, at: text.range(of: "重点").location, effectiveRange: nil) as? UIFont
+        XCTAssertTrue(italic?.fontDescriptor.symbolicTraits.contains(.traitItalic) == true)
+        let code = native.attribute(.font, at: text.range(of: "code").location, effectiveRange: nil) as? UIFont
+        XCTAssertTrue(code?.fontDescriptor.symbolicTraits.contains(.traitMonoSpace) == true)
+        XCTAssertEqual(native.attribute(.link, at: text.range(of: "来源").location, effectiveRange: nil) as? URL, URL(string: "https://example.com"))
+        XCTAssertEqual(ChatMarkdown.selectableText("**my literal question**", markdown: false).string, "**my literal question**")
+    }
+
+    @MainActor func testStreamingPreservesSelectedRangeAndAppliesLatestReplyAfterSelectionEnds() {
+        let view = UITextView()
+        let coordinator = SelectableChatText.Coordinator()
+        coordinator.update(ChatMarkdown.selectableText("第一句 🌿 selected passage"), in: view)
+        let range = (view.text as NSString).range(of: "selected passage")
+        view.selectedRange = range
+        coordinator.textViewDidChangeSelection(view)
+        coordinator.update(ChatMarkdown.selectableText("第一句 🌿 selected passage，新增**一句**。"), in: view)
+        coordinator.update(ChatMarkdown.selectableText("第一句 🌿 selected passage，新增**一句**。最后一句。"), in: view)
+        XCTAssertEqual(view.selectedRange, range)
+        XCTAssertEqual((view.text as NSString).substring(with: view.selectedRange), "selected passage")
+        XCTAssertEqual(view.text, "第一句 🌿 selected passage")
+        view.selectedRange = NSRange(location: range.location, length: 0)
+        coordinator.textViewDidChangeSelection(view)
+        XCTAssertEqual(view.text, "第一句 🌿 selected passage，新增一句。最后一句。")
+        coordinator.update(ChatMarkdown.selectableText("下一条回复"), in: view)
+        view.selectedRange = NSRange(location: 0, length: 2)
+        coordinator.textViewDidChangeSelection(view)
+        coordinator.update(ChatMarkdown.selectableText("下一条回复已完成"), in: view)
+        coordinator.textViewDidEndEditing(view)
+        XCTAssertEqual(view.text, "下一条回复已完成", "Moving focus to the composer must release deferred streaming text")
+    }
+
     func testChineseBoldAdjacentToPunctuationAndText() {
         let source = "这是**李香玲**，云瑶新组织里的队友。"
         let rendered = ChatMarkdown.render(source)
