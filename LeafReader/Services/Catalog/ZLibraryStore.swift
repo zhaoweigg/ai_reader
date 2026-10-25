@@ -25,6 +25,19 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var progress: Double?
     @Published private(set) var importedID: UUID?
     @Published private(set) var importError: String?
+    /// The library's Discover shelf: account recommendations, or popular books without an account.
+    @Published private(set) var shelf: [ZLibraryBook] = []
+    @Published private(set) var shelfFeed: ZLibraryFeed = .popular
+    /// Whether the library may request books before the user opens Discover.
+    let discoversFromLibrary: Bool
+    private var shelfTask: Task<Void, Never>?
+    private var shelfGeneration: UUID?
+    private struct ShelfCache: Codable {
+        let origin: String
+        let account: String?
+        let feed: String
+        let books: [ZLibraryBook]
+    }
     private var signInData: WKWebsiteDataStore?
     private var browserSession: ZLibraryBrowserSession?
     var websiteBrowser: ZLibraryBrowserSession {
@@ -101,8 +114,9 @@ final class ZLibraryStore: ObservableObject {
     #else
     let isPreview = false
     #endif
-    init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(service: "com.weizhao.leafreader.zlibrary"), client: (any ZLibraryServing)? = nil) {
+    init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(service: "com.weizhao.leafreader.zlibrary"), client: (any ZLibraryServing)? = nil, discoversFromLibrary: Bool = true) {
         self.defaults = defaults; self.credentials = credentials; self.clientOverride = client
+        self.discoversFromLibrary = discoversFromLibrary
         feed = ZLibraryFeed(rawValue: defaults.string(forKey: "zlibrary.feed") ?? "") ?? .popular
         searchOrder = ZLibrarySearchOrder(rawValue: defaults.string(forKey: "zlibrary.searchOrder") ?? "") ?? .popular
         origin = (try? ZLibraryOrigin(defaults.string(forKey: "zlibrary.origin") ?? "https://z-library.sk")) ?? (try! ZLibraryOrigin("https://z-library.sk"))
@@ -114,6 +128,12 @@ final class ZLibraryStore: ObservableObject {
             websiteUserAgent = session?.userAgent
             accountName = session == nil ? "" : "Saved account"
         } catch { connectionError = "Leaf could not read your saved connection. Unlock your device and try again." }
+        if discoversFromLibrary, let data = defaults.data(forKey: "zlibrary.shelf"),
+           let saved = try? JSONDecoder().decode(ShelfCache.self, from: data),
+           saved.origin == origin.url.absoluteString, saved.account == session?.userID,
+           let feed = ZLibraryFeed(rawValue: saved.feed) {
+            shelf = saved.books; shelfFeed = feed
+        }
     }
     /// The Keychain session of an origin; an unreadable or invalid record counts as none.
     private func savedSession(for origin: ZLibraryOrigin) throws -> ZLibrarySession? {
@@ -134,6 +154,8 @@ final class ZLibraryStore: ObservableObject {
         books = []; error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
         recommendationConnectionRequired = false
         loading = false; verifying = false; downloadingID = nil; progress = nil
+        shelfTask?.cancel(); shelfTask = nil; shelfGeneration = nil
+        shelf = []; defaults.removeObject(forKey: "zlibrary.shelf")
     }
     func changeAddress(_ address: String) async throws {
         let next = try ZLibraryOrigin(address)
@@ -254,6 +276,67 @@ final class ZLibraryStore: ObservableObject {
         // A new order is a new result set. Cancel even when the submitted query is
         // identical, and restart at page one so differently ordered pages never mix.
         if !activeQuery.isEmpty { cancelCatalogLoad(); await reload() }
+    }
+    /// Selects what Discover shows; its view performs the load when it appears.
+    func show(_ feed: ZLibraryFeed) {
+        cancelCatalogLoad(); activeQuery = ""
+        if feed != self.feed { self.feed = feed; defaults.set(feed.rawValue, forKey: "zlibrary.feed") }
+    }
+    func show(query: String) {
+        cancelCatalogLoad(); activeQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    /// Loads the shelf once per account. It reuses a Discover list already loaded
+    /// for the same feed, and keeps its saved books when a request fails; Discover
+    /// is where failures are explained.
+    func loadShelf() async {
+        guard discoversFromLibrary, shelfGeneration != generation else { return }
+        if let shelfTask { return await shelfTask.value }
+        let token = generation, source = origin
+        let task = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            do {
+                if self.session == nil {
+                    self.session = try self.savedSession(for: source)
+                    self.websiteUserAgent = self.session?.userAgent
+                }
+                let saved = self.session, feed: ZLibraryFeed = saved == nil ? .popular : .recommended
+                let books: [ZLibraryBook]
+                if let listed = self.snapshots[CatalogKey("", self.searchOrder, feed: feed)] {
+                    books = listed.books
+                } else {
+                    try await self.prepareCatalogWebsiteContext(request: UUID())
+                    try Task.checkCancellation(); guard token == self.generation else { return }
+                    if let saved, feed == .recommended {
+                        books = try await self.client.recommended(origin: source, session: saved)
+                    } else { books = try await self.client.popular(origin: source, session: saved) }
+                }
+                try Task.checkCancellation(); guard token == self.generation else { return }
+                self.shelfGeneration = token; self.shelfFeed = feed; self.shelf = Array(books.prefix(12))
+                let cache = ShelfCache(origin: source.url.absoluteString, account: saved?.userID, feed: feed.rawValue, books: self.shelf)
+                self.defaults.set(try? JSONEncoder().encode(cache), forKey: "zlibrary.shelf")
+            } catch {
+                // One attempt per account and launch; reopening the library must not repeat it.
+                if token == self.generation && !Task.isCancelled && !Self.isCancellation(error) { self.shelfGeneration = token }
+            }
+        }
+        shelfTask = task
+        await task.value
+        if token == generation { shelfTask = nil }
+    }
+    /// First-page matches for a library search. Discover still performs its own
+    /// search, so it verifies the account and keeps its pagination state.
+    func searchPreview(_ query: String) async -> [ZLibraryBook] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard discoversFromLibrary, !query.isEmpty else { return [] }
+        if let listed = snapshots[CatalogKey(query, searchOrder, feed: feed)] { return listed.books }
+        let token = generation, source = origin, order = searchOrder
+        do {
+            try await prepareCatalogWebsiteContext(request: UUID())
+            try Task.checkCancellation(); guard token == generation else { return [] }
+            let page = try await client.search(query, page: 1, order: order, origin: source, session: session)
+            try Task.checkCancellation()
+            return token == generation ? page.books : []
+        } catch { return [] }
     }
     func reload() async { await loadCatalog(query: activeQuery, refresh: true) }
     func retry() async {
@@ -382,13 +465,14 @@ final class ZLibraryStore: ObservableObject {
         #endif
     }
     func details(_ book: ZLibraryBook) async throws -> ZLibraryBook {
-        if let cached = books.first(where: { $0.id == book.id }), !cached.fileExtension.isEmpty { return cached }
+        if let cached = (books + shelf).first(where: { $0.id == book.id }), !cached.fileExtension.isEmpty { return cached }
         let token = generation, source = origin
         do {
             let resolved = try await client.details(book, origin: source, session: session)
             try Task.checkCancellation()
             guard token == generation else { throw CancellationError() }
             if let index = books.firstIndex(where: { $0.id == book.id }) { books[index] = resolved }
+            if let index = shelf.firstIndex(where: { $0.id == book.id }) { shelf[index] = resolved }
             for (key, snapshot) in snapshots {
                 guard let index = snapshot.books.firstIndex(where: { $0.id == book.id }) else { continue }
                 var rows = snapshot.books; rows[index] = resolved
