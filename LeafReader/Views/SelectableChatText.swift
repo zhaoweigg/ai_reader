@@ -38,7 +38,7 @@ struct SelectableChatText: UIViewRepresentable {
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
         // Keep short user bubbles fitted to their text, as before. Long replies
         // take the available width and let the outer history scroll vertically.
-        let natural = uiView.attributedText.boundingRect(with: CGSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude),
+        let natural = uiView.attributedText.boundingRect(with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
                                                         options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
         let fittedWidth = min(width, ceil(natural.width) + 1)
         let size = uiView.sizeThatFits(CGSize(width: fittedWidth, height: .greatestFiniteMagnitude))
