@@ -720,6 +720,9 @@ final class ZLibraryUITests: XCTestCase {
         let field = app.textFields["librarySearch"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap(); field.typeText("Coast tides")
+        // Typing hides the featured book and shelf; the field must stay on screen.
+        XCTAssertTrue(field.isHittable)
+        XCTAssertGreaterThan(field.frame.minY, app.navigationBars.firstMatch.frame.maxY - 1)
         let fallback = app.buttons["librarySearchZLibrary"]
         XCTAssertTrue(fallback.waitForExistence(timeout: 5))
         XCTAssertTrue(fallback.label.contains("Coast tides"))
@@ -744,6 +747,11 @@ final class ZLibraryUITests: XCTestCase {
         setReaderOrientation(.landscapeLeft, app: app)
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 5)
         XCTAssertTrue(recommended.waitForExistence(timeout: 5))
+        let library = app.scrollViews.firstMatch
+        for _ in 0..<6 where !recommended.isHittable {
+            library.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)).press(forDuration: 0, thenDragTo: library.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
+        }
+        XCTAssertTrue(recommended.isHittable)
         capture("Library recommendations shelf Night landscape")
         setReaderOrientation(.portrait, app: app)
         app.terminate(); app.launch(); setReaderOrientation(.portrait, app: app)

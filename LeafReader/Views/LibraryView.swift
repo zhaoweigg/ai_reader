@@ -56,6 +56,7 @@ struct LibraryView: View {
     }
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     VStack(alignment: .leading, spacing: 7) {
@@ -70,7 +71,7 @@ struct LibraryView: View {
                     }
                     VStack(alignment: .leading, spacing: 16) {
                         HStack {
-                            Text("Your library").font(.title2.weight(.semibold))
+                            Text("Your library").font(.title2.weight(.semibold)).id("libraryHeader")
                             Text("\(library.books.count)").font(.subheadline).foregroundStyle(.secondary)
                             Spacer()
                             Menu {
@@ -140,6 +141,9 @@ struct LibraryView: View {
                     }.font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 8)
                 }
                 .padding(.horizontal, 24).padding(.bottom, 20).frame(maxWidth: 960, alignment: .leading).frame(maxWidth: .infinity)
+            }
+            // Searching hides the featured book and shelf; keep the search field in view.
+            .onChange(of: query.isEmpty) { _, empty in if !empty { proxy.scrollTo("libraryHeader", anchor: .top) } }
             }
             .background(theme.canvas)
             .toolbarBackground(theme.canvas, for: .navigationBar)
