@@ -13,7 +13,7 @@ struct SelectableChatText: UIViewRepresentable {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = SelectableChatTextView()
         view.isEditable = false
         view.isSelectable = true
         view.isScrollEnabled = false
@@ -23,6 +23,11 @@ struct SelectableChatText: UIViewRepresentable {
         view.textContainer.lineFragmentPadding = 0
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.delegate = context.coordinator
+        let coordinator = context.coordinator
+        view.onSelectionEnd = { [weak view, weak coordinator] in
+            guard let view else { return }
+            coordinator?.endSelection(in: view)
+        }
         return view
     }
 
@@ -88,8 +93,27 @@ struct SelectableChatText: UIViewRepresentable {
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            endSelection(in: textView)
+        }
+
+        func endSelection(in textView: UITextView) {
+            applying = true
+            textView.selectedRange = NSRange(location: 0, length: 0)
+            applying = false
             reportSelection(false)
             applyLatest(in: textView)
         }
+    }
+}
+
+final class SelectableChatTextView: UITextView {
+    var onSelectionEnd: (() -> Void)?
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        // A selectable, non-editable view can become first responder without
+        // beginning editing, so UITextViewDelegate.didEndEditing is insufficient.
+        if resigned { onSelectionEnd?() }
+        return resigned
     }
 }

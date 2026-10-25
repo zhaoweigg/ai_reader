@@ -18,8 +18,10 @@ final class ChatMarkdownTests: XCTestCase {
     }
 
     @MainActor func testStreamingPreservesSelectedRangeAndAppliesLatestReplyAfterSelectionEnds() {
-        let view = UITextView()
+        let view = SelectableChatTextView()
         let coordinator = SelectableChatText.Coordinator()
+        view.isEditable = false
+        view.onSelectionEnd = { coordinator.endSelection(in: view) }
         coordinator.update(ChatMarkdown.selectableText("第一句 🌿 selected passage"), in: view)
         let range = (view.text as NSString).range(of: "selected passage")
         view.selectedRange = range
@@ -36,7 +38,7 @@ final class ChatMarkdownTests: XCTestCase {
         view.selectedRange = NSRange(location: 0, length: 2)
         coordinator.textViewDidChangeSelection(view)
         coordinator.update(ChatMarkdown.selectableText("下一条回复已完成"), in: view)
-        coordinator.textViewDidEndEditing(view)
+        XCTAssertTrue(view.resignFirstResponder())
         XCTAssertEqual(view.text, "下一条回复已完成", "Moving focus to the composer must release deferred streaming text")
     }
 
