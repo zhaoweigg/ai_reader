@@ -103,7 +103,7 @@ struct HTTPChatProvider: ChatProvider {
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             body["system"] = system
             body["max_tokens"] = profile.maxOutputTokens
-            if let tools {
+            if let tools, !tools.isEmpty {
                 body["tools"] = tools.map { ["name": $0.name, "description": $0.description, "input_schema": $0.parameters] }
                 body["tool_choice"] = ["type": allowTools ? "auto" : "none"]
             }
@@ -114,10 +114,12 @@ struct HTTPChatProvider: ChatProvider {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             messages.insert(["role": "system", "content": system], at: 0)
             body[profile.legacyTokenLimit ? "max_tokens" : "max_completion_tokens"] = profile.maxOutputTokens
-            if let tools {
+            if let tools, !tools.isEmpty {
                 body["tools"] = tools.map { ["type": "function", "function": ["name": $0.name, "description": $0.description, "parameters": $0.parameters]] }
                 body["tool_choice"] = allowTools ? "auto" : "none"
             }
+            // Ask OpenAI for token usage in traced agent requests; other servers may not know the option.
+            if tools != nil, request.url?.host?.hasSuffix("openai.com") == true { body["stream_options"] = ["include_usage": true] }
         case .chatGPT: throw ChatGPTError.signInRequired
         }
         body["messages"] = messages

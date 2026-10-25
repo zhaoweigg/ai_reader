@@ -56,7 +56,10 @@ struct ChatConfiguration: Codable, Equatable {
     var profiles: [String: ChatProfile] = [:]
     var sharePage = true
     var harness: ReadingChatHarness = .evidence
-    private enum CodingKeys: String, CodingKey { case provider, profiles, sharePage, harness }
+    var agentLimits = AgentLimits()
+    /// Keep detailed answer traces on this device for troubleshooting.
+    var recordTraces = true
+    private enum CodingKeys: String, CodingKey { case provider, profiles, sharePage, harness, agentLimits, recordTraces }
     init() {}
     // Settings saved before a field existed keep their values instead of resetting everything.
     init(from decoder: Decoder) throws {
@@ -65,6 +68,8 @@ struct ChatConfiguration: Codable, Equatable {
         profiles = try container.decodeIfPresent([String: ChatProfile].self, forKey: .profiles) ?? [:]
         sharePage = try container.decodeIfPresent(Bool.self, forKey: .sharePage) ?? true
         harness = (try? container.decodeIfPresent(ReadingChatHarness.self, forKey: .harness)) ?? .evidence
+        agentLimits = (try? container.decodeIfPresent(AgentLimits.self, forKey: .agentLimits)) ?? AgentLimits()
+        recordTraces = (try? container.decodeIfPresent(Bool.self, forKey: .recordTraces)) ?? true
     }
     var profile: ChatProfile {
         get { profiles[provider.rawValue] ?? provider.defaultProfile }

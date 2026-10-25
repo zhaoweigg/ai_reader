@@ -39,7 +39,7 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                         switch event {
                         case .text(let text): continuation.yield(.text(text))
                         case .finished(let value): continuation.yield(.finished(truncated: value))
-                        case .toolCall: break
+                        case .toolCall, .usage: break
                         }
                     }
                     continuation.finish()
@@ -91,7 +91,7 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                             case .text(let text):
                                 textLength += text.count
                                 guard textLength <= 64000 else { throw ChatError.tooLarge }
-                            case .toolCall: break
+                            case .toolCall, .usage: break
                             case .finished:
                                 guard textLength > 0 || calls > 0 else { throw ChatError.emptyResponse }
                                 continuation.yield(event); continuation.finish(); return
@@ -136,7 +136,7 @@ extension ChatGPTSubscriptionProvider: ToolChatProvider {
         }
     }
     func makeAgentRequest(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool, accessToken: String) throws -> URLRequest {
-        try makeRequest(instructions: system, input: Self.input(items), extra: [
+        try makeRequest(instructions: system, input: Self.input(items), extra: tools.isEmpty ? [:] : [
             "tools": tools.map { ["type": "function", "name": $0.name, "description": $0.description, "parameters": $0.parameters] },
             "tool_choice": allowTools ? "auto" : "none", "parallel_tool_calls": true
         ], accessToken: accessToken)
@@ -149,6 +149,13 @@ extension ChatGPTSubscriptionProvider: ToolChatProvider {
         }
     }
     static func decodeAgent(_ data: String) throws -> [AgentEvent] {
+        if let object = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any],
+           object["type"] as? String == "response.completed", let usage = (object["response"] as? [String: Any])?["usage"] as? [String: Any] {
+            let reported = TokenUsage(input: usage["input_tokens"] as? Int, output: usage["output_tokens"] as? Int,
+                                      cachedInput: (usage["input_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int,
+                                      reasoning: (usage["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int)
+            return (reported.isEmpty ? [] : [.usage(reported)]) + [.finished(truncated: false)]
+        }
         if let object = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any],
            object["type"] as? String == "response.output_item.done",
            let item = object["item"] as? [String: Any], item["type"] as? String == "function_call" {
