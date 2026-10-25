@@ -380,6 +380,7 @@ struct ReaderChatPanel: View {
     @FocusState private var inputFocused: Bool
     @State private var confirmsClear = false
     @State private var scrollFollowing = ChatScrollFollowing()
+    @State private var selectedMessage: UUID?
 
     private var accent: Color { theme.accent }
     private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -510,7 +511,10 @@ struct ReaderChatPanel: View {
                                     HStack {
                                         if message.isUser { Spacer(minLength: 32) }
                                         ReaderChatMessageBubble(message: message, accent: accent,
-                                                                activity: message.id == session.messages.last?.id ? session.activity : nil)
+                                                                activity: message.id == session.messages.last?.id ? session.activity : nil) { selected in
+                                            if selected { selectedMessage = message.id }
+                                            else if selectedMessage == message.id { selectedMessage = nil }
+                                        }
                                         if !message.isUser { Spacer(minLength: 0) }
                                     }.id(message.id)
                                 }
@@ -543,7 +547,7 @@ struct ReaderChatPanel: View {
                             if !ChatHistoryInteraction.usesNativeTracking, let distance { scrollFollowing.updateBottomDistance(distance) }
                         }
                         .onChange(of: session.messages.last?.text) { _, _ in
-                            if scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                            if selectedMessage == nil, scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
                         .onChange(of: session.isSending) { _, sending in
                             if sending {
@@ -715,6 +719,7 @@ private struct ReaderChatMessageBubble: View {
     let message: ReaderChatMessage
     let accent: Color
     var activity: String? = nil
+    var onSelectionChange: (Bool) -> Void = { _ in }
     @State private var quoteExpanded = false
 
     var body: some View {
@@ -740,9 +745,10 @@ private struct ReaderChatMessageBubble: View {
                 .accessibilityValue(context.text)
                 .accessibilityIdentifier("toggleChatQuote")
             }
-            Text(message.isUser ? AttributedString(displayText) : ChatMarkdown.render(displayText))
-                .font(.subheadline).lineSpacing(3).textSelection(.enabled)
-                .accessibilityIdentifier(message.isUser ? "chatQuestion" : "chatReply")
+            SelectableChatText(text: displayText, markdown: !message.isUser,
+                               identifier: message.isUser ? "chatQuestion" : "chatReply",
+                               tint: accent,
+                               onSelectionChange: onSelectionChange)
             // Which reading-context design produced this reply, for comparison.
             if !message.isUser, message.state != .streaming, let trace = message.trace {
                 Label(trace.caption, systemImage: trace.harness == .agent ? "magnifyingglass" : "text.book.closed")
