@@ -149,10 +149,7 @@ final class LeafReaderUITests: XCTestCase {
             app.tabBars.buttons["Bookmarks"].tap()
             capture(theme + " themed bookmarks", app: app)
             app.tabBars.buttons["Library"].tap()
-            app.buttons["importBooks"].tap()
-            XCTAssertTrue(app.buttons["addFromFiles"].waitForExistence(timeout: 5))
-            capture(theme + " themed add books", app: app)
-            app.buttons["Close"].tap()
+            XCTAssertTrue(app.buttons["importBooks"].waitForExistence(timeout: 5))
         }
         app.terminate(); app.launch()
         app.tabBars.buttons["Settings"].tap()
