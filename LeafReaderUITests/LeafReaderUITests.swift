@@ -2770,8 +2770,8 @@ final class LeafReaderUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "Test reply: "), evaluatedWith: reply)
         waitForExpectations(timeout: 5)
         copyChatWord(reply, expected: "Test", flow: "Streaming Pages", app: app) {
-            expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
-            waitForExpectations(timeout: 40)
+            self.expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+            self.waitForExpectations(timeout: 40)
             XCTAssertEqual(reply.label, "Test reply: ", "Incoming text must not replace a native selection")
         }
         XCTAssertTrue(reply.label.contains("Consider what the passage states"), "The completed reply must appear when selection ends")
