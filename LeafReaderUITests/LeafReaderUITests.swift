@@ -2765,7 +2765,7 @@ final class LeafReaderUITests: XCTestCase {
         openSelectionFixture("Pages", app: app)
         app.buttons["openReaderChat"].tap()
         sendChatQuestion("Keep this selection while replying", app: app)
-        app.buttons["Hide keyboard"].tap()
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
         let reply = app.textViews.matching(identifier: "chatReply").firstMatch
         expectation(for: NSPredicate(format: "label == %@", "Test reply: "), evaluatedWith: reply)
         waitForExpectations(timeout: 5)
