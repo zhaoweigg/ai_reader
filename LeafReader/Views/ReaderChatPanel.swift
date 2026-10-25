@@ -359,7 +359,7 @@ struct ReaderChatPanel: View {
                     } else { Text("Ask Leaf").font(.subheadline.weight(.semibold)).foregroundStyle(accent).lineLimit(1) }
                     Spacer(minLength: 4)
                     if let onChooseConversation, !isComposing {
-                        Button(action: onChooseConversation) {
+                        Button { dictation.cancel(); onChooseConversation() } label: {
                             HStack(spacing: 4) {
                                 Text(context == .general ? "General chat" : bookTitle).lineLimit(1)
                                 Image(systemName: "chevron.down")
@@ -376,8 +376,8 @@ struct ReaderChatPanel: View {
                     if !isComposing && !compact {
                         Menu {
                             dictationLanguagePicker
-                            Button("AI settings", systemImage: "gearshape", action: onSettings)
-                            Button("Floating button",systemImage:"circle.lefthalf.filled",action:onButtonSettings)
+                            Button("AI settings", systemImage: "gearshape") { dictation.cancel(); onSettings() }
+                            Button("Floating button",systemImage:"circle.lefthalf.filled") { dictation.cancel(); onButtonSettings() }
                                 .accessibilityIdentifier("configureChatButton")
                             Button("Clear conversation", systemImage: "trash", role: .destructive) { dictation.cancel(); confirmsClear = true }
                                 .accessibilityIdentifier("requestClearConversation")

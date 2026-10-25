@@ -1452,7 +1452,7 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         expectation(for: NSPredicate { _, _ in (input.value as? String ?? "").components(separatedBy: "帮我解释这段文字").count == 3 }, evaluatedWith: input)
         waitForExpectations(timeout: 5)
-        let unsent = input.value as? String
+        var unsent = input.value as? String
         app.buttons["closeReaderChat"].tap()
         app.buttons["openReaderChat"].tap()
         XCTAssertEqual(mic.label, "Dictate question"); XCTAssertEqual(input.value as? String, unsent)
@@ -1468,9 +1468,22 @@ final class LeafReaderUITests: XCTestCase {
         waitForBook(app); app.buttons["openReaderChat"].tap()
         XCTAssertEqual(input.value as? String, unsent); XCTAssertEqual(mic.label, "Dictate question")
         XCTAssertEqual(quote.label, selected)
+        if flow == "Pages" {
+            mic.tap()
+            expectation(for: NSPredicate { _, _ in (input.value as? String) != unsent }, evaluatedWith: input)
+            waitForExpectations(timeout: 5)
+            let dictatingDraft = input.value as? String
+            app.buttons["chatOptions"].tap(); app.buttons["AI settings"].tap()
+            XCTAssertTrue(app.navigationBars["AI settings"].waitForExistence(timeout: 5))
+            app.navigationBars["AI settings"].buttons["Done"].tap()
+            XCTAssertEqual(mic.label, "Dictate question", "Opening another panel stops the microphone")
+            XCTAssertEqual(input.value as? String, dictatingDraft)
+            unsent = dictatingDraft
+        }
         capture(flow + " unsent dictated draft restored", app: app)
         app.buttons["sendReaderChat"].tap()
-        XCTAssertTrue(app.staticTexts.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", unsent ?? "")).firstMatch.waitForExistence(timeout: 5))
+        let sentText = (unsent ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertTrue(app.staticTexts.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", sentText)).firstMatch.waitForExistence(timeout: 5))
     }
 
     @MainActor func testKeyboardKeepsHistoryVisibleInPages() { verifyKeyboardHistory(flow: "Pages") }
