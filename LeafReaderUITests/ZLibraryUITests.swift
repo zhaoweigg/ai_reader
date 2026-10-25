@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -10,6 +10,7 @@ final class ZLibraryUITests: XCTestCase {
         if feedFailure { app.launchEnvironment["LEAF_UI_ZLIB_FEED_FAILURE"] = "1" }
         if let details { app.launchEnvironment["LEAF_UI_ZLIB_DETAILS"] = details }
         if sceneGeometry { app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = "1" }
+        if let recommendations { app.launchEnvironment["LEAF_UI_ZLIB_RECOMMENDATIONS_" + recommendations.uppercased()] = "1" }
         app.launch()
         if sceneGeometry {
             registerSceneGeometryCleanup(app: app)
@@ -81,6 +82,96 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(option.waitForExistence(timeout:5));option.tap()
         expectation(for:NSPredicate { _,_ in menu.label.contains(title) },evaluatedWith:menu)
         waitForExpectations(timeout:5)
+    }
+    @MainActor private func browse(_ title: String, app: XCUIApplication) {
+        let picker = app.segmentedControls["zlibraryFeedPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        revealCatalogElement(picker, app: app)
+        picker.buttons[title].tap()
+        expectation(for: NSPredicate(format: "label == %@", title), evaluatedWith: app.staticTexts["zlibraryFeedTitle"])
+        waitForExpectations(timeout: 5)
+        waitForCatalogLoad(app)
+        XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
+    }
+    @MainActor private func waitForCatalogLoad(_ app: XCUIApplication) {
+        // Changing feeds may request a fresh account-scoped list. The heading
+        // updates before that request finishes; wait for completion, not just its title.
+        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: app.buttons["zlibraryRefresh"])
+        waitForExpectations(timeout: 15)
+    }
+    @MainActor func testRecommendationsConnectSearchDetailsRefreshAndRelaunch() {
+        continueAfterFailure = false
+        let app = launch(sceneGeometry: true)
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        browse("Recommended", app: app)
+        XCTAssertTrue(app.staticTexts["Connect for recommendations"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["catalogBook-recommended"].exists)
+        capture("Recommendations require connection Day portrait")
+        app.buttons["connectZLibrary"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        let card = app.buttons["catalogBook-recommended"]
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["TXT · 18 KB"].exists)
+        capture("Personal recommendations Day portrait")
+        revealCatalogElement(card, app: app); card.tap()
+        XCTAssertTrue(app.buttons["catalogAddBook"].waitForExistence(timeout: 5))
+        capture("Recommended book details")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        search("墓碑", app: app)
+        XCTAssertTrue(app.buttons["zlibrarySearchOrder"].waitForExistence(timeout: 5))
+        app.buttons["zlibraryClearSearch"].tap()
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["zlibraryFeedTitle"].label, "Recommended")
+        browse("Most popular", app: app)
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 5))
+        browse("Recommended", app: app)
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        app.buttons["zlibraryRefresh"].tap()
+        waitForCatalogLoad(app)
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        app.terminate(); app.launch(); setReaderOrientation(.portrait, app: app)
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["zlibraryFeedTitle"].label, "Recommended")
+        XCTAssertFalse(app.staticTexts["Connect for recommendations"].exists)
+        capture("Recommendations restored after relaunch")
+    }
+    @MainActor func testRecommendationAccessFailureKeepsConnectionAndPopularWorksInNightLandscape() {
+        continueAfterFailure = false
+        let app = launch(sceneGeometry: true, recommendations: "failure")
+        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap(); app.tabBars.buttons["Library"].tap()
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        browse("Recommended", app: app)
+        app.buttons["connectZLibrary"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        XCTAssertTrue(app.staticTexts["Could not load recommendations"].waitForExistence(timeout: 10))
+        app.buttons["Request details"].tap()
+        let details = app.staticTexts["zlibraryRequestDiagnostic"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertTrue(details.label.contains("/eapi/user/book/recommended"))
+        XCTAssertFalse(details.label.contains("preview-only"))
+        capture("Recommendation access failure Night portrait")
+        setReaderOrientation(.landscapeLeft, app: app)
+        XCTAssertGreaterThan(app.frame.width, app.frame.height)
+        capture("Recommendation access failure Night landscape")
+        browse("Most popular", app: app)
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["connectZLibrary"].exists)
+        capture("Popular remains available Night landscape")
+    }
+    @MainActor func testEmptyRecommendationsStayHonestAndCanSwitchToPopularInDusk() {
+        continueAfterFailure = false
+        let app = launch(recommendations: "empty")
+        app.tabBars.buttons["Settings"].tap(); app.buttons["Dusk theme"].tap(); app.tabBars.buttons["Library"].tap()
+        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        browse("Recommended", app: app)
+        app.buttons["connectZLibrary"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        XCTAssertTrue(app.staticTexts["No recommendations yet"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["catalogBook-sample"].exists)
+        capture("Empty recommendations Dusk portrait")
+        browse("Most popular", app: app)
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 5))
+        browse("Recommended", app: app)
+        XCTAssertTrue(app.staticTexts["No recommendations yet"].waitForExistence(timeout: 5))
     }
     @MainActor func testSearchOrderMenuAllOptionsPaginationAndDetailsPreserveSelection() {
         let app = launch()

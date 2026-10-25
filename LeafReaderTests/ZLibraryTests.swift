@@ -31,6 +31,9 @@ private final class CatalogTransport: ZLibraryTransport {
     var popularSessions: [ZLibrarySession?] = []
     var popularContinuation: CheckedContinuation<[ZLibraryBook],Error>?
     var popularBooks: [ZLibraryBook] = []
+    var recommendedSessions: [ZLibrarySession] = []
+    var recommendedBooks: [ZLibraryBook] = []
+    var recommendedHandler: (() async throws -> [ZLibraryBook])?
     var detailCalls = 0
     var detailHandler: ((ZLibraryBook) async throws -> ZLibraryBook)?
     var searchCalls: [(String, Int, ZLibrarySession?, ZLibrarySearchOrder)] = []
@@ -47,6 +50,10 @@ private final class CatalogTransport: ZLibraryTransport {
         if suspendPopular { return try await withCheckedThrowingContinuation { popularContinuation = $0 } }
         if let popularError { throw popularError }
         return popularBooks
+    }
+    func recommended(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> [ZLibraryBook] {
+        recommendedSessions.append(session)
+        return try await recommendedHandler?() ?? recommendedBooks
     }
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
         detailCalls += 1
@@ -66,6 +73,7 @@ private final class CatalogURLProtocol: URLProtocol {
     static var expected: Int?
     static var remainOpen = false
     static var stopped = false
+    static var onStop: (() -> Void)?
     override class func canInit(with request:URLRequest)->Bool { true }
     override class func canonicalRequest(for request:URLRequest)->URLRequest { request }
     override func startLoading() {
@@ -77,7 +85,7 @@ private final class CatalogURLProtocol: URLProtocol {
         }
         if !Self.remainOpen { client?.urlProtocolDidFinishLoading(self) }
     }
-    override func stopLoading() { Self.stopped = true }
+    override func stopLoading() { Self.stopped = true; Self.onStop?() }
 }
 
 @MainActor final class ZLibraryTests: XCTestCase {
@@ -134,6 +142,117 @@ private final class CatalogURLProtocol: URLProtocol {
         let books = try await ZLibraryClient(transport:transport).popular(origin:origin,session:session)
         XCTAssertEqual(books.count,1);XCTAssertEqual(books[0].format,.epub);XCTAssertEqual(books[0].size,"1 MB")
         XCTAssertEqual(books[0].coverURL?.host,"images.example")
+    }
+    func testRecommendationsUseAuthenticatedGETAndKeepProviderOrderAndMetadataBounded() async throws {
+        let rows: [[String: Any]] = (1...205).map { ["id": $0, "hash": "abc123", "title": "Book \($0)", "extension": "epub", "filesizeString": "2 MB", "rating": 4.5] }
+        let transport = CatalogTransport { [self] request, toFile in
+            XCTAssertFalse(toFile); XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/eapi/user/book/recommended")
+            XCTAssertNil(request.url?.query); XCTAssertNil(request.httpBody)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "remix-userkey"), session.userKey)
+            return try response(["success": 1, "books": [rows[0]] + rows])
+        }
+        let client = ZLibraryClient(transport: transport)
+        let books = try await client.recommended(origin: origin, session: session)
+        XCTAssertEqual(books.count, 199) // Only the first 200 rows are parsed, including the duplicate.
+        XCTAssertEqual(books.last?.remoteID, "199")
+        XCTAssertEqual(books.prefix(2).map(\.remoteID), ["1", "2"])
+        XCTAssertEqual(books.first?.size, "2 MB"); XCTAssertEqual(books.first?.rating, 4.5)
+        do {
+            _ = try await client.recommended(origin: origin, session: ZLibrarySession(userID: "", userKey: ""))
+            XCTFail("Invalid accounts must not request personalized data")
+        } catch { XCTAssertEqual(error as? ZLibraryError, .signInRequired) }
+        XCTAssertEqual(transport.requests.count, 1)
+        transport.handler = { [self] _, _ in try response(["success": 1, "books": "invalid"]) }
+        do { _ = try await client.recommended(origin: origin, session: session); XCTFail("Malformed recommendations are not an empty feed") }
+        catch { XCTAssertEqual(error as? ZLibraryError, .response) }
+    }
+    func testRecommendationsRequireConnectionAndRestoreSelectedFeedAfterRelaunch() async throws {
+        let client = CatalogService(), (store, credentials, defaults) = store(client)
+        client.recommendedBooks = [book]
+        await store.browse(.recommended)
+        XCTAssertEqual(store.feed, .recommended); XCTAssertTrue(store.books.isEmpty)
+        XCTAssertNil(store.error); XCTAssertTrue(store.recommendationConnectionRequired)
+        XCTAssertTrue(client.recommendedSessions.isEmpty); XCTAssertTrue(client.popularSessions.isEmpty)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        await store.reload()
+        XCTAssertEqual(store.books, [book]); XCTAssertNil(store.error)
+        XCTAssertEqual(client.recommendedSessions, [session])
+        let reopened = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        XCTAssertEqual(reopened.feed, .recommended)
+        await reopened.search("")
+        XCTAssertEqual(reopened.books, [book]); XCTAssertTrue(reopened.connected)
+        XCTAssertEqual(client.recommendedSessions.count, 2); XCTAssertTrue(client.popularSessions.isEmpty)
+    }
+    func testRecommendationPopularAndSearchCachesStaySeparateAndClearReturnsToSelectedFeed() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.popularBooks = [book]
+        client.recommendedBooks = [] // An empty recommendation feed must also be cached.
+        client.searchHandler = { [self] _, _ in ZLibrarySearchPage(books: [book], hasMore: false) }
+        await store.loadPopular(); await store.browse(.recommended)
+        XCTAssertTrue(store.books.isEmpty); XCTAssertFalse(store.canLoadMore)
+        await store.search("title"); await store.setSearchOrder(.year)
+        await store.search("")
+        XCTAssertEqual(store.feed, .recommended); XCTAssertTrue(store.books.isEmpty)
+        XCTAssertEqual(client.recommendedSessions.count, 1); XCTAssertTrue(store.showingSavedResults)
+        await store.loadPopular(); XCTAssertEqual(store.books, [book])
+        await store.search("title"); await store.browse(.recommended)
+        XCTAssertTrue(store.books.isEmpty); XCTAssertEqual(client.popularSessions.count, 1)
+        XCTAssertEqual(client.recommendedSessions.count, 1); XCTAssertEqual(client.searchCalls.count, 2)
+    }
+    func testLateRecommendationCannotReplaceAnotherFeedOrResurrectDisconnectedAccount() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        var continuation: CheckedContinuation<[ZLibraryBook], Error>?
+        client.recommendedHandler = { try await withCheckedThrowingContinuation { continuation = $0 } }
+        let pending = Task { await store.browse(.recommended) }
+        try await wait { continuation != nil }
+        await store.loadPopular()
+        continuation?.resume(returning: [book]); await pending.value
+        XCTAssertEqual(store.feed, .popular); XCTAssertTrue(store.books.isEmpty); XCTAssertNil(store.error)
+        continuation = nil
+        let disconnected = Task { await store.browse(.recommended) }
+        try await wait { continuation != nil }
+        try await store.disconnect()
+        continuation?.resume(returning: [book]); await disconnected.value
+        XCTAssertFalse(store.connected); XCTAssertTrue(store.books.isEmpty)
+        XCTAssertFalse(store.loading); XCTAssertNil(store.error)
+        client.recommendedHandler = nil
+        await store.browse(.recommended)
+        XCTAssertEqual(client.recommendedSessions.count, 2)
+    }
+    func testRecommendationRefreshFailureKeepsSavedBooksAndNeverFallsBackToPopular() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.recommendedBooks = [book]
+        await store.browse(.recommended)
+        client.recommendedHandler = { throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "GET /eapi/user/book/recommended · browser redirect") }
+        await store.reload()
+        XCTAssertEqual(store.books, [book]); XCTAssertTrue(store.showingSavedResults)
+        XCTAssertTrue(store.connected); XCTAssertTrue(store.websiteAccessNeeded)
+        XCTAssertTrue(store.requestDiagnostic?.contains("/eapi/user/book/recommended") == true)
+        XCTAssertTrue(client.popularSessions.isEmpty)
+        client.recommendedHandler = nil
+        await store.retry()
+        XCTAssertNil(store.error); XCTAssertFalse(store.showingSavedResults)
+        XCTAssertEqual(client.recommendedSessions.count, 3)
+    }
+    func testRecommendationsAreIsolatedAcrossAccountsAndReuseResolvedEditionDetails() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        let sparse = ZLibraryBook(remoteID: book.remoteID, hash: book.hash, title: book.title, author: "", fileExtension: "", size: "", language: "", year: "", coverURL: nil)
+        client.recommendedBooks = [sparse]; client.detailHandler = { [self] _ in book }
+        await store.browse(.recommended)
+        let resolved = try await store.details(sparse); XCTAssertEqual(resolved, book)
+        await store.loadPopular(); await store.browse(.recommended)
+        XCTAssertEqual(store.books, [book]); XCTAssertEqual(client.detailCalls, 1)
+        client.recommendedBooks = []
+        let changed = await store.connect(ZLibrarySession(userID: "other", userKey: "other-test-account"))
+        XCTAssertTrue(changed); XCTAssertTrue(store.books.isEmpty)
+        await store.reload()
+        XCTAssertTrue(store.books.isEmpty)
+        XCTAssertEqual(client.recommendedSessions.map(\.userID), ["42", "other"])
     }
     func testSparsePopularBookLoadsOnlySelectedEditionWithSavedWebsiteContext() async throws {
         let browser = ZLibrarySession(userID:"42",userKey:"test-only",websiteCookies:[ZLibraryWebsiteCookie(name:"access",value:"context",path:"/eapi/book/12",expires:nil)],userAgent:"Saved browser")
@@ -797,11 +916,16 @@ private final class CatalogURLProtocol: URLProtocol {
         let files = { Set((try? FileManager.default.contentsOfDirectory(atPath:FileManager.default.temporaryDirectory.path)) ?? []) }
         let before = files(), config = URLSessionConfiguration.ephemeral;config.protocolClasses = [CatalogURLProtocol.self]
         CatalogURLProtocol.body = Data([0x50,0x4b,0x03,0x04]);CatalogURLProtocol.expected = nil;CatalogURLProtocol.remainOpen = true;CatalogURLProtocol.stopped = false
-        defer { CatalogURLProtocol.body = Data();CatalogURLProtocol.remainOpen = false }
+        let received = expectation(description: "Partial file received before cancellation")
+        let stopped = expectation(description: "URL protocol stopped after cancellation")
+        CatalogURLProtocol.onStop = { stopped.fulfill() }
+        defer { CatalogURLProtocol.body = Data();CatalogURLProtocol.remainOpen = false;CatalogURLProtocol.onStop = nil }
         let transport = ZLibraryHTTPTransport(configuration:config)
-        let task = Task { try await transport.send(URLRequest(url:origin.url),toFile:true,progress:{_ in}) }
-        try await Task.sleep(for:.milliseconds(100));task.cancel()
+        let task = Task { try await transport.send(URLRequest(url:origin.url),toFile:true,progress:{_ in received.fulfill()}) }
+        await fulfillment(of: [received], timeout: 3)
+        task.cancel()
         do { _ = try await task.value;XCTFail("Cancelled download completed") } catch {}
+        await fulfillment(of: [stopped], timeout: 3)
         XCTAssertTrue(CatalogURLProtocol.stopped)
         XCTAssertTrue(files().subtracting(before).filter { $0.hasPrefix("LeafDownload-") }.isEmpty)
     }

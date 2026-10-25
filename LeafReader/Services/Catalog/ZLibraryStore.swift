@@ -11,6 +11,7 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var loading = false
     @Published private(set) var showingSavedResults = false
     @Published private(set) var activeQuery = ""
+    @Published private(set) var feed: ZLibraryFeed
     @Published private(set) var searchOrder: ZLibrarySearchOrder
     @Published private(set) var canLoadMore = false
     @Published private(set) var searchLimitReached = false
@@ -18,6 +19,7 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var requestDiagnostic: String?
     @Published private(set) var websiteAccessNeeded = false
+    @Published private(set) var recommendationConnectionRequired = false
     @Published private(set) var connectionError: String?
     @Published private(set) var downloadingID: String?
     @Published private(set) var progress: Double?
@@ -60,12 +62,14 @@ final class ZLibraryStore: ObservableObject {
     private var searchPage = 0
     private var retryNextPage = false
     // Bounded, in-memory navigation state, isolated to the verified account/origin.
-    // Popular plus the three most recently visited searches (at most 1,100 rows).
+    // Both feeds plus the three most recently visited searches (at most 1,300 rows).
     private struct CatalogKey: Hashable {
         let query: String
         let order: String
-        init(_ query: String, _ order: ZLibrarySearchOrder) {
+        let feed: ZLibraryFeed
+        init(_ query: String, _ order: ZLibrarySearchOrder, feed: ZLibraryFeed) {
             self.query = query; self.order = query.isEmpty ? "" : order.rawValue
+            self.feed = query.isEmpty ? feed : .popular
         }
     }
     private struct CatalogSnapshot {
@@ -99,6 +103,7 @@ final class ZLibraryStore: ObservableObject {
     #endif
     init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(service: "com.weizhao.leafreader.zlibrary"), client: (any ZLibraryServing)? = nil) {
         self.defaults = defaults; self.credentials = credentials; self.clientOverride = client
+        feed = ZLibraryFeed(rawValue: defaults.string(forKey: "zlibrary.feed") ?? "") ?? .popular
         searchOrder = ZLibrarySearchOrder(rawValue: defaults.string(forKey: "zlibrary.searchOrder") ?? "") ?? .popular
         origin = (try? ZLibraryOrigin(defaults.string(forKey: "zlibrary.origin") ?? "https://z-library.sk")) ?? (try! ZLibraryOrigin("https://z-library.sk"))
         #if DEBUG
@@ -127,6 +132,7 @@ final class ZLibraryStore: ObservableObject {
         generation = UUID(); clearSnapshots(); downloadTask?.cancel(); downloadTask = nil
         cancelCatalogLoad(); searchPage = 0; canLoadMore = false; searchLimitReached = false
         books = []; error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
+        recommendationConnectionRequired = false
         loading = false; verifying = false; downloadingID = nil; progress = nil
     }
     func changeAddress(_ address: String) async throws {
@@ -233,7 +239,14 @@ final class ZLibraryStore: ObservableObject {
             if let cookie = HTTPCookie(properties: properties) { await data.httpCookieStore.setCookie(cookie) }
         }
     }
-    func loadPopular() async { await loadCatalog(query: "") }
+    func loadPopular() async { await browse(.popular) }
+    func browse(_ feed: ZLibraryFeed) async {
+        if feed != self.feed {
+            cancelCatalogLoad()
+            self.feed = feed; defaults.set(feed.rawValue, forKey: "zlibrary.feed")
+        }
+        await loadCatalog(query: "")
+    }
     func search(_ query: String) async { await loadCatalog(query: query.trimmingCharacters(in: .whitespacesAndNewlines)) }
     func setSearchOrder(_ order: ZLibrarySearchOrder) async {
         guard order != searchOrder else { return }
@@ -256,11 +269,12 @@ final class ZLibraryStore: ObservableObject {
     private func loadCatalog(query: String, append: Bool = false, refresh: Bool = false) async {
         if loading && query == activeQuery { return }
         cancelCatalogLoad()
-        let request = catalogRequest, token = generation, source = origin, order = searchOrder
+        let request = catalogRequest, token = generation, source = origin, order = searchOrder, feed = self.feed
         activeQuery = query; retryNextPage = append
         error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
+        recommendationConnectionRequired = false
         if !append {
-            let restored = restore(CatalogKey(query, order))
+            let restored = restore(CatalogKey(query, order, feed: feed))
             if restored && !refresh { return }
             if !restored {
                 books = []; searchPage = 0; canLoadMore = false; searchLimitReached = false
@@ -271,14 +285,17 @@ final class ZLibraryStore: ObservableObject {
         let page = append ? searchPage + 1 : 1
         let task = Task<Void, Never> { [weak self] in
             guard let self else { return }
-            await self.performLoad(query: query, page: page, order: order, append: append, request: request, token: token, source: source)
+            await self.performLoad(query: query, feed: feed, page: page, order: order, append: append, request: request, token: token, source: source)
         }
         // Hold a cancellable task: a query change cancels network work as well as rejecting stale results.
         catalogTask = task
         await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
     }
-    private func performLoad(query: String, page: Int, order: ZLibrarySearchOrder, append: Bool, request: UUID, token: UUID, source: ZLibraryOrigin) async {
-        defer { if token == generation && request == catalogRequest { loading = false; catalogTask = nil } }
+    private func performLoad(query: String, feed: ZLibraryFeed, page: Int, order: ZLibrarySearchOrder, append: Bool, request: UUID, token: UUID, source: ZLibraryOrigin) async {
+        defer {
+            traceCatalogLoad("finished cancelled=\(Task.isCancelled)", request: request)
+            if token == generation && request == catalogRequest { loading = false; catalogTask = nil }
+        }
         do {
             try Task.checkCancellation()
             // Keychain may have been locked during app initialization. Retry on use
@@ -290,8 +307,7 @@ final class ZLibraryStore: ObservableObject {
             }
             // Restore Keychain account cookies that WebKit treats as session-only,
             // while retaining any newer persistent browser access cookies.
-            await seedWebsite()
-            try await saveWebsiteContext()
+            try await prepareCatalogWebsiteContext(request: request)
             try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
             let saved = session
             if let saved, !connected {
@@ -300,36 +316,70 @@ final class ZLibraryStore: ObservableObject {
                 connected = true; accountName = profile.name; remaining = profile.remaining
             }
             let result: [ZLibraryBook], more: Bool
-            if query.isEmpty { result = try await client.popular(origin: source, session: saved); more = false }
+            traceCatalogLoad("request \(query.isEmpty ? feed.rawValue : "search")", request: request)
+            if query.isEmpty {
+                if feed == .recommended {
+                    guard let saved else { recommendationConnectionRequired = true; return }
+                    result = try await client.recommended(origin: source, session: saved)
+                } else { result = try await client.popular(origin: source, session: saved) }
+                more = false
+            }
             else {
                 let response = try await client.search(query, page: page, order: order, origin: source, session: saved)
                 result = response.books; more = response.hasMore
             }
             try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
+            traceCatalogLoad("received rows=\(result.count)", request: request)
             let existing = append ? Set(books.map(\.id)) : []
             let added = result.filter { !existing.contains($0.id) }
             books = append ? books + added : result
             searchPage = query.isEmpty ? 0 : page
             searchLimitReached = !query.isEmpty && more && page >= ZLibrarySearchPage.maximumPages
             canLoadMore = !query.isEmpty && more && !added.isEmpty && !searchLimitReached
-            let key = CatalogKey(query, order)
+            let key = CatalogKey(query, order, feed: feed)
             snapshots[key] = CatalogSnapshot(books: books, page: searchPage, canLoadMore: canLoadMore, limitReached: searchLimitReached)
             touch(key); showingSavedResults = false
         } catch {
             if token == generation && request == catalogRequest && !Task.isCancelled && !Self.isCancellation(error) {
                 let issue = ZLibraryRequestFailure.issue(error)
-                if issue == .signInRequired { connected = false }
+                if issue == .signInRequired {
+                    connected = false
+                    recommendationConnectionRequired = query.isEmpty && feed == .recommended
+                }
                 websiteAccessNeeded = issue == .challenge || issue == .accessCheck
                 requestDiagnostic = (error as? ZLibraryRequestFailure)?.diagnostic
                 if issue == .accessCheck {
                     self.error = ZLibraryError.accessCheck.localizedDescription + (connected ? " Your account remains connected." : "")
                 } else {
                     self.error = connected && websiteAccessNeeded
-                        ? (query.isEmpty ? "Your account is connected, but the website did not return popular-book data. Open the website to check access, then try again." : "Your account is connected, but the website did not return search results. Open the website to check access, then try again.")
+                        ? (query.isEmpty ? (feed == .recommended ? "Your account is connected, but the website did not return recommendations. Open the website to check access, then try again." : "Your account is connected, but the website did not return popular-book data. Open the website to check access, then try again.") : "Your account is connected, but the website did not return search results. Open the website to check access, then try again.")
                         : error.localizedDescription
                 }
             }
         }
+    }
+    private func prepareCatalogWebsiteContext(request: UUID) async throws {
+        #if DEBUG
+        // Ordinary offline fixtures use account IDs from the fake client, not
+        // browser cookies. Keep them independent of WebKit network-process IPC.
+        // Dedicated website fixtures continue to exercise real cookie storage.
+        if isPreview && !UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE") {
+            traceCatalogLoad("offline client: browser context not required", request: request)
+            return
+        }
+        #endif
+        traceCatalogLoad("seed website", request: request)
+        await seedWebsite()
+        traceCatalogLoad("save website context", request: request)
+        try await saveWebsiteContext()
+        traceCatalogLoad("website ready", request: request)
+    }
+    private func traceCatalogLoad(_ event: String, request: UUID) {
+        #if DEBUG
+        // Offline UI fixtures can trace lifecycle stalls without logging queries,
+        // account identities, cookies or any real network response.
+        if UITesting.flag("LEAF_UI_ZLIB_MOCK") { print("[ZLibraryLoad] \(request) \(event)") }
+        #endif
     }
     func details(_ book: ZLibraryBook) async throws -> ZLibraryBook {
         if let cached = books.first(where: { $0.id == book.id }), !cached.fileExtension.isEmpty { return cached }
@@ -391,6 +441,15 @@ final class ZLibraryStore: ObservableObject {
 
 #if DEBUG
 struct UITestZLibraryClient: ZLibraryServing {
+    func recommended(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> [ZLibraryBook] {
+        try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
+        try await guardRepeatedRequest("recommended-" + session.userID, path: "user/book/recommended", session: session)
+        if UITesting.flag("LEAF_UI_ZLIB_RECOMMENDATIONS_EMPTY") { return [] }
+        if UITesting.flag("LEAF_UI_ZLIB_RECOMMENDATIONS_FAILURE") {
+            throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "GET /eapi/user/book/recommended · browser redirect · website verification required")
+        }
+        return [ZLibraryBook(remoteID:"recommended",hash:"ddeeff",title:"A Field Guide to Slow Days",author:"Leaf Editions",fileExtension:"txt",size:"18 KB",language:"English",year:"2026",coverURL:nil,rating:4.7,ratingCount:18)]
+    }
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
         try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()
         if UITesting.environment("LEAF_UI_ZLIB_DETAILS") == "failure" { throw ZLibraryError.metadata }
