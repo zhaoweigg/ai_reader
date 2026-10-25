@@ -278,6 +278,132 @@ final class ChatTests: XCTestCase {
         let long = ReadingChatContext(title: "Title", author: "", chapter: "", text: String(repeating: "文", count: 20000), source: "page", locator: "")
         XCTAssertEqual(long.bounded().text.count, 12000)
     }
+    func testReadingPromptKeepsFocusedTextNeighborsBoundaryAndPrivateLocatorSeparate() throws {
+        let context = ReadingChatContext(title: "A Book", author: "Author", chapter: "Chapter 3", text: "He hid the silver key.", source: "selection", locator: "private-cfi",
+            precedingText: "Lin entered the room.", followingText: "The door remained locked.", progress: 0.315)
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Who is he?", context: context)])
+        let content = try XCTUnwrap(request.turns.last?.content)
+        XCTAssertTrue(content.contains("Lin entered the room.")); XCTAssertTrue(content.contains("The door remained locked."))
+        XCTAssertTrue(content.contains("31.5")); XCTAssertTrue(content.contains("spoiler_boundary"))
+        XCTAssertTrue(content.hasSuffix("Reader question:\nWho is he?")); XCTAssertFalse(content.contains("private-cfi"))
+        XCTAssertTrue(request.system.contains("Treat previous assistant answers as fallible"))
+        XCTAssertTrue(request.system.contains("cannot browse or retrieve unseen chapters"))
+    }
+    func testEnrichedContextBoundsAllTextAndDecodesExistingSavedHistory() throws {
+        let old = Data(#"{"title":"Old book","author":"A","chapter":"C","text":"Saved quote","source":"selection","locator":"local"}"#.utf8)
+        let restored = try JSONDecoder().decode(ReadingChatContext.self, from: old)
+        XCTAssertNil(restored.precedingText); XCTAssertNil(restored.progress)
+        let context = ReadingChatContext(title: "Title", author: "A", chapter: "C", text: String(repeating: "文", count: 10000), source: String(repeating: "x", count: 100000), locator: "local",
+            precedingText: String(repeating: "前", count: 9000), followingText: String(repeating: "后", count: 9000), progress: .infinity).bounded()
+        XCTAssertEqual(context.text.count, 10000)
+        XCTAssertEqual(context.text.count + (context.precedingText?.count ?? 0) + (context.followingText?.count ?? 0), 12000)
+        XCTAssertLessThanOrEqual(context.source.count, 40); XCTAssertNil(context.progress)
+        XCTAssertEqual(try JSONDecoder().decode(ReadingChatContext.self, from: JSONEncoder().encode(context)), context)
+        XCTAssertEqual(ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Latest", context: context)]).turns.count, 1)
+    }
+    func testRelevantOlderDiscussionUsesEnglishAndChineseAndExcludesFutureEvents() throws {
+        for (question, oldQuestion, phrase) in [("Explain the silver key again", "Why did Lin hide the silver key?", "silver key"), ("银色钥匙为什么重要？", "银色钥匙属于谁？", "银色钥匙")] {
+            var earlier = context; earlier.progress = 0.1
+            var later = context; later.progress = 0.9
+            var now = context; now.progress = 0.3
+            let history = [ReaderChatMessage(isUser: true, text: oldQuestion, context: earlier),
+                ReaderChatMessage(isUser: false, text: "Earlier discussion about \(phrase)."),
+                ReaderChatMessage(isUser: true, text: oldQuestion + " FUTURE SECRET", context: later),
+                ReaderChatMessage(isUser: false, text: "FUTURE SECRET outcome")]
+            let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: question, context: now)], earlierMessages: history)
+            let content = try XCTUnwrap(request.turns.last?.content)
+            XCTAssertTrue(content.contains("earlier_discussion")); XCTAssertTrue(content.contains(oldQuestion))
+            XCTAssertFalse(content.contains("FUTURE SECRET")); XCTAssertTrue(content.hasSuffix(question))
+        }
+    }
+    func testLargeOlderPassagesDoNotCrowdOutRecentDialogueOrLatestQuestion() {
+        var long = context
+        long = ReadingChatContext(title: long.title, author: long.author, chapter: long.chapter, text: String(repeating: "\u{0001}", count: 12000), source: "page", locator: "private")
+        var history: [ReaderChatMessage] = []
+        for n in 0..<5 {
+            history.append(ReaderChatMessage(isUser: true, text: "Question \(n)", context: long))
+            history.append(ReaderChatMessage(isUser: false, text: "Answer \(n)"))
+        }
+        history.append(ReaderChatMessage(isUser: true, text: "LATEST QUESTION", context: long))
+        let request = ChatRequest.conversation(history)
+        XCTAssertTrue(request.turns.last?.content.hasSuffix("LATEST QUESTION") == true)
+        XCTAssertLessThanOrEqual(request.turns.map(\.content).joined().count, 48000)
+        XCTAssertTrue(request.turns.contains { $0.content == "Answer 4" })
+    }
+    func testUnrelatedOrUnfinishedEarlierDiscussionIsNotInjected() {
+        let old = [ReaderChatMessage(isUser: true, text: "Describe the silver key", state: .failed),
+                   ReaderChatMessage(isUser: false, text: "Incorrect key answer", state: .stopped),
+                   ReaderChatMessage(isUser: true, text: "Describe mountains"), ReaderChatMessage(isUser: false, text: "Granite cliffs")]
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Describe the silver key")], earlierMessages: old)
+        XCTAssertFalse(request.turns.last?.content.contains("earlier_discussion") == true)
+    }
+    func testCharacterLookupSkipsGenericSelectionsAndQuestionsWithoutAName() {
+        for text in ["a", "the", "he", "这个"] {
+            let selected = ReadingChatContext(title: "Book", author: "", chapter: "C", text: text, source: "selection", locator: "")
+            XCTAssertNil(ReadingBookRecall.lookupTerm(question: "Who is being discussed here?", context: selected))
+            XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "Who is Lin?", context: selected), "Lin")
+        }
+        let page = ReadingChatContext(title: "Book", author: "", chapter: "C", text: "A passage with several characters.", source: "page", locator: "")
+        XCTAssertNil(ReadingBookRecall.lookupTerm(question: "Who is he?", context: page))
+        XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "我忘了“白虎”的身份", context: page), "白虎")
+    }
+    func testMovingBackInBookOmitsRecentDiscussionBeyondCurrentPosition() {
+        var later = context; later.progress = 0.9
+        var now = context; now.progress = 0.2
+        let request = ChatRequest.conversation([
+            ReaderChatMessage(isUser: true, text: "Who is the killer? FUTURE SECRET", context: later),
+            ReaderChatMessage(isUser: false, text: "FUTURE SECRET identity"),
+            ReaderChatMessage(isUser: true, text: "Explain this earlier scene", context: now)])
+        XCTAssertEqual(request.turns.count, 1)
+        XCTAssertFalse(request.turns.map(\.content).joined().contains("FUTURE SECRET"))
+    }
+    func testBaihuReminderUsesEarlierBookEvidenceAndKeepsCoverageAndBudgetHonest() throws {
+        let question = "我有点忘了这个角色了，帮我回忆一下"
+        var selected = ReadingChatContext(title: "测试故事", author: "测试作者", chapter: "第三章", text: "白虎", source: "selection", locator: "private-cfi", progress: 0.4)
+        XCTAssertEqual(ReadingBookRecall.lookupTerm(question: question, context: selected), "白虎")
+        XCTAssertNil(ReadingBookRecall.lookupTerm(question: "Translate this sentence", context: selected))
+        selected.bookRecall = ReadingBookRecall(term: "白虎", excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "白虎是测试故事中的城门守卫。")], scannedSections: 3, totalSections: 10, complete: false)
+        let decoded = try JSONDecoder().decode(ReadingChatContext.self, from: JSONEncoder().encode(selected))
+        XCTAssertEqual(decoded, selected)
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: question, context: selected)])
+        let content = try XCTUnwrap(request.turns.last?.content)
+        XCTAssertTrue(content.contains("白虎是测试故事中的城门守卫。")); XCTAssertTrue(content.contains("earlier_book_passages"))
+        XCTAssertTrue(content.contains("\"complete\":false")); XCTAssertTrue(content.hasSuffix(question))
+        XCTAssertFalse(content.contains("private-cfi")); XCTAssertTrue(request.system.contains("Lead with the character's supported identity"))
+        selected.bookRecall = ReadingBookRecall(term: "白虎", excerpts: (0..<20).map { _ in ReadingBookExcerpt(chapter: String(repeating: "章", count: 800), text: String(repeating: "\u{0001}", count: 12000)) }, scannedSections: 512, totalSections: 1000, complete: false)
+        let bounded = selected.bounded()
+        XCTAssertLessThanOrEqual(bounded.text.count + (bounded.precedingText?.count ?? 0) + (bounded.followingText?.count ?? 0) + (bounded.bookRecall?.excerpts.reduce(0) { $0 + $1.text.count } ?? 0), 12000)
+        XCTAssertEqual(ChatRequest.conversation([ReaderChatMessage(isUser: true, text: question, context: bounded)]).turns.count, 1)
+    }
+    func testCharacterRecallUsesFrozenSelectionAndRetryKeepsOriginalEvidence() async throws {
+        let provider = ControlledChatProvider(), (settings, _, _) = settings(provider)
+        let session = ReaderChatSession()
+        let selected = ReadingChatContext(title: "测试故事", author: "", chapter: "第三章", text: "白虎", source: "selection", locator: "snapshot-location", progress: 0.4)
+        session.attachSelection(selected); session.draft = "我忘了这个角色，帮我回忆一下"
+        var lookups = 0
+        session.send(settings: settings, recall: { term, context in
+            lookups += 1; XCTAssertEqual(term, "白虎"); XCTAssertEqual(context.locator, "snapshot-location")
+            return ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "白虎守着测试城门。")], scannedSections: 3, totalSections: 3, complete: true)
+        }) { XCTFail("Attached selection is already captured"); return nil }
+        try await wait { provider.requests.count == 1 }
+        XCTAssertTrue(provider.requests[0].turns.last?.content.contains("白虎守着测试城门。") == true)
+        provider.continuations[0].finish(throwing: ChatError.interrupted)
+        try await wait { !session.isSending }
+        session.retry(settings: settings); try await wait { provider.requests.count == 2 }
+        XCTAssertEqual(lookups, 1); XCTAssertEqual(provider.requests[0].turns, provider.requests[1].turns)
+        session.stop()
+    }
+    func testSharingOffDoesNotReadBookForCharacterRecall() async throws {
+        let provider = ControlledChatProvider(), (settings, _, _) = settings(provider)
+        var config = settings.configuration; config.sharePage = false; try settings.save(config, replacementKey: nil)
+        let session = ReaderChatSession()
+        session.attachSelection(ReadingChatContext(title: "Book", author: "", chapter: "C", text: "白虎", source: "selection", locator: "private"))
+        session.draft = "帮我回忆这个人物"
+        session.send(settings: settings, recall: { _, _ in XCTFail("Sharing off must skip local book lookup"); return nil }) { XCTFail("Sharing off must skip passage capture"); return nil }
+        try await wait { provider.requests.count == 1 }
+        XCTAssertFalse(provider.requests[0].turns.last?.content.contains("reading_context") == true)
+        session.stop()
+    }
 
     func testEscapedPassageCannotDisplaceLatestQuestion() {
         let context = ReadingChatContext(title: "Title", author: "", chapter: "", text: String(repeating: "\u{0001}", count: 12000), source: "page", locator: "internal-locator")

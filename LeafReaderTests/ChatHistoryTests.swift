@@ -53,6 +53,42 @@ private final class HistoryProvider: ChatProvider {
     private func complete(_ provider: HistoryProvider, _ text: String = "An explanation") {
         provider.continuations.last?.yield(.text(text)); provider.continuations.last?.yield(.finished(truncated: false)); provider.continuations.last?.finish()
     }
+    func testReadingContextAndRelevantOlderDiscussionSurviveRelaunchAndClear() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        let storage = try ChatHistoryStore(directory: directory, conversation: "book")
+        let enriched = ReadingChatContext(title: "A Book", author: "Author", chapter: "Chapter 2", text: "A silver key", source: "selection", locator: "private-locator",
+                                          precedingText: "Lin entered.", followingText: "He locked the door.", progress: 0.2)
+        var messages = [ReaderChatMessage(isUser: true, text: "Who hid the silver key?", context: enriched), ReaderChatMessage(isUser: false, text: "We discussed Lin's silver key.")]
+        for n in 0..<16 { messages += [ReaderChatMessage(isUser: true, text: "Unrelated topic \(n)"), ReaderChatMessage(isUser: false, text: "Other discussion \(n)")] }
+        try storage.save(messages, draft: "Why is the silver key important?", selection: .set(enriched))
+        let session = ReaderChatSession(directory: directory, conversation: "book")
+        XCTAssertTrue(session.hasEarlierMessages); XCTAssertEqual(session.selectedContext, enriched)
+        session.send(settings: settings) { XCTFail("Restored attached quote should be used"); return nil }
+        try await wait { !provider.requests.isEmpty }
+        XCTAssertTrue(provider.requests[0].turns.last?.content.contains("Who hid the silver key?") == true)
+        XCTAssertTrue(provider.requests[0].turns.last?.content.contains("Lin entered.") == true)
+        complete(provider); try await wait { !session.isSending }
+        session.clear(); XCTAssertTrue(session.messages.isEmpty)
+        session.draft = "Why is the silver key important?"
+        session.send(settings: settings) { nil }; try await wait { provider.requests.count == 2 }
+        XCTAssertFalse(provider.requests[1].turns.last?.content.contains("earlier_discussion") == true)
+        complete(provider); try await wait { !session.isSending }
+    }
+    func testSharingOffRemovesPassagesFromOlderDiscussionAsWellAsRecentMessages() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        var config = settings.configuration; config.sharePage = false; try settings.save(config, replacementKey: nil)
+        let storage = try ChatHistoryStore(directory: directory, conversation: "book")
+        var messages = [ReaderChatMessage(isUser: true, text: "Explain the silver key", context: context), ReaderChatMessage(isUser: false, text: "An interpretation of the silver key")]
+        for n in 0..<16 { messages += [ReaderChatMessage(isUser: true, text: "Other \(n)"), ReaderChatMessage(isUser: false, text: "Other answer \(n)")] }
+        try storage.save(messages, draft: "What about the silver key?", selection: .set(context))
+        let session = ReaderChatSession(directory: directory, conversation: "book")
+        session.send(settings: settings) { XCTFail("Passage sharing is disabled"); return nil }
+        try await wait { !provider.requests.isEmpty }
+        let request = provider.requests[0].turns.map(\.content).joined()
+        XCTAssertTrue(request.contains("earlier_discussion")); XCTAssertFalse(request.contains("passage_excerpt"))
+        XCTAssertFalse(request.contains("The door stayed shut.")); XCTAssertFalse(request.contains("private-locator"))
+        complete(provider); try await wait { !session.isSending }
+    }
     func testLibraryGeneralChatHasNoBookContextAndStaysSeparateFromBookHistory() async throws {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
         let book = ReaderChatSession(directory: directory, conversation: "book-fingerprint")

@@ -3,6 +3,8 @@ import { openBookSource } from './book-source.js';
 import { createAnnotations } from './annotations.js';
 import { readAloudChunk, revealReadAloud, clearReadAloud, setSpokenRange, clearSpokenRange } from './read-aloud.js';
 import { languageText, contributor } from './metadata-text.js';
+import { nearbyChatText } from './chat-context.js';
+import { retrieveEarlierPassages } from './book-recall.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -16,6 +18,7 @@ const observedDocuments = new WeakSet();
 // Remember the current selection owner without retaining an evicted chapter.
 // An empty current selection must never resurrect an older iframe range.
 let selectedDocument;
+let chatRecallID;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 reducedMotion.addEventListener('change', () => { if (preferences) applyPreferences(preferences); });
 
@@ -58,6 +61,7 @@ function observeReadingTouches(doc, index) {
             // Snapshot its own CFI/label without navigating the reading viewport.
             detail.locator = view.getCFI(index, range);
             detail.label = languageText(view.getProgressOf(index, range).tocItem?.label);
+            Object.assign(detail, nearbyChatText(range, view.lastLocation?.range));
         }
         post('selection', detail);
     });
@@ -332,6 +336,11 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, close, command, applyPreferences, search, tap,
+    recallBook: async ({term, locator, id, selection}) => {
+        const source=view; chatRecallID=id;
+        return retrieveEarlierPassages(source,term,locator,{selection,prepare:sanitize,cancelled:()=>view!==source || chatRecallID!==id});
+    },
+    cancelRecall: ({id}) => { if (chatRecallID===id) chatRecallID=null; },
     setSpokenRange: config => setSpokenRange(view, config),
     clearSpokenRange: () => { if (view) clearSpokenRange(view); },
     readAloudChunk: ({ locator }) => readAloudChunk(view, locator, sanitize),
@@ -354,12 +363,14 @@ window.Leaf = { open, close, command, applyPreferences, search, tap,
             if (selection && !selection.isCollapsed && selection.toString().trim()) {
                 const range = textBoundedSelection(selection.getRangeAt(0));
                 return {text: selection.toString().slice(0, 24000), source: 'selection',
-                    locator:view.getCFI(index, range), label:languageText(view.getProgressOf(index, range).tocItem?.label)};
+                    locator:view.getCFI(index, range), label:languageText(view.getProgressOf(index, range).tocItem?.label),
+                    ...nearbyChatText(range, view.lastLocation?.range)};
             }
         }
         // visibleText() below is a diagnostic for the whole loaded document.
         // Chat must use only the visible range, never the entire chapter.
-        return {text: view?.lastLocation?.range?.toString().slice(0, 24000) ?? '', source: 'page'};
+        const range = view?.lastLocation?.range;
+        return {text: range?.toString().slice(0, 24000) ?? '', source: 'page', ...nearbyChatText(range)};
     },
     // Useful to test the actual rendered document, rather than only parser metadata.
     visibleText: () => view?.renderer?.getContents?.().map(({doc}) => doc?.body?.innerText || '').join('\n') || '',

@@ -124,7 +124,7 @@ final class ReaderChatSession: ObservableObject {
         flush()
     }
 
-    func send(settings: AISettingsStore, missingContextNotice: String? = "No readable page text was found. This question is sent without a passage; you can paste one yourself.", context: @escaping @MainActor () async throws -> ReadingChatContext?) {
+    func send(settings: AISettingsStore, missingContextNotice: String? = "No readable page text was found. This question is sent without a passage; you can paste one yourself.", recall: (@MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall?)? = nil, context: @escaping @MainActor () async throws -> ReadingChatContext?) {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isSending, !question.isEmpty else { return }
         guard flush() else { return }
@@ -142,6 +142,15 @@ final class ReaderChatSession: ObservableObject {
                 if sharePage {
                     if let selected { snapshot = selected }
                     else { snapshot = try await context()?.bounded() }
+                    if var passage = snapshot, let recall, let term = ReadingBookRecall.lookupTerm(question: question, context: passage) {
+                        do { passage.bookRecall = try await recall(term, passage) }
+                        catch {
+                            try Task.checkCancellation()
+                            passage.bookRecall = ReadingBookRecall(term: term, excerpts: [], scannedSections: 0, totalSections: 0, complete: false)
+                            self.notice = "Book lookup was incomplete; this reply uses the passages available."
+                        }
+                        snapshot = passage.bounded()
+                    }
                 }
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
@@ -199,8 +208,16 @@ final class ReaderChatSession: ObservableObject {
     }
     private func respond(provider: any ChatProvider, token: UUID, sharePage: Bool) async {
         var history = messages
-        if !sharePage { for index in history.indices { history[index].context = nil } }
-        let request = ChatRequest.conversation(history)
+        var earlier: [ReaderChatMessage] = []
+        if let storage = self.history, let oldest, hasEarlierMessages {
+            do { earlier = try storage.page(before: oldest, after: nil, limit: 48).messages }
+            catch { notice = "Earlier discussion could not be loaded; this reply uses recent messages." }
+        }
+        if !sharePage {
+            for index in history.indices { history[index].context = nil }
+            for index in earlier.indices { earlier[index].context = nil }
+        }
+        let request = ChatRequest.conversation(history, earlierMessages: earlier)
         let id = UUID()
         messages.append(ReaderChatMessage(id: id, isUser: false, text: "", state: .streaming))
         changed(messages.last!)
@@ -256,6 +273,17 @@ struct UITestChatProvider: ChatProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    if UITesting.flag("LEAF_UI_CHAT_CONTEXT_PROBE") {
+                        let content = request.turns.last?.content ?? ""
+                        let body = content.components(separatedBy: "reading_context (source material):\n").last?.components(separatedBy: "\n\nReader question:\n").first ?? ""
+                        let context = body.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+                        let valid = context["source"] as? String == "selection" && !(context["text"] as? String ?? "").isEmpty &&
+                            (!(context["preceding_text"] as? String ?? "").isEmpty || !(context["following_text"] as? String ?? "").isEmpty) &&
+                            context["approximate_book_progress_percent"] != nil && context["spoiler_boundary"] != nil &&
+                            !content.contains("epubcfi(") && request.system.contains("Treat previous assistant answers as fallible")
+                        continuation.yield(.text(valid ? "Reading context verified: focused quote, nearby passage, reading progress and spoiler boundary." : "Reading context verification failed: \(body)"))
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
                     try await Task.sleep(for: .milliseconds(150))
                     continuation.yield(.text("Test reply: "))
                     try await Task.sleep(for: .milliseconds(slow ? 30000 : 150))

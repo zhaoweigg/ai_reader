@@ -6,7 +6,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -14,6 +14,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
         app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
@@ -1423,6 +1424,51 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testOpenChatAutomaticallyQuotesSelectionInPages() { verifyAutomaticQuote(flow:"Pages") }
     @MainActor func testOpenChatAutomaticallyQuotesSelectionInScroll() { verifyAutomaticQuote(flow:"Scroll") }
     @MainActor func testOpenChatAutomaticallyQuotesSelectionInPDF() { verifyAutomaticQuote(flow:"PDF") }
+    @MainActor func testEnrichedReadingPromptInPages() { verifyEnrichedReadingPrompt(flow: "Pages") }
+    @MainActor func testEnrichedReadingPromptInScroll() { verifyEnrichedReadingPrompt(flow: "Scroll") }
+    @MainActor func testEnrichedReadingPromptInPDF() { verifyEnrichedReadingPrompt(flow: "PDF") }
+    @MainActor private func verifyEnrichedReadingPrompt(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(contextProbe: true)
+        func openBook() {
+            if flow == "PDF" {
+                let search = app.textFields["librarySearch"]
+                XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
+                app.buttons["book-Notes from the Coast"].tap()
+            } else { app.buttons["featuredBook"].tap() }
+            waitForBook(app)
+        }
+        openBook(); showReaderControls(app)
+        if flow == "PDF" { app.buttons["nextPage"].tap() }
+        else {
+            app.buttons["Appearance"].tap(); app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap(); dismissAppearance(app)
+        }
+        let surface = readingSurface(app), frame = surface.frame
+        app.buttons["openReaderChat"].tap()
+        let paragraph = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", flow == "PDF" ? "Before the town" : "Attention is a way")).firstMatch
+        let point = paragraph.exists ? paragraph.coordinate(withNormalizedOffset: CGVector(dx: flow == "PDF" ? 0.15 : 0.3, dy: flow == "PDF" ? 0.25 : 0.1)) : surface.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.25))
+        point.press(forDuration: 1.2)
+        let passage = app.staticTexts["chatSelectedPassage"]
+        XCTAssertTrue(passage.waitForExistence(timeout: 5)); let quote = passage.label
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Who is being discussed here?")
+        XCTAssertEqual(passage.label, quote); XCTAssertEqual(surface.frame.size.width, frame.width, accuracy: 2)
+        XCTAssertEqual(surface.frame.size.height, frame.height, accuracy: 2)
+        capture(flow + " enriched context selected while composing", app: app)
+        orient(.landscapeLeft); XCTAssertEqual(passage.label, quote)
+        capture(flow + " enriched context landscape", app: app)
+        orient(.portrait); app.buttons["Hide keyboard"].tap()
+        app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
+        app.terminate(); app.launch(); openBook(); app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(passage.label, quote); XCTAssertEqual(input.value as? String, "Who is being discussed here?")
+        app.buttons["sendReaderChat"].tap()
+        let reply = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Reading context verified:")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 10), app.debugDescription)
+        capture(flow + " enriched prompt verified after reopening", app: app)
+    }
 
     @MainActor private func verifyAutomaticQuote(flow:String) {
         orient(.portrait)
