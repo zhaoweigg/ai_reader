@@ -429,10 +429,11 @@ struct UITestChatProvider: ChatProvider {
             let task = Task {
                 do {
                     if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
-                        continuation.yield(.text((1...20).map { "Paragraph \($0): Read this explanation at your own pace, without jumping to the newest words." }.joined(separator: "\n\n")))
-                        for index in 1...200 {
+                        continuation.yield(.text((1...10).map { "Paragraph \($0): Read this explanation at your own pace, without jumping to the newest words." }.joined(separator: "\n\n")))
+                        continuation.yield(.text("\n\nUpdate 1:"))
+                        for index in 1...600 {
                             try await Task.sleep(for: .milliseconds(500))
-                            continuation.yield(.text("\n\nUpdate \(index): The explanation continues while you read an earlier passage."))
+                            continuation.yield(.text(" next \(index)."))
                         }
                         continuation.yield(.finished(truncated: false)); continuation.finish(); return
                     }

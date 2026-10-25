@@ -19,8 +19,8 @@ final class ChatScrollFollowingTests: XCTestCase {
     }
     func testReturningToBottomResumesAfterDragOrMomentum() {
         var state = ChatScrollFollowing()
-        state.beginDragging(); state.updateBottomDistance(100); state.endDragging()
-        XCTAssertFalse(state.followsLatest)
+        state.beginDragging(); state.updateBottomDistance(12); state.endDragging()
+        XCTAssertFalse(state.followsLatest, "A small scroll in a compact keyboard viewport still pauses following")
         state.updateBottomDistance(4)
         XCTAssertTrue(state.followsLatest, "Momentum can reach the bottom after the finger lifts")
         state.beginDragging(); state.updateBottomDistance(-8); state.endDragging()

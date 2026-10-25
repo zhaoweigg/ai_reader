@@ -2769,11 +2769,16 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 10)
 
         func assertPausedWhileGrowing(_ name: String) {
-            history.swipeDown()
+            // A gesture can extend outside the small history viewport, just as
+            // a finger does when reading above the keyboard.
+            let start = history.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+            let distance = min(220, max(100, history.frame.height * 0.65))
+            start.press(forDuration: 0.02, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)),
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
             expectation(for: NSPredicate(format: "value == %@", "Reading earlier"), evaluatedWith: history)
             waitForExpectations(timeout: 5)
             let origin = reply.frame.minY, count = reply.label.count
-            expectation(for: NSPredicate { _, _ in reply.label.count > count + 140 }, evaluatedWith: reply)
+            expectation(for: NSPredicate { _, _ in reply.label.count > count + 20 }, evaluatedWith: reply)
             waitForExpectations(timeout: 8)
             XCTAssertEqual(reply.frame.minY, origin, accuracy: 3, "New tokens must not move the passage being read")
             XCTAssertEqual(history.value as? String, "Reading earlier")
@@ -2787,8 +2792,8 @@ final class LeafReaderUITests: XCTestCase {
         expectation(for: NSPredicate(format: "value == %@", "Following latest"), evaluatedWith: history)
         waitForExpectations(timeout: 5)
         let origin = reply.frame.minY, count = reply.label.count
-        expectation(for: NSPredicate { _, _ in reply.label.count > count + 140 && reply.frame.minY < origin - 10 }, evaluatedWith: reply)
-        waitForExpectations(timeout: 8)
+        expectation(for: NSPredicate { _, _ in reply.label.count > count + 80 && reply.frame.minY < origin - 10 }, evaluatedWith: reply)
+        waitForExpectations(timeout: 12)
         capture(flow + " following resumes at bottom", app: app)
 
         input.tap(); input.typeText("Keep my draft")

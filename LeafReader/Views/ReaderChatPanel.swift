@@ -6,12 +6,12 @@ struct ChatScrollFollowing {
     private var bottomDistance: CGFloat = 0
 
     mutating func beginDragging() { dragging = true; followsLatest = false }
-    mutating func endDragging() { dragging = false; followsLatest = bottomDistance <= 24 }
+    mutating func endDragging() { dragging = false; followsLatest = bottomDistance <= 4 }
     mutating func updateBottomDistance(_ distance: CGFloat) {
         bottomDistance = distance
         // Appending text can move the bottom away. Only a user drag pauses
         // following; reaching the bottom again resumes it, including momentum.
-        if !dragging, distance <= 24 { followsLatest = true }
+        if !dragging, distance <= 4 { followsLatest = true }
     }
     mutating func resume() { followsLatest = true }
 }
@@ -40,6 +40,40 @@ enum ReaderChatSizing {
             desired = max(limits.lowerBound, min(fullHeight / 3, availableHeight * 0.5))
         } else { desired = fullHeight * CGFloat(fraction.isFinite && fraction > 0 ? fraction : 1.0 / 3) }
         return min(limits.upperBound, max(limits.lowerBound, desired))
+    }
+}
+
+private struct ChatHistoryInteraction: ViewModifier {
+    @Binding var following: ChatScrollFollowing
+    @GestureState private var dragging = false
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height
+                } action: { _, distance in following.updateBottomDistance(distance) }
+                .onScrollPhaseChange { _, phase, context in
+                    switch phase {
+                    case .tracking, .interacting, .decelerating: following.beginDragging()
+                    case .idle:
+                        let geometry = context.geometry
+                        following.updateBottomDistance(geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height)
+                        following.endDragging()
+                    case .animating: break
+                    @unknown default: break
+                    }
+                }
+        } else {
+            content
+                .simultaneousGesture(DragGesture(minimumDistance: 8)
+                    .updating($dragging) { _, dragging, _ in dragging = true }
+                    .onChanged { _ in following.beginDragging() })
+                .onChange(of: dragging) { _, dragging in
+                    // Let the final content-offset preference arrive first.
+                    if !dragging { DispatchQueue.main.async { following.endDragging() } }
+                }
+        }
     }
 }
 
@@ -337,7 +371,6 @@ struct ReaderChatPanel: View {
     @FocusState private var inputFocused: Bool
     @State private var confirmsClear = false
     @State private var scrollFollowing = ChatScrollFollowing()
-    @GestureState private var draggingHistory = false
 
     private var accent: Color { theme.accent }
     private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -496,15 +529,9 @@ struct ReaderChatPanel: View {
                         .scrollDismissesKeyboard(isComposing ? .never : .interactively)
                         .accessibilityIdentifier("chatMessageHistory")
                         .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
-                        .simultaneousGesture(DragGesture(minimumDistance: 8)
-                            .updating($draggingHistory) { _, dragging, _ in dragging = true }
-                            .onChanged { _ in scrollFollowing.beginDragging() })
-                        .onChange(of: draggingHistory) { _, dragging in
-                            // GestureState also resets when UIKit cancels a drag.
-                            if !dragging { scrollFollowing.endDragging() }
-                        }
+                        .modifier(ChatHistoryInteraction(following: $scrollFollowing))
                         .onPreferenceChange(ChatHistoryBottomDistance.self) { distance in
-                            if let distance { scrollFollowing.updateBottomDistance(distance) }
+                            if #unavailable(iOS 18), let distance { scrollFollowing.updateBottomDistance(distance) }
                         }
                         .onChange(of: session.messages.last?.text) { _, _ in
                             if scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
