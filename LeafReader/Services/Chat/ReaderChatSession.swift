@@ -429,6 +429,12 @@ struct UITestChatProvider: ChatProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    if UITesting.flag("LEAF_UI_CHAT_SCROLL_PERF") {
+                        continuation.yield(.text((1...28).map {
+                            "### 线索 \($0)\n\n白虎说完又看向几人。**人物的猜测**需要和已经发生的事情分开来看。读到这里，可以结合前文回顾这个角色的身份，观察他的话和行动是否一致。\n\n- 当前的解释还不是最终结论。\n- 保留阅读位置，继续寻找书中的证据。"
+                        }.joined(separator: "\n\n")))
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
                     if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
                         continuation.yield(.text((1...10).map { "Paragraph \($0): Read this explanation at your own pace, without jumping to the newest words." }.joined(separator: "\n\n")))
                         continuation.yield(.text("\n\nUpdate 1:"))

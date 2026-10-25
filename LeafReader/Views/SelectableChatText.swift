@@ -1,6 +1,16 @@
 import SwiftUI
 import UIKit
 
+#if DEBUG
+/// Read through accessibility by the focused swipe test; never publishes view state.
+enum ChatTextWork {
+    static var updates = 0
+    static var formats = 0
+    static var measurements = 0
+    static var enabled: Bool { UITesting.flag("LEAF_UI_CHAT_SCROLL_PERF") }
+}
+#endif
+
 /// A read-only text view gives chat the native range handles and Copy menu.
 /// The surrounding SwiftUI history owns scrolling, including long replies.
 struct SelectableChatText: UIViewRepresentable {
@@ -32,6 +42,9 @@ struct SelectableChatText: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
+        #if DEBUG
+        if ChatTextWork.enabled { ChatTextWork.updates += 1; ChatTextWork.formats += 1 }
+        #endif
         view.accessibilityIdentifier = identifier
         view.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
         view.tintColor = UIColor(tint)
@@ -41,6 +54,9 @@ struct SelectableChatText: UIViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
+        #if DEBUG
+        if ChatTextWork.enabled { ChatTextWork.measurements += 1 }
+        #endif
         // Keep short user bubbles fitted to their text, as before. Long replies
         // take the available width and let the outer history scroll vertically.
         let natural = uiView.attributedText.boundingRect(with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
