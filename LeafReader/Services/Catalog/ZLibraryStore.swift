@@ -292,7 +292,10 @@ final class ZLibraryStore: ObservableObject {
         await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
     }
     private func performLoad(query: String, feed: ZLibraryFeed, page: Int, order: ZLibrarySearchOrder, append: Bool, request: UUID, token: UUID, source: ZLibraryOrigin) async {
-        defer { if token == generation && request == catalogRequest { loading = false; catalogTask = nil } }
+        defer {
+            traceCatalogLoad("finished cancelled=\(Task.isCancelled)", request: request)
+            if token == generation && request == catalogRequest { loading = false; catalogTask = nil }
+        }
         do {
             try Task.checkCancellation()
             // Keychain may have been locked during app initialization. Retry on use
@@ -304,8 +307,11 @@ final class ZLibraryStore: ObservableObject {
             }
             // Restore Keychain account cookies that WebKit treats as session-only,
             // while retaining any newer persistent browser access cookies.
+            traceCatalogLoad("seed website", request: request)
             await seedWebsite()
+            traceCatalogLoad("save website context", request: request)
             try await saveWebsiteContext()
+            traceCatalogLoad("website ready", request: request)
             try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
             let saved = session
             if let saved, !connected {
@@ -314,6 +320,7 @@ final class ZLibraryStore: ObservableObject {
                 connected = true; accountName = profile.name; remaining = profile.remaining
             }
             let result: [ZLibraryBook], more: Bool
+            traceCatalogLoad("request \(query.isEmpty ? feed.rawValue : "search")", request: request)
             if query.isEmpty {
                 if feed == .recommended {
                     guard let saved else { recommendationConnectionRequired = true; return }
@@ -326,6 +333,7 @@ final class ZLibraryStore: ObservableObject {
                 result = response.books; more = response.hasMore
             }
             try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
+            traceCatalogLoad("received rows=\(result.count)", request: request)
             let existing = append ? Set(books.map(\.id)) : []
             let added = result.filter { !existing.contains($0.id) }
             books = append ? books + added : result
@@ -353,6 +361,13 @@ final class ZLibraryStore: ObservableObject {
                 }
             }
         }
+    }
+    private func traceCatalogLoad(_ event: String, request: UUID) {
+        #if DEBUG
+        // Offline UI fixtures can trace lifecycle stalls without logging queries,
+        // account identities, cookies or any real network response.
+        if UITesting.flag("LEAF_UI_ZLIB_MOCK") { print("[ZLibraryLoad] \(request) \(event)") }
+        #endif
     }
     func details(_ book: ZLibraryBook) async throws -> ZLibraryBook {
         if let cached = books.first(where: { $0.id == book.id }), !cached.fileExtension.isEmpty { return cached }

@@ -73,6 +73,7 @@ private final class CatalogURLProtocol: URLProtocol {
     static var expected: Int?
     static var remainOpen = false
     static var stopped = false
+    static var onStop: (() -> Void)?
     override class func canInit(with request:URLRequest)->Bool { true }
     override class func canonicalRequest(for request:URLRequest)->URLRequest { request }
     override func startLoading() {
@@ -84,7 +85,7 @@ private final class CatalogURLProtocol: URLProtocol {
         }
         if !Self.remainOpen { client?.urlProtocolDidFinishLoading(self) }
     }
-    override func stopLoading() { Self.stopped = true }
+    override func stopLoading() { Self.stopped = true; Self.onStop?() }
 }
 
 @MainActor final class ZLibraryTests: XCTestCase {
@@ -915,11 +916,16 @@ private final class CatalogURLProtocol: URLProtocol {
         let files = { Set((try? FileManager.default.contentsOfDirectory(atPath:FileManager.default.temporaryDirectory.path)) ?? []) }
         let before = files(), config = URLSessionConfiguration.ephemeral;config.protocolClasses = [CatalogURLProtocol.self]
         CatalogURLProtocol.body = Data([0x50,0x4b,0x03,0x04]);CatalogURLProtocol.expected = nil;CatalogURLProtocol.remainOpen = true;CatalogURLProtocol.stopped = false
-        defer { CatalogURLProtocol.body = Data();CatalogURLProtocol.remainOpen = false }
+        let received = expectation(description: "Partial file received before cancellation")
+        let stopped = expectation(description: "URL protocol stopped after cancellation")
+        CatalogURLProtocol.onStop = { stopped.fulfill() }
+        defer { CatalogURLProtocol.body = Data();CatalogURLProtocol.remainOpen = false;CatalogURLProtocol.onStop = nil }
         let transport = ZLibraryHTTPTransport(configuration:config)
-        let task = Task { try await transport.send(URLRequest(url:origin.url),toFile:true,progress:{_ in}) }
-        try await Task.sleep(for:.milliseconds(100));task.cancel()
+        let task = Task { try await transport.send(URLRequest(url:origin.url),toFile:true,progress:{_ in received.fulfill()}) }
+        await fulfillment(of: [received], timeout: 3)
+        task.cancel()
         do { _ = try await task.value;XCTFail("Cancelled download completed") } catch {}
+        await fulfillment(of: [stopped], timeout: 3)
         XCTAssertTrue(CatalogURLProtocol.stopped)
         XCTAssertTrue(files().subtracting(before).filter { $0.hasPrefix("LeafDownload-") }.isEmpty)
     }
