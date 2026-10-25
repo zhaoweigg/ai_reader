@@ -1470,6 +1470,81 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " enriched prompt verified after reopening", app: app)
     }
 
+    @MainActor private func chooseChatHarness(_ title: String, app: XCUIApplication) {
+        app.tabBars.buttons["Settings"].tap()
+        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.buttons["openAISettings"].tap()
+        let option = app.buttons[title]
+        XCTAssertTrue(option.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !option.isHittable { app.swipeUp() }
+        option.tap()
+        let save = app.buttons["saveAISettings"]
+        for _ in 0..<6 where !save.isHittable { app.swipeUp() }
+        save.tap()
+        XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["Library"].tap()
+    }
+    @MainActor func testBookSearchAgentInPagesComparedWithPrefetchedEvidence() { verifyBookSearchAgent(flow: "Pages") }
+    @MainActor func testBookSearchAgentInScrollNightLandscape() { verifyBookSearchAgent(flow: "Scroll") }
+    @MainActor func testBookSearchAgentInPDF() { verifyBookSearchAgent(flow: "PDF") }
+    @MainActor private func verifyBookSearchAgent(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp()
+        chooseChatHarness("Book search agent (Claude)", app: app)
+        func openBook() {
+            if flow == "PDF" {
+                let search = app.textFields["librarySearch"]
+                XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
+                app.buttons["book-Notes from the Coast"].tap()
+            } else { app.buttons["featuredBook"].tap() }
+            waitForBook(app)
+        }
+        openBook(); showReaderControls(app)
+        if flow == "PDF" { app.buttons["nextPage"].tap() }
+        else {
+            app.buttons["Appearance"].tap(); app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap(); dismissAppearance(app)
+        }
+        let surface = readingSurface(app), frame = surface.frame
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        let term = flow == "PDF" ? "town" : "attention"
+        input.tap(); input.typeText("Remind me about \(term)")
+        if flow == "Scroll" { orient(.landscapeLeft) }
+        XCTAssertEqual(surface.frame.size.width, readingSurface(app).frame.size.width, accuracy: 2)
+        capture(flow + " agent question composing", app: app)
+        app.buttons["sendReaderChat"].tap()
+        let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertFalse(reply.label.contains("found 0 passages"), reply.label)
+        XCTAssertFalse(reply.label.contains("Let me look"), "Preamble before tool calls is withdrawn")
+        let trace = app.descendants(matching: .any)["chatReplyTrace"].firstMatch
+        XCTAssertTrue(trace.waitForExistence(timeout: 5))
+        XCTAssertTrue(trace.label.contains("Book search agent · searched “\(term)”"), trace.label)
+        capture(flow + " agent reply with search trace", app: app)
+        if flow == "Scroll" {
+            orient(.portrait)
+            XCTAssertEqual(readingSurface(app).frame.size.height, frame.height, accuracy: 2)
+            capture("Scroll agent reply portrait", app: app)
+        }
+        guard flow == "Pages" else { return }
+        // Same question with the other harness, for side-by-side comparison in one conversation.
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+        app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
+        chooseChatHarness("Pre-fetched evidence (Sam)", app: app)
+        openBook(); app.buttons["openReaderChat"].tap()
+        input.tap(); input.typeText("Remind me about \(term)")
+        app.buttons["sendReaderChat"].tap()
+        let traces = app.descendants(matching: .any).matching(identifier: "chatReplyTrace")
+        expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: traces); waitForExpectations(timeout: 15)
+        XCTAssertTrue(traces.element(boundBy: 1).label.hasPrefix("Pre-fetched evidence"), traces.element(boundBy: 1).label)
+        XCTAssertTrue(traces.element(boundBy: 0).label.hasPrefix("Book search agent"))
+        capture("Pages harness comparison in one conversation", app: app)
+    }
+
     @MainActor private func verifyAutomaticQuote(flow:String) {
         orient(.portrait)
         defer { orient(.portrait) }

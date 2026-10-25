@@ -155,9 +155,15 @@ struct ReaderContent: View {
                 }, onSend: {
                     chat.send(settings: aiSettings, recall: { term, context in
                         try await model.recallBookContext(term: term, context: context)
+                    }, agentBook: { context in
+                        try await model.readingAgentBook(for: context)
                     }) { try await model.readingChatContext() }
                 })
             }
+        }
+        .task(id: chatIsPresented && model.isReady && aiSettings.configuration.harness == .agent && aiSettings.configuration.sharePage) {
+            // Closing the chat or the book cancels preparation; saved sections are kept.
+            if chatIsPresented && model.isReady && aiSettings.configuration.harness == .agent && aiSettings.configuration.sharePage { await model.warmBookText() }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showsControls)
         .background(theme.background.ignoresSafeArea()).foregroundStyle(theme.foreground).tint(theme.accent)

@@ -417,7 +417,8 @@ struct ReaderChatPanel: View {
                             ForEach(session.messages) { message in
                                 HStack {
                                     if message.isUser { Spacer(minLength: 32) }
-                                    ReaderChatMessageBubble(message: message, accent: accent)
+                                    ReaderChatMessageBubble(message: message, accent: accent,
+                                                            activity: message.id == session.messages.last?.id ? session.activity : nil)
                                     if !message.isUser { Spacer(minLength: 0) }
                                 }.id(message.id)
                             }
@@ -550,6 +551,7 @@ struct ReaderChatPanel: View {
 private struct ReaderChatMessageBubble: View {
     let message: ReaderChatMessage
     let accent: Color
+    var activity: String? = nil
     @State private var quoteExpanded = false
 
     var body: some View {
@@ -575,9 +577,15 @@ private struct ReaderChatMessageBubble: View {
                 .accessibilityValue(context.text)
                 .accessibilityIdentifier("toggleChatQuote")
             }
-            Text(message.text.isEmpty ? (message.state == .streaming ? "Thinking…" : "No response text") : message.text)
+            Text(message.text.isEmpty ? (message.state == .streaming ? activity ?? "Thinking…" : "No response text") : message.text)
                 .font(.subheadline).lineSpacing(3).textSelection(.enabled)
                 .accessibilityIdentifier(message.isUser ? "chatQuestion" : "chatReply")
+            // Which reading-context design produced this reply, for comparison.
+            if !message.isUser, message.state != .streaming, let trace = message.trace {
+                Label(trace.caption, systemImage: trace.harness == .agent ? "magnifyingglass" : "text.book.closed")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(3)
+                    .accessibilityIdentifier("chatReplyTrace")
+            }
         }
         .padding(message.isUser ? 10 : 0)
         .background(message.isUser ? accent.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 16))

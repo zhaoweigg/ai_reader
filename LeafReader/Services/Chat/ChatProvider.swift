@@ -85,28 +85,39 @@ struct HTTPChatProvider: ChatProvider {
     var transport: any ChatTransport = URLSessionChatTransport()
 
     func makeRequest(_ conversation: ChatRequest) throws -> URLRequest {
+        try makeRequest(system: conversation.system, messages: conversation.turns.map { ["role": $0.role, "content": $0.content] })
+    }
+    func makeRequest(system: String, messages input: [[String: Any]], tools: [AgentTool]? = nil, allowTools: Bool = true) throws -> URLRequest {
         var request = URLRequest(url: try profile.validatedURL())
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ChatError.missingKey }
-        guard !conversation.turns.isEmpty else { throw ChatError.configuration("Write a question first.") }
+        guard !input.isEmpty else { throw ChatError.configuration("Write a question first.") }
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        var messages = conversation.turns.map { ["role": $0.role, "content": $0.content] }
+        var messages = input
         var body: [String: Any] = ["model": profile.model.trimmingCharacters(in: .whitespacesAndNewlines), "stream": true]
         switch kind {
         case .anthropic:
             request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-            body["system"] = conversation.system
+            body["system"] = system
             body["max_tokens"] = profile.maxOutputTokens
+            if let tools {
+                body["tools"] = tools.map { ["name": $0.name, "description": $0.description, "input_schema": $0.parameters] }
+                body["tool_choice"] = ["type": allowTools ? "auto" : "none"]
+            }
             // Haiku 5.5 defaults to adaptive thinking. Keep short reading answers
             // responsive; older Haiku models also support disabled thinking.
             if profile.model.hasPrefix("claude-haiku-5") { body["thinking"] = ["type": "disabled"] }
         case .chatCompletions:
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            messages.insert(["role": "system", "content": conversation.system], at: 0)
+            messages.insert(["role": "system", "content": system], at: 0)
             body[profile.legacyTokenLimit ? "max_tokens" : "max_completion_tokens"] = profile.maxOutputTokens
+            if let tools {
+                body["tools"] = tools.map { ["type": "function", "function": ["name": $0.name, "description": $0.description, "parameters": $0.parameters]] }
+                body["tool_choice"] = allowTools ? "auto" : "none"
+            }
         case .chatGPT: throw ChatGPTError.signInRequired
         }
         body["messages"] = messages
@@ -150,7 +161,7 @@ struct HTTPChatProvider: ChatProvider {
         }
     }
 
-    private func decode(_ data: String, truncated: inout Bool) throws -> [ChatEvent] {
+    func decode(_ data: String, truncated: inout Bool) throws -> [ChatEvent] {
         if kind == .chatCompletions, data == "[DONE]" { return [.finished(truncated: truncated)] }
         guard let object = try? JSONSerialization.jsonObject(with: Data(data.utf8)) as? [String: Any] else { throw ChatError.invalidResponse }
         if let error = object["error"] as? [String: Any] {

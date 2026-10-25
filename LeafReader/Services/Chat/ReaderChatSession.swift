@@ -11,7 +11,11 @@ final class ReaderChatSession: ObservableObject {
     @Published private(set) var historyError: String?
     @Published private(set) var hasEarlierMessages = false
     @Published private(set) var hasNewerMessages = false
+    /// What the book search agent is doing, shown in place of “Thinking…”.
+    @Published private(set) var activity: String?
     private let history: (any ChatHistoryStorage)?
+    private var recall: (@MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall?)?
+    private var agentBook: (@MainActor (ReadingChatContext) async throws -> ReadingAgentBook?)?
     private var historyRequired = false
     private var historyReadable = true
     private var oldest: Int64?
@@ -124,7 +128,7 @@ final class ReaderChatSession: ObservableObject {
         flush()
     }
 
-    func send(settings: AISettingsStore, missingContextNotice: String? = "No readable page text was found. This question is sent without a passage; you can paste one yourself.", recall: (@MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall?)? = nil, context: @escaping @MainActor () async throws -> ReadingChatContext?) {
+    func send(settings: AISettingsStore, missingContextNotice: String? = "No readable page text was found. This question is sent without a passage; you can paste one yourself.", recall: (@MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall?)? = nil, agentBook: (@MainActor (ReadingChatContext) async throws -> ReadingAgentBook?)? = nil, context: @escaping @MainActor () async throws -> ReadingChatContext?) {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isSending, !question.isEmpty else { return }
         guard flush() else { return }
@@ -133,6 +137,9 @@ final class ReaderChatSession: ObservableObject {
         do { provider = try settings.provider() }
         catch { self.error = error.localizedDescription; return }
         let sharePage = settings.configuration.sharePage
+        let harness = settings.configuration.harness
+        // Retries reuse the book access of the reader that sent the question.
+        self.recall = recall; self.agentBook = agentBook
         let selected = selectedContext
         if hasNewerMessages { loadLatest(); guard historyError == nil else { return } }
         start { [weak self] token in
@@ -142,7 +149,8 @@ final class ReaderChatSession: ObservableObject {
                 if sharePage {
                     if let selected { snapshot = selected }
                     else { snapshot = try await context()?.bounded() }
-                    if var passage = snapshot, let recall, let term = ReadingBookRecall.lookupTerm(question: question, context: passage) {
+                    // The agent searches during its reply; pre-fetching is the other harness.
+                    if harness == .evidence, var passage = snapshot, let recall, let term = ReadingBookRecall.lookupTerm(question: question, context: passage) {
                         do { passage.bookRecall = try await recall(term, passage) }
                         catch {
                             try Task.checkCancellation()
@@ -163,7 +171,7 @@ final class ReaderChatSession: ObservableObject {
                 self.selectedContext = nextSelection; self.selectionDirty = false
                 if !sharePage && selected != nil { self.notice = "Selected text was not sent because passage sharing is off." }
                 if sharePage && (snapshot?.isEmpty ?? true) { self.notice = missingContextNotice }
-                await self.respond(provider: provider, token: token, sharePage: sharePage)
+                await self.respond(provider: provider, token: token, sharePage: sharePage, harness: harness)
             } catch {
                 guard self.generation == token else { return }
                 self.error = self.errorMessage(error); self.isSending = false
@@ -177,7 +185,8 @@ final class ReaderChatSession: ObservableObject {
             let provider = try settings.provider()
             if let id = messages.last?.id { try history?.remove(id) }
             messages.removeLast() // Retain the original question and passage snapshot.
-            start { [weak self] token in await self?.respond(provider: provider, token: token, sharePage: settings.configuration.sharePage) }
+            let configuration = settings.configuration
+            start { [weak self] token in await self?.respond(provider: provider, token: token, sharePage: configuration.sharePage, harness: configuration.harness) }
         } catch { self.error = error.localizedDescription }
     }
 
@@ -206,10 +215,11 @@ final class ReaderChatSession: ObservableObject {
         let token = UUID(); generation = token
         task = Task { await operation(token) }
     }
-    private func respond(provider: any ChatProvider, token: UUID, sharePage: Bool) async {
+    private func respond(provider: any ChatProvider, token: UUID, sharePage: Bool, harness: ReadingChatHarness) async {
         var history = messages
         var earlier: [ReaderChatMessage] = []
-        if let storage = self.history, let oldest, hasEarlierMessages {
+        // The agent searches older discussion with a tool instead.
+        if harness == .evidence || !sharePage, let storage = self.history, let oldest, hasEarlierMessages {
             do { earlier = try storage.page(before: oldest, after: nil, limit: 48).messages }
             catch { notice = "Earlier discussion could not be loaded; this reply uses recent messages." }
         }
@@ -217,7 +227,6 @@ final class ReaderChatSession: ObservableObject {
             for index in history.indices { history[index].context = nil }
             for index in earlier.indices { earlier[index].context = nil }
         }
-        let request = ChatRequest.conversation(history, earlierMessages: earlier)
         let id = UUID()
         messages.append(ReaderChatMessage(id: id, isUser: false, text: "", state: .streaming))
         changed(messages.last!)
@@ -226,29 +235,105 @@ final class ReaderChatSession: ObservableObject {
             notice = "The reply has not been sent. Retry after saving your conversation."
             isSending = false; task = nil; return
         }
+        var trace = ChatTrace(harness: harness)
         do {
-            var completed = false
-            for try await event in provider.stream(request) {
+            let truncated: Bool
+            if harness == .agent, sharePage {
+                // Book text leaves the device only through tool results, which passage sharing governs.
+                var book: ReadingAgentBook?
+                if let context = history.last(where: \.isUser)?.context, let agentBook { book = try? await agentBook(context) }
                 try Task.checkCancellation()
-                guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
-                switch event {
-                case .text(let text): messages[index].text += text
-                case .finished(let truncated):
-                    completed = true
-                    if truncated {
-                        messages[index].state = .stopped
-                        notice = "The reply ended before completion. Retry or ask for a shorter answer."
-                    } else { messages[index].state = .complete }
+                if let tools = provider as? any ToolChatProvider, let book {
+                    let toolbox = ReadingAgentToolbox(book: book) { [weak self] terms in self?.conversationMatches(terms) ?? "{\"matches\":[]}" }
+                    toolbox.activity = { [weak self] text in if self?.generation == token { self?.activity = text } }
+                    do {
+                        let request = ChatRequest.conversation(history, harness: .agent)
+                        let outcome = try await ReadingAgentRunner.run(provider: tools, request: request, toolbox: toolbox, onText: { [weak self] text in
+                            self?.append(text, to: id, token: token)
+                        }, onWithdraw: { [weak self] in self?.withdraw(id, token: token) })
+                        trace.steps = toolbox.steps; truncated = outcome.truncated
+                    } catch ReadingAgentError.toolsUnsupported {
+                        trace.steps = []; trace.fellBack = true
+                        truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace)
+                    }
+                } else {
+                    // A provider without tool support, or a book without readable text.
+                    trace.fellBack = !(provider is any ToolChatProvider)
+                    if !trace.fellBack { trace.steps = [agentBook == nil ? "no book open" : "book text unavailable"] }
+                    truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace)
                 }
-                changed(messages[index])
+            } else {
+                if !sharePage { trace.steps = ["passage sharing off"] }
+                else if let recall = history.last(where: \.isUser)?.context?.bookRecall {
+                    trace.steps = ["looked up “\(recall.term)” (\(recall.excerpts.count))"]
+                }
+                truncated = try await stream(ChatRequest.conversation(history, earlierMessages: earlier), provider: provider, into: id, token: token)
             }
-            if !completed { throw ChatError.interrupted }
+            guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
+            messages[index].trace = trace
+            if truncated {
+                messages[index].state = .stopped
+                notice = "The reply ended before completion. Retry or ask for a shorter answer."
+            } else { messages[index].state = .complete }
+            changed(messages[index])
         } catch {
             guard generation == token else { return }
-            if let index = messages.firstIndex(where: { $0.id == id }) { messages[index].state = .failed; changed(messages[index]) }
+            if let index = messages.firstIndex(where: { $0.id == id }) {
+                messages[index].state = .failed; messages[index].trace = trace; changed(messages[index])
+            }
             self.error = errorMessage(error)
         }
-        if generation == token { isSending = false; task = nil; flush(); refreshLatest() }
+        if generation == token { activity = nil; isSending = false; task = nil; flush(); refreshLatest() }
+    }
+    /// Streams a plain request into a reply; returns whether it was truncated.
+    private func stream(_ request: ChatRequest, provider: any ChatProvider, into id: UUID, token: UUID) async throws -> Bool {
+        for try await event in provider.stream(request) {
+            try Task.checkCancellation()
+            guard generation == token else { throw CancellationError() }
+            switch event {
+            case .text(let text): append(text, to: id, token: token)
+            case .finished(let truncated): return truncated
+            }
+        }
+        throw ChatError.interrupted
+    }
+    /// The pre-fetched evidence harness, also the agent's fallback.
+    private func streamEvidence(provider: any ChatProvider, history: [ReaderChatMessage], earlier: [ReaderChatMessage], id: UUID, token: UUID, trace: inout ChatTrace) async throws -> Bool {
+        var history = history
+        if let index = history.lastIndex(where: \.isUser), var context = history[index].context, context.bookRecall == nil, let recall,
+           let term = ReadingBookRecall.lookupTerm(question: history[index].text, context: context) {
+            activity = "Looking up “\(term)”…"
+            context.bookRecall = try? await recall(term, context)
+            history[index].context = context.bounded()
+            if let found = context.bookRecall { trace.steps = ["looked up “\(found.term)” (\(found.excerpts.count))"] }
+        }
+        activity = nil
+        try Task.checkCancellation()
+        return try await stream(ChatRequest.conversation(history, earlierMessages: earlier), provider: provider, into: id, token: token)
+    }
+    private func append(_ text: String, to id: UUID, token: UUID) {
+        guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        activity = nil
+        messages[index].text += text; changed(messages[index])
+    }
+    private func withdraw(_ id: UUID, token: UUID) {
+        guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        messages[index].text = ""; changed(messages[index])
+    }
+    /// Earlier exchanges in this book's conversation that mention any term, for the agent.
+    private func conversationMatches(_ terms: [String]) -> String {
+        let all = ((try? history?.page(before: nil, after: nil, limit: 200).messages) ?? nil) ?? messages
+        let needles = terms.map { $0.lowercased() }
+        var matches: [[String: String]] = []
+        for (index, message) in all.enumerated() where message.isUser && message.state == .complete {
+            let answer = all.indices.contains(index + 1) && !all[index + 1].isUser ? all[index + 1].text : ""
+            let haystack = (message.text + " " + answer).lowercased()
+            guard needles.contains(where: { haystack.contains($0) }) else { continue }
+            var match = ["reader_question": String(message.text.prefix(400)), "assistant_answer": String(answer.prefix(900))]
+            if let chapter = message.context?.chapter, !chapter.isEmpty { match["chapter"] = String(chapter.prefix(200)) }
+            matches.append(match)
+        }
+        return ReadingAgentToolbox.json(["matches": Array(matches.suffix(4)), "note": "Earlier answers may be wrong; prefer book text."])
     }
     private func errorMessage(_ error: Error) -> String {
         if let error = error as? ChatError { return error.localizedDescription }
@@ -288,6 +373,37 @@ struct UITestChatProvider: ChatProvider {
                     continuation.yield(.text("Test reply: "))
                     try await Task.sleep(for: .milliseconds(slow ? 30000 : 150))
                     continuation.yield(.text("Consider what the passage states and what the character assumes."))
+                    continuation.yield(.finished(truncated: false)); continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+// Scripted agent: searches the words after “about” in the question, then
+// answers from the real on-device tool result.
+extension UITestChatProvider: ToolChatProvider {
+    func streamAgent(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool) -> AsyncThrowingStream<AgentEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await Task.sleep(for: .milliseconds(150))
+                    let results = items.compactMap { item -> [AgentToolResult]? in if case .toolResults(let value) = item { return value }; return nil }.last
+                    guard let output = results?.first?.output else {
+                        let question = items.compactMap { item -> String? in if case .turn(let turn) = item, turn.role == "user" { return turn.content }; return nil }.last ?? ""
+                        let asked = question.components(separatedBy: "Reader question:\n").last ?? question
+                        let term = asked.components(separatedBy: "about ").dropFirst().first?
+                            .trimmingCharacters(in: .punctuationCharacters.union(.whitespacesAndNewlines)) ?? asked
+                        let arguments = ReadingAgentToolbox.json(["terms": [String(term.prefix(40))]])
+                        continuation.yield(.text("Let me look."))
+                        continuation.yield(.toolCall(AgentToolCall(id: "call_1", name: "search_book", arguments: arguments)))
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
+                    let object = (try? JSONSerialization.jsonObject(with: Data(output.utf8))) as? [String: Any] ?? [:]
+                    let hits = object["results"] as? [[String: Any]] ?? []
+                    let chapter = hits.first?["chapter"] as? String ?? "no chapter"
+                    continuation.yield(.text("Agent reply: found \(hits.count) passages; earliest in \(chapter)."))
                     continuation.yield(.finished(truncated: false)); continuation.finish()
                 } catch { continuation.finish(throwing: error) }
             }
