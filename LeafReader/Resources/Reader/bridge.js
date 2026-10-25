@@ -5,6 +5,7 @@ import { readAloudChunk, revealReadAloud, clearReadAloud, setSpokenRange, clearS
 import { languageText, contributor } from './metadata-text.js';
 import { nearbyChatText } from './chat-context.js';
 import { retrieveEarlierPassages } from './book-recall.js';
+import { sectionText, textBoundary } from './book-text.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -341,6 +342,8 @@ window.Leaf = { open, close, command, applyPreferences, search, tap,
         return retrieveEarlierPassages(source,term,locator,{selection,prepare:sanitize,cancelled:()=>view!==source || chatRecallID!==id});
     },
     cancelRecall: ({id}) => { if (chatRecallID===id) chatRecallID=null; },
+    sectionText: ({index}) => sectionText(view, index, sanitize),
+    textBoundary: ({locator}) => textBoundary(view, locator, sanitize),
     setSpokenRange: config => setSpokenRange(view, config),
     clearSpokenRange: () => { if (view) clearSpokenRange(view); },
     readAloudChunk: ({ locator }) => readAloudChunk(view, locator, sanitize),

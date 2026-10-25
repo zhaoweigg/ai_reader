@@ -52,9 +52,18 @@ struct AISettingsView: View {
                         }
                     } header: { Text("API key") } footer: { Text("Your own provider key is stored on this device. API usage is billed by your provider. No key is bundled with Leaf.") }
                 }
+                Section {
+                    Picker("Book context", selection: $configuration.harness) {
+                        ForEach(ReadingChatHarness.allCases) { harness in Text(harness.title).tag(harness) }
+                    }.pickerStyle(.inline).labelsHidden().accessibilityIdentifier("aiHarness")
+                } header: { Text("Book context") } footer: {
+                    Text(configuration.harness.summary + " Each reply shows which one answered.")
+                }
                 Section("Reading context") {
                     Toggle("Include current passage", isOn: $configuration.sharePage).accessibilityIdentifier("aiSharePage")
-                    Text("Sending shares your question, up to 12,000 characters of selected or visible text, nearby text and relevant earlier book passages, plus book details, approximate reading progress and recent or relevant earlier discussion. Character reminders look up earlier mentions locally. Images and entire books are not uploaded. Disable this to send questions and chat text only.")
+                    Text(configuration.harness == .agent
+                         ? "Sending shares your question, up to 12,000 characters of selected or visible text, nearby text, book details, approximate reading progress and recent discussion. The AI can also ask for passages it searches in the book up to your reading position, and earlier discussion it searches for. Book text is prepared on this device. Images and entire books are not uploaded. Disable this to send questions and chat text only; book search is then off."
+                         : "Sending shares your question, up to 12,000 characters of selected or visible text, nearby text and relevant earlier book passages, plus book details, approximate reading progress and recent or relevant earlier discussion. Character reminders look up earlier mentions locally. Images and entire books are not uploaded. Disable this to send questions and chat text only.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("Conversations and drafts are saved on this device for each book until you clear them. Provider retention follows that provider’s policy.")
                         .font(.footnote).foregroundStyle(.secondary)

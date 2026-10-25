@@ -118,6 +118,22 @@ final class ReaderModel: NSObject, ObservableObject {
         return ReadingChatContext(title: title, author: author, chapter: chapter, text: text,
                                   source: source, locator: location, precedingText: preceding, followingText: following, progress: fraction).bounded()
     }
+    /// Book text for the chat agent, kept per book file so later searches are instant.
+    private(set) lazy var bookText = BookTextIndex(source: self, directory: book.flatMap { book in
+        library.disk?.root.appendingPathComponent("ChatIndex/\(book.fingerprint)/v1", isDirectory: true)
+    })
+    func readingAgentBook(for context: ReadingChatContext) async throws -> ReadingAgentBook? {
+        guard isReady, !isLocked, error == nil else { return nil }
+        guard let boundary = try await bookBoundary(for: context.locator.isEmpty ? locator : context.locator) else { return nil }
+        return ReadingAgentBook(index: bookText, boundary: boundary)
+    }
+    /// Prepares text up to the reading position while the chat is open, so the
+    /// agent's first search does not wait for the whole book.
+    func warmBookText() async {
+        guard isReady, !isLocked, error == nil, let boundary = try? await bookBoundary(for: locator) else { return }
+        _ = try? await bookText.prepare(through: boundary, deadline: Date().addingTimeInterval(120))
+    }
+
     func recallBookContext(term: String, context: ReadingChatContext) async throws -> ReadingBookRecall? {
         try Task.checkCancellation()
         guard isReady, !isLocked, error == nil, (2...40).contains(term.count) else { return nil }
