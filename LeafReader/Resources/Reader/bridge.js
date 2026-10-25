@@ -3,6 +3,7 @@ import { openBookSource } from './book-source.js';
 import { createAnnotations } from './annotations.js';
 import { readAloudChunk, revealReadAloud, clearReadAloud, setSpokenRange, clearSpokenRange } from './read-aloud.js';
 import { languageText, contributor } from './metadata-text.js';
+import { nearbyChatText } from './chat-context.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -58,6 +59,7 @@ function observeReadingTouches(doc, index) {
             // Snapshot its own CFI/label without navigating the reading viewport.
             detail.locator = view.getCFI(index, range);
             detail.label = languageText(view.getProgressOf(index, range).tocItem?.label);
+            Object.assign(detail, nearbyChatText(range, view.lastLocation?.range));
         }
         post('selection', detail);
     });
@@ -354,12 +356,14 @@ window.Leaf = { open, close, command, applyPreferences, search, tap,
             if (selection && !selection.isCollapsed && selection.toString().trim()) {
                 const range = textBoundedSelection(selection.getRangeAt(0));
                 return {text: selection.toString().slice(0, 24000), source: 'selection',
-                    locator:view.getCFI(index, range), label:languageText(view.getProgressOf(index, range).tocItem?.label)};
+                    locator:view.getCFI(index, range), label:languageText(view.getProgressOf(index, range).tocItem?.label),
+                    ...nearbyChatText(range, view.lastLocation?.range)};
             }
         }
         // visibleText() below is a diagnostic for the whole loaded document.
         // Chat must use only the visible range, never the entire chapter.
-        return {text: view?.lastLocation?.range?.toString().slice(0, 24000) ?? '', source: 'page'};
+        const range = view?.lastLocation?.range;
+        return {text: range?.toString().slice(0, 24000) ?? '', source: 'page', ...nearbyChatText(range)};
     },
     // Useful to test the actual rendered document, rather than only parser metadata.
     visibleText: () => view?.renderer?.getContents?.().map(({doc}) => doc?.body?.innerText || '').join('\n') || '',

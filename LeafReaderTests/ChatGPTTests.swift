@@ -361,6 +361,19 @@ final class ChatGPTTests: XCTestCase {
         XCTAssertEqual(body["store"] as? Bool, false); XCTAssertEqual(body["stream"] as? Bool, true)
         XCTAssertEqual((body["input"] as? [[String: String]])?.count, 2)
     }
+    func testEnrichedReadingPromptReachesSubscriptionRequestUnchanged() throws {
+        let (store, _) = store()
+        let client = ChatGPTSubscriptionProvider(accounts: store, accountID: "test", model: "available-model")
+        let context = ReadingChatContext(title: "A Book", author: "Author", chapter: "Chapter 3", text: "He hid the key.", source: "selection", locator: "private-location", precedingText: "Lin arrived.", progress: 0.3)
+        let prompt = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Who is he?", context: context)])
+        let request = try client.makeRequest(prompt, accessToken: "test-only-token")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+        XCTAssertEqual(body["instructions"] as? String, ChatRequest.systemPrompt)
+        let input = try XCTUnwrap(body["input"] as? [[String: String]])
+        XCTAssertEqual(input.last?["content"], prompt.turns.last?.content)
+        XCTAssertTrue(input.last?["content"]?.contains("Lin arrived.") == true)
+        XCTAssertFalse(input.last?["content"]?.contains("private-location") == true)
+    }
     func testResponsesEventsRequireCompletionAndTranslateSubscriptionFailures() throws {
         XCTAssertEqual(try ChatGPTSubscriptionProvider.decode(#"{"type":"response.output_text.delta","delta":"中文"}"#), [.text("中文")])
         XCTAssertEqual(try ChatGPTSubscriptionProvider.decode(#"{"type":"response.reasoning_text.delta","delta":"private"}"#), [])

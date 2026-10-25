@@ -84,12 +84,38 @@ final class ReaderEngineTests: XCTestCase {
             await model.refreshSelectedWebContext()
             XCTAssertEqual(model.selectedReadingContext()?.text, expected?["text"])
             XCTAssertEqual(model.selectedReadingContext()?.locator, expected?["locator"])
+            XCTAssertTrue(model.selectedReadingContext()?.precedingText?.contains("Attention is a") == true)
+            XCTAssertNotNil(model.selectedReadingContext()?.progress)
+            let requestContext = try await model.readingChatContext()
+            XCTAssertEqual(requestContext?.text, expected?["text"])
+            XCTAssertTrue(requestContext?.precedingText?.contains("Attention is a") == true)
             let currentPlace = try await web.evaluateJavaScript("window.Leaf.currentLocation()") as? String
             XCTAssertEqual(currentPlace, expected?["place"])
             XCTAssertEqual(model.book?.bookmarks, bookmarks)
             model.clearNativeSelection(); await model.refreshSelectedWebContext()
             XCTAssertNil(model.selectedReadingContext(), "Clearing selection must not substitute page text for a selected quote")
         }
+    }
+    func testNearbyChatTextIsBoundedExcludesHiddenContentAndStopsAtVisibleBoundary() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const {nearbyChatText}=await import('./chat-context.js');
+            const doc=document.implementation.createHTMLDocument('context');
+            doc.body.innerHTML='<p>'+('old '.repeat(2000))+'<span hidden>HIDDEN SECRET</span>Lin arrived. </p><p>He hid the key. VISIBLE END FUTURE SECRET</p><p>UNLOADED FUTURE</p>';
+            const node=doc.querySelectorAll('p')[1].firstChild,focus=doc.createRange(),visible=doc.createRange();
+            focus.setStart(node,3);focus.setEnd(node,14);visible.setStart(node,0);visible.setEnd(node,26);
+            const context=nearbyChatText(focus,visible),page=nearbyChatText(visible);
+            return {before:context.precedingText,after:context.followingText,pageAfter:page.followingText,unchanged:focus.toString()==='hid the key.',loaded:document.querySelector('foliate-view').renderer.getContents().length};
+            """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        let value = try XCTUnwrap(result)
+        XCTAssertLessThanOrEqual((value["before"] as? String ?? "").count, 2400)
+        XCTAssertTrue((value["before"] as? String ?? "").contains("Lin arrived."))
+        XCTAssertFalse((value["before"] as? String ?? "").contains("HIDDEN SECRET"))
+        XCTAssertFalse((value["after"] as? String ?? "").contains("FUTURE"))
+        XCTAssertEqual(value["pageAfter"] as? String, ""); XCTAssertEqual(value["unchanged"] as? Bool, true)
+        XCTAssertLessThanOrEqual(value["loaded"] as? Int ?? 100, 3)
     }
     func testSelectionRefreshKeepsTheLatestNeighborCFIWhenAnotherChapterRetainsASelection() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
@@ -1219,11 +1245,14 @@ final class ReaderEngineTests: XCTestCase {
         let context = try XCTUnwrap(snapshot)
         XCTAssertEqual(context.text, String((page.string ?? "").prefix(12000)))
         XCTAssertEqual(context.locator, "pdf:2")
-        view.currentSelection = page.selection(for: page.bounds(for: .cropBox))
+        let pageText = (page.string ?? "") as NSString
+        view.currentSelection = page.selection(for: NSRange(location: min(20, pageText.length / 2), length: min(8, pageText.length / 2)))
         let selectedSnapshot = try await model.readingChatContext()
         let selection = try XCTUnwrap(selectedSnapshot)
         XCTAssertEqual(selection.source, "selection")
         XCTAssertFalse(selection.isEmpty)
+        XCTAssertFalse((selection.precedingText ?? "").isEmpty)
+        XCTAssertNotNil(selection.progress)
         XCTAssertEqual(model.selectedReadingContext()?.text, selection.text)
         try await waitUntil { model.liveSelection == selection }
         view.clearSelection()

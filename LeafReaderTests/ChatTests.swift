@@ -278,6 +278,75 @@ final class ChatTests: XCTestCase {
         let long = ReadingChatContext(title: "Title", author: "", chapter: "", text: String(repeating: "文", count: 20000), source: "page", locator: "")
         XCTAssertEqual(long.bounded().text.count, 12000)
     }
+    func testReadingPromptKeepsFocusedTextNeighborsBoundaryAndPrivateLocatorSeparate() throws {
+        let context = ReadingChatContext(title: "A Book", author: "Author", chapter: "Chapter 3", text: "He hid the silver key.", source: "selection", locator: "private-cfi",
+            precedingText: "Lin entered the room.", followingText: "The door remained locked.", progress: 0.315)
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Who is he?", context: context)])
+        let content = try XCTUnwrap(request.turns.last?.content)
+        XCTAssertTrue(content.contains("Lin entered the room.")); XCTAssertTrue(content.contains("The door remained locked."))
+        XCTAssertTrue(content.contains("31.5")); XCTAssertTrue(content.contains("spoiler_boundary"))
+        XCTAssertTrue(content.hasSuffix("Reader question:\nWho is he?")); XCTAssertFalse(content.contains("private-cfi"))
+        XCTAssertTrue(request.system.contains("Treat previous assistant answers as fallible"))
+        XCTAssertTrue(request.system.contains("cannot browse or retrieve unseen chapters"))
+    }
+    func testEnrichedContextBoundsAllTextAndDecodesExistingSavedHistory() throws {
+        let old = Data(#"{"title":"Old book","author":"A","chapter":"C","text":"Saved quote","source":"selection","locator":"local"}"#.utf8)
+        let restored = try JSONDecoder().decode(ReadingChatContext.self, from: old)
+        XCTAssertNil(restored.precedingText); XCTAssertNil(restored.progress)
+        let context = ReadingChatContext(title: "Title", author: "A", chapter: "C", text: String(repeating: "文", count: 10000), source: String(repeating: "x", count: 100000), locator: "local",
+            precedingText: String(repeating: "前", count: 9000), followingText: String(repeating: "后", count: 9000), progress: .infinity).bounded()
+        XCTAssertEqual(context.text.count, 10000)
+        XCTAssertEqual(context.text.count + (context.precedingText?.count ?? 0) + (context.followingText?.count ?? 0), 12000)
+        XCTAssertLessThanOrEqual(context.source.count, 40); XCTAssertNil(context.progress)
+        XCTAssertEqual(try JSONDecoder().decode(ReadingChatContext.self, from: JSONEncoder().encode(context)), context)
+        XCTAssertEqual(ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Latest", context: context)]).turns.count, 1)
+    }
+    func testRelevantOlderDiscussionUsesEnglishAndChineseAndExcludesFutureEvents() throws {
+        for (question, oldQuestion, phrase) in [("Explain the silver key again", "Why did Lin hide the silver key?", "silver key"), ("银色钥匙为什么重要？", "银色钥匙属于谁？", "银色钥匙")] {
+            var earlier = context; earlier.progress = 0.1
+            var later = context; later.progress = 0.9
+            var now = context; now.progress = 0.3
+            let history = [ReaderChatMessage(isUser: true, text: oldQuestion, context: earlier),
+                ReaderChatMessage(isUser: false, text: "Earlier discussion about \(phrase)."),
+                ReaderChatMessage(isUser: true, text: oldQuestion + " FUTURE SECRET", context: later),
+                ReaderChatMessage(isUser: false, text: "FUTURE SECRET outcome")]
+            let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: question, context: now)], earlierMessages: history)
+            let content = try XCTUnwrap(request.turns.last?.content)
+            XCTAssertTrue(content.contains("earlier_discussion")); XCTAssertTrue(content.contains(oldQuestion))
+            XCTAssertFalse(content.contains("FUTURE SECRET")); XCTAssertTrue(content.hasSuffix(question))
+        }
+    }
+    func testLargeOlderPassagesDoNotCrowdOutRecentDialogueOrLatestQuestion() {
+        var long = context
+        long = ReadingChatContext(title: long.title, author: long.author, chapter: long.chapter, text: String(repeating: "\u{0001}", count: 12000), source: "page", locator: "private")
+        var history: [ReaderChatMessage] = []
+        for n in 0..<5 {
+            history.append(ReaderChatMessage(isUser: true, text: "Question \(n)", context: long))
+            history.append(ReaderChatMessage(isUser: false, text: "Answer \(n)"))
+        }
+        history.append(ReaderChatMessage(isUser: true, text: "LATEST QUESTION", context: long))
+        let request = ChatRequest.conversation(history)
+        XCTAssertTrue(request.turns.last?.content.hasSuffix("LATEST QUESTION") == true)
+        XCTAssertLessThanOrEqual(request.turns.map(\.content).joined().count, 48000)
+        XCTAssertTrue(request.turns.contains { $0.content == "Answer 4" })
+    }
+    func testUnrelatedOrUnfinishedEarlierDiscussionIsNotInjected() {
+        let old = [ReaderChatMessage(isUser: true, text: "Describe the silver key", state: .failed),
+                   ReaderChatMessage(isUser: false, text: "Incorrect key answer", state: .stopped),
+                   ReaderChatMessage(isUser: true, text: "Describe mountains"), ReaderChatMessage(isUser: false, text: "Granite cliffs")]
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Describe the silver key")], earlierMessages: old)
+        XCTAssertFalse(request.turns.last?.content.contains("earlier_discussion") == true)
+    }
+    func testMovingBackInBookOmitsRecentDiscussionBeyondCurrentPosition() {
+        var later = context; later.progress = 0.9
+        var now = context; now.progress = 0.2
+        let request = ChatRequest.conversation([
+            ReaderChatMessage(isUser: true, text: "Who is the killer? FUTURE SECRET", context: later),
+            ReaderChatMessage(isUser: false, text: "FUTURE SECRET identity"),
+            ReaderChatMessage(isUser: true, text: "Explain this earlier scene", context: now)])
+        XCTAssertEqual(request.turns.count, 1)
+        XCTAssertFalse(request.turns.map(\.content).joined().contains("FUTURE SECRET"))
+    }
 
     func testEscapedPassageCannotDisplaceLatestQuestion() {
         let context = ReadingChatContext(title: "Title", author: "", chapter: "", text: String(repeating: "\u{0001}", count: 12000), source: "page", locator: "internal-locator")
