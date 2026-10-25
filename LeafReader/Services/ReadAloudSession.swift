@@ -40,8 +40,10 @@ enum ReadAloudError: LocalizedError {
 
 /// The shared audio session of both speech engines.
 enum ReadAloudAudioSession {
+    static let willActivate = Notification.Name("LeafWillActivateReadAloudAudio")
     /// Takes the spoken-audio playback category; other apps' audio ducks or pauses.
     static func activate() throws {
+        NotificationCenter.default.post(name: willActivate, object: nil)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .spokenAudio)
         try session.setActive(true)
@@ -262,6 +264,9 @@ extension ReadAloudSpeaking {
             self.saveBookmark()
             ReadAloudAudioSession.deactivate()
         }
+        notificationTokens.append(NotificationCenter.default.addObserver(forName: ChatDictationSession.willRecord, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pause() }
+        })
         notificationTokens.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
             guard (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue else { return }
             Task { @MainActor in self?.pause() }

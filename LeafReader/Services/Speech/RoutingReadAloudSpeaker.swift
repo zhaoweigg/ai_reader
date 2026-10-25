@@ -59,6 +59,11 @@ enum ReadAloudEngine: String, CaseIterable, Identifiable {
         kokoro.prepare(text, language: language, voice: String(voice.dropFirst(ReadAloudEngine.kokoroPrefix.count)), speed: speed)
     }
     func pause() { active?.pause() }
-    func resume() -> Bool { active?.resume() ?? false }
+    func resume() -> Bool {
+        guard let active else { return false }
+        // Dictation may have changed the category and released the audio session.
+        do { try ReadAloudAudioSession.activate() } catch { return false }
+        return active.resume()
+    }
     func stop() { active?.stop(); active = nil; request = nil }
 }

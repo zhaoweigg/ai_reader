@@ -242,6 +242,27 @@ import PDFKit
             userInfo: [AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue])
         try await wait { session.state == .paused }; XCTAssertEqual(session.bookmark?.locator, "position:0")
     }
+    func testDictationPausesPlaybackSynchronouslyAndKeepsBookmark() async throws {
+        let (session, speaker, _, _) = setup()
+        session.source = { [self] _ in passage(0) }
+        session.start(); try await wait { session.state == .playing }
+        NotificationCenter.default.post(name: ChatDictationSession.willRecord, object: nil)
+        XCTAssertEqual(session.state, .paused, "Pause before dictation takes the shared audio session")
+        XCTAssertTrue(speaker.paused); XCTAssertEqual(session.bookmark?.locator, "position:0")
+        XCTAssertEqual(speaker.spoken.count, 1)
+    }
+    func testPlaybackResumeRestoresAudioCategoryAfterDictation() throws {
+        let speaker = RecordingSpeaker()
+        let router = RoutingReadAloudSpeaker(system: speaker, kokoro: KokoroReadAloudSpeaker(store: .shared))
+        defer { router.stop(); ReadAloudAudioSession.deactivate() }
+        try router.speak("A saved passage", language: "en-US", voice: "", speed: 1)
+        router.pause()
+        try AVAudioSession.sharedInstance().setCategory(.record, mode: .measurement)
+        XCTAssertTrue(router.resume())
+        XCTAssertEqual(AVAudioSession.sharedInstance().category, .playback)
+        XCTAssertEqual(AVAudioSession.sharedInstance().mode, .spokenAudio)
+        XCTAssertFalse(speaker.paused)
+    }
     func testSourceFailureCanBeReplacedWithoutAffectingBookState() async throws {
         let (session, speaker, _, _) = setup()
         session.source = { _ in throw ReadAloudError.noText }

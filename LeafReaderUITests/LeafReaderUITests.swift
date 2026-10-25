@@ -6,7 +6,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -16,6 +16,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_MARKDOWN"] = markdown ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_DICTATION_MOCK"] = dictation ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
         app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
@@ -1394,6 +1395,83 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testChatEdgeResizesInPages() { verifyChatResize(flow: "Pages") }
     @MainActor func testChatEdgeResizesInScroll() { verifyChatResize(flow: "Scroll") }
     @MainActor func testChatEdgeResizesInPDF() { verifyChatResize(flow: "PDF") }
+
+    @MainActor func testDictationAddsAnEditableDraftInPages() { verifyDictation(flow: "Pages") }
+    @MainActor func testDictationAddsAnEditableDraftInScroll() { verifyDictation(flow: "Scroll") }
+    @MainActor func testDictationAddsAnEditableDraftInPDF() { verifyDictation(flow: "PDF") }
+
+    @MainActor private func verifyDictation(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(dictation: true)
+        defer { orient(.portrait) }
+        openSelectionFixture(flow, app: app); waitForBook(app); showReaderControls(app)
+        app.buttons["toggleBookmark"].tap()
+        let surface = readingSurface(app), frame = surface.frame
+        app.buttons["openReaderChat"].tap()
+        sendChatQuestion("Keep this conversation", app: app)
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 5)
+        selectFixturePassage(flow, app: app)
+        let quote = app.staticTexts["chatSelectedPassage"], selected = quote.label
+        XCTAssertFalse(selected.isEmpty)
+        let mic = app.buttons["dictateChatQuestion"]
+        XCTAssertTrue(mic.isHittable); XCTAssertGreaterThanOrEqual(mic.frame.width, 44)
+        mic.press(forDuration: 1)
+        let mandarin = app.buttons["中文 · 普通话"].exists ? app.buttons["中文 · 普通话"] : app.menuItems["中文 · 普通话"]
+        XCTAssertTrue(mandarin.waitForExistence(timeout: 5)); mandarin.tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Remember: ")
+        mic.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Stop dictation"), evaluatedWith: mic)
+        waitForExpectations(timeout: 5)
+        expectation(for: NSPredicate(format: "value == %@", "Remember: 帮我解释这段文字"), evaluatedWith: input)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled, "Dictation adds a draft; it never sends automatically")
+        XCTAssertEqual(quote.label, selected)
+        XCTAssertEqual(surface.frame.height, frame.height, accuracy: 2)
+        XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists)
+        capture(flow + " live dictation keeps the book and quote visible", app: app)
+        orient(.landscapeLeft)
+        XCTAssertEqual(mic.label, "Stop dictation")
+        XCTAssertEqual(input.value as? String, "Remember: 帮我解释这段文字")
+        XCTAssertTrue(mic.isHittable)
+        capture(flow + " landscape dictation draft", app: app)
+        orient(.portrait); mic.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Dictate question"), evaluatedWith: mic)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(input.value as? String, "Remember: 帮我解释这段文字。")
+        input.tap(); input.typeText(" Please.")
+        XCTAssertTrue((input.value as? String ?? "").contains("Please."))
+        XCTAssertTrue((input.value as? String ?? "").contains("帮我解释这段文字"))
+        XCTAssertTrue(app.buttons["sendReaderChat"].isEnabled)
+        XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists)
+        capture(flow + " dictated text editable with native keyboard", app: app)
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+        mic.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Stop dictation"), evaluatedWith: mic)
+        waitForExpectations(timeout: 5)
+        expectation(for: NSPredicate { _, _ in (input.value as? String ?? "").components(separatedBy: "帮我解释这段文字").count == 3 }, evaluatedWith: input)
+        waitForExpectations(timeout: 5)
+        let unsent = input.value as? String
+        app.buttons["closeReaderChat"].tap()
+        app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(mic.label, "Dictate question"); XCTAssertEqual(input.value as? String, unsent)
+        XCTAssertEqual(quote.label, selected)
+        app.buttons["closeReaderChat"].tap(); showReaderControls(app)
+        XCTAssertEqual(app.buttons["toggleBookmark"].label, "Remove bookmark")
+        app.buttons["closeBook"].tap(); app.terminate(); app.launch()
+        if flow == "PDF" {
+            let card = app.buttons["book-Notes from the Coast"]
+            for _ in 0..<5 where !card.isHittable { app.scrollViews.firstMatch.swipeUp() }
+            card.tap()
+        } else { app.buttons["featuredBook"].tap() }
+        waitForBook(app); app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(input.value as? String, unsent); XCTAssertEqual(mic.label, "Dictate question")
+        XCTAssertEqual(quote.label, selected)
+        capture(flow + " unsent dictated draft restored", app: app)
+        app.buttons["sendReaderChat"].tap()
+        XCTAssertTrue(app.staticTexts.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", unsent ?? "")).firstMatch.waitForExistence(timeout: 5))
+    }
 
     @MainActor func testKeyboardKeepsHistoryVisibleInPages() { verifyKeyboardHistory(flow: "Pages") }
     @MainActor func testKeyboardKeepsHistoryVisibleInScroll() { verifyKeyboardHistory(flow: "Scroll") }
