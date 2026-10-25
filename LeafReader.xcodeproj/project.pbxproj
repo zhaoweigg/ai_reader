@@ -16,6 +16,7 @@
 		11F98810E05BCDC675C839EC /* ThemePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24297F21BBA41AD9AFD4A205 /* ThemePicker.swift */; };
 		1608AF5DEBCE97A8D9E72A38 /* LibraryChatUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */; };
 		1638B0F496721D3878BCB0BA /* AISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 241FD63FE84D0DB2819A589D /* AISettingsView.swift */; };
+		21ECB6395EBB150169CAB938 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C20E5A828AAC6404D28EC9E /* ChatMarkdown.swift */; };
 		21ED9AF526E865E9547836E5 /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB89A39521EB5C1CB63BFC12 /* LibraryStore.swift */; };
 		240E576211DE00CEFEFC6B1E /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DDD91EF78808E1BD8AE415A /* ChatTests.swift */; };
 		262B7A06D68B8DB11254B6DD /* Fixtures in Resources */ = {isa = PBXBuildFile; fileRef = 8BEDAE49739E86E86ABC4D4D /* Fixtures */; };
@@ -39,6 +40,7 @@
 		528EB5F991F8175152420471 /* ReaderEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */; };
 		54061AFBEC9BA1100163F4BA /* BookmarksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AB29A7913A706F43291361B /* BookmarksView.swift */; };
 		5664A96BFC589704B6A55C7C /* ChatGPTOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEC6851EC27447414454AFF7 /* ChatGPTOAuth.swift */; };
+		5727AF09338FB8CFB5DA3339 /* ChatMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A536CA4524C2454C20024AEF /* ChatMarkdownTests.swift */; };
 		59B4EDBF40040C16DE521BB0 /* ReaderSelectionMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C1484671B40D96BC623E4F9 /* ReaderSelectionMenu.swift */; };
 		5DCC8CC47046C8BCE3454EE8 /* AppleVoiceCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBFEF84FF9F66E74AF30D17 /* AppleVoiceCatalogTests.swift */; };
 		629FC1922792EEB8C5174BEC /* ReaderChatSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C632D3424C29D507323DF84 /* ReaderChatSession.swift */; };
@@ -145,6 +147,7 @@
 		43A2C9B67F8B3D6FC34ACF98 /* PDFLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFLocator.swift; sourceTree = "<group>"; };
 		44915C2A5A181E23DE9282E7 /* BookTextIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookTextIndex.swift; sourceTree = "<group>"; };
 		4ACB471A6D9C5397A634C4FA /* ReaderModel+BookText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ReaderModel+BookText.swift"; sourceTree = "<group>"; };
+		4C20E5A828AAC6404D28EC9E /* ChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMarkdown.swift; sourceTree = "<group>"; };
 		4F54C849D003EAC52FC2783C /* ReadingAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingAgentTests.swift; sourceTree = "<group>"; };
 		53EF7C81ECA87AA792CB61CD /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
 		56D4D8913088D871C0A664F5 /* ReaderAudioSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAudioSource.swift; sourceTree = "<group>"; };
@@ -167,6 +170,7 @@
 		96E14EF665D316B3CB3BA361 /* ChatModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModels.swift; sourceTree = "<group>"; };
 		988B12B05A25D8C389A2D249 /* BookMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookMetadataTests.swift; sourceTree = "<group>"; };
 		9C217626C6A54DF6B51455E7 /* UITesting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITesting.swift; sourceTree = "<group>"; };
+		A536CA4524C2454C20024AEF /* ChatMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMarkdownTests.swift; sourceTree = "<group>"; };
 		AA375CCD5FE2A2A6CEEDDF5B /* ReaderPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderPreferences.swift; sourceTree = "<group>"; };
 		AE07B9A1522472930DD1E8D6 /* ChatGPTConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTConnectionView.swift; sourceTree = "<group>"; };
 		B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTests.swift; sourceTree = "<group>"; };
@@ -255,6 +259,7 @@
 				DEC483DB37697EED2DA2BC84 /* BookCover.swift */,
 				6AB29A7913A706F43291361B /* BookmarksView.swift */,
 				AE07B9A1522472930DD1E8D6 /* ChatGPTConnectionView.swift */,
+				4C20E5A828AAC6404D28EC9E /* ChatMarkdown.swift */,
 				C30FC3F239F7C9AB36F0AFB5 /* LibraryChatOverlay.swift */,
 				F9567239B01E0D6638DA1D06 /* LibraryView.swift */,
 				D7B596C7A37807FDBC583EA2 /* ReaderAnnotationsView.swift */,
@@ -308,6 +313,7 @@
 				988B12B05A25D8C389A2D249 /* BookMetadataTests.swift */,
 				379B84A8D58BA66045270D3C /* ChatGPTTests.swift */,
 				8AF0B59C16AA23A2176C159D /* ChatHistoryTests.swift */,
+				A536CA4524C2454C20024AEF /* ChatMarkdownTests.swift */,
 				1DDD91EF78808E1BD8AE415A /* ChatTests.swift */,
 				C494CF7B965049F41D1A360F /* KokoroSpeechTests.swift */,
 				B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */,
@@ -562,6 +568,7 @@
 				5664A96BFC589704B6A55C7C /* ChatGPTOAuth.swift in Sources */,
 				6E9ADECBA5E3CC649895ABA1 /* ChatGPTSubscriptionProvider.swift in Sources */,
 				CA53E0D5B88DDD43C8306E39 /* ChatHistoryStore.swift in Sources */,
+				21ECB6395EBB150169CAB938 /* ChatMarkdown.swift in Sources */,
 				CE3F5B2B76E940DDD061A8A8 /* ChatModels.swift in Sources */,
 				C1191F779B70CD82A1CEF063 /* ChatProvider+Agent.swift in Sources */,
 				36730BF910AF1DBF55AE4EA9 /* ChatProvider.swift in Sources */,
@@ -612,6 +619,7 @@
 				E7140E31D841ADAE2EB508AF /* BookMetadataTests.swift in Sources */,
 				B3EC6DAD8A1755A253168FE5 /* ChatGPTTests.swift in Sources */,
 				4FFA5D443B98E1E4B80522B2 /* ChatHistoryTests.swift in Sources */,
+				5727AF09338FB8CFB5DA3339 /* ChatMarkdownTests.swift in Sources */,
 				240E576211DE00CEFEFC6B1E /* ChatTests.swift in Sources */,
 				40137AAE22983BAD512DC3BF /* KokoroSpeechTests.swift in Sources */,
 				716D839DBA091435CCFAF605 /* LibraryTests.swift in Sources */,

@@ -51,6 +51,9 @@ private final class ScriptedAgentProvider: ToolChatProvider {
 
 @MainActor
 final class ReadingAgentTests: XCTestCase {
+    // The index holds its source weakly, as the reader owns both in the app.
+    private var sources: [FixtureBookSource] = []
+    private func retain(_ source: FixtureBookSource) -> FixtureBookSource { sources.append(source); return source }
     private func book() -> [BookTextSection] {
         [BookTextSection(label: "第一章", text: "城门外站着白虎，他是守门的统领。"),
          BookTextSection(label: "第二章", text: "大家都在说话，白虎没有出现。" + String(repeating: "雨。", count: 200)),
@@ -69,7 +72,7 @@ final class ReadingAgentTests: XCTestCase {
 
     func testSearchRanksAliasesKeepsFirstMentionAndNeverPassesTheReader() async throws {
         let sections = book(), source = FixtureBookSource(sections)
-        let index = BookTextIndex(source: source, directory: nil), limit = boundary(sections)
+        let index = BookTextIndex(source: retain(source), directory: nil), limit = boundary(sections)
         let coverage = try await index.prepare(through: limit, deadline: .distantFuture)
         XCTAssertEqual(coverage, BookTextIndex.Coverage(indexed: 4, eligible: 4))
         let (hits, counts) = index.search(["白虎", "老白"], within: limit, limit: 3)
@@ -84,10 +87,10 @@ final class ReadingAgentTests: XCTestCase {
     func testPreparedSectionsAreReusedFromDiskWithoutReadingTheBookAgain() async throws {
         let sections = book(), directory = try folder(), limit = boundary(sections)
         let first = FixtureBookSource(sections)
-        _ = try await BookTextIndex(source: first, directory: directory).prepare(through: limit, deadline: .distantFuture)
+        _ = try await BookTextIndex(source: retain(first), directory: directory).prepare(through: limit, deadline: .distantFuture)
         XCTAssertEqual(first.reads, 4)
         let second = FixtureBookSource(sections); second.failing = true
-        let reopened = BookTextIndex(source: second, directory: directory)
+        let reopened = BookTextIndex(source: retain(second), directory: directory)
         let coverage = try await reopened.prepare(through: limit, deadline: .distantPast)
         XCTAssertTrue(coverage.complete); XCTAssertEqual(second.reads, 0)
         XCTAssertEqual(reopened.search(["林檎"], within: limit, limit: 6).hits.first?.chapter, "第三章")
@@ -95,16 +98,16 @@ final class ReadingAgentTests: XCTestCase {
 
     func testDeadlineReportsPartialCoverageAndUnreadableSectionsDoNotFailSearch() async throws {
         let sections = book(), limit = boundary(sections)
-        let index = BookTextIndex(source: FixtureBookSource(sections), directory: nil)
+        let index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
         let partial = try await index.prepare(through: limit, deadline: .distantPast)
         XCTAssertEqual(partial, BookTextIndex.Coverage(indexed: 0, eligible: 4))
         let broken = FixtureBookSource(sections); broken.failing = true
-        let coverage = try await BookTextIndex(source: broken, directory: nil).prepare(through: limit, deadline: .distantFuture)
+        let coverage = try await BookTextIndex(source: retain(broken), directory: nil).prepare(through: limit, deadline: .distantFuture)
         XCTAssertEqual(coverage.indexed, 4)
     }
 
     func testToolboxValidatesArgumentsAndRefusesTextPastTheReader() async throws {
-        let sections = book(), index = BookTextIndex(source: FixtureBookSource(sections), directory: nil)
+        let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
         let toolbox = ReadingAgentToolbox(book: ReadingAgentBook(index: index, boundary: boundary(sections))) { _ in "{}" }
         var activity: [String] = []; toolbox.activity = { activity.append($0) }
         let search = try await toolbox.run(AgentToolCall(id: "1", name: "search_book", arguments: #"{"query":"白虎|老白"}"#))
@@ -122,7 +125,7 @@ final class ReadingAgentTests: XCTestCase {
     }
 
     func testRunnerExecutesToolsWithdrawsPreambleAndCapsToolUse() async throws {
-        let sections = book(), index = BookTextIndex(source: FixtureBookSource(sections), directory: nil)
+        let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
         let toolbox = ReadingAgentToolbox(book: ReadingAgentBook(index: index, boundary: boundary(sections))) { _ in "{}" }
         let call = AgentToolCall(id: "c1", name: "search_book", arguments: #"{"terms":["白虎"]}"#)
         let provider = ScriptedAgentProvider([[.text("Let me check."), .toolCall(call), .finished(truncated: false)],
@@ -144,7 +147,7 @@ final class ReadingAgentTests: XCTestCase {
     }
 
     func testToolRejectionIsDistinctOnlyBeforeAnyOutput() async throws {
-        let sections = book(), index = BookTextIndex(source: FixtureBookSource(sections), directory: nil)
+        let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
         let toolbox = ReadingAgentToolbox(book: ReadingAgentBook(index: index, boundary: boundary(sections))) { _ in "{}" }
         let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Who?")], harness: .agent)
         do {
@@ -241,7 +244,7 @@ final class ReadingAgentTests: XCTestCase {
     }
 
     func testSessionRecordsAgentStepsAndFallsBackWhenToolsAreRejected() async throws {
-        let sections = book(), index = BookTextIndex(source: FixtureBookSource(sections), directory: nil)
+        let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
         let context = ReadingChatContext(title: "测试", author: "", chapter: "第四章", text: "白虎", source: "selection", locator: "here", progress: 0.6)
         let call = AgentToolCall(id: "c1", name: "search_book", arguments: #"{"terms":["白虎","老白"]}"#)
         let agent = ScriptedAgentProvider([[.toolCall(call), .finished(truncated: false)], [.text("守门统领。"), .finished(truncated: false)]])

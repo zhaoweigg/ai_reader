@@ -577,17 +577,22 @@ private struct ReaderChatMessageBubble: View {
                 .accessibilityValue(context.text)
                 .accessibilityIdentifier("toggleChatQuote")
             }
-            Text(message.text.isEmpty ? (message.state == .streaming ? activity ?? "Thinking…" : "No response text") : message.text)
+            Text(message.isUser ? AttributedString(displayText) : ChatMarkdown.render(displayText))
                 .font(.subheadline).lineSpacing(3).textSelection(.enabled)
                 .accessibilityIdentifier(message.isUser ? "chatQuestion" : "chatReply")
             // Which reading-context design produced this reply, for comparison.
             if !message.isUser, message.state != .streaming, let trace = message.trace {
                 Label(trace.caption, systemImage: trace.harness == .agent ? "magnifyingglass" : "text.book.closed")
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(3)
+                    .accessibilityElement(children: .ignore).accessibilityLabel(trace.caption)
                     .accessibilityIdentifier("chatReplyTrace")
             }
         }
         .padding(message.isUser ? 10 : 0)
         .background(message.isUser ? accent.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var displayText: String {
+        message.text.isEmpty ? (message.state == .streaming ? activity ?? "Thinking…" : "No response text") : message.text
     }
 }
