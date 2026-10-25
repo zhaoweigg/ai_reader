@@ -56,13 +56,18 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(element.exists)
         let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
         for _ in 0..<12 {
+            guard element.exists else {
+                // Report the catalog load sequence that removed the element (LEAF_UI_ZLIB_TRACE).
+                let trace = app.descendants(matching: .any)["zlibraryLoadTrace"].firstMatch
+                return XCTFail("Catalog element disappeared while revealing it. Load trace: \(trace.exists ? trace.label : "unavailable")")
+            }
             let frame = element.frame
             let top = app.navigationBars["Z-Library"].frame.maxY + 8
             let bottom = app.frame.maxY - 24
             if element.isHittable && frame.minY >= top && frame.maxY <= bottom { return }
             let up = frame.maxY > bottom
-            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: up ? 0.68 : 0.43))
-            let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: up ? 0.43 : 0.68))
+            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.68 : 0.43))
+            let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.43 : 0.68))
             start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
         }
         XCTAssertTrue(element.isHittable)
@@ -557,7 +562,7 @@ final class ZLibraryUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
-        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_POPULAR_REDIRECT": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1"]
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_POPULAR_REDIRECT": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1", "LEAF_UI_ZLIB_TRACE": "1"]
         registerSceneGeometryCleanup(app: app)
         app.launch(); setReaderOrientation(.portrait, app: app)
         openDiscover(app)

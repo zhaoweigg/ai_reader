@@ -142,13 +142,21 @@ struct ZLibraryView: View {
         }
         .background(theme.canvas).toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle("Z-Library").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement:.topBarTrailing) { Button { sheet = .connection } label: { Image(systemName:"person.crop.circle") }.accessibilityLabel("Z-Library connection") } }
-        .onAppear { searchText = catalog.activeQuery }
+        .onAppear { searchText = catalog.activeQuery; catalog.traceCatalogLoad("view appeared") }
         .onChange(of: searchText) { _, value in
             if value.isEmpty && !catalog.activeQuery.isEmpty { Task { await catalog.search("") } }
         }
-        .onDisappear { catalog.cancelCatalogLoad() }
+        .onDisappear { catalog.traceCatalogLoad("view disappeared"); catalog.cancelCatalogLoad("view disappeared") }
         .task { await catalog.search(catalog.activeQuery) }
-        .refreshable { await catalog.reload() }
+        .refreshable { catalog.traceCatalogLoad("pull to refresh"); await catalog.reload() }
+        #if DEBUG
+        .overlay(alignment: .bottomLeading) {
+            if UITesting.flag("LEAF_UI_ZLIB_TRACE") {
+                Text(catalog.loadTrace.joined(separator: " | ")).font(.system(size: 1)).opacity(0.02)
+                    .frame(width: 2, height: 2).accessibilityIdentifier("zlibraryLoadTrace")
+            }
+        }
+        #endif
         .scrollBounceBehavior(.always, axes: .vertical)
         .scrollDismissesKeyboard(.interactively)
         .sheet(item:$sheet,onDismiss: { Task { await catalog.reload() } }) { sheet in
