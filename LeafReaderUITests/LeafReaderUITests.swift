@@ -1618,7 +1618,7 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["openAISettings"].tap()
         let calls = app.descendants(matching: .any)["agentMaxToolCalls"].firstMatch
         for _ in 0..<6 where !(calls.exists && calls.isHittable) { app.swipeUp() }
-        calls.buttons["Increment"].tap()
+        app.buttons["agentMaxToolCalls-Increment"].tap()
         let conversationTool = app.switches["agentTool-search_conversation"]
         for _ in 0..<4 where !(conversationTool.exists && conversationTool.isHittable) { app.swipeUp() }
         conversationTool.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
@@ -2764,7 +2764,10 @@ final class LeafReaderUITests: XCTestCase {
         for _ in 0..<4 where !sharing.isHittable { app.swipeUp() }
         sharing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(sharing.value as? String, "0")
-        app.buttons["saveAISettings"].tap()
+        // Agent troubleshooting sits between Reading context and Save.
+        let save = app.buttons["saveAISettings"]
+        for _ in 0..<4 where !save.isHittable { app.swipeUp() }
+        save.tap()
         XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
         app.terminate(); app.launch()
         app.tabBars.buttons["Settings"].tap()
