@@ -97,6 +97,25 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["closeBook"].exists)
     }
 
+    /// Bring a settings row on screen with short drags. Whole-form swipes jump
+    /// past rows; a held press can scroll a Form 0 pt, so swap gesture kinds
+    /// when one does not move the row.
+    @MainActor private func revealSettingsRow(_ row: XCUIElement, app: XCUIApplication) {
+        var held = false, last: CGRect?
+        for _ in 0..<14 {
+            let top = app.navigationBars.firstMatch.frame.maxY + 8, bottom = app.tabBars.firstMatch.frame.minY - 8
+            if row.exists, row.isHittable, row.frame.minY >= top, row.frame.maxY <= bottom { return }
+            let up = !row.exists || row.frame.maxY > bottom
+            if row.exists, row.frame == last { held.toggle() }
+            last = row.exists ? row.frame : nil
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: up ? 0.62 : 0.4))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: up ? 0.4 : 0.62))
+            if held { start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2) }
+            else { start.press(forDuration: 0, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0) }
+        }
+        XCTAssertTrue(row.exists && row.isHittable, "Could not reveal \(row.identifier)")
+    }
+
     @MainActor private func revealAppearanceControl(_ app: XCUIApplication, _ control: XCUIElement) {
         let form = app.descendants(matching: .any)["appearanceForm"].firstMatch
         XCTAssertTrue(form.waitForExistence(timeout: 5))
@@ -1761,7 +1780,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(conversationTool.value as? String, "0")
         capture("Agent limits in AI settings", app: app)
         let contextCharacters = app.descendants(matching: .any)["contextCharacters"].firstMatch
-        for _ in 0..<4 where !(contextCharacters.exists && contextCharacters.isHittable) { app.swipeUp() }
+        revealSettingsRow(contextCharacters, app: app)
         app.buttons["contextCharacters-Decrement"].tap()
         XCTAssertTrue(app.staticTexts["11,000 chars"].exists)
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "up to 11,000 characters")).firstMatch.exists)
@@ -1784,7 +1803,7 @@ final class LeafReaderUITests: XCTestCase {
         app.tabBars.buttons["Settings"].tap()
         for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
         app.buttons["openAISettings"].tap()
-        for _ in 0..<6 where !(contextCharacters.exists && contextCharacters.isHittable) { app.swipeUp() }
+        revealSettingsRow(contextCharacters, app: app)
         XCTAssertTrue(app.staticTexts["11,000 chars"].exists, "The reading context limit is saved")
         let traces = app.buttons["openAgentTraces"]
         for _ in 0..<8 where !(traces.exists && traces.isHittable) { app.swipeUp() }
