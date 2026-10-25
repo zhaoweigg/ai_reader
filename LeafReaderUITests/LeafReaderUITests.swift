@@ -1423,13 +1423,17 @@ final class LeafReaderUITests: XCTestCase {
             app.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: frame.midX - app.frame.minX, dy: frame.midY - app.frame.minY)).tap()
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            expectation(for: NSPredicate { _, _ in
+                app.buttons["Hide keyboard"].exists && panel.frame.maxY <= app.keyboards.firstMatch.frame.minY + 2
+            }, evaluatedWith: app)
+            waitForExpectations(timeout: 5)
         }
         func assertHistoryAndBook() {
             XCTAssertTrue(history.exists, "Never remove existing messages while composing")
             XCTAssertGreaterThanOrEqual(history.frame.height, 20, "Keep a readable, scrollable message viewport even in landscape")
             XCTAssertLessThanOrEqual(history.frame.maxY, input.frame.minY + 2)
             XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
-            XCTAssertGreaterThan(panel.frame.minY - surface.frame.minY, app.frame.width > app.frame.height ? 8 : app.frame.height * 0.2)
+            XCTAssertGreaterThan(panel.frame.minY - surface.frame.minY, app.frame.width > app.frame.height ? 8 : 150)
             XCTAssertTrue(input.isHittable); XCTAssertTrue(app.buttons["Hide keyboard"].isHittable)
             XCTAssertEqual(quote.label, selected)
         }
@@ -1478,7 +1482,8 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " landscape keyboard history and quote", app: app)
         orient(.portrait); assertHistoryAndBook()
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
-        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+        let bookPoint = CGPoint(x: surface.frame.midX, y: (surface.frame.minY + panel.frame.minY) / 2)
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: bookPoint.x - app.frame.minX, dy: bookPoint.y - app.frame.minY)).tap()
         XCTAssertTrue(app.buttons["closeReaderChat"].exists); XCTAssertTrue(app.keyboards.firstMatch.exists)
         XCTAssertEqual(input.value as? String, "Keep this followup draft")
         hideKeyboard()

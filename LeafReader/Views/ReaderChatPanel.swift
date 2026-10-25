@@ -3,7 +3,10 @@ import SwiftUI
 enum ReaderChatSizing {
     static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> ClosedRange<CGFloat> {
         let usable = max(0, availableHeight - 16)
-        let maximum = min(fullHeight * 0.85, usable * 0.88)
+        // Leave actual book text above an expanded portrait composer, rather
+        // than just the status area or the chapter's top whitespace.
+        let bookReserve = composing && fullHeight >= 500 ? min(160, fullHeight * 0.2) : 0
+        let maximum = min(fullHeight * 0.85, usable * 0.88, max(0, usable - bookReserve))
         let minimum: CGFloat = composing ? (fullHeight < 500 ? 176 : (hasSelection ? 256 : 224)) : (fullHeight < 500 ? 132 : (hasSelection ? 260 : 200))
         let lower = min(minimum, maximum)
         return lower...maximum

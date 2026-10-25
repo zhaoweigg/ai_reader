@@ -13,10 +13,11 @@ final class ReaderChatSizingTests: XCTestCase {
         let saved = 0.6
         let typing = height(saved, available: 400, composing: true)
         XCTAssertLessThan(typing + 16, 400)
-        XCTAssertGreaterThanOrEqual(typing, 300, "An expanded composer can reveal history")
+        XCTAssertGreaterThanOrEqual(typing, 224, "An expanded composer keeps room for history")
+        XCTAssertGreaterThanOrEqual(400 - typing - 16, 160, "Maximum typing height leaves readable book text")
         XCTAssertEqual(height(saved), 480, accuracy: 0.1, "Hiding the keyboard restores the preferred reading height")
         XCTAssertEqual(height(-1, available: 400, composing: true), 224, accuracy: 0.1)
-        XCTAssertEqual(height(-1, available: 400, composing: true, selection: true), 256, accuracy: 0.1)
+        XCTAssertEqual(height(-1, available: 400, composing: true, selection: true), 224, accuracy: 0.1)
     }
     func testRotationRetainsFractionAndFitsCompactKeyboardViewport() {
         let fraction = 0.6
@@ -46,9 +47,9 @@ final class ReaderChatSizingTests: XCTestCase {
     func testIndependentKeyboardPreferenceRestoresAfterRotationAndSelectionChanges() {
         let reading = 0.55, typing = 0.38
         XCTAssertEqual(height(reading), 440, accuracy: 0.1)
-        XCTAssertEqual(height(typing, available: 450, composing: true), 304, accuracy: 0.1)
+        XCTAssertEqual(height(typing, available: 450, composing: true), 274, accuracy: 0.1)
         _ = height(typing, full: 393, available: 210, composing: true, selection: true)
-        XCTAssertEqual(height(typing, available: 450, composing: true, selection: true), 304, accuracy: 0.1)
+        XCTAssertEqual(height(typing, available: 450, composing: true, selection: true), 274, accuracy: 0.1)
         XCTAssertEqual(height(reading), 440, accuracy: 0.1)
     }
     private func height(_ fraction: Double, full: CGFloat = 800, available: CGFloat = 800, composing: Bool = false, selection: Bool = false) -> CGFloat {
