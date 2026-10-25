@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -17,6 +17,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_MARKDOWN"] = markdown ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_SCROLL_STREAM"] = scrollStream ? "1" : "0"
         app.launchEnvironment["LEAF_UI_DICTATION_MOCK"] = dictation ? "1" : "0"
         if nativeDictation {
             let audio = Bundle(for: LeafReaderUITests.self).url(forResource: "Mandarin", withExtension: "m4a")!
@@ -2747,6 +2748,63 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(notice.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertEqual(notice.label, "Native browser callback verified.")
         capture("ChatGPT native browser callback", app: app)
+    }
+
+    @MainActor func testStreamingScrollAtOwnPaceInPages() { verifyStreamingScroll(flow: "Pages") }
+    @MainActor func testStreamingScrollAtOwnPaceInScroll() { verifyStreamingScroll(flow: "Scroll") }
+    @MainActor func testStreamingScrollAtOwnPaceInPDF() { verifyStreamingScroll(flow: "PDF") }
+    @MainActor func testStreamingScrollAtOwnPaceInLibrary() { verifyStreamingScroll(flow: "Library") }
+
+    @MainActor private func verifyStreamingScroll(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(scrollStream: true)
+        if flow == "Library" { app.buttons["openLibraryChat"].tap() }
+        else { openSelectionFixture(flow, app: app); waitForBook(app); app.buttons["openReaderChat"].tap() }
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Explain at length"); app.buttons["sendReaderChat"].tap()
+        let history = app.scrollViews["chatMessageHistory"]
+        let reply = app.descendants(matching: .any).matching(identifier: "chatReply").firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "Update 1:"), evaluatedWith: reply)
+        waitForExpectations(timeout: 10)
+
+        func assertPausedWhileGrowing(_ name: String) {
+            history.swipeDown()
+            expectation(for: NSPredicate(format: "value == %@", "Reading earlier"), evaluatedWith: history)
+            waitForExpectations(timeout: 5)
+            let origin = reply.frame.minY, count = reply.label.count
+            expectation(for: NSPredicate { _, _ in reply.label.count > count + 140 }, evaluatedWith: reply)
+            waitForExpectations(timeout: 8)
+            XCTAssertEqual(reply.frame.minY, origin, accuracy: 3, "New tokens must not move the passage being read")
+            XCTAssertEqual(history.value as? String, "Reading earlier")
+            capture(flow + " " + name, app: app)
+        }
+        assertPausedWhileGrowing("manual reading during streaming")
+        for _ in 0..<8 {
+            if history.value as? String == "Following latest" { break }
+            history.swipeUp(velocity: .fast)
+        }
+        expectation(for: NSPredicate(format: "value == %@", "Following latest"), evaluatedWith: history)
+        waitForExpectations(timeout: 5)
+        let origin = reply.frame.minY, count = reply.label.count
+        expectation(for: NSPredicate { _, _ in reply.label.count > count + 140 && reply.frame.minY < origin - 10 }, evaluatedWith: reply)
+        waitForExpectations(timeout: 8)
+        capture(flow + " following resumes at bottom", app: app)
+
+        input.tap(); input.typeText("Keep my draft")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        assertPausedWhileGrowing("manual reading above keyboard")
+        XCTAssertEqual(input.value as? String, "Keep my draft")
+        app.buttons["Hide keyboard"].tap()
+        app.buttons["sendReaderChat"].tap() // Stop the deterministic long stream.
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 5)
+        app.buttons["closeReaderChat"].tap()
+        app.buttons[flow == "Library" ? "openLibraryChat" : "openReaderChat"].tap()
+        XCTAssertEqual(input.value as? String, "Keep my draft")
+        XCTAssertTrue(reply.waitForExistence(timeout: 5))
+        orient(.landscapeLeft)
+        capture(flow + " long reply after reopening in landscape", app: app)
     }
 
     @MainActor func testMarkdownReplyInPages() { verifyMarkdownReply(flow: "Pages") }

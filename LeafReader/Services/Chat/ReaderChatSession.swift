@@ -428,6 +428,14 @@ struct UITestChatProvider: ChatProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
+                        continuation.yield(.text((1...20).map { "Paragraph \($0): Read this explanation at your own pace, without jumping to the newest words." }.joined(separator: "\n\n")))
+                        for index in 1...200 {
+                            try await Task.sleep(for: .milliseconds(500))
+                            continuation.yield(.text("\n\nUpdate \(index): The explanation continues while you read an earlier passage."))
+                        }
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
                     if UITesting.flag("LEAF_UI_CHAT_MARKDOWN") {
                         continuation.yield(.text("## 人物\n\n这是**李"))
                         try await Task.sleep(for: .milliseconds(250))
