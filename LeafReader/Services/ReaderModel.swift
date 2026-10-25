@@ -103,6 +103,7 @@ final class ReaderModel: NSObject, ObservableObject {
         if let pdfView {
             if let selection = pdfView.currentSelection?.string, !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 text = selection; source = "selection"
+                location = pdfChatLocator(pdfView.currentSelection) ?? location
                 let neighbors = pdfChatNeighbors(pdfView.currentSelection)
                 preceding = neighbors.before; following = neighbors.after
             } else { text = pdfView.currentPage?.string ?? "" }
@@ -115,6 +116,59 @@ final class ReaderModel: NSObject, ObservableObject {
         }
         return ReadingChatContext(title: title, author: author, chapter: chapter, text: text,
                                   source: source, locator: location, precedingText: preceding, followingText: following, progress: fraction).bounded()
+    }
+    func recallBookContext(term: String, context: ReadingChatContext) async throws -> ReadingBookRecall? {
+        try Task.checkCancellation()
+        guard isReady, !isLocked, error == nil else { return nil }
+        let epoch = reloadID
+        if let web = webView {
+            let id = UUID().uuidString
+            return try await withTaskCancellationHandler(operation: {
+                let value = try await web.callAsyncJavaScript("return await window.Leaf.recallBook({term,locator,id,selection});",
+                    arguments: ["term": term, "locator": context.locator, "id": id, "selection": context.source == "selection"], in: nil, contentWorld: .page)
+                try Task.checkCancellation(); guard epoch == reloadID, webView === web else { throw CancellationError() }
+                guard let value, JSONSerialization.isValidJSONObject(value),
+                      let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+                return try JSONDecoder().decode(ReadingBookRecall.self, from: data).bounded()
+            }, onCancel: { [weak web] in
+                Task { @MainActor in
+                    _ = try? await web?.callAsyncJavaScript("window.Leaf.cancelRecall({id});", arguments: ["id": id], in: nil, contentWorld: .page)
+                }
+            })
+        }
+        guard let view = pdfView, let doc = view.document else { return nil }
+        let cursor = PDFLocator.cursor(context.locator)
+        let boundaryPage = cursor?.page ?? view.currentPage.map(doc.index(for:)) ?? 0
+        let total = min(doc.pageCount, boundaryPage + 1), deadline = Date().addingTimeInterval(8)
+        var excerpts: [(page: Int, offset: Int, text: String)] = [], scanned = 0, characters = 0
+        var partial = false, visited = Set<Int>()
+        let indices = Array(0..<min(total, 32)) + Array((max(0, total - 96)..<total).reversed()) + Array(0..<total)
+        for index in indices where visited.insert(index).inserted {
+            try Task.checkCancellation(); guard epoch == reloadID else { throw CancellationError() }
+            if Date() >= deadline || scanned >= 512 || characters >= 4000000 { break }
+            let text = autoreleasepool { () -> NSString in
+                let value = (doc.page(at: index)?.string ?? "") as NSString
+                let cutoff = index == boundaryPage && context.locator.split(separator: ":").count > 2 ? cursor?.offset ?? value.length : value.length
+                if cutoff > 250000 { partial = true }
+                return value.substring(to: min(250000, min(max(0, cutoff), value.length))) as NSString
+            }
+            characters += text.length
+            var range = NSRange(location: 0, length: text.length), matches = 0
+            while range.length > 0, matches < 200 {
+                let found = text.range(of: term, options: [.caseInsensitive], range: range)
+                if found.location == NSNotFound { break }; matches += 1
+                let start = max(0, found.location - 170), length = min(500, text.length - start)
+                if !excerpts.contains(where: { $0.page == index && abs($0.offset - found.location) < 180 }) {
+                    excerpts.append((index, found.location, text.substring(with: NSRange(location: start, length: length))))
+                    excerpts.sort { $0.page == $1.page ? $0.offset < $1.offset : $0.page < $1.page }
+                    if excerpts.count > 6 { excerpts.remove(at: 1) }
+                }
+                let next = NSMaxRange(found); range = NSRange(location: next, length: text.length - next)
+            }
+            if matches >= 200 { partial = true }
+            scanned += 1; await Task.yield()
+        }
+        return ReadingBookRecall(term: term, excerpts: excerpts.map { ReadingBookExcerpt(chapter: "Page \($0.page + 1)", text: $0.text) }, scannedSections: scanned, totalSections: total, complete: scanned == total && !partial).bounded()
     }
     func refreshSelectedWebContext() async {
         guard isReady, let view = webView else { return }
@@ -131,9 +185,16 @@ final class ReaderModel: NSObject, ObservableObject {
         guard isReady, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let neighbors = pdfView == nil ? (before: selectedWebPreceding, after: selectedWebFollowing) : pdfChatNeighbors(pdfView?.currentSelection)
         return ReadingChatContext(title: book?.title ?? "", author: book?.author ?? "", chapter: pdfView != nil ? chapterTitle : selectedWebChapter ?? chapterTitle,
-                                  text: text, source: "selection", locator: pdfView != nil ? locator : selectedWebLocator ?? locator,
+                                  text: text, source: "selection", locator: pdfView != nil ? pdfChatLocator(pdfView?.currentSelection) ?? locator : selectedWebLocator ?? locator,
                                   precedingText: neighbors.before, followingText: neighbors.after,
                                   progress: pdfView != nil ? fraction : selectedWebProgress ?? fraction).bounded()
+    }
+    private func pdfChatLocator(_ selection: PDFSelection?) -> String? {
+        guard let selection, let page = selection.pages.first, let document = pdfView?.document,
+              selection.numberOfTextRanges(on: page) > 0 else { return nil }
+        let range = selection.range(at: 0, on: page)
+        guard range.location != NSNotFound else { return nil }
+        return PDFLocator.position(page: document.index(for: page), offset: range.location)
     }
     private func pdfChatNeighbors(_ selection: PDFSelection?) -> (before: String?, after: String?) {
         guard let selection, let first = selection.pages.first, let last = selection.pages.last,

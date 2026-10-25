@@ -4,6 +4,7 @@ import { createAnnotations } from './annotations.js';
 import { readAloudChunk, revealReadAloud, clearReadAloud, setSpokenRange, clearSpokenRange } from './read-aloud.js';
 import { languageText, contributor } from './metadata-text.js';
 import { nearbyChatText } from './chat-context.js';
+import { retrieveEarlierPassages } from './book-recall.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -17,6 +18,7 @@ const observedDocuments = new WeakSet();
 // Remember the current selection owner without retaining an evicted chapter.
 // An empty current selection must never resurrect an older iframe range.
 let selectedDocument;
+let chatRecallID;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 reducedMotion.addEventListener('change', () => { if (preferences) applyPreferences(preferences); });
 
@@ -334,6 +336,11 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, close, command, applyPreferences, search, tap,
+    recallBook: async ({term, locator, id, selection}) => {
+        const source=view; chatRecallID=id;
+        return retrieveEarlierPassages(source,term,locator,{selection,prepare:sanitize,cancelled:()=>view!==source || chatRecallID!==id});
+    },
+    cancelRecall: ({id}) => { if (chatRecallID===id) chatRecallID=null; },
     setSpokenRange: config => setSpokenRange(view, config),
     clearSpokenRange: () => { if (view) clearSpokenRange(view); },
     readAloudChunk: ({ locator }) => readAloudChunk(view, locator, sanitize),

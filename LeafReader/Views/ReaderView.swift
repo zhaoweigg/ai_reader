@@ -153,7 +153,9 @@ struct ReaderContent: View {
                 }, onButtonSettings: {
                     panel = .buttonAppearance
                 }, onSend: {
-                    chat.send(settings: aiSettings) { try await model.readingChatContext() }
+                    chat.send(settings: aiSettings, recall: { term, context in
+                        try await model.recallBookContext(term: term, context: context)
+                    }) { try await model.readingChatContext() }
                 })
             }
         }

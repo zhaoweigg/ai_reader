@@ -105,7 +105,7 @@ final class ReaderEngineTests: XCTestCase {
             const doc=document.implementation.createHTMLDocument('context');
             doc.body.innerHTML='<p>'+('old '.repeat(2000))+'<span hidden>HIDDEN SECRET</span>Lin arrived. </p><p>He hid the key. VISIBLE END FUTURE SECRET</p><p>UNLOADED FUTURE</p>';
             const node=doc.querySelectorAll('p')[1].firstChild,focus=doc.createRange(),visible=doc.createRange();
-            focus.setStart(node,3);focus.setEnd(node,14);visible.setStart(node,0);visible.setEnd(node,26);
+            focus.setStart(node,3);focus.setEnd(node,15);visible.setStart(node,0);visible.setEnd(node,26);
             const context=nearbyChatText(focus,visible),page=nearbyChatText(visible);
             return {before:context.precedingText,after:context.followingText,pageAfter:page.followingText,unchanged:focus.toString()==='hid the key.',loaded:document.querySelector('foliate-view').renderer.getContents().length};
             """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
@@ -116,6 +116,54 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertFalse((value["after"] as? String ?? "").contains("FUTURE"))
         XCTAssertEqual(value["pageAfter"] as? String, ""); XCTAssertEqual(value["unchanged"] as? Bool, true)
         XCTAssertLessThanOrEqual(value["loaded"] as? Int ?? 100, 3)
+    }
+    func testCharacterRecallSearchesEarlierBookPassagesInBothFlowsWithoutMovingReader() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let web = try XCTUnwrap(model.webView)
+            let value = try await web.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view');await view.goTo(1);
+                const content=view.renderer.getContents().find(c=>c.index===1),doc=content.doc,node=doc.querySelector('p').firstChild;
+                const at=node.data.indexOf('Attention'),range=doc.createRange();range.setStart(node,at);range.setEnd(node,at+9);
+                return {locator:view.getCFI(1,range),place:view.lastLocation.cfi,loaded:view.renderer.getContents().length};
+                """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+            let locator = try XCTUnwrap(value?["locator"] as? String)
+            let context = ReadingChatContext(title: book.title, author: book.author, chapter: "The ordinary world", text: "Attention", source: "selection", locator: locator, progress: model.fraction)
+            let recall = try await model.recallBookContext(term: "Attention", context: context)
+            XCTAssertTrue(recall?.excerpts.contains(where: { $0.text.contains("Attention is a way of arriving") }) == true)
+            XCTAssertTrue(recall?.excerpts.allSatisfy { !$0.text.contains("Choose one thing") && !$0.text.contains("You cannot hold") } == true)
+            XCTAssertEqual(recall?.totalSections, 2); XCTAssertEqual(recall?.complete, true)
+            let after = try await web.evaluateJavaScript("window.Leaf.currentLocation()") as? String
+            XCTAssertEqual(after, value?["place"] as? String)
+            let loaded = try await web.evaluateJavaScript("document.querySelector('foliate-view').renderer.getContents().length") as? Int
+            XCTAssertEqual(loaded, value?["loaded"] as? Int)
+        }
+    }
+    func testBaihuLookupExcludesFutureChaptersAndReportsPartialAndCancelledCoverage() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        let value = try await model.webView?.callAsyncJavaScript("""
+            const {retrieveEarlierPassages}=await import('./book-recall.js');
+            const calls=[],texts=['白虎是测试城门的守卫。他曾帮助林找回钥匙。','林走过街道。','白虎浮到半空。当前段落。','白虎的未来秘密 FUTURE SECRET'];
+            const sections=texts.map((text,index)=>({size:100,createDocument:async()=>{calls.push(index);const doc=document.implementation.createHTMLDocument();doc.body.textContent=text;return doc;}}));
+            const view={book:{sections},getProgressOf:index=>({tocItem:{label:'第'+(index+1)+'章'}}),resolveCFI:()=>({index:2,anchor:doc=>{const r=doc.createRange();r.setStart(doc.body.firstChild,0);r.setEnd(doc.body.firstChild,2);return r;}})};
+            const full=await retrieveEarlierPassages(view,'白虎','private',{selection:true});
+            const partial=await retrieveEarlierPassages(view,'白虎','private',{selection:true,maxSections:1});
+            const cancelled=await retrieveEarlierPassages(view,'白虎','private',{cancelled:()=>true});
+            return {full,partial,cancelled,calls};
+            """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        let full = try XCTUnwrap(value?["full"] as? [String: Any])
+        let excerpts = try XCTUnwrap(full["excerpts"] as? [[String: String]])
+        XCTAssertTrue(excerpts.contains { $0["text"]?.contains("白虎是测试城门的守卫") == true })
+        XCTAssertFalse(excerpts.contains { $0["text"]?.contains("FUTURE SECRET") == true })
+        XCTAssertFalse((value?["calls"] as? [Int] ?? []).contains(3))
+        XCTAssertEqual(full["complete"] as? Bool, true)
+        XCTAssertEqual((value?["partial"] as? [String: Any])?["complete"] as? Bool, false)
+        XCTAssertEqual((value?["cancelled"] as? [String: Any])?["scannedSections"] as? Int, 0)
     }
     func testSelectionRefreshKeepsTheLatestNeighborCFIWhenAnotherChapterRetainsASelection() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
@@ -1258,6 +1306,19 @@ final class ReaderEngineTests: XCTestCase {
         view.clearSelection()
         XCTAssertNil(model.selectedReadingContext())
         try await waitUntil { model.liveSelection == nil }
+    }
+    func testPDFRecallStopsAtSelectedPositionAndPreservesReaderState() async throws {
+        let (book, url) = try prepare("Notes from the Coast.pdf", format: .pdf)
+        let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil)
+        self.model = model
+        let view = PDFView(frame: CGRect(x: 0, y: 0, width: 390, height: 700))
+        model.configurePDF(view, url: url); model.send("navigate", value: "pdf:2"); model.pdfPageChanged()
+        let page = try XCTUnwrap(view.currentPage), place = model.locator
+        let context = ReadingChatContext(title: book.title, author: book.author, chapter: "Page 3", text: "the", source: "selection", locator: PDFLocator.position(page: 2, offset: 0), progress: model.fraction)
+        let recall = try await model.recallBookContext(term: "the", context: context)
+        XCTAssertFalse(recall?.excerpts.isEmpty ?? true)
+        XCTAssertTrue(recall?.excerpts.allSatisfy { $0.chapter != "Page 3" } == true)
+        XCTAssertEqual(recall?.totalSections, 3); XCTAssertEqual(model.locator, place); XCTAssertTrue(view.currentPage === page)
     }
     func testClosingPDFChatClearsNativeSelectionButKeepsQuote() async throws {
         let (book, url) = try prepare("Notes from the Coast.pdf", format:.pdf)
