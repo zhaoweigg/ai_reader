@@ -1655,9 +1655,16 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(summary.label.contains("input tokens"), summary.label)
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "9 calls")).firstMatch.exists)
         XCTAssertTrue(app.staticTexts["Tool result · search_book"].exists)
-        XCTAssertTrue(app.staticTexts.matching(identifier: "agentTraceStepUsage").count >= 2)
         capture("Agent trace detail", app: app)
-        app.swipeUp()
+        // Steps load lazily; collect each round's usage line while scrolling.
+        let usage = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "agentTraceStepUsage-"))
+        var roundsWithUsage = Set<String>()
+        for attempt in 0..<4 {
+            usage.allElementsBoundByIndex.forEach { roundsWithUsage.insert($0.identifier) }
+            if roundsWithUsage.count >= 2 { break }
+            if attempt < 3 { app.swipeUp() }
+        }
+        XCTAssertGreaterThanOrEqual(roundsWithUsage.count, 2, "\(roundsWithUsage)")
         capture("Agent trace detail steps", app: app)
     }
     @MainActor func testBookSearchAgentInPagesComparedWithPrefetchedEvidence() { verifyBookSearchAgent(flow: "Pages") }

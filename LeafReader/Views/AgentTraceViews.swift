@@ -202,7 +202,7 @@ private struct AgentTraceStepRow: View {
                     Text(step.detail).font(step.kind == .round ? .caption.monospaced() : .caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 if let usage = step.usage {
-                    Text(Self.usageText(usage)).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("agentTraceStepUsage")
+                    Text(Self.usageText(usage)).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("agentTraceStepUsage-\(number)")
                 }
                 if !step.payload.isEmpty {
                     DisclosureGroup(isExpanded: $expanded) {
@@ -211,7 +211,7 @@ private struct AgentTraceStepRow: View {
                     } label: { Text(step.payloadTitle.isEmpty ? "Details" : step.payloadTitle).font(.caption) }
                 }
             }
-        }.padding(.vertical, 2).accessibilityIdentifier("agentTraceStep")
+        }.padding(.vertical, 2)
     }
     static func usageText(_ usage: TokenUsage) -> String {
         var parts = ["↑ \(usage.input?.formatted() ?? "–") in", "↓ \(usage.output?.formatted() ?? "–") out"]
@@ -229,7 +229,7 @@ extension AgentTrace {
     var metrics: String {
         if outcome == .failed { return [model, error ?? "failed"].filter { !$0.isEmpty }.joined(separator: " · ") }
         var parts = [model]
-        if harness == .agent { parts += ["\(rounds) \(rounds == 1 ? "round" : "rounds")", "\(modelToolCalls) tools"] }
+        if harness == .agent { parts += ["\(rounds) \(rounds == 1 ? "round" : "rounds")", "\(modelToolCalls) \(modelToolCalls == 1 ? "tool" : "tools")"] }
         else if let lookup = steps.first(where: { $0.kind == .lookup }) { parts.append(lookup.title.lowercased()) }
         parts.append(String(format: "%.1f s", totalSeconds))
         if let input = usage.input, let output = usage.output { parts.append("\(AgentTraceDetailView.compact(input)) / \(AgentTraceDetailView.compact(output)) tokens") }
