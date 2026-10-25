@@ -2218,6 +2218,30 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(model.locator, "pdf:2")
         XCTAssertEqual(model.fraction, 2.0 / 3.0, accuracy: 0.001)
     }
+    func testPDFRestoresSavedPageAfterInitialLayoutBeforeWritingProgress() async throws {
+        let (book, url) = try prepare("Notes from the Coast.pdf", format: .pdf)
+        let library = try XCTUnwrap(store)
+        library.setPosition(book.id, locator: "pdf:2", fraction: 2.0 / 3.0); library.flush()
+        let model = ReaderModel(bookID: book.id, library: library, initialLocator: nil)
+        self.model = model
+        let pdf = ReaderPDFView(frame: .zero)
+        pdf.autoScales = true; pdf.displayMode = .singlePageContinuous; pdf.displayDirection = .vertical
+        model.configurePDF(pdf, url: url); model.pdfPageChanged()
+        XCTAssertEqual(model.locator, "pdf:2", "Ignore PDFKit's default first page until layout can restore the saved page")
+        XCTAssertEqual(library.book(book.id)?.locator, "pdf:2")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        let controller = UIViewController(); window.rootViewController = controller
+        controller.view.addSubview(pdf); window.makeKeyAndVisible(); self.window = window
+        pdf.frame = controller.view.bounds; pdf.setNeedsLayout(); pdf.layoutIfNeeded()
+        try await waitUntil { pdf.currentPage === pdf.document?.page(at: 2) && model.locator == "pdf:2" }
+        XCTAssertEqual(library.book(book.id)?.locator, "pdf:2")
+        for index in [0, 3, 2, 0] {
+            model.send("navigate", value: "pdf:\(index)"); model.pdfPageChanged()
+            XCTAssertEqual(model.locator, "pdf:\(index)")
+        }
+    }
 }
 
 @MainActor private final class CenteredReaderTestTap: UITapGestureRecognizer {
