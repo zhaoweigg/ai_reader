@@ -150,7 +150,8 @@ final class ReaderChatSession: ObservableObject {
                     if let selected { snapshot = selected }
                     else { snapshot = try await context()?.bounded() }
                     // The agent searches during its reply; pre-fetching is the other harness.
-                    if harness == .evidence, var passage = snapshot, let recall, let term = ReadingBookRecall.lookupTerm(question: question, context: passage) {
+                    if harness == .evidence, var passage = snapshot, let recall,
+                       let term = ReadingBookRecall.lookupTerm(question: question, context: passage, previous: Self.previousSubject(self.messages)) {
                         do { passage.bookRecall = try await recall(term, passage) }
                         catch {
                             try Task.checkCancellation()
@@ -248,7 +249,15 @@ final class ReaderChatSession: ObservableObject {
                     toolbox.activity = { [weak self] text in if self?.generation == token { self?.activity = text } }
                     do {
                         let request = ChatRequest.conversation(history, harness: .agent)
-                        let outcome = try await ReadingAgentRunner.run(provider: tools, request: request, toolbox: toolbox, onText: { [weak self] text in
+                        // A highlighted name is searched before the model answers, so a
+                        // “who is this” reply always starts from the book, not the chat.
+                        let question = history.last(where: \.isUser)
+                        let selection = question?.context?.source == "selection" ? question?.context?.text : nil
+                        let followUp = question.flatMap { asked in asked.context.flatMap { context in
+                            ReadingBookRecall.lookupTerm(question: asked.text, context: context, previous: Self.previousSubject(history.filter { $0.id != asked.id }))
+                        } }
+                        let seed = try await toolbox.seed(selection, followUp: followUp)
+                        let outcome = try await ReadingAgentRunner.run(provider: tools, request: request, toolbox: toolbox, seed: seed, onText: { [weak self] text in
                             self?.append(text, to: id, token: token)
                         }, onWithdraw: { [weak self] in self?.withdraw(id, token: token) })
                         trace.steps = toolbox.steps; truncated = outcome.truncated
@@ -297,11 +306,17 @@ final class ReaderChatSession: ObservableObject {
         }
         throw ChatError.interrupted
     }
+    /// The subject of the reader's last lookup or name selection, for follow-up questions.
+    static func previousSubject(_ messages: [ReaderChatMessage]) -> String? {
+        guard let context = messages.last(where: \.isUser)?.context else { return nil }
+        if let term = context.bookRecall?.term, !term.isEmpty { return term }
+        return context.source == "selection" ? ReadingAgentToolbox.nameLike(context.text) : nil
+    }
     /// The pre-fetched evidence harness, also the agent's fallback.
     private func streamEvidence(provider: any ChatProvider, history: [ReaderChatMessage], earlier: [ReaderChatMessage], id: UUID, token: UUID, trace: inout ChatTrace) async throws -> Bool {
         var history = history
         if let index = history.lastIndex(where: \.isUser), var context = history[index].context, context.bookRecall == nil, let recall,
-           let term = ReadingBookRecall.lookupTerm(question: history[index].text, context: context) {
+           let term = ReadingBookRecall.lookupTerm(question: history[index].text, context: context, previous: Self.previousSubject(Array(history[..<index]))) {
             activity = "Looking up “\(term)”…"
             context.bookRecall = try? await recall(term, context)
             history[index].context = context.bounded()
