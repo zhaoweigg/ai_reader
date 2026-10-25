@@ -1797,7 +1797,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("Remind me about attention")
         app.buttons["sendReaderChat"].tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.textViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch.waitForExistence(timeout: 30))
         if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
         app.tabBars.buttons["Settings"].tap()
@@ -1872,7 +1872,7 @@ final class LeafReaderUITests: XCTestCase {
             start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -200)), withVelocity: .slow, thenHoldForDuration: 0.1)
             XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Resizing must never dismiss chat")
         }
-        let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch
+        let reply = app.textViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertFalse(reply.label.contains("found 0 passages"), reply.label)
         XCTAssertFalse(reply.label.contains("Let me look"), "Preamble before tool calls is withdrawn")
