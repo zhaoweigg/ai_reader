@@ -1417,11 +1417,15 @@ final class LeafReaderUITests: XCTestCase {
         let panel = app.otherElements["readerChatPanel"], history = app.scrollViews["chatMessageHistory"]
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         let readingHeight = panel.frame.height
-        func focusInput() {
+        func focusInput(typing text: String? = nil) {
             // Resolve current scene geometry after the keyboard moved the composer.
             let frame = input.frame
             app.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: frame.midX - app.frame.minX, dy: frame.midY - app.frame.minY)).tap()
+            // A real key event brings up the software keyboard reliably after
+            // native book selection; a cached AX keyboard can exist while hidden.
+            if let text { input.typeText(text) }
+            else { input.typeText("x"); input.typeText(XCUIKeyboardKey.delete.rawValue) }
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
             expectation(for: NSPredicate { _, _ in
                 app.buttons["Hide keyboard"].exists && panel.frame.maxY <= app.keyboards.firstMatch.frame.minY + 2
@@ -1455,7 +1459,7 @@ final class LeafReaderUITests: XCTestCase {
             start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: endY - handle.frame.midY)), withVelocity: .slow, thenHoldForDuration: 0.1)
             XCTAssertTrue(app.buttons["closeReaderChat"].exists)
         }
-        focusInput(); input.typeText("Keep this followup draft")
+        focusInput(typing: "Keep this followup draft")
         assertHistoryAndBook(); latestReplyIsVisible()
         XCTAssertEqual(surface.frame.width, originalFrame.width, accuracy: 2)
         XCTAssertEqual(surface.frame.height, originalFrame.height, accuracy: 2)
@@ -1484,9 +1488,10 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
         let bookPoint = CGPoint(x: surface.frame.midX, y: (surface.frame.minY + panel.frame.minY) / 2)
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: bookPoint.x - app.frame.minX, dy: bookPoint.y - app.frame.minY)).tap()
-        XCTAssertTrue(app.buttons["closeReaderChat"].exists); XCTAssertTrue(app.keyboards.firstMatch.exists)
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Book focus must never dismiss the conversation")
         XCTAssertEqual(input.value as? String, "Keep this followup draft")
-        hideKeyboard()
+        XCTAssertEqual(quote.label, selected)
+        if app.buttons["Hide keyboard"].exists { hideKeyboard() }
         let header = app.descendants(matching: .any)["readerChatHeader"].firstMatch
         let top = header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         top.press(forDuration: 0.01, thenDragTo: top.withOffset(CGVector(dx: 0, dy: 100)), withVelocity: .slow, thenHoldForDuration: 0.1)

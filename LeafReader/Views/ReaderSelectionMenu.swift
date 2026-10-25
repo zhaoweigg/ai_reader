@@ -687,7 +687,12 @@ final class ReaderWebView: WKWebView {
 final class ReaderPDFView: PDFView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
     var selectionHooks = ReaderSelectionHooks()
+    var afterInitialLayout: (() -> Void)?
     var isHandlingNativeSelectionGesture: Bool { selectionMenu.isHandlingNativeSelectionGesture }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        afterInitialLayout?()
+    }
     override func didMoveToWindow() {
         super.didMoveToWindow()
         selectionMenu.windowDidChange(for: self) { [weak self] in
