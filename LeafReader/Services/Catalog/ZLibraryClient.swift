@@ -148,6 +148,13 @@ struct ZLibrarySearchPage {
     let books: [ZLibraryBook]
     let hasMore: Bool
 }
+enum ZLibraryFeed: String, CaseIterable, Identifiable {
+    case popular, recommended
+    var id: String { rawValue }
+    var title: String { self == .popular ? "Most popular" : "Recommended" }
+    var loadingTitle: String { self == .popular ? "Loading popular books…" : "Loading recommendations…" }
+    var failureTitle: String { self == .popular ? "Could not load popular books" : "Could not load recommendations" }
+}
 enum ZLibrarySearchOrder: String, CaseIterable, Identifiable {
     case popular, bestMatch = "bestmatch", recentlyAdded = "date", titleAscending = "titleA", titleDescending = "title", year, fileSizeDescending = "filesize", fileSizeAscending = "filesizeA"
     var id: String { rawValue }
@@ -169,6 +176,7 @@ protocol ZLibraryTransport {
 }
 protocol ZLibraryServing {
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook]
+    func recommended(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> [ZLibraryBook]
     func search(_ query: String, page: Int, order: ZLibrarySearchOrder, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook
@@ -286,6 +294,12 @@ struct ZLibraryClient: ZLibraryServing {
     }
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook] {
         let object = try await object("book/most-popular", origin: origin, session: session)
+        guard let rows = object["books"] as? [[String: Any]] else { throw ZLibraryError.response }
+        return Self.books(rows, origin: origin, limit: 200)
+    }
+    func recommended(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> [ZLibraryBook] {
+        guard session.valid else { throw ZLibraryError.signInRequired }
+        let object = try await object("user/book/recommended", origin: origin, session: session)
         guard let rows = object["books"] as? [[String: Any]] else { throw ZLibraryError.response }
         return Self.books(rows, origin: origin, limit: 200)
     }

@@ -16,7 +16,7 @@ struct AddBooksView: View {
                         source("From Files", subtitle:"On your iPhone, iCloud Drive & more", icon:"folder")
                     }.buttonStyle(.plain).accessibilityIdentifier("addFromFiles")
                     Button { path = ["zlibrary"] } label: {
-                        source("Z-Library",subtitle:"Search books or browse the most popular",icon:"book")
+                        source("Z-Library",subtitle:"Search books, discover recommendations & more",icon:"book")
                     }.buttonStyle(.plain).accessibilityIdentifier("addFromZLibrary")
                     Section { Text("Books you add are saved on this device for offline reading.").font(.footnote).foregroundStyle(.secondary) }
                 }.listRowBackground(theme.surface)
@@ -60,13 +60,19 @@ struct ZLibraryView: View {
                     if !searchText.isEmpty {
                         Button("Clear search", systemImage: "xmark.circle.fill") {
                             searchText = ""; searchFocused = false
-                            Task { await catalog.loadPopular() }
+                            Task { await catalog.search("") }
                         }.labelStyle(.iconOnly).foregroundStyle(.secondary).accessibilityIdentifier("zlibraryClearSearch")
                     }
                     Button("Search", action: submitSearch)
                         .font(.subheadline.weight(.semibold)).disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("zlibrarySubmitSearch")
                 }.padding(14).frame(minHeight: 48).background(theme.surface, in: .rect(cornerRadius: 14))
+                Picker("Browse books", selection: Binding(get: { catalog.feed }, set: { feed in
+                    searchFocused = false
+                    Task { searchText = ""; await catalog.browse(feed) }
+                })) {
+                    ForEach(ZLibraryFeed.allCases) { feed in Text(feed.title).tag(feed) }
+                }.pickerStyle(.segmented).accessibilityIdentifier("zlibraryFeedPicker")
                 if !catalog.activeQuery.isEmpty {
                     Menu {
                         Picker("Sort search results", selection: Binding(get: { catalog.searchOrder }, set: { order in
@@ -85,7 +91,8 @@ struct ZLibraryView: View {
                     }.accessibilityIdentifier("zlibrarySearchOrder")
                 }
                 HStack(alignment:.firstTextBaseline) {
-                    Text(catalog.activeQuery.isEmpty ? "Most popular" : "Search results").font(.system(size:32,weight:.regular,design:.serif))
+                    Text(catalog.activeQuery.isEmpty ? catalog.feed.title : "Search results").font(.system(size:32,weight:.regular,design:.serif))
+                        .accessibilityIdentifier("zlibraryFeedTitle")
                     Spacer()
                     if catalog.isPreview { Text("Preview").font(.caption).foregroundStyle(.secondary) }
                     Button("Refresh books", systemImage: "arrow.clockwise") { Task { await catalog.reload() } }
@@ -94,6 +101,8 @@ struct ZLibraryView: View {
                 }
                 if !catalog.activeQuery.isEmpty {
                     Text("Results for “\(catalog.activeQuery)”").font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                } else if catalog.feed == .recommended {
+                    Text("Picked for you by Z-Library using your connected account.").font(.subheadline).foregroundStyle(.secondary)
                 }
                 if catalog.showingSavedResults {
                     Text("Previously loaded · Pull down to refresh").font(.caption).foregroundStyle(.secondary)
@@ -104,11 +113,13 @@ struct ZLibraryView: View {
                         .buttonStyle(.bordered).accessibilityIdentifier("connectZLibrary")
                 }
                 if catalog.loading && catalog.books.isEmpty {
-                    ProgressView(catalog.activeQuery.isEmpty ? "Loading popular books…" : "Searching books…").frame(maxWidth:.infinity).padding(.vertical,70)
+                    ProgressView(catalog.activeQuery.isEmpty ? catalog.feed.loadingTitle : "Searching books…").frame(maxWidth:.infinity).padding(.vertical,70)
                 }
-                if let error = catalog.error {
+                if catalog.recommendationConnectionRequired {
+                    ContentUnavailableView("Connect for recommendations",systemImage:"person.crop.circle",description:Text("Connect your Z-Library account to see its personal book recommendations."))
+                } else if let error = catalog.error {
                     VStack(alignment:.leading,spacing:12) {
-                        Label(catalog.activeQuery.isEmpty ? "Could not load popular books" : "Could not search books",systemImage:"exclamationmark.circle").font(.headline)
+                        Label(catalog.activeQuery.isEmpty ? catalog.feed.failureTitle : "Could not search books",systemImage:"exclamationmark.circle").font(.headline)
                         Text(error).font(.subheadline).foregroundStyle(.secondary)
                         HStack {
                             if catalog.websiteAccessNeeded {
@@ -128,7 +139,11 @@ struct ZLibraryView: View {
                     }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(theme.surface,in:.rect(cornerRadius:18))
                 } else if !catalog.loading && catalog.books.isEmpty {
                     if catalog.activeQuery.isEmpty {
-                        ContentUnavailableView("No books available",systemImage:"books.vertical",description:Text("Pull down to refresh the popular books list."))
+                        if catalog.feed == .recommended {
+                            ContentUnavailableView("No recommendations yet",systemImage:"sparkles",description:Text("Z-Library has not returned recommendations for this account yet. Try Most popular or search for a book."))
+                        } else {
+                            ContentUnavailableView("No books available",systemImage:"books.vertical",description:Text("Pull down to refresh the popular books list."))
+                        }
                     } else {
                         ContentUnavailableView("No books found",systemImage:"magnifyingglass",description:Text("Try another title, author, or ISBN."))
                     }
@@ -166,7 +181,7 @@ struct ZLibraryView: View {
         .toolbar { ToolbarItem(placement:.topBarTrailing) { Button { sheet = .connection } label: { Image(systemName:"person.crop.circle") }.accessibilityLabel("Z-Library connection") } }
         .onAppear { searchText = catalog.activeQuery }
         .onChange(of: searchText) { _, value in
-            if value.isEmpty && !catalog.activeQuery.isEmpty { Task { await catalog.loadPopular() } }
+            if value.isEmpty && !catalog.activeQuery.isEmpty { Task { await catalog.search("") } }
         }
         .onDisappear { catalog.cancelCatalogLoad() }
         .task { await catalog.search(catalog.activeQuery) }

@@ -193,7 +193,7 @@ import WebKit
 
     private static func diagnosticPath(_ path: String) -> String {
         // Never expose book IDs, hashes, queries, website response bodies or credentials.
-        if ["/eapi/book/most-popular", "/eapi/book/search", "/eapi/user/profile"].contains(path) { return path }
+        if ["/eapi/book/most-popular", "/eapi/book/search", "/eapi/user/book/recommended", "/eapi/user/profile"].contains(path) { return path }
         return "/eapi/book/request"
     }
 
