@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct ChatScrollFollowing {
     private(set) var followsLatest = true
@@ -20,7 +21,45 @@ private struct ChatHistoryBottomDistance: PreferenceKey {
     static var defaultValue: CGFloat? = nil
     static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
 }
-import AVFoundation
+
+#if DEBUG
+private struct ChatHistoryMeasuredOffset: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct ChatHistoryOffsetProbe: UIViewRepresentable {
+    let offset: CGFloat
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isAccessibilityElement = true
+        view.accessibilityIdentifier = "uitestChatHistoryGeometry"
+        view.accessibilityLabel = "UI test chat scroll offset"
+        return view
+    }
+    func updateUIView(_ view: UIView, context: Context) { view.accessibilityValue = String(Double(offset)) }
+}
+#endif
+
+/// Native text views clip their accessibility bounds to the screen. UI tests
+/// measure the independently laid-out history instead of those clipped bounds.
+private struct ChatHistoryTestMeasurement: ViewModifier {
+    #if DEBUG
+    @State private var offset: CGFloat = 0
+    #endif
+    func body(content: Content) -> some View {
+        #if DEBUG
+        if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
+            content.onPreferenceChange(ChatHistoryMeasuredOffset.self) { offset = $0 }
+                .overlay(alignment: .topLeading) {
+                    ChatHistoryOffsetProbe(offset: offset).frame(width: 1, height: 1).allowsHitTesting(false)
+                }
+        } else { content }
+        #else
+        content
+        #endif
+    }
+}
 
 enum ReaderChatSizing {
     static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> ClosedRange<CGFloat> {
@@ -534,6 +573,12 @@ struct ReaderChatPanel: View {
                                     GeometryReader { content in
                                         Color.clear.preference(key: ChatHistoryBottomDistance.self,
                                             value: content.frame(in: .named("chatHistoryViewport")).maxY - viewport.size.height)
+                                            .overlay {
+                                                #if DEBUG
+                                                Color.clear.preference(key: ChatHistoryMeasuredOffset.self,
+                                                    value: -content.frame(in: .named("chatHistoryViewport")).minY)
+                                                #endif
+                                            }
                                     }
                                 }
                         }
@@ -542,6 +587,7 @@ struct ReaderChatPanel: View {
                         .scrollDismissesKeyboard(isComposing ? .never : .interactively)
                         .accessibilityIdentifier("chatMessageHistory")
                         .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
+                        .modifier(ChatHistoryTestMeasurement())
                         .modifier(ChatHistoryInteraction(following: $scrollFollowing))
                         .onPreferenceChange(ChatHistoryBottomDistance.self) { distance in
                             if !ChatHistoryInteraction.usesNativeTracking, let distance { scrollFollowing.updateBottomDistance(distance) }

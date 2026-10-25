@@ -2766,7 +2766,10 @@ final class LeafReaderUITests: XCTestCase {
         input.tap(); input.typeText("Explain at length"); app.buttons["sendReaderChat"].tap()
         let history = app.scrollViews["chatMessageHistory"]
         let reply = app.descendants(matching: .any).matching(identifier: "chatReply").firstMatch
+        let geometry = app.descendants(matching: .any)["uitestChatHistoryGeometry"].firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 10))
+        XCTAssertTrue(geometry.waitForExistence(timeout: 5))
+        func measuredOffset() -> Double { Double(geometry.value as? String ?? "") ?? .nan }
         expectation(for: NSPredicate(format: "label CONTAINS %@", "Update 1:"), evaluatedWith: reply)
         waitForExpectations(timeout: 10)
 
@@ -2779,10 +2782,13 @@ final class LeafReaderUITests: XCTestCase {
                         withVelocity: .slow, thenHoldForDuration: 0.2)
             expectation(for: NSPredicate(format: "value == %@", "Reading earlier"), evaluatedWith: history)
             waitForExpectations(timeout: 5)
-            let origin = reply.frame.minY, count = reply.label.count
+            let origin = measuredOffset(), count = reply.label.count
             expectation(for: NSPredicate { _, _ in reply.label.count > count + 20 }, evaluatedWith: reply)
             waitForExpectations(timeout: 8)
-            XCTAssertEqual(reply.frame.minY, origin, accuracy: 3, "New tokens must not move the passage being read")
+            let current = measuredOffset()
+            XCTAssertEqual(current, origin, accuracy: 3, "New tokens must not move the passage being read")
+            let trace = XCTAttachment(string: "Actual history offset: \(origin) → \(current); reply characters: \(count) → \(reply.label.count)")
+            trace.name = flow + " " + name + " measured position"; trace.lifetime = .keepAlways; add(trace)
             XCTAssertEqual(history.value as? String, "Reading earlier")
             capture(flow + " " + name, app: app)
         }
@@ -2793,9 +2799,11 @@ final class LeafReaderUITests: XCTestCase {
         }
         expectation(for: NSPredicate(format: "value == %@", "Following latest"), evaluatedWith: history)
         waitForExpectations(timeout: 5)
-        let origin = reply.frame.minY, count = reply.label.count
-        expectation(for: NSPredicate { _, _ in reply.label.count > count + 80 && reply.frame.minY < origin - 10 }, evaluatedWith: reply)
+        let origin = measuredOffset(), count = reply.label.count
+        expectation(for: NSPredicate { _, _ in reply.label.count > count + 80 && measuredOffset() > origin + 10 }, evaluatedWith: reply)
         waitForExpectations(timeout: 12)
+        let trace = XCTAttachment(string: "Following offset: \(origin) → \(measuredOffset()); reply characters: \(count) → \(reply.label.count)")
+        trace.name = flow + " measured following position"; trace.lifetime = .keepAlways; add(trace)
         capture(flow + " following resumes at bottom", app: app)
 
         input.tap(); input.typeText("Keep my draft")
