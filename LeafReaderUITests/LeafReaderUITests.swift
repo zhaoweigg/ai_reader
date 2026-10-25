@@ -97,6 +97,26 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["closeBook"].exists)
     }
 
+    /// Bring a settings row on screen with short drags. Whole-form swipes jump
+    /// past rows; a held press can scroll a Form 0 pt, so swap gesture kinds
+    /// when one does not move the row.
+    @MainActor private func revealSettingsRow(_ row: XCUIElement, app: XCUIApplication) {
+        var held = false, last: CGRect?
+        // Fixed margins clear the navigation bar and the floating tab bar.
+        let top = app.frame.minY + app.frame.height * 0.12, bottom = app.frame.maxY - app.frame.height * 0.12
+        for _ in 0..<14 {
+            if row.exists, row.isHittable, row.frame.minY >= top, row.frame.maxY <= bottom { return }
+            let up = !row.exists || row.frame.maxY > bottom
+            if row.exists, row.frame == last { held.toggle() }
+            last = row.exists ? row.frame : nil
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: up ? 0.62 : 0.4))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: up ? 0.4 : 0.62))
+            if held { start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2) }
+            else { start.press(forDuration: 0, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0) }
+        }
+        XCTAssertTrue(row.exists && row.isHittable, "Could not reveal \(row.identifier): \(row.exists ? "\(row.frame)" : "absent") within \(top)...\(bottom)")
+    }
+
     @MainActor private func revealAppearanceControl(_ app: XCUIApplication, _ control: XCUIElement) {
         let form = app.descendants(matching: .any)["appearanceForm"].firstMatch
         XCTAssertTrue(form.waitForExistence(timeout: 5))
@@ -1777,6 +1797,12 @@ final class LeafReaderUITests: XCTestCase {
         conversationTool.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(conversationTool.value as? String, "0")
         capture("Agent limits in AI settings", app: app)
+        let decrement = app.buttons["contextCharacters-Decrement"]
+        revealSettingsRow(decrement, app: app)
+        decrement.tap()
+        XCTAssertTrue(app.staticTexts["11,000 chars"].exists)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "up to 11,000 characters")).firstMatch.exists)
+        capture("Reading context limits in AI settings", app: app)
         let save = app.buttons["saveAISettings"]
         for _ in 0..<6 where !save.isHittable { app.swipeUp() }
         save.tap()
@@ -1789,12 +1815,14 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("Remind me about attention")
         app.buttons["sendReaderChat"].tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.textViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch.waitForExistence(timeout: 30))
         if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
         app.tabBars.buttons["Settings"].tap()
         for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
         app.buttons["openAISettings"].tap()
+        revealSettingsRow(decrement, app: app)
+        XCTAssertTrue(app.staticTexts["11,000 chars"].exists, "The reading context limit is saved")
         let traces = app.buttons["openAgentTraces"]
         for _ in 0..<8 where !(traces.exists && traces.isHittable) { app.swipeUp() }
         traces.tap()
@@ -1862,7 +1890,7 @@ final class LeafReaderUITests: XCTestCase {
             start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -200)), withVelocity: .slow, thenHoldForDuration: 0.1)
             XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Resizing must never dismiss chat")
         }
-        let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch
+        let reply = app.textViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertFalse(reply.label.contains("found 0 passages"), reply.label)
         XCTAssertFalse(reply.label.contains("Let me look"), "Preamble before tool calls is withdrawn")

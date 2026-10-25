@@ -276,7 +276,33 @@ final class ChatTests: XCTestCase {
         XCTAssertTrue(request.turns.last?.content.contains("Latest question") == true)
         XCTAssertFalse(request.turns.contains { $0.content.contains("Unfinished answer") })
         let long = ReadingChatContext(title: "Title", author: "", chapter: "", text: String(repeating: "文", count: 20000), source: "page", locator: "")
-        XCTAssertEqual(long.bounded().text.count, 12000)
+        XCTAssertEqual(long.bounded().text.count, 20000, "The reader keeps up to the largest setting")
+        XCTAssertEqual(long.bounded(ReadingContextLimits()).text.count, 12000)
+    }
+    func testConfiguredReadingContextLimitsTrimRequestsAndClampSavedValues() throws {
+        func sent(_ context: ReadingChatContext, _ limits: ReadingContextLimits, harness: ReadingChatHarness = .evidence) throws -> [String: Any] {
+            let content = try XCTUnwrap(ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Why?", context: context)], harness: harness, limits: limits).turns.last?.content)
+            let start = try XCTUnwrap(content.range(of: "\n")).upperBound, end = try XCTUnwrap(content.range(of: "\n\nReader question:")).lowerBound
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(content[start..<end].utf8)) as? [String: Any])
+        }
+        func counts(_ json: [String: Any]) -> [Int] { ["text", "preceding_text", "following_text"].map { (json[$0] as? String)?.count ?? 0 } }
+        let context = ReadingChatContext(title: "书", author: "", chapter: "第一章", text: String(repeating: "文", count: 10000), source: "selection", locator: "private",
+            precedingText: String(repeating: "前", count: 9000), followingText: String(repeating: "后", count: 9000), progress: 0.3).bounded()
+        XCTAssertEqual(counts(try sent(context, ReadingContextLimits())), [10000, 2000, 0], "Default: 12,000 in all, before ahead of after")
+        XCTAssertEqual(counts(try sent(context, ReadingContextLimits(characters: 20000, before: 6000, after: 3000))), [10000, 6000, 3000])
+        XCTAssertEqual(counts(try sent(context, ReadingContextLimits(characters: 4000, before: 0, after: 0), harness: .agent)), [4000, 0, 0])
+        let largest = ReadingContextLimits.capture
+        XCTAssertEqual(counts(try sent(context, largest)), [10000, 8000, 4000])
+        let escaped = ReadingChatContext(title: "T", author: "", chapter: "", text: String(repeating: "\u{0001}", count: 24000), source: "page", locator: "")
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Latest", context: escaped)], limits: largest)
+        XCTAssertEqual(request.turns.count, 1); XCTAssertLessThanOrEqual(request.turns[0].content.count, largest.encodedLimit + 100)
+
+        let saved = try JSONDecoder().decode(ReadingContextLimits.self, from: Data(#"{"characters":999999,"before":-5}"#.utf8))
+        XCTAssertEqual(saved, ReadingContextLimits(characters: 24000, before: 0, after: 1200))
+        let older = try JSONDecoder().decode(ChatConfiguration.self, from: Data(#"{"provider":"anthropic","sharePage":true}"#.utf8))
+        XCTAssertEqual(older.contextLimits, ReadingContextLimits())
+        var configuration = ChatConfiguration(); configuration.contextLimits.characters = 6000
+        XCTAssertEqual(try JSONDecoder().decode(ChatConfiguration.self, from: JSONEncoder().encode(configuration)).contextLimits.characters, 6000)
     }
     func testReadingPromptKeepsFocusedTextNeighborsBoundaryAndPrivateLocatorSeparate() throws {
         let context = ReadingChatContext(title: "A Book", author: "Author", chapter: "Chapter 3", text: "He hid the silver key.", source: "selection", locator: "private-cfi",
@@ -294,7 +320,7 @@ final class ChatTests: XCTestCase {
         let restored = try JSONDecoder().decode(ReadingChatContext.self, from: old)
         XCTAssertNil(restored.precedingText); XCTAssertNil(restored.progress)
         let context = ReadingChatContext(title: "Title", author: "A", chapter: "C", text: String(repeating: "文", count: 10000), source: String(repeating: "x", count: 100000), locator: "local",
-            precedingText: String(repeating: "前", count: 9000), followingText: String(repeating: "后", count: 9000), progress: .infinity).bounded()
+            precedingText: String(repeating: "前", count: 9000), followingText: String(repeating: "后", count: 9000), progress: .infinity).bounded(ReadingContextLimits())
         XCTAssertEqual(context.text.count, 10000)
         XCTAssertEqual(context.text.count + (context.precedingText?.count ?? 0) + (context.followingText?.count ?? 0), 12000)
         XCTAssertLessThanOrEqual(context.source.count, 40); XCTAssertNil(context.progress)
@@ -405,7 +431,7 @@ final class ChatTests: XCTestCase {
         XCTAssertTrue(content.contains("\"complete\":false")); XCTAssertTrue(content.hasSuffix(question))
         XCTAssertFalse(content.contains("private-cfi")); XCTAssertTrue(request.system.contains("Lead with the character's supported identity"))
         selected.bookRecall = ReadingBookRecall(term: "白虎", excerpts: (0..<20).map { _ in ReadingBookExcerpt(chapter: String(repeating: "章", count: 800), text: String(repeating: "\u{0001}", count: 12000)) }, scannedSections: 512, totalSections: 1000, complete: false)
-        let bounded = selected.bounded()
+        let bounded = selected.bounded(ReadingContextLimits())
         XCTAssertLessThanOrEqual(bounded.text.count + (bounded.precedingText?.count ?? 0) + (bounded.followingText?.count ?? 0) + (bounded.bookRecall?.excerpts.reduce(0) { $0 + $1.text.count } ?? 0), 12000)
         XCTAssertEqual(ChatRequest.conversation([ReaderChatMessage(isUser: true, text: question, context: bounded)]).turns.count, 1)
     }

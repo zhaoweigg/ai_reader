@@ -62,10 +62,20 @@ struct AISettingsView: View {
                 if configuration.harness == .agent { AgentLimitsSection(configuration: $configuration) }
                 Section("Reading context") {
                     Toggle("Include current passage", isOn: $configuration.sharePage).accessibilityIdentifier("aiSharePage")
+                    if configuration.sharePage {
+                        contextStepper("Passage and nearby text", value: $configuration.contextLimits.characters, range: ReadingContextLimits.characterRange, step: 1000, id: "contextCharacters")
+                        contextStepper("Text before", value: $configuration.contextLimits.before, range: ReadingContextLimits.beforeRange, step: 400, id: "contextBefore")
+                        contextStepper("Text after", value: $configuration.contextLimits.after, range: ReadingContextLimits.afterRange, step: 400, id: "contextAfter")
+                    }
+                    let limit = configuration.contextLimits.characters.formatted()
                     Text(configuration.harness == .agent
-                         ? "Sending shares your question, up to 12,000 characters of selected or visible text, nearby text, book details, approximate reading progress and recent discussion. The AI can also ask for passages it searches in the book up to your reading position, and earlier discussion it searches for. Book text is prepared on this device. Images and entire books are not uploaded. Disable this to send questions and chat text only; book search is then off."
-                         : "Sending shares your question, up to 12,000 characters of selected or visible text, nearby text and relevant earlier book passages, plus book details, approximate reading progress and recent or relevant earlier discussion. Character reminders look up earlier mentions locally. Images and entire books are not uploaded. Disable this to send questions and chat text only.")
+                         ? "Sending shares your question, up to \(limit) characters of selected or visible text, nearby text, book details, approximate reading progress and recent discussion. The AI can also ask for passages it searches in the book up to your reading position, and earlier discussion it searches for. Book text is prepared on this device. Images and entire books are not uploaded. Disable this to send questions and chat text only; book search is then off."
+                         : "Sending shares your question, up to \(limit) characters of selected or visible text, nearby text and relevant earlier book passages, plus book details, approximate reading progress and recent or relevant earlier discussion. Character reminders look up earlier mentions locally. Images and entire books are not uploaded. Disable this to send questions and chat text only.")
                         .font(.footnote).foregroundStyle(.secondary)
+                    if configuration.sharePage {
+                        Text("Nearby text stays within the current chapter, and text after a selection stops at the end of the visible page. Larger limits give the AI more to work with but use more of your plan.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     Text("Conversations and drafts are saved on this device for each book until you clear them. Provider retention follows that provider’s policy.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -90,6 +100,11 @@ struct AISettingsView: View {
         .onAppear { configuration = settings.configuration; refreshKey() }
         .onChange(of: configuration.provider) { _, _ in replacementKey = ""; saved = false; refreshKey() }
         .onChange(of: configuration.profile.endpoint) { _, _ in saved = false; refreshKey() }
+    }
+    private func contextStepper(_ title: String, value: Binding<Int>, range: ClosedRange<Int>, step: Int, id: String) -> some View {
+        Stepper(value: value, in: range, step: step) {
+            HStack { Text(title); Spacer(); Text(value.wrappedValue.formatted() + " chars").foregroundStyle(.secondary).monospacedDigit() }
+        }.accessibilityIdentifier(id)
     }
     private func refreshKey() {
         guard configuration.provider != .chatGPT else { hasKey = false; return }

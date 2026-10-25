@@ -9,7 +9,7 @@ export function nearbyChatText(range, visibleRange) {
         const walker = doc.createTreeWalker(doc.body, 4);
         walker.currentNode = node;
         let result = '', count = 0;
-        while (node && result.length < limit && count++ < 512) {
+        while (node && result.length < limit && count++ < 2048) {
             let start = backwards ? 0 : offset, end = backwards ? offset : node.length;
             if (boundary) {
                 if (boundary.endContainer === node) end = Math.min(end, boundary.endOffset);
@@ -26,13 +26,14 @@ export function nearbyChatText(range, visibleRange) {
         }
         return result;
     };
-    const precedingText = walk(range.startContainer, range.startOffset, true, 2400);
+    // Capture up to the largest limits in AI settings; each request trims to the reader's choice.
+    const precedingText = walk(range.startContainer, range.startOffset, true, 8000);
     // Only text after a selection which is already inside the visible range may
     // follow it. Ordinary page context never reads ahead of the visible endpoint.
     let followingText = '';
     if (visibleRange?.startContainer.ownerDocument === doc &&
         visibleRange.isPointInRange(range.endContainer, range.endOffset)) {
-        followingText = walk(range.endContainer, range.endOffset, false, 1200, visibleRange);
+        followingText = walk(range.endContainer, range.endOffset, false, 4000, visibleRange);
     }
     return {precedingText, followingText};
 }
