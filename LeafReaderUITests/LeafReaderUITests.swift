@@ -2381,10 +2381,15 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(reply.label.contains("这是李香玲，云瑶的队友。"))
         XCTAssertTrue(reply.label.contains("• 第一条")); XCTAssertTrue(reply.label.contains("let value = 1"))
         XCTAssertFalse(reply.label.contains("**")); XCTAssertFalse(reply.label.contains("```")); XCTAssertFalse(reply.label.contains("##"))
-        XCTAssertEqual(app.staticTexts.matching(identifier: "chatQuestion").firstMatch.label, "Literal **question**")
         let handle = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
         let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.32)), withVelocity: .slow, thenHoldForDuration: 0.1)
+        // The compact history lazily removes an offscreen question after a long
+        // reply. Reveal it before checking the deliberately literal user text.
+        let question = app.staticTexts.matching(identifier: "chatQuestion").firstMatch
+        if !question.exists { app.scrollViews["chatMessageHistory"].swipeDown() }
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        XCTAssertEqual(question.label, "Literal **question**")
         capture(flow + " formatted Markdown portrait", app: app)
         input.tap(); input.typeText("Draft after formatted reply")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
