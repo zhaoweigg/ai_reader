@@ -108,7 +108,7 @@ struct ZLibraryProfile: Equatable {
     let name: String
     let remaining: Int?
 }
-struct ZLibraryBook: Identifiable, Equatable {
+struct ZLibraryBook: Identifiable, Equatable, Codable {
     let remoteID: String
     let hash: String
     let title: String

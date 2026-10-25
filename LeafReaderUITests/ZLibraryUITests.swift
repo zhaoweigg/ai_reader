@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -11,12 +11,17 @@ final class ZLibraryUITests: XCTestCase {
         if let details { app.launchEnvironment["LEAF_UI_ZLIB_DETAILS"] = details }
         if sceneGeometry { app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = "1" }
         if let recommendations { app.launchEnvironment["LEAF_UI_ZLIB_RECOMMENDATIONS_" + recommendations.uppercased()] = "1" }
+        if shelf { app.launchEnvironment["LEAF_UI_ZLIB_SHELF"] = "1" }
         app.launch()
         if sceneGeometry {
             registerSceneGeometryCleanup(app: app)
             setReaderOrientation(.portrait, app: app)
         }
         return app
+    }
+    @MainActor private func openDiscover(_ app: XCUIApplication) {
+        let tab = app.tabBars.buttons["Discover"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 10)); tab.tap()
     }
     @MainActor private func capture(_ name:String) {
         let attachment = XCTAttachment(screenshot:XCUIScreen.main.screenshot());attachment.name = name;attachment.lifetime = .keepAlways;add(attachment)
@@ -102,7 +107,7 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor func testRecommendationsConnectSearchDetailsRefreshAndRelaunch() {
         continueAfterFailure = false
         let app = launch(sceneGeometry: true)
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         browse("Recommended", app: app)
         XCTAssertTrue(app.staticTexts["Connect for recommendations"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["catalogBook-recommended"].exists)
@@ -130,7 +135,7 @@ final class ZLibraryUITests: XCTestCase {
         waitForCatalogLoad(app)
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         app.terminate(); app.launch(); setReaderOrientation(.portrait, app: app)
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(card.waitForExistence(timeout: 10))
         XCTAssertEqual(app.staticTexts["zlibraryFeedTitle"].label, "Recommended")
         XCTAssertFalse(app.staticTexts["Connect for recommendations"].exists)
@@ -140,7 +145,7 @@ final class ZLibraryUITests: XCTestCase {
         continueAfterFailure = false
         let app = launch(sceneGeometry: true, recommendations: "failure")
         app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap(); app.tabBars.buttons["Library"].tap()
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         browse("Recommended", app: app)
         app.buttons["connectZLibrary"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
         XCTAssertTrue(app.staticTexts["Could not load recommendations"].waitForExistence(timeout: 10))
@@ -162,7 +167,7 @@ final class ZLibraryUITests: XCTestCase {
         continueAfterFailure = false
         let app = launch(recommendations: "empty")
         app.tabBars.buttons["Settings"].tap(); app.buttons["Dusk theme"].tap(); app.tabBars.buttons["Library"].tap()
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         browse("Recommended", app: app)
         app.buttons["connectZLibrary"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
         XCTAssertTrue(app.staticTexts["No recommendations yet"].waitForExistence(timeout: 10))
@@ -175,7 +180,7 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor func testSearchOrderMenuAllOptionsPaginationAndDetailsPreserveSelection() {
         let app = launch()
-        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
         XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
         capture("Popular feed without search sorting Day")
@@ -216,7 +221,7 @@ final class ZLibraryUITests: XCTestCase {
         continueAfterFailure = false
         let app = launch(sceneGeometry: true)
         app.tabBars.buttons["Settings"].tap();app.buttons["Night theme"].tap();app.tabBars.buttons["Library"].tap()
-        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
         XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
         search("unavailable",app:app)
@@ -241,7 +246,7 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["Best match"].firstMatch.tap()
         XCTAssertTrue(app.buttons["zlibrarySearchOrder"].label.contains("Best match"))
         app.terminate();app.launch();setReaderOrientation(.portrait, app: app)
-        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
         XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
         XCTAssertEqual(app.textFields["zlibrarySearchField"].value as? String,"Title, author, or ISBN")
@@ -252,10 +257,7 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor func testPopularCatalogConnectsImportsAndPreservesExistingBook() {
         let app = launch()
-        XCTAssertTrue(app.buttons["importBooks"].waitForExistence(timeout:10));app.buttons["importBooks"].tap()
-        XCTAssertTrue(app.buttons["addFromZLibrary"].waitForExistence(timeout:5))
-        capture("Add books sources")
-        app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
         XCTAssertTrue(app.textFields["zlibrarySearchField"].exists)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:10))
@@ -313,7 +315,7 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["Night theme"].tap()
         XCTAssertTrue(app.buttons["Night theme"].isSelected)
         app.tabBars.buttons["Library"].tap()
-        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         let rated = app.buttons["catalogBook-sample"], unrated = app.buttons["catalogBook-sample2"]
         XCTAssertTrue(rated.waitForExistence(timeout:10))
         XCTAssertTrue(rated.label.contains("EPUB · 1.8 MB"))
@@ -352,7 +354,7 @@ final class ZLibraryUITests: XCTestCase {
         capture("Book rating and file quality details")
     }
     @MainActor func testConnectionRejectsUnsafeAddressAndCancellingKeepsCatalog() {
-        let app = launch();app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        let app = launch(); openDiscover(app)
         XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout:10));app.buttons["Z-Library connection"].tap()
         let address = app.textFields["zlibraryAddress"]
         XCTAssertTrue(address.waitForExistence(timeout:5));address.tap()
@@ -368,7 +370,7 @@ final class ZLibraryUITests: XCTestCase {
         let app = launch(details: "success")
         app.tabBars.buttons["Settings"].tap(); app.buttons["Sage theme"].tap()
         app.tabBars.buttons["Library"].tap()
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:10))
         app.buttons["catalogBook-sample"].tap()
         XCTAssertTrue(app.buttons["catalogAddBook"].waitForExistence(timeout:10))
@@ -408,7 +410,7 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor func testSparsePopularDetailsFailureCanRetryAndUnsupportedIsDistinct() {
         for scenario in ["failure", "unsupported"] {
             let app = launch(details:scenario)
-            app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+            openDiscover(app)
             XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:10));app.buttons["catalogBook-sample"].tap()
             if scenario == "failure" {
                 XCTAssertTrue(app.staticTexts["catalogDetailsError"].waitForExistence(timeout:10))
@@ -433,7 +435,7 @@ final class ZLibraryUITests: XCTestCase {
         app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_WEBSITE_FIXTURE": "1"]
         // Strict portrait workflow: do not change device orientation while another slot rotates.
         app.launch()
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout: 10))
         app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
         XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
@@ -448,7 +450,7 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
         capture("Catalog recovered by closing website")
         app.terminate(); app.launch()
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
         XCTAssertFalse(app.buttons["connectZLibrary"].exists)
@@ -456,7 +458,7 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor func testSavedConnectionLoadsWithoutWebsiteAfterRepeatedRelaunch() {
         let app = launch()
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout: 10))
         app.buttons["Z-Library connection"].tap()
         app.buttons["zlibraryPreviewConnect"].tap()
@@ -464,8 +466,7 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertFalse(app.buttons["connectZLibrary"].exists)
         for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
             app.terminate(); XCUIDevice.shared.orientation = orientation; app.launch()
-            XCTAssertTrue(app.buttons["importBooks"].waitForExistence(timeout: 10))
-            app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+            openDiscover(app)
             XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
             XCTAssertFalse(app.buttons["connectZLibrary"].exists)
             XCTAssertFalse(app.buttons["zlibraryCheckWebsite"].exists)
@@ -486,7 +487,7 @@ final class ZLibraryUITests: XCTestCase {
         app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_WEBSITE_FIXTURE": "1"]
         // Strict portrait workflow: do not change device orientation while another slot rotates.
         app.launch()
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout: 10))
         app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
         XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
@@ -522,7 +523,7 @@ final class ZLibraryUITests: XCTestCase {
                 expectation(for: NSPredicate { _, _ in app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height }, evaluatedWith: app)
                 waitForExpectations(timeout: 10)
             }
-            app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+            openDiscover(app)
             let loaded = app.buttons["catalogBook-sample2"].waitForExistence(timeout: 10)
             if !loaded { capture("Initial catalog failure"); print(app.debugDescription) }
             XCTAssertTrue(loaded)
@@ -559,7 +560,7 @@ final class ZLibraryUITests: XCTestCase {
         app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_POPULAR_REDIRECT": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1"]
         registerSceneGeometryCleanup(app: app)
         app.launch(); setReaderOrientation(.portrait, app: app)
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
         app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
         XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
@@ -584,7 +585,7 @@ final class ZLibraryUITests: XCTestCase {
         let window = app.windows.firstMatch
         expectation(for: NSPredicate { _, _ in window.frame.width > window.frame.height }, evaluatedWith: window)
         waitForExpectations(timeout: 10)
-        app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
         search("The Art of Noticing", app: app)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
@@ -603,7 +604,7 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor func testVerifiedAccountWithUnavailableFeedShowsWebsiteAccessWithoutSigningOut() {
         let app = launch(feedFailure:true)
-        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout:10))
         app.buttons["Z-Library connection"].tap()
         XCTAssertTrue(app.buttons["zlibraryPreviewConnect"].waitForExistence(timeout:5))
@@ -622,13 +623,13 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Preview account"].exists)
         app.buttons["Close connection"].tap()
         app.terminate();app.launch()
-        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout:10))
         XCTAssertFalse(app.buttons["connectZLibrary"].exists)
     }
     @MainActor func testSearchPaginationEmptyStateRetryAndReturnToPopular() {
         let app = launch()
-        app.buttons["importBooks"].tap();app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:10))
         let field = app.textFields["zlibrarySearchField"]
         field.tap();field.typeText("9781234567890 + C++")
@@ -675,8 +676,7 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["Dusk theme"].tap()
         XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
         app.tabBars.buttons["Library"].tap()
-        app.buttons["importBooks"].tap()
-        app.buttons["addFromZLibrary"].tap()
+        openDiscover(app)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
         capture("Dusk catalog")
         let search = app.textFields["zlibrarySearchField"]
@@ -692,6 +692,79 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["catalogAddBook"].tap()
         XCTAssertTrue(app.textFields["zlibraryAddress"].waitForExistence(timeout: 5))
         capture("Dusk catalog connection")
+    }
+    @MainActor func testLibraryShelfSeeAllSearchFallbackRecommendationsAndRelaunch() {
+        continueAfterFailure = false
+        let app = launch(sceneGeometry: true, shelf: true)
+        let title = app.staticTexts["discoverShelfTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertEqual(title.label, "Popular on Z-Library")
+        let popular = app.buttons["discoverShelfBook-sample2"]
+        XCTAssertTrue(popular.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["addFromZLibrary"].exists)
+        XCTAssertTrue(app.buttons["importBooks"].label.contains("Import"))
+        capture("Library popular shelf Day portrait")
+        popular.tap()
+        XCTAssertTrue(app.buttons["catalogAddBook"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["catalogAddBook"].label, "Connect to add book")
+        capture("Shelf book details sheet")
+        app.buttons["closeCatalogBook"].tap()
+        XCTAssertTrue(popular.waitForExistence(timeout: 5))
+        app.buttons["discoverSeeAll"].tap()
+        XCTAssertTrue(app.tabBars.buttons["Discover"].isSelected)
+        expectation(for: NSPredicate(format: "label == %@", "Most popular"), evaluatedWith: app.staticTexts["zlibraryFeedTitle"])
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout: 10))
+        capture("See all opens Discover popular")
+        app.tabBars.buttons["Library"].tap()
+        let field = app.textFields["librarySearch"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap(); field.typeText("Coast tides")
+        let fallback = app.buttons["librarySearchZLibrary"]
+        XCTAssertTrue(fallback.waitForExistence(timeout: 5))
+        XCTAssertTrue(fallback.label.contains("Coast tides"))
+        XCTAssertTrue(app.buttons["librarySearchMatch-sample"].waitForExistence(timeout: 10))
+        capture("Library search falls back to Z-Library")
+        fallback.tap()
+        XCTAssertTrue(app.tabBars.buttons["Discover"].isSelected)
+        expectation(for: NSPredicate(format: "label == %@", "Search results"), evaluatedWith: app.staticTexts["zlibraryFeedTitle"])
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(app.textFields["zlibrarySearchField"].value as? String, "Coast tides")
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+        capture("Fallback search in Discover")
+        app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap(); app.tabBars.buttons["Library"].tap()
+        app.buttons["libraryClearSearch"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Recommended for you"), evaluatedWith: title)
+        waitForExpectations(timeout: 10)
+        let recommended = app.buttons["discoverShelfBook-recommended"]
+        XCTAssertTrue(recommended.waitForExistence(timeout: 5))
+        capture("Library recommendations shelf Night portrait")
+        setReaderOrientation(.landscapeLeft, app: app)
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 5)
+        XCTAssertTrue(recommended.waitForExistence(timeout: 5))
+        capture("Library recommendations shelf Night landscape")
+        setReaderOrientation(.portrait, app: app)
+        app.terminate(); app.launch(); setReaderOrientation(.portrait, app: app)
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertEqual(title.label, "Recommended for you")
+        XCTAssertTrue(recommended.waitForExistence(timeout: 5))
+        app.buttons["discoverSeeAll"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Recommended"), evaluatedWith: app.staticTexts["zlibraryFeedTitle"])
+        waitForExpectations(timeout: 10)
+        app.tabBars.buttons["Library"].tap()
+        recommended.tap()
+        let add = app.buttons["catalogAddBook"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate(format: "label == %@ AND hittable == true", "Add to library"), evaluatedWith: add); waitForExpectations(timeout: 10)
+        add.tap()
+        XCTAssertTrue(app.buttons["catalogViewLibrary"].waitForExistence(timeout: 15))
+        app.buttons["catalogViewLibrary"].tap()
+        // A book already in the library leaves the shelf; an empty shelf is hidden.
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: recommended); waitForExpectations(timeout: 5)
+        XCTAssertFalse(title.exists)
+        capture("Added recommendation leaves the shelf")
     }
 
 }

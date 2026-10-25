@@ -6,9 +6,12 @@ private enum LibrarySort: String, CaseIterable { case recent = "Recently opened"
 struct LibraryView: View {
     @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var catalog: ZLibraryStore
     @Environment(\.scenePhase) private var scenePhase
     let onImport: () -> Void
     let onOpen: (UUID) -> Void
+    let onDiscover: (ZLibraryFeed) -> Void
+    let onSearchCatalog: (String) -> Void
     @State private var query = ""
     @FocusState private var searchFocused: Bool
     @State private var filter: LibraryFilter = .all
@@ -21,6 +24,8 @@ struct LibraryView: View {
     @State private var choosingConversation = false
     @State private var viewportHeight: CGFloat = 0
     @State private var conversation = "general"
+    @State private var catalogBook: ZLibraryBook?
+    @State private var catalogMatches: [ZLibraryBook] = []
 
     private var visible: [Book] {
         library.books.filter { book in
@@ -42,6 +47,9 @@ struct LibraryView: View {
             }
         }
     }
+    private var shelf: [ZLibraryBook] {
+        catalog.shelf.filter { book in !library.books.contains { $0.catalogSource == book.sourceID } }
+    }
     private var featured: Book? {
         library.books.filter { !$0.isFinished && $0.lastOpenedAt != nil }.max { ($0.lastOpenedAt ?? .distantPast) < ($1.lastOpenedAt ?? .distantPast) }
         ?? library.books.first
@@ -56,6 +64,9 @@ struct LibraryView: View {
                     }.padding(.top, 8)
                     if let book = featured, query.isEmpty, filter == .all, format == nil {
                         featuredBook(book)
+                    }
+                    if !shelf.isEmpty, query.isEmpty, filter == .all, format == nil {
+                        discoverShelf
                     }
                     VStack(alignment: .leading, spacing: 16) {
                         HStack {
@@ -76,7 +87,7 @@ struct LibraryView: View {
                         HStack(spacing: 9) {
                             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                             TextField("Find a title or author", text: $query).focused($searchFocused).accessibilityIdentifier("librarySearch")
-                            if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.accessibilityLabel("Clear search") }
+                            if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.accessibilityLabel("Clear search").accessibilityIdentifier("libraryClearSearch") }
                         }.padding(13).background(theme.surface, in: .rect(cornerRadius: 12))
                         Picker("Library filter", selection: $filter) {
                             ForEach(LibraryFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -122,6 +133,7 @@ struct LibraryView: View {
                             }
                         }
                     }
+                    if !query.isEmpty { catalogSearch }
                     HStack(spacing: 6) {
                         Image(systemName: "iphone")
                         Text("At home on your device. Available offline.")
@@ -145,9 +157,29 @@ struct LibraryView: View {
                     .accessibilityElement(children: .combine).accessibilityLabel("Leaf reader")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: onImport) { Label("Add books", systemImage: "plus") }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).clipShape(Capsule())
+                    Button(action: onImport) { Label("Import", systemImage: "plus") }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).clipShape(Capsule())
                         .disabled(library.isImporting).accessibilityIdentifier("importBooks")
                 }
+            }
+            .task(id: catalog.connected) { await catalog.loadShelf() }
+            .task(id: query) {
+                catalogMatches = []
+                guard !query.trimmingCharacters(in: .whitespaces).isEmpty, visible.isEmpty else { return }
+                // Wait for a pause in typing before asking the catalog.
+                try? await Task.sleep(for: .milliseconds(600))
+                guard !Task.isCancelled else { return }
+                let matches = await catalog.searchPreview(query)
+                if !Task.isCancelled { catalogMatches = matches }
+            }
+            .sheet(item: $catalogBook) { book in
+                NavigationStack {
+                    ZLibraryBookView(book: book, close: { catalogBook = nil })
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Close", systemImage: "xmark") { catalogBook = nil }.labelStyle(.iconOnly).accessibilityIdentifier("closeCatalogBook")
+                            }
+                        }
+                }.environment(\.leafTheme, theme).tint(theme.accent)
             }
             .safeAreaInset(edge: .bottom) {
                 if library.isImporting { HStack { ProgressView(); Text("Importing books… \(library.importCount) added").font(.subheadline) }.padding().frame(maxWidth: .infinity).background(.regularMaterial) }
@@ -203,6 +235,52 @@ struct LibraryView: View {
     }
     private func closeChat() { chat?.close(); chat = nil; chatBook = nil }
     private func openBook(_ id: UUID) { closeChat(); onOpen(id) }
+    private var discoverShelf: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(catalog.shelfFeed == .recommended ? "Recommended for you" : "Popular on Z-Library").font(.title2.weight(.semibold))
+                    .accessibilityIdentifier("discoverShelfTitle")
+                Spacer()
+                Button("See all") { onDiscover(catalog.shelfFeed) }.font(.subheadline.weight(.semibold)).accessibilityIdentifier("discoverSeeAll")
+            }
+            catalogRow(shelf, identifier: "discoverShelfBook")
+        }
+    }
+    private var catalogSearch: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button { searchFocused = false; onSearchCatalog(query) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass").font(.title3).foregroundStyle(theme.accent).frame(width: 42, height: 42)
+                        .background(theme.accent.opacity(0.1), in: .rect(cornerRadius: 11))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Search Z-Library for “\(query)”").font(.headline).foregroundStyle(.primary).lineLimit(2)
+                        Text("Find it and add it to your library").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary).accessibilityHidden(true)
+                }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(theme.surface, in: .rect(cornerRadius: 14)).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("librarySearchZLibrary")
+            if visible.isEmpty && !catalogMatches.isEmpty {
+                Text("Matches on Z-Library").font(.subheadline).foregroundStyle(.secondary)
+                catalogRow(catalogMatches, identifier: "librarySearchMatch")
+            }
+        }
+    }
+    private func catalogRow(_ books: [ZLibraryBook], identifier: String) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .top, spacing: 14) {
+                ForEach(books) { book in
+                    Button { searchFocused = false; catalogBook = book } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ZLibraryCover(book: book)
+                            Text(book.title).font(.caption.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
+                            Text(book.author.isEmpty ? "Unknown author" : book.author).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }.frame(width: 96, alignment: .leading).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityIdentifier("\(identifier)-\(book.remoteID)")
+                }
+            }.padding(.horizontal, 24)
+        }.padding(.horizontal, -24)
+    }
     private func featuredBook(_ book: Book) -> some View {
         Button { openBook(book.id) } label: {
             HStack(spacing: 22) {

@@ -2,43 +2,6 @@ import SwiftUI
 import WebKit
 import ImageIO
 
-struct AddBooksView: View {
-    @Environment(\.leafTheme) private var theme
-    let openFiles: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var path: [String] = []
-    @State private var detent: PresentationDetent = .medium
-    var body: some View {
-        NavigationStack(path:$path) {
-            List {
-                Group {
-                    Button(action: openFiles) {
-                        source("From Files", subtitle:"On your iPhone, iCloud Drive & more", icon:"folder")
-                    }.buttonStyle(.plain).accessibilityIdentifier("addFromFiles")
-                    Button { path = ["zlibrary"] } label: {
-                        source("Z-Library",subtitle:"Search books, discover recommendations & more",icon:"book")
-                    }.buttonStyle(.plain).accessibilityIdentifier("addFromZLibrary")
-                    Section { Text("Books you add are saved on this device for offline reading.").font(.footnote).foregroundStyle(.secondary) }
-                }.listRowBackground(theme.surface)
-            }.leafFormStyle()
-            .toolbarBackground(theme.canvas, for: .navigationBar)
-            .navigationTitle("Add books").navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for:String.self) { _ in ZLibraryView(close: { dismiss() }) }
-            .toolbar { ToolbarItem(placement:.topBarTrailing) { Button("Close",systemImage:"xmark") { dismiss() }.labelStyle(.iconOnly) } }
-        }.presentationDetents([.medium,.large],selection:$detent).presentationDragIndicator(.visible)
-            .onChange(of:path) { _, value in detent = value.isEmpty ? .medium : .large }
-    }
-    private func source(_ title: String, subtitle: String, icon: String) -> some View {
-        HStack(spacing:14) {
-            Image(systemName:icon).font(.title2).foregroundStyle(theme.accent).frame(width:46,height:46)
-                .background(theme.accent.opacity(0.1),in:.rect(cornerRadius:13))
-            VStack(alignment:.leading,spacing:4) { Text(title).font(.headline).foregroundStyle(.primary);Text(subtitle).font(.caption).foregroundStyle(.secondary) }
-            Spacer(minLength:8)
-            Image(systemName:"chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary).accessibilityHidden(true)
-        }.padding(.vertical,8).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
-    }
-}
-
 struct ZLibraryView: View {
     @Environment(\.leafTheme) private var theme
     let close: () -> Void
@@ -191,7 +154,6 @@ struct ZLibraryView: View {
         .sheet(item:$sheet,onDismiss: { Task { await catalog.reload() } }) { sheet in
             if sheet == .website { ZLibraryWebsiteSignIn() } else { ZLibraryConnectionView() }
         }
-        .presentationDetents([.large])
     }
     private func submitSearch() {
         searchFocused = false
@@ -395,7 +357,7 @@ private struct ZLibrarySignInWebView: UIViewRepresentable {
     }
 }
 
-private struct ZLibraryCover: View {
+struct ZLibraryCover: View {
     let book: ZLibraryBook
     @State private var image: UIImage?
     var body: some View {

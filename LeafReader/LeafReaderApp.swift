@@ -16,6 +16,7 @@ struct LeafReaderApp: App {
         var chatGPT: ChatGPTAccountStore?
         var chatCredentials = KeychainChatCredentials()
         var catalogClient: (any ZLibraryServing)?
+        var catalogDiscovery = true
         #if DEBUG
         if let id = UITesting.testID {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUITests/\(id.uuidString)", isDirectory: true)
@@ -28,6 +29,8 @@ struct LeafReaderApp: App {
             if UITesting.flag("LEAF_UI_CHATGPT_CONNECTED") {
                 chatGPT = ChatGPTAccountStore.uiTestConnected(defaults: defaults, credentials: chatCredentials)
             }
+            // UI tests never reach the live catalog from the library; shelf cases opt in.
+            catalogDiscovery = UITesting.flag("LEAF_UI_ZLIB_MOCK") && UITesting.flag("LEAF_UI_ZLIB_SHELF")
             if UITesting.flag("LEAF_UI_ZLIB_MOCK") {
                 catalogClient = UITestZLibraryClient()
                 if UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE") {
@@ -37,13 +40,14 @@ struct LeafReaderApp: App {
         } else if NSClassFromString("XCTestCase") != nil {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUnitTests/\(UUID().uuidString)", isDirectory: true)
             seedSamples = false
+            catalogDiscovery = false
         }
         #endif
         _library = StateObject(wrappedValue: LibraryStore(root: root, seedSamples: seedSamples))
         _aiSettings = StateObject(wrappedValue: AISettingsStore(defaults: defaults, credentials: chatCredentials, providerOverride: chatProvider, chatGPTOverride: chatGPT))
         var catalogCredentials = chatCredentials
         catalogCredentials.service += ".zlibrary"
-        _catalog = StateObject(wrappedValue: ZLibraryStore(defaults: defaults, credentials: catalogCredentials, client: catalogClient))
+        _catalog = StateObject(wrappedValue: ZLibraryStore(defaults: defaults, credentials: catalogCredentials, client: catalogClient, discoversFromLibrary: catalogDiscovery))
         readingDefaults = defaults
     }
 
@@ -62,30 +66,36 @@ struct ReadingDestination: Identifiable {
     var locator: String? = nil
 }
 
+enum AppTab: Hashable { case library, discover, bookmarks, settings }
+
 struct AppView: View {
     @AppStorage("reader.theme") private var themeName = ReadingTheme.day.rawValue
     private var theme: ReadingTheme { ReadingTheme(rawValue: themeName) ?? .day }
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var catalog: ZLibraryStore
     @Environment(\.scenePhase) private var scenePhase
+    @State private var tab = AppTab.library
+    @State private var discoverStack = UUID()
     @State private var importing = false
-    @State private var addingBooks = false
-    @State private var pickFilesAfterDismiss = false
     @State private var destination: ReadingDestination?
     @State private var pendingURLs: [URL] = []
     @State private var drainingImports = false
     var body: some View {
-        TabView {
-            LibraryView(onImport: { addingBooks = true }, onOpen: { destination = ReadingDestination(id: $0) })
-                .tabItem { Label("Library", systemImage: "books.vertical") }
+        TabView(selection: $tab) {
+            LibraryView(onImport: { importing = true }, onOpen: { destination = ReadingDestination(id: $0) },
+                        onDiscover: { catalog.show($0); tab = .discover },
+                        onSearchCatalog: { catalog.show(query: $0); tab = .discover })
+                .tabItem { Label("Library", systemImage: "books.vertical") }.tag(AppTab.library)
+            NavigationStack {
+                // Returning to the library also leaves the details of an added book.
+                ZLibraryView(close: { tab = .library; discoverStack = UUID() })
+            }.id(discoverStack)
+                .tabItem { Label("Discover", systemImage: "safari") }.tag(AppTab.discover)
             BookmarksView(onOpen: { id, locator in destination = ReadingDestination(id: id, locator: locator) })
-                .tabItem { Label("Bookmarks", systemImage: "bookmark") }
+                .tabItem { Label("Bookmarks", systemImage: "bookmark") }.tag(AppTab.bookmarks)
             SettingsView()
-                .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
+                .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }.tag(AppTab.settings)
         }
-        .sheet(isPresented: $addingBooks, onDismiss: {
-            if pickFilesAfterDismiss { pickFilesAfterDismiss = false; importing = true }
-        }) { AddBooksView(openFiles: { pickFilesAfterDismiss = true; addingBooks = false }).environment(\.leafTheme, theme).tint(theme.accent) }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): enqueue(urls)

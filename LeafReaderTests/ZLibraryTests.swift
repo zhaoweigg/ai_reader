@@ -184,6 +184,52 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertEqual(reopened.books, [book]); XCTAssertTrue(reopened.connected)
         XCTAssertEqual(client.recommendedSessions.count, 2); XCTAssertTrue(client.popularSessions.isEmpty)
     }
+    func testShelfShowsPopularWithoutAccountRecommendationsWithOneAndRestoresOnlyForThatAccount() async throws {
+        let client = CatalogService(), (store, credentials, defaults) = store(client)
+        let other = ZLibraryBook(remoteID:"77",hash:"cd5678",title:"Recommended book",author:"",fileExtension:"epub",size:"",language:"",year:"",coverURL:nil)
+        client.popularBooks = [book]; client.recommendedBooks = [other]
+        await store.loadShelf()
+        XCTAssertEqual(store.shelf, [book]); XCTAssertEqual(store.shelfFeed, .popular)
+        await store.loadShelf() // Reopening the library reuses the shelf.
+        XCTAssertEqual(client.popularSessions.count, 1)
+        XCTAssertEqual(store.books, []); XCTAssertEqual(store.activeQuery, "")
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        XCTAssertTrue(store.shelf.isEmpty)
+        await store.loadShelf()
+        XCTAssertEqual(store.shelf, [other]); XCTAssertEqual(store.shelfFeed, .recommended)
+        XCTAssertEqual(client.recommendedSessions, [session])
+        let reopened = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        XCTAssertEqual(reopened.shelf, [other]); XCTAssertEqual(reopened.shelfFeed, .recommended)
+        try await store.disconnect()
+        XCTAssertTrue(store.shelf.isEmpty)
+        XCTAssertTrue(ZLibraryStore(defaults: defaults, credentials: credentials, client: client).shelf.isEmpty)
+    }
+    func testShelfReusesDiscoverListAndFailureIsSilentAndNotRepeated() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        client.popularBooks = [book]
+        await store.loadPopular(); await store.loadShelf()
+        XCTAssertEqual(store.shelf, [book]); XCTAssertEqual(client.popularSessions.count, 1)
+        let (failing, _, _) = self.store(client)
+        client.popularError = ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
+        await failing.loadShelf(); await failing.loadShelf()
+        XCTAssertTrue(failing.shelf.isEmpty); XCTAssertNil(failing.error)
+        XCTAssertEqual(client.popularSessions.count, 2)
+    }
+    func testDiscoveryOffMakesNoLibraryRequestsAndPreviewLeavesDiscoverUnchanged() async throws {
+        let client = CatalogService(), (store, credentials, defaults) = store(client)
+        client.popularBooks = [book]
+        client.searchHandler = { [self] _, _ in ZLibrarySearchPage(books: [book], hasMore: true) }
+        let matches = await store.searchPreview("  test  ")
+        XCTAssertEqual(matches, [book]); XCTAssertEqual(client.searchCalls.map(\.0), ["test"])
+        XCTAssertEqual(store.books, []); XCTAssertEqual(store.activeQuery, ""); XCTAssertFalse(store.canLoadMore)
+        store.show(query: " test "); XCTAssertEqual(store.activeQuery, "test")
+        store.show(.recommended); XCTAssertEqual(store.activeQuery, ""); XCTAssertEqual(store.feed, .recommended)
+        let quiet = ZLibraryStore(defaults: defaults, credentials: credentials, client: client, discoversFromLibrary: false)
+        await quiet.loadShelf()
+        let none = await quiet.searchPreview("test")
+        XCTAssertTrue(quiet.shelf.isEmpty); XCTAssertTrue(none.isEmpty)
+        XCTAssertTrue(client.popularSessions.isEmpty); XCTAssertEqual(client.searchCalls.count, 1)
+    }
     func testRecommendationPopularAndSearchCachesStaySeparateAndClearReturnsToSelectedFeed() async throws {
         let client = CatalogService(), (store, _, _) = store(client)
         let connected = await store.connect(session); XCTAssertTrue(connected)
