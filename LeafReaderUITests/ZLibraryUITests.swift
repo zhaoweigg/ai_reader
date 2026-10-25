@@ -90,7 +90,14 @@ final class ZLibraryUITests: XCTestCase {
         picker.buttons[title].tap()
         expectation(for: NSPredicate(format: "label == %@", title), evaluatedWith: app.staticTexts["zlibraryFeedTitle"])
         waitForExpectations(timeout: 5)
+        waitForCatalogLoad(app)
         XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
+    }
+    @MainActor private func waitForCatalogLoad(_ app: XCUIApplication) {
+        // Changing feeds may request a fresh account-scoped list. The heading
+        // updates before that request finishes; wait for completion, not just its title.
+        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: app.buttons["zlibraryRefresh"])
+        waitForExpectations(timeout: 15)
     }
     @MainActor func testRecommendationsConnectSearchDetailsRefreshAndRelaunch() {
         continueAfterFailure = false
@@ -120,6 +127,7 @@ final class ZLibraryUITests: XCTestCase {
         browse("Recommended", app: app)
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         app.buttons["zlibraryRefresh"].tap()
+        waitForCatalogLoad(app)
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         app.terminate(); app.launch(); setReaderOrientation(.portrait, app: app)
         app.buttons["importBooks"].tap(); app.buttons["addFromZLibrary"].tap()
