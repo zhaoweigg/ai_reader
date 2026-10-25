@@ -102,8 +102,9 @@ final class LeafReaderUITests: XCTestCase {
     /// when one does not move the row.
     @MainActor private func revealSettingsRow(_ row: XCUIElement, app: XCUIApplication) {
         var held = false, last: CGRect?
+        // Fixed margins clear the navigation bar and the floating tab bar.
+        let top = app.frame.minY + app.frame.height * 0.12, bottom = app.frame.maxY - app.frame.height * 0.12
         for _ in 0..<14 {
-            let top = app.navigationBars.firstMatch.frame.maxY + 8, bottom = app.tabBars.firstMatch.frame.minY - 8
             if row.exists, row.isHittable, row.frame.minY >= top, row.frame.maxY <= bottom { return }
             let up = !row.exists || row.frame.maxY > bottom
             if row.exists, row.frame == last { held.toggle() }
@@ -113,7 +114,7 @@ final class LeafReaderUITests: XCTestCase {
             if held { start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2) }
             else { start.press(forDuration: 0, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0) }
         }
-        XCTAssertTrue(row.exists && row.isHittable, "Could not reveal \(row.identifier)")
+        XCTAssertTrue(row.exists && row.isHittable, "Could not reveal \(row.identifier): \(row.exists ? "\(row.frame)" : "absent") within \(top)...\(bottom)")
     }
 
     @MainActor private func revealAppearanceControl(_ app: XCUIApplication, _ control: XCUIElement) {
@@ -1779,9 +1780,9 @@ final class LeafReaderUITests: XCTestCase {
         conversationTool.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(conversationTool.value as? String, "0")
         capture("Agent limits in AI settings", app: app)
-        let contextCharacters = app.descendants(matching: .any)["contextCharacters"].firstMatch
-        revealSettingsRow(contextCharacters, app: app)
-        app.buttons["contextCharacters-Decrement"].tap()
+        let decrement = app.buttons["contextCharacters-Decrement"]
+        revealSettingsRow(decrement, app: app)
+        decrement.tap()
         XCTAssertTrue(app.staticTexts["11,000 chars"].exists)
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "up to 11,000 characters")).firstMatch.exists)
         capture("Reading context limits in AI settings", app: app)
@@ -1803,7 +1804,7 @@ final class LeafReaderUITests: XCTestCase {
         app.tabBars.buttons["Settings"].tap()
         for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
         app.buttons["openAISettings"].tap()
-        revealSettingsRow(contextCharacters, app: app)
+        revealSettingsRow(decrement, app: app)
         XCTAssertTrue(app.staticTexts["11,000 chars"].exists, "The reading context limit is saved")
         let traces = app.buttons["openAgentTraces"]
         for _ in 0..<8 where !(traces.exists && traces.isHittable) { app.swipeUp() }
