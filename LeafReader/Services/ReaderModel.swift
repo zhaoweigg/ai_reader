@@ -223,9 +223,10 @@ final class ReaderModel: NSObject, ObservableObject {
         let lastText = first === last ? firstText : (last.string ?? "") as NSString
         guard firstRange.location != NSNotFound, firstRange.location <= firstText.length,
               lastRange.location != NSNotFound, NSMaxRange(lastRange) <= lastText.length else { return (nil, nil) }
-        let before = firstText.substring(with: NSRange(location: max(0, firstRange.location - 2400), length: min(2400, firstRange.location)))
+        let reach = ReadingContextLimits.capture
+        let before = firstText.substring(with: NSRange(location: max(0, firstRange.location - reach.before), length: min(reach.before, firstRange.location)))
         // A PDF page is the context boundary; do not load the next page.
-        let after = lastText.substring(with: NSRange(location: NSMaxRange(lastRange), length: min(1200, lastText.length - NSMaxRange(lastRange))))
+        let after = lastText.substring(with: NSRange(location: NSMaxRange(lastRange), length: min(reach.after, lastText.length - NSMaxRange(lastRange))))
         return (before, after)
     }
     private func updateLiveSelection() {
@@ -365,12 +366,12 @@ final class ReaderModel: NSObject, ObservableObject {
         guard let type = message["type"] as? String else { return }
         switch type {
         case "selection":
-            selectedWebText = String((message["text"] as? String ?? "").prefix(12000))
+            selectedWebText = String((message["text"] as? String ?? "").prefix(ReadingContextLimits.capture.characters))
             selectionTooLong = message["tooLong"] as? Bool ?? false
             selectedWebLocator = (message["locator"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(2000)) }
             selectedWebChapter = (message["label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(300)) }
-            selectedWebPreceding = (message["precedingText"] as? String).map { String($0.suffix(2400)) }
-            selectedWebFollowing = (message["followingText"] as? String).map { String($0.prefix(1200)) }
+            selectedWebPreceding = (message["precedingText"] as? String).map { String($0.suffix(ReadingContextLimits.capture.before)) }
+            selectedWebFollowing = (message["followingText"] as? String).map { String($0.prefix(ReadingContextLimits.capture.after)) }
             selectedWebProgress = fraction
             #if DEBUG
             readerSelectionMenuTrace("selection", source: webView, context: !selectedWebText.isEmpty)

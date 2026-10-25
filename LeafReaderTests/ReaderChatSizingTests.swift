@@ -52,6 +52,14 @@ final class ReaderChatSizingTests: XCTestCase {
         XCTAssertEqual(height(typing, available: 450, composing: true, selection: true), 226, accuracy: 0.1)
         XCTAssertEqual(height(reading), 440, accuracy: 0.1)
     }
+    func testCompactStoppedReplyReservesHistoryAboveItsNotice() {
+        for fraction in [0.01, ReaderChatSizing.dockedReadingFraction] {
+            let value = ReaderChatSizing.height(fraction: fraction, fullHeight: 393, availableHeight: 393,
+                composing: false, hasSelection: false, hasStatus: true)
+            XCTAssertGreaterThanOrEqual(value - 106 - 34, 30, "Leave message lines beyond the compact header, composer and notice")
+            XCTAssertGreaterThan(393 - value, 200, "Keep the book visible in landscape")
+        }
+    }
     private func height(_ fraction: Double, full: CGFloat = 800, available: CGFloat = 800, composing: Bool = false, selection: Bool = false) -> CGFloat {
         ReaderChatSizing.height(fraction: fraction, fullHeight: full, availableHeight: available, composing: composing, hasSelection: selection)
     }

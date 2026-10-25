@@ -99,6 +99,26 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["closeBook"].exists)
     }
 
+    /// Bring a settings row on screen with short drags. Whole-form swipes jump
+    /// past rows; a held press can scroll a Form 0 pt, so swap gesture kinds
+    /// when one does not move the row.
+    @MainActor private func revealSettingsRow(_ row: XCUIElement, app: XCUIApplication) {
+        var held = false, last: CGRect?
+        // Fixed margins clear the navigation bar and the floating tab bar.
+        let top = app.frame.minY + app.frame.height * 0.12, bottom = app.frame.maxY - app.frame.height * 0.12
+        for _ in 0..<14 {
+            if row.exists, row.isHittable, row.frame.minY >= top, row.frame.maxY <= bottom { return }
+            let up = !row.exists || row.frame.maxY > bottom
+            if row.exists, row.frame == last { held.toggle() }
+            last = row.exists ? row.frame : nil
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: up ? 0.62 : 0.4))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: up ? 0.4 : 0.62))
+            if held { start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2) }
+            else { start.press(forDuration: 0, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0) }
+        }
+        XCTAssertTrue(row.exists && row.isHittable, "Could not reveal \(row.identifier): \(row.exists ? "\(row.frame)" : "absent") within \(top)...\(bottom)")
+    }
+
     @MainActor private func revealAppearanceControl(_ app: XCUIApplication, _ control: XCUIElement) {
         let form = app.descendants(matching: .any)["appearanceForm"].firstMatch
         XCTAssertTrue(form.waitForExistence(timeout: 5))
@@ -1555,7 +1575,12 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(quote.waitForExistence(timeout: 5)); let selected = quote.label
         let panel = app.otherElements["readerChatPanel"], history = app.scrollViews["chatMessageHistory"]
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
-        let readingHeight = panel.frame.height
+        let initialReadingHeight = panel.frame.height
+        var readingHeight = initialReadingHeight
+        XCTAssertGreaterThan(initialReadingHeight, app.frame.height * 0.28)
+        XCTAssertLessThan(initialReadingHeight, app.frame.height * 0.40, "The dock leaves most of the screen for the book")
+        XCTAssertGreaterThanOrEqual(panel.frame.maxY, app.frame.maxY - 24, "No unused bottom safe-area gap below the reader chat")
+        capture(flow + " lower reading dock at approved height", app: app)
         func focusInput(typing text: String? = nil) {
             // Resolve current scene geometry after the keyboard moved the composer.
             let frame = input.frame
@@ -1598,6 +1623,18 @@ final class LeafReaderUITests: XCTestCase {
             start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: endY - handle.frame.midY)), withVelocity: .slow, thenHoldForDuration: 0.1)
             XCTAssertTrue(app.buttons["closeReaderChat"].exists)
         }
+        resize(500)
+        XCTAssertLessThan(panel.frame.height, initialReadingHeight)
+        XCTAssertTrue(input.isHittable)
+        capture(flow + " minimum reading dock", app: app)
+        resize(-700)
+        XCTAssertGreaterThan(panel.frame.height, initialReadingHeight + 100)
+        XCTAssertLessThan(panel.frame.height, app.frame.height * 0.9)
+        XCTAssertTrue(input.isHittable)
+        capture(flow + " maximum reading dock", app: app)
+        resize(panel.frame.height - initialReadingHeight)
+        XCTAssertEqual(panel.frame.height, initialReadingHeight, accuracy: 15)
+        readingHeight = panel.frame.height
         focusInput(typing: "Keep this followup draft")
         assertHistoryAndBook(); latestReplyIsVisible()
         XCTAssertEqual(surface.frame.width, originalFrame.width, accuracy: 2)
@@ -1762,6 +1799,12 @@ final class LeafReaderUITests: XCTestCase {
         conversationTool.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(conversationTool.value as? String, "0")
         capture("Agent limits in AI settings", app: app)
+        let decrement = app.buttons["contextCharacters-Decrement"]
+        revealSettingsRow(decrement, app: app)
+        decrement.tap()
+        XCTAssertTrue(app.staticTexts["11,000 chars"].exists)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "up to 11,000 characters")).firstMatch.exists)
+        capture("Reading context limits in AI settings", app: app)
         let save = app.buttons["saveAISettings"]
         for _ in 0..<6 where !save.isHittable { app.swipeUp() }
         save.tap()
@@ -1774,12 +1817,14 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("Remind me about attention")
         app.buttons["sendReaderChat"].tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.textViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch.waitForExistence(timeout: 30))
         if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
         app.tabBars.buttons["Settings"].tap()
         for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
         app.buttons["openAISettings"].tap()
+        revealSettingsRow(decrement, app: app)
+        XCTAssertTrue(app.staticTexts["11,000 chars"].exists, "The reading context limit is saved")
         let traces = app.buttons["openAgentTraces"]
         for _ in 0..<8 where !(traces.exists && traces.isHittable) { app.swipeUp() }
         traces.tap()
@@ -1847,7 +1892,7 @@ final class LeafReaderUITests: XCTestCase {
             start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -200)), withVelocity: .slow, thenHoldForDuration: 0.1)
             XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Resizing must never dismiss chat")
         }
-        let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch
+        let reply = app.textViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertFalse(reply.label.contains("found 0 passages"), reply.label)
         XCTAssertFalse(reply.label.contains("Let me look"), "Preamble before tool calls is withdrawn")
@@ -2769,7 +2814,10 @@ final class LeafReaderUITests: XCTestCase {
         let geometry = app.descendants(matching: .any)["uitestChatHistoryGeometry"].firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 10))
         XCTAssertTrue(geometry.waitForExistence(timeout: 5))
-        func measuredOffset() -> Double { Double(geometry.value as? String ?? "") ?? .nan }
+        func measuredOffset() -> Double {
+            let data = (geometry.value as? String ?? "").data(using: .utf8) ?? Data()
+            return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["offset"] as? Double ?? .nan
+        }
         expectation(for: NSPredicate(format: "label CONTAINS %@", "Update 1:"), evaluatedWith: reply)
         waitForExpectations(timeout: 10)
 
@@ -2800,10 +2848,15 @@ final class LeafReaderUITests: XCTestCase {
         expectation(for: NSPredicate(format: "value == %@", "Following latest"), evaluatedWith: history)
         waitForExpectations(timeout: 5)
         let origin = measuredOffset(), count = reply.label.count
-        expectation(for: NSPredicate { _, _ in reply.label.count > count + 80 && measuredOffset() > origin + 10 }, evaluatedWith: reply)
-        waitForExpectations(timeout: 12)
-        let trace = XCTAttachment(string: "Following offset: \(origin) → \(measuredOffset()); reply characters: \(count) → \(reply.label.count)")
+        var samples: [String] = []
+        let resumes = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            samples.append("characters=\(reply.label.count) \(geometry.value as? String ?? "missing")")
+            return reply.label.count > count + 80 && measuredOffset() > origin + 10
+        }, object: reply)
+        let outcome = XCTWaiter.wait(for: [resumes], timeout: 12)
+        let trace = XCTAttachment(string: "Following offset: \(origin) → \(measuredOffset()); reply characters: \(count) → \(reply.label.count)\n" + samples.joined(separator: "\n"))
         trace.name = flow + " measured following position"; trace.lifetime = .keepAlways; add(trace)
+        XCTAssertEqual(outcome, .completed, "Returning to the bottom must resume actual scrolling as the reply grows")
         capture(flow + " following resumes at bottom", app: app)
 
         input.tap(); input.typeText("Keep my draft")
@@ -2998,6 +3051,7 @@ final class LeafReaderUITests: XCTestCase {
         capture("Cleared conversation after restart", app: app)
     }
     @MainActor func testPartialChatRestoresStoppedAfterRestart() {
+        defer { orient(.portrait) }
         let app = launchApp(slowChat: true); openFeaturedChat(app)
         sendChatQuestion("Keep my partial reply", app: app)
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
@@ -3007,6 +3061,14 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Retry"].exists)
         XCTAssertEqual(app.buttons["sendReaderChat"].label, "Send message")
         capture("Interrupted reply retained with Retry after restart", app: app)
+        orient(.landscapeLeft)
+        let history = app.scrollViews["chatMessageHistory"]
+        let reply = app.textViews.matching(identifier: "chatReply").firstMatch
+        XCTAssertGreaterThanOrEqual(history.frame.height, 20, "A stopped-reply notice must leave readable history in the compact dock")
+        XCTAssertGreaterThan(reply.frame.intersection(history.frame).height, 15)
+        XCTAssertTrue(app.buttons["Retry"].isHittable)
+        XCTAssertTrue(app.buttons["sendReaderChat"].exists)
+        capture("Compact landscape stopped reply keeps history above Retry notice", app: app)
     }
 
     @MainActor func testChatStopAndRetryKeepOneQuestion() {

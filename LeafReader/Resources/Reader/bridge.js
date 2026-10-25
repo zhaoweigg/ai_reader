@@ -52,7 +52,7 @@ function observeReadingTouches(doc, index) {
     doc.addEventListener('selectionchange', () => {
         if (!view?.renderer?.getContents?.().some(content => content.doc === doc)) return;
         const selection = doc.getSelection();
-        const text = selection && !selection.isCollapsed ? selection.toString().slice(0,12000) : '';
+        const text = selection && !selection.isCollapsed ? selection.toString().slice(0,24000) : '';
         if (!text && selectedDocument && selectedDocument.deref() !== doc) return;
         const detail = { text, tooLong: (selection?.toString().length ?? 0) > 12000 };
         if (text || selectedDocument?.deref() === doc) selectedDocument = new WeakRef(doc);

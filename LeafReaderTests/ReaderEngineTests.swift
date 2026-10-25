@@ -110,7 +110,7 @@ final class ReaderEngineTests: XCTestCase {
             return {before:context.precedingText,after:context.followingText,pageAfter:page.followingText,unchanged:focus.toString()==='hid the key.',loaded:document.querySelector('foliate-view').renderer.getContents().length};
             """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
         let value = try XCTUnwrap(result)
-        XCTAssertLessThanOrEqual((value["before"] as? String ?? "").count, 2400)
+        XCTAssertLessThanOrEqual((value["before"] as? String ?? "").count, ReadingContextLimits.capture.before)
         XCTAssertTrue((value["before"] as? String ?? "").contains("Lin arrived."))
         XCTAssertFalse((value["before"] as? String ?? "").contains("HIDDEN SECRET"))
         XCTAssertFalse((value["after"] as? String ?? "").contains("FUTURE"))
@@ -1145,7 +1145,7 @@ final class ReaderEngineTests: XCTestCase {
         let snapshot = try await model.readingChatContext()
         let context = try XCTUnwrap(snapshot)
         XCTAssertFalse(context.isEmpty)
-        XCTAssertEqual(context.text, String((visible ?? "").prefix(12000)))
+        XCTAssertEqual(context.text, String((visible ?? "").prefix(ReadingContextLimits.capture.characters)))
         XCTAssertLessThan(context.text.count, (whole ?? "").count)
         XCTAssertEqual(context.locator, location)
         XCTAssertEqual(context.source, "page")
@@ -1291,7 +1291,7 @@ final class ReaderEngineTests: XCTestCase {
         let page = try XCTUnwrap(view.currentPage)
         let snapshot = try await model.readingChatContext()
         let context = try XCTUnwrap(snapshot)
-        XCTAssertEqual(context.text, String((page.string ?? "").prefix(12000)))
+        XCTAssertEqual(context.text, String((page.string ?? "").prefix(ReadingContextLimits.capture.characters)))
         XCTAssertEqual(context.locator, "pdf:2")
         let pageText = (page.string ?? "") as NSString
         view.currentSelection = page.selection(for: NSRange(location: min(20, pageText.length / 2), length: min(8, pageText.length / 2)))

@@ -24,12 +24,18 @@ private struct ChatHistoryBottomDistance: PreferenceKey {
 
 #if DEBUG
 private struct ChatHistoryMeasuredOffset: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    static var defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
+}
+
+private struct ChatHistoryTestMetrics: Equatable {
+    var offset: CGFloat = 0
+    var contentHeight: CGFloat = 0
+    var viewportHeight: CGFloat = 0
 }
 
 private struct ChatHistoryOffsetProbe: UIViewRepresentable {
-    let offset: CGFloat
+    let value: String
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.isAccessibilityElement = true
@@ -37,23 +43,35 @@ private struct ChatHistoryOffsetProbe: UIViewRepresentable {
         view.accessibilityLabel = "UI test chat scroll offset"
         return view
     }
-    func updateUIView(_ view: UIView, context: Context) { view.accessibilityValue = String(Double(offset)) }
+    func updateUIView(_ view: UIView, context: Context) { view.accessibilityValue = value }
 }
 #endif
 
 /// Native text views clip their accessibility bounds to the screen. UI tests
 /// measure the independently laid-out history instead of those clipped bounds.
 private struct ChatHistoryTestMeasurement: ViewModifier {
+    let following: Bool
+    let selected: Bool
     #if DEBUG
-    @State private var offset: CGFloat = 0
+    @State private var metrics = ChatHistoryTestMetrics()
+    private var probe: some View {
+        ChatHistoryOffsetProbe(value: "{\"offset\":\(metrics.offset),\"contentHeight\":\(metrics.contentHeight),\"viewportHeight\":\(metrics.viewportHeight),\"following\":\(following),\"selected\":\(selected)}")
+            .frame(width: 1, height: 1).allowsHitTesting(false)
+    }
     #endif
     func body(content: Content) -> some View {
         #if DEBUG
         if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
-            content.onPreferenceChange(ChatHistoryMeasuredOffset.self) { offset = $0 }
-                .overlay(alignment: .topLeading) {
-                    ChatHistoryOffsetProbe(offset: offset).frame(width: 1, height: 1).allowsHitTesting(false)
-                }
+            if #available(iOS 18, *) {
+                content.onScrollGeometryChange(for: ChatHistoryTestMetrics.self) { geometry in
+                    ChatHistoryTestMetrics(offset: geometry.contentOffset.y, contentHeight: geometry.contentSize.height,
+                                           viewportHeight: geometry.containerSize.height)
+                } action: { _, value in metrics = value }
+                    .overlay(alignment: .topLeading) { probe }
+            } else {
+                content.onPreferenceChange(ChatHistoryMeasuredOffset.self) { if let value = $0 { metrics.offset = value } }
+                    .overlay(alignment: .topLeading) { probe }
+            }
         } else { content }
         #else
         content
@@ -62,18 +80,21 @@ private struct ChatHistoryTestMeasurement: ViewModifier {
 }
 
 enum ReaderChatSizing {
-    static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> ClosedRange<CGFloat> {
+    static let dockedReadingFraction = 0.36
+    static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool, hasStatus: Bool = false) -> ClosedRange<CGFloat> {
         let usable = max(0, availableHeight - 16)
         // Leave actual book text above an expanded portrait composer, rather
         // than just the status area or the chapter's top whitespace.
         let bookReserve = composing && fullHeight >= 500 ? min(220, fullHeight * 0.26, max(0, usable - 176)) : 0
         let maximum = min(fullHeight * 0.85, usable * 0.88, max(0, usable - bookReserve))
-        let minimum: CGFloat = composing ? (fullHeight < 500 ? 176 : (hasSelection ? 256 : 224)) : (fullHeight < 500 ? 132 : (hasSelection ? 260 : 200))
+        // A stopped reply's notice and Retry row must not consume every
+        // message line in a compact landscape panel.
+        let minimum: CGFloat = composing ? (fullHeight < 500 ? 176 : (hasSelection ? 256 : 224)) : (fullHeight < 500 ? (hasStatus ? 176 : 132) : (hasSelection ? 260 : 200))
         let lower = min(minimum, maximum)
         return lower...maximum
     }
-    static func height(fraction: Double, fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> CGFloat {
-        let limits = bounds(fullHeight: fullHeight, availableHeight: availableHeight, composing: composing, hasSelection: hasSelection)
+    static func height(fraction: Double, fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool, hasStatus: Bool = false) -> CGFloat {
+        let limits = bounds(fullHeight: fullHeight, availableHeight: availableHeight, composing: composing, hasSelection: hasSelection, hasStatus: hasStatus)
         let desired: CGFloat
         if composing, !fraction.isFinite || fraction <= 0 {
             desired = max(limits.lowerBound, min(fullHeight / 3, availableHeight * 0.5))
@@ -349,7 +370,10 @@ struct ResizableChatPanel: View {
         self.session = session; self.location = location; self.fullHeight = fullHeight; self.bookTitle = bookTitle
         self.context = context; self.onChooseConversation = onChooseConversation
         self.onClose = onClose; self.onSettings = onSettings; self.onButtonSettings = onButtonSettings; self.onSend = onSend
-        _heightFraction = AppStorage(wrappedValue: 1.0 / 3, "\(location.storagePrefix).chatHeightFraction")
+        // Start the new reader dock at its approved size once. Subsequent user
+        // resizes persist independently of the existing keyboard preference.
+        _heightFraction = AppStorage(wrappedValue: location == .reader ? ReaderChatSizing.dockedReadingFraction : 1.0 / 3,
+            location == .reader ? "reader.dockedChatHeightFraction" : "library.chatHeightFraction")
         _composingHeightFraction = AppStorage(wrappedValue: -1, "\(location.storagePrefix).chatComposingHeightFraction")
     }
 
@@ -358,9 +382,10 @@ struct ResizableChatPanel: View {
             let full = max(fullHeight, geometry.size.height)
             let composing = geometry.size.height < full - 80
             let hasSelection = session.selectedContext != nil
-            let limits = ReaderChatSizing.bounds(fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection)
+            let hasStatus = session.notice != nil || session.error != nil || session.historyError != nil
+            let limits = ReaderChatSizing.bounds(fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection, hasStatus: hasStatus)
             let preferred = ReaderChatSizing.height(fraction: composing ? composingHeightFraction : heightFraction,
-                fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection)
+                fullHeight: full, availableHeight: geometry.size.height, composing: composing, hasSelection: hasSelection, hasStatus: hasStatus)
             let height = min(limits.upperBound, max(limits.lowerBound, resizedHeight ?? preferred))
             ReaderChatPanel(session: session, bookTitle: bookTitle, isComposing: composing, context: context, onChooseConversation: onChooseConversation,
                 onClose: onClose, onSettings: onSettings, onButtonSettings: onButtonSettings, onSend: onSend,
@@ -372,7 +397,8 @@ struct ResizableChatPanel: View {
                 }, onResizeStep: { step in
                     save(min(limits.upperBound, max(limits.lowerBound, height + step)), fullHeight: full, composing: composing)
                 }, onResetSize: {
-                    if composing { composingHeightFraction = -1 } else { heightFraction = 1.0 / 3 }
+                    if composing { composingHeightFraction = -1 }
+                    else { heightFraction = location == .reader ? ReaderChatSizing.dockedReadingFraction : 1.0 / 3 }
                     resizeOrigin = nil; resizedHeight = nil
                 })
                 .frame(height: height)
@@ -587,7 +613,7 @@ struct ReaderChatPanel: View {
                         .scrollDismissesKeyboard(isComposing ? .never : .interactively)
                         .accessibilityIdentifier("chatMessageHistory")
                         .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
-                        .modifier(ChatHistoryTestMeasurement())
+                        .modifier(ChatHistoryTestMeasurement(following: scrollFollowing.followsLatest, selected: selectedMessage != nil))
                         .modifier(ChatHistoryInteraction(following: $scrollFollowing))
                         .onPreferenceChange(ChatHistoryBottomDistance.self) { distance in
                             if !ChatHistoryInteraction.usesNativeTracking, let distance { scrollFollowing.updateBottomDistance(distance) }
