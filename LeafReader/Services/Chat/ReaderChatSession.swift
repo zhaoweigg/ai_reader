@@ -280,7 +280,6 @@ struct UITestChatProvider: ChatProvider {
                         let valid = context["source"] as? String == "selection" && !(context["text"] as? String ?? "").isEmpty &&
                             (!(context["preceding_text"] as? String ?? "").isEmpty || !(context["following_text"] as? String ?? "").isEmpty) &&
                             context["approximate_book_progress_percent"] != nil && context["spoiler_boundary"] != nil &&
-                            context["book_lookup"] != nil &&
                             !content.contains("epubcfi(") && request.system.contains("Treat previous assistant answers as fallible")
                         continuation.yield(.text(valid ? "Reading context verified: focused quote, nearby passage, reading progress and spoiler boundary." : "Reading context verification failed: \(body)"))
                         continuation.yield(.finished(truncated: false)); continuation.finish(); return

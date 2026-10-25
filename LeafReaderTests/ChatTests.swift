@@ -337,6 +337,16 @@ final class ChatTests: XCTestCase {
         let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Describe the silver key")], earlierMessages: old)
         XCTAssertFalse(request.turns.last?.content.contains("earlier_discussion") == true)
     }
+    func testCharacterLookupSkipsGenericSelectionsAndQuestionsWithoutAName() {
+        for text in ["a", "the", "he", "这个"] {
+            let selected = ReadingChatContext(title: "Book", author: "", chapter: "C", text: text, source: "selection", locator: "")
+            XCTAssertNil(ReadingBookRecall.lookupTerm(question: "Who is being discussed here?", context: selected))
+            XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "Who is Lin?", context: selected), "Lin")
+        }
+        let page = ReadingChatContext(title: "Book", author: "", chapter: "C", text: "A passage with several characters.", source: "page", locator: "")
+        XCTAssertNil(ReadingBookRecall.lookupTerm(question: "Who is he?", context: page))
+        XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "我忘了“白虎”的身份", context: page), "白虎")
+    }
     func testMovingBackInBookOmitsRecentDiscussionBeyondCurrentPosition() {
         var later = context; later.progress = 0.9
         var now = context; now.progress = 0.2
