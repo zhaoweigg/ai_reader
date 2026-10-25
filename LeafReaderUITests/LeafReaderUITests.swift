@@ -2767,12 +2767,13 @@ final class LeafReaderUITests: XCTestCase {
         sendChatQuestion("Keep this selection while replying", app: app)
         if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
         let reply = app.textViews.matching(identifier: "chatReply").firstMatch
-        expectation(for: NSPredicate(format: "label == %@", "Test reply: "), evaluatedWith: reply)
+        // Markdown strips a trailing source space from the visible partial reply.
+        expectation(for: NSPredicate(format: "label == %@", "Test reply:"), evaluatedWith: reply)
         waitForExpectations(timeout: 5)
         copyChatWord(reply, expected: "Test", flow: "Streaming Pages", app: app) {
             self.expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
             self.waitForExpectations(timeout: 40)
-            XCTAssertEqual(reply.label, "Test reply: ", "Incoming text must not replace a native selection")
+            XCTAssertEqual(reply.label, "Test reply:", "Incoming text must not replace a native selection")
         }
         XCTAssertTrue(reply.label.contains("Consider what the passage states"), "The completed reply must appear when selection ends")
     }
