@@ -462,65 +462,69 @@ struct ReaderChatPanel: View {
                 }
                 ScrollViewReader { proxy in
                     GeometryReader { viewport in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(session.messages) { message in
-                                HStack {
-                                    if message.isUser { Spacer(minLength: 32) }
-                                    ReaderChatMessageBubble(message: message, accent: accent,
-                                                            activity: message.id == session.messages.last?.id ? session.activity : nil)
-                                    if !message.isUser { Spacer(minLength: 0) }
-                                }.id(message.id)
-                            }
-                            if session.messages.isEmpty && session.selectedContext == nil {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    if context == .reader {
-                                        Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
-                                            .font(.subheadline)
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(session.messages) { message in
+                                    HStack {
+                                        if message.isUser { Spacer(minLength: 32) }
+                                        ReaderChatMessageBubble(message: message, accent: accent,
+                                                                activity: message.id == session.messages.last?.id ? session.activity : nil)
+                                        if !message.isUser { Spacer(minLength: 0) }
+                                    }.id(message.id)
+                                }
+                                if session.messages.isEmpty && session.selectedContext == nil {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        if context == .reader {
+                                            Text(ReaderChatMessage.usesChinese(bookTitle) ? "问我解释这段文字、梳理线索，或总结当前页面。" : "Ask about a passage, explore a character’s motives, or recap this page.")
+                                                .font(.subheadline)
+                                        }
+                                        Text(contextHint)
+                                            .font(.caption).foregroundStyle(.secondary)
+                                        Button("AI settings", action: onSettings).font(.subheadline)
                                     }
-                                    Text(contextHint)
-                                        .font(.caption).foregroundStyle(.secondary)
-                                    Button("AI settings", action: onSettings).font(.subheadline)
                                 }
-                            }
-                        }.padding(.vertical, 2)
-                            .background {
-                                GeometryReader { content in
-                                    Color.clear.preference(key: ChatHistoryBottomDistance.self,
-                                        value: content.frame(in: .named("chatHistoryViewport")).maxY - viewport.size.height)
+                            }.padding(.vertical, 2)
+                                .background {
+                                    GeometryReader { content in
+                                        Color.clear.preference(key: ChatHistoryBottomDistance.self,
+                                            value: content.frame(in: .named("chatHistoryViewport")).maxY - viewport.size.height)
+                                    }
                                 }
+                        }
+                        .coordinateSpace(name: "chatHistoryViewport")
+                        .defaultScrollAnchor(.bottom)
+                        .scrollDismissesKeyboard(isComposing ? .never : .interactively)
+                        .accessibilityIdentifier("chatMessageHistory")
+                        .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
+                        .simultaneousGesture(DragGesture(minimumDistance: 8)
+                            .updating($draggingHistory) { _, dragging, _ in dragging = true }
+                            .onChanged { _ in scrollFollowing.beginDragging() })
+                        .onChange(of: draggingHistory) { _, dragging in
+                            // GestureState also resets when UIKit cancels a drag.
+                            if !dragging { scrollFollowing.endDragging() }
+                        }
+                        .onPreferenceChange(ChatHistoryBottomDistance.self) { distance in
+                            if let distance { scrollFollowing.updateBottomDistance(distance) }
+                        }
+                        .onChange(of: session.messages.last?.text) { _, _ in
+                            if scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                        .onChange(of: session.isSending) { _, sending in
+                            if sending {
+                                scrollFollowing.resume()
+                                if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                             }
-                    }
-                    .coordinateSpace(name: "chatHistoryViewport")
-                    .defaultScrollAnchor(.bottom)
-                    .scrollDismissesKeyboard(isComposing ? .never : .interactively)
-                    .accessibilityIdentifier("chatMessageHistory")
-                    .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
-                    .simultaneousGesture(DragGesture(minimumDistance: 8)
-                        .updating($draggingHistory) { _, dragging, _ in dragging = true }
-                        .onChanged { _ in scrollFollowing.beginDragging() })
-                    .onChange(of: draggingHistory) { _, dragging in
-                        // GestureState also resets when UIKit cancels a drag.
-                        if !dragging { scrollFollowing.endDragging() }
-                    }
-                    .onPreferenceChange(ChatHistoryBottomDistance.self) { distance in
-                        if let distance { scrollFollowing.updateBottomDistance(distance) }
-                    }
-                    .onChange(of: session.messages.last?.text) { _, _ in
-                        if scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                    .onChange(of: session.isSending) { _, sending in
-                        if sending {
-                            scrollFollowing.resume()
+                        }
+                        .onChange(of: ObjectIdentifier(session)) { _, _ in
+                            scrollFollowing = ChatScrollFollowing()
                             if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
-                    }
-                    .onChange(of: inputFocused) { _, focused in
-                        if focused, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                    .onChange(of: isComposing) { _, composing in
-                        if composing, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
+                        .onChange(of: inputFocused) { _, focused in
+                            if focused, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                        .onChange(of: isComposing) { _, composing in
+                            if composing, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
                     }
                 }.frame(maxHeight: .infinity)
                 if let historyError = session.historyError {
