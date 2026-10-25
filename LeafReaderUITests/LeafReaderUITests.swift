@@ -1483,6 +1483,9 @@ final class LeafReaderUITests: XCTestCase {
         for _ in 0..<6 where !save.isHittable { app.swipeUp() }
         save.tap()
         XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
+        // Return to the Settings list so the next visit starts from it.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["openAISettings"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Library"].tap()
     }
     @MainActor func testBookSearchAgentInPagesComparedWithPrefetchedEvidence() { verifyBookSearchAgent(flow: "Pages") }
@@ -1519,7 +1522,14 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " agent question composing", app: app)
         app.buttons["sendReaderChat"].tap()
         // A landscape composer is compact; hiding the keyboard shows the conversation.
-        if flow == "Scroll", app.buttons["Hide keyboard"].waitForExistence(timeout: 2) { app.buttons["Hide keyboard"].tap() }
+        if flow == "Scroll" {
+            if app.buttons["Hide keyboard"].waitForExistence(timeout: 2) { app.buttons["Hide keyboard"].tap() }
+            // The short landscape panel has no room for history; enlarge it as a reader would.
+            let edge = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+            let start = edge.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -200)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Resizing must never dismiss chat")
+        }
         let reply = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertFalse(reply.label.contains("found 0 passages"), reply.label)
@@ -2589,6 +2599,7 @@ final class LeafReaderUITests: XCTestCase {
         for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
         app.buttons["openAISettings"].tap()
         XCTAssertEqual(model.value as? String, "claude-haiku-4-5")
+        for _ in 0..<4 where !app.switches["aiSharePage"].isHittable { app.swipeUp() }
         XCTAssertEqual(app.switches["aiSharePage"].value as? String, "0")
         capture("AI provider settings", app: app)
         app.tabBars.buttons["Library"].tap()
