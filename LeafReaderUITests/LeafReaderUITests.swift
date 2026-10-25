@@ -2801,7 +2801,13 @@ final class LeafReaderUITests: XCTestCase {
         }
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.tap(); input.typeText("Literal **question**"); app.buttons["sendReaderChat"].tap()
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5), "Wait for the composing panel before native typing")
+        input.typeText("Literal **question**")
+        expectation(for: NSPredicate(format: "value == %@", "Literal **question**"), evaluatedWith: input)
+        waitForExpectations(timeout: 5)
+        app.buttons["sendReaderChat"].tap()
         let reply = app.textViews.matching(identifier: "chatReply").firstMatch
         expectation(for: NSPredicate(format: "label CONTAINS %@", "尾句。"), evaluatedWith: reply)
         waitForExpectations(timeout: 10)

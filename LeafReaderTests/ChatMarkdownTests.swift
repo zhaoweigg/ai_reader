@@ -17,11 +17,13 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertEqual(ChatMarkdown.selectableText("**my literal question**", markdown: false).string, "**my literal question**")
     }
 
-    @MainActor func testStreamingPreservesSelectedRangeAndAppliesLatestReplyAfterSelectionEnds() {
+    @MainActor func testStreamingPreservesSelectedRangeAndAppliesLatestReplyAfterSelectionEnds() throws {
         let view = SelectableChatTextView()
         let coordinator = SelectableChatText.Coordinator()
         view.isEditable = false
-        view.onSelectionEnd = { coordinator.endSelection(in: view) }
+        view.onSelectionEnd = { [weak view, weak coordinator] in
+            if let view { coordinator?.endSelection(in: view) }
+        }
         coordinator.update(ChatMarkdown.selectableText("第一句 🌿 selected passage"), in: view)
         let range = (view.text as NSString).range(of: "selected passage")
         view.selectedRange = range
@@ -34,6 +36,18 @@ final class ChatMarkdownTests: XCTestCase {
         view.selectedRange = NSRange(location: range.location, length: 0)
         coordinator.textViewDidChangeSelection(view)
         XCTAssertEqual(view.text, "第一句 🌿 selected passage，新增一句。最后一句。")
+        // Resigning only succeeds for a view that actually owns focus. Host the
+        // read-only view in a real scene before exercising that UIKit lifecycle.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIViewController()
+        window.makeKeyAndVisible()
+        window.rootViewController?.view.addSubview(view)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 180)
+        defer { window.isHidden = true; previousWindow?.makeKey() }
+        XCTAssertTrue(view.becomeFirstResponder())
+        XCTAssertTrue(view.isFirstResponder)
         coordinator.update(ChatMarkdown.selectableText("下一条回复"), in: view)
         view.selectedRange = NSRange(location: 0, length: 2)
         coordinator.textViewDidChangeSelection(view)
