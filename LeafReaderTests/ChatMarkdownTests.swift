@@ -1,7 +1,61 @@
 import XCTest
+import UIKit
 @testable import LeafReader
 
 final class ChatMarkdownTests: XCTestCase {
+    func testNativeSelectableReplyKeepsUnicodeFormattingAndLinks() {
+        let native = ChatMarkdown.selectableText("## 人物\n\n🌿这是**李香玲**，*重点*与 `code`。[来源](https://example.com)\n\n- 第一条\n- 第二条")
+        XCTAssertEqual(native.string, "人物\n\n🌿这是李香玲，重点与 code。来源\n\n• 第一条\n• 第二条")
+        let text = native.string as NSString
+        let bold = native.attribute(.font, at: text.range(of: "李香玲").location, effectiveRange: nil) as? UIFont
+        XCTAssertTrue(bold?.fontDescriptor.symbolicTraits.contains(.traitBold) == true)
+        let italic = native.attribute(.font, at: text.range(of: "重点").location, effectiveRange: nil) as? UIFont
+        XCTAssertTrue(italic?.fontDescriptor.symbolicTraits.contains(.traitItalic) == true)
+        let code = native.attribute(.font, at: text.range(of: "code").location, effectiveRange: nil) as? UIFont
+        XCTAssertTrue(code?.fontDescriptor.symbolicTraits.contains(.traitMonoSpace) == true)
+        XCTAssertEqual(native.attribute(.link, at: text.range(of: "来源").location, effectiveRange: nil) as? URL, URL(string: "https://example.com"))
+        XCTAssertEqual(ChatMarkdown.selectableText("**my literal question**", markdown: false).string, "**my literal question**")
+    }
+
+    @MainActor func testStreamingPreservesSelectedRangeAndAppliesLatestReplyAfterSelectionEnds() throws {
+        let view = SelectableChatTextView()
+        let coordinator = SelectableChatText.Coordinator()
+        view.isEditable = false
+        view.onSelectionEnd = { [weak view, weak coordinator] in
+            if let view { coordinator?.endSelection(in: view) }
+        }
+        coordinator.update(ChatMarkdown.selectableText("第一句 🌿 selected passage"), in: view)
+        let range = (view.text as NSString).range(of: "selected passage")
+        view.selectedRange = range
+        coordinator.textViewDidChangeSelection(view)
+        coordinator.update(ChatMarkdown.selectableText("第一句 🌿 selected passage，新增**一句**。"), in: view)
+        coordinator.update(ChatMarkdown.selectableText("第一句 🌿 selected passage，新增**一句**。最后一句。"), in: view)
+        XCTAssertEqual(view.selectedRange, range)
+        XCTAssertEqual((view.text as NSString).substring(with: view.selectedRange), "selected passage")
+        XCTAssertEqual(view.text, "第一句 🌿 selected passage")
+        view.selectedRange = NSRange(location: range.location, length: 0)
+        coordinator.textViewDidChangeSelection(view)
+        XCTAssertEqual(view.text, "第一句 🌿 selected passage，新增一句。最后一句。")
+        // Resigning only succeeds for a view that actually owns focus. Host the
+        // read-only view in a real scene before exercising that UIKit lifecycle.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIViewController()
+        window.makeKeyAndVisible()
+        window.rootViewController?.view.addSubview(view)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 180)
+        defer { window.isHidden = true; previousWindow?.makeKey() }
+        XCTAssertTrue(view.becomeFirstResponder())
+        XCTAssertTrue(view.isFirstResponder)
+        coordinator.update(ChatMarkdown.selectableText("下一条回复"), in: view)
+        view.selectedRange = NSRange(location: 0, length: 2)
+        coordinator.textViewDidChangeSelection(view)
+        coordinator.update(ChatMarkdown.selectableText("下一条回复已完成"), in: view)
+        XCTAssertTrue(view.resignFirstResponder())
+        XCTAssertEqual(view.text, "下一条回复已完成", "Moving focus to the composer must release deferred streaming text")
+    }
+
     func testChineseBoldAdjacentToPunctuationAndText() {
         let source = "这是**李香玲**，云瑶新组织里的队友。"
         let rendered = ChatMarkdown.render(source)
