@@ -1,4 +1,5 @@
 import XCTest
+import Speech
 
 final class LeafReaderUITests: XCTestCase {
     private var geometryApp: XCUIApplication?
@@ -1405,6 +1406,14 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testDictationAddsAnEditableDraftInPDF() { verifyDictation(flow: "PDF") }
 
     @MainActor func testNativeMandarinSpeechRecognitionFromAudio() async throws {
+        #if targetEnvironment(simulator)
+        // A simulator without Apple's speech service cannot validate real ASR.
+        // Keep this separate from the app's locale/draft UI checks; never replace
+        // the native result with a mock or turn an app recognition error into a pass.
+        guard SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))?.isAvailable == true else {
+            throw XCTSkip("Apple's zh-CN speech service is unavailable in this simulator runtime. Real Mandarin recognition requires a physical-device check.")
+        }
+        #endif
         let app = launchApp(nativeDictation: true)
         app.buttons["featuredBook"].tap(); waitForBook(app)
         app.buttons["openReaderChat"].tap()
