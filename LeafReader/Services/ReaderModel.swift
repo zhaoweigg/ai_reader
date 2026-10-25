@@ -119,7 +119,7 @@ final class ReaderModel: NSObject, ObservableObject {
     }
     func recallBookContext(term: String, context: ReadingChatContext) async throws -> ReadingBookRecall? {
         try Task.checkCancellation()
-        guard isReady, !isLocked, error == nil else { return nil }
+        guard isReady, !isLocked, error == nil, (2...40).contains(term.count) else { return nil }
         let epoch = reloadID
         if let web = webView {
             let id = UUID().uuidString
@@ -139,6 +139,7 @@ final class ReaderModel: NSObject, ObservableObject {
         guard let view = pdfView, let doc = view.document else { return nil }
         let cursor = PDFLocator.cursor(context.locator)
         let boundaryPage = cursor?.page ?? view.currentPage.map(doc.index(for:)) ?? 0
+        guard boundaryPage >= 0, boundaryPage < doc.pageCount else { return nil }
         let total = min(doc.pageCount, boundaryPage + 1), deadline = Date().addingTimeInterval(8)
         var excerpts: [(page: Int, offset: Int, text: String)] = [], scanned = 0, characters = 0
         var partial = false, visited = Set<Int>()

@@ -68,7 +68,7 @@ struct ReadingBookRecall: Codable, Equatable {
     static func lookupTerm(question: String, context: ReadingChatContext) -> String? {
         let recall = question.range(of: "回忆|忘|角色|人物|是谁|谁是|前情|之前|以前|身份|来历|关系|remind|remember|forgot|character|relationship|backstory|who (?:is|was)|earlier|recap", options: [.regularExpression, .caseInsensitive]) != nil
         guard recall else { return nil }
-        let selected = context.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selected = context.text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "“”「」『』\"'，,：:、")))
         if context.source == "selection", (2...40).contains(selected.count), !selected.contains(where: { "。！？!?\n".contains($0) }) { return selected }
         for pattern in ["[“「『\"]([^”」』\"]{2,40})[”」』\"]", "([\\p{Han}]{2,8})(?:是谁|的身份)", "(?i)who (?:is|was) ([A-Z][a-z]+(?: [A-Z][a-z]+)?)"] {
             guard let regex = try? NSRegularExpression(pattern: pattern), let match = regex.firstMatch(in: question, range: NSRange(question.startIndex..., in: question)),
@@ -229,9 +229,9 @@ struct ChatRequest {
         let lowered = text.lowercased()
         var terms = Set(lowered.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count >= 3 && !$0.unicodeScalars.contains(where: { (0x3400...0x9FFF).contains($0.value) }) && !ignored.contains($0) })
         let characters = Array(lowered.prefix(4000))
+        let generic: Set<String> = ["这个", "那个", "角色", "人物", "什么", "一下", "回忆", "有点", "忘了", "之前", "可以", "帮我", "解释"]
         for index in characters.indices.dropFirst() {
             let pair = String(characters[(index - 1)...index])
-            let generic: Set<String> = ["这个", "那个", "角色", "人物", "什么", "一下", "回忆", "有点", "忘了", "之前", "可以", "帮我", "解释"]
             if pair.unicodeScalars.count == 2 && pair.unicodeScalars.allSatisfy({ (0x3400...0x9FFF).contains($0.value) }) && !generic.contains(pair) { terms.insert(pair) }
         }
         return terms
