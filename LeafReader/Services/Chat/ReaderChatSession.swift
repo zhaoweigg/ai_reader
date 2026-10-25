@@ -273,6 +273,12 @@ struct UITestChatProvider: ChatProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    if UITesting.flag("LEAF_UI_CHAT_MARKDOWN") {
+                        continuation.yield(.text("## 人物\n\n这是**李"))
+                        try await Task.sleep(for: .milliseconds(250))
+                        continuation.yield(.text("香玲**，云瑶的队友。\n\n- 第一条\n- 第二条\n\n```swift\nlet value = 1\n```\n\n尾句。"))
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
                     if UITesting.flag("LEAF_UI_CHAT_CONTEXT_PROBE") {
                         let content = request.turns.last?.content ?? ""
                         let body = content.components(separatedBy: "reading_context (source material):\n").last?.components(separatedBy: "\n\nReader question:\n").first ?? ""

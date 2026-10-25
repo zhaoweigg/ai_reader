@@ -584,11 +584,15 @@ private struct ReaderChatMessageBubble: View {
                 .accessibilityValue(context.text)
                 .accessibilityIdentifier("toggleChatQuote")
             }
-            Text(message.text.isEmpty ? (message.state == .streaming ? "Thinking…" : "No response text") : message.text)
+            Text(message.isUser ? AttributedString(displayText) : ChatMarkdown.render(displayText))
                 .font(.subheadline).lineSpacing(3).textSelection(.enabled)
                 .accessibilityIdentifier(message.isUser ? "chatQuestion" : "chatReply")
         }
         .padding(message.isUser ? 10 : 0)
         .background(message.isUser ? accent.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var displayText: String {
+        message.text.isEmpty ? (message.state == .streaming ? "Thinking…" : "No response text") : message.text
     }
 }
