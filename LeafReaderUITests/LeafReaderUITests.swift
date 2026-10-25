@@ -1553,7 +1553,12 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(quote.waitForExistence(timeout: 5)); let selected = quote.label
         let panel = app.otherElements["readerChatPanel"], history = app.scrollViews["chatMessageHistory"]
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
-        let readingHeight = panel.frame.height
+        let initialReadingHeight = panel.frame.height
+        var readingHeight = initialReadingHeight
+        XCTAssertGreaterThan(initialReadingHeight, app.frame.height * 0.28)
+        XCTAssertLessThan(initialReadingHeight, app.frame.height * 0.40, "The dock leaves most of the screen for the book")
+        XCTAssertGreaterThanOrEqual(panel.frame.maxY, app.frame.maxY - 24, "No unused bottom safe-area gap below the reader chat")
+        capture(flow + " lower reading dock at approved height", app: app)
         func focusInput(typing text: String? = nil) {
             // Resolve current scene geometry after the keyboard moved the composer.
             let frame = input.frame
@@ -1574,6 +1579,7 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(history.frame.height, 20, "Keep a readable, scrollable message viewport even in landscape")
             XCTAssertLessThanOrEqual(history.frame.maxY, input.frame.minY + 2)
             XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
+            XCTAssertGreaterThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY - 24)
             XCTAssertGreaterThan(panel.frame.minY - surface.frame.minY, app.frame.width > app.frame.height ? 8 : 210)
             XCTAssertTrue(input.isHittable); XCTAssertTrue(app.buttons["Hide keyboard"].isHittable)
             XCTAssertEqual(quote.label, selected)
@@ -1596,6 +1602,18 @@ final class LeafReaderUITests: XCTestCase {
             start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: endY - handle.frame.midY)), withVelocity: .slow, thenHoldForDuration: 0.1)
             XCTAssertTrue(app.buttons["closeReaderChat"].exists)
         }
+        resize(500)
+        XCTAssertLessThan(panel.frame.height, initialReadingHeight)
+        XCTAssertTrue(input.isHittable)
+        capture(flow + " minimum reading dock", app: app)
+        resize(-700)
+        XCTAssertGreaterThan(panel.frame.height, initialReadingHeight + 100)
+        XCTAssertLessThan(panel.frame.height, app.frame.height * 0.9)
+        XCTAssertTrue(input.isHittable)
+        capture(flow + " maximum reading dock", app: app)
+        resize(panel.frame.height - initialReadingHeight)
+        XCTAssertEqual(panel.frame.height, initialReadingHeight, accuracy: 15)
+        readingHeight = panel.frame.height
         focusInput(typing: "Keep this followup draft")
         assertHistoryAndBook(); latestReplyIsVisible()
         XCTAssertEqual(surface.frame.width, originalFrame.width, accuracy: 2)

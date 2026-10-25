@@ -160,6 +160,9 @@ struct ReaderContent: View {
                         try await model.readingAgentBook(for: context)
                     }, traces: agentTraces) { try await model.readingChatContext() }
                 })
+                // Dock the chat into the bottom container inset while still
+                // following the keyboard. This overlay never resizes the book.
+                .ignoresSafeArea(.container, edges: .bottom)
             }
         }
         .task(id: chatIsPresented && model.isReady && aiSettings.configuration.harness == .agent && aiSettings.configuration.sharePage) {

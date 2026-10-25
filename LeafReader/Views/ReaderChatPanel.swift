@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 
 enum ReaderChatSizing {
+    static let dockedReadingFraction = 0.36
     static func bounds(fullHeight: CGFloat, availableHeight: CGFloat, composing: Bool, hasSelection: Bool) -> ClosedRange<CGFloat> {
         let usable = max(0, availableHeight - 16)
         // Leave actual book text above an expanded portrait composer, rather
@@ -246,7 +247,10 @@ struct ResizableChatPanel: View {
         self.session = session; self.location = location; self.fullHeight = fullHeight; self.bookTitle = bookTitle
         self.context = context; self.onChooseConversation = onChooseConversation
         self.onClose = onClose; self.onSettings = onSettings; self.onButtonSettings = onButtonSettings; self.onSend = onSend
-        _heightFraction = AppStorage(wrappedValue: 1.0 / 3, "\(location.storagePrefix).chatHeightFraction")
+        // Start the new reader dock at its approved size once. Subsequent user
+        // resizes persist independently of the existing keyboard preference.
+        _heightFraction = AppStorage(wrappedValue: location == .reader ? ReaderChatSizing.dockedReadingFraction : 1.0 / 3,
+            location == .reader ? "reader.dockedChatHeightFraction" : "library.chatHeightFraction")
         _composingHeightFraction = AppStorage(wrappedValue: -1, "\(location.storagePrefix).chatComposingHeightFraction")
     }
 
@@ -269,7 +273,8 @@ struct ResizableChatPanel: View {
                 }, onResizeStep: { step in
                     save(min(limits.upperBound, max(limits.lowerBound, height + step)), fullHeight: full, composing: composing)
                 }, onResetSize: {
-                    if composing { composingHeightFraction = -1 } else { heightFraction = 1.0 / 3 }
+                    if composing { composingHeightFraction = -1 }
+                    else { heightFraction = location == .reader ? ReaderChatSizing.dockedReadingFraction : 1.0 / 3 }
                     resizeOrigin = nil; resizedHeight = nil
                 })
                 .frame(height: height)
