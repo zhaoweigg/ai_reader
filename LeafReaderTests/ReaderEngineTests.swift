@@ -53,6 +53,116 @@ final class ReaderEngineTests: XCTestCase {
         let rendered = try await model.webView?.evaluateJavaScript("window.Leaf.visibleText()") as? String
         XCTAssertTrue(rendered?.localizedCaseInsensitiveContains(text) == true, "Missing '\(text)' in rendered content: \(rendered?.prefix(500) ?? "nil")")
     }
+    func testChatClearanceUsesMeasuredPanelIncludingKeyboard() {
+        let book = CGRect(x: 0, y: 0, width: 390, height: 844)
+        XCTAssertEqual(ReaderClearance.height(book: book, chat: nil), 0)
+        XCTAssertEqual(ReaderClearance.height(book: book, chat: CGRect(x: 8, y: 540, width: 374, height: 296)), 316)
+        XCTAssertEqual(ReaderClearance.height(book: book, chat: CGRect(x: 8, y: 270, width: 374, height: 240)), 586)
+        XCTAssertEqual(ReaderClearance.height(book: book, chat: CGRect(x: 8, y: 900, width: 374, height: 240)), 0)
+    }
+    func testFinalEPUBLineStaysReachableWithChatWithoutRepaginationInBothFlows() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "attention")
+        let web = try XCTUnwrap(model.webView)
+        for size in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
+            window?.frame.size = size
+            try await Task.sleep(for: .milliseconds(250))
+            let value = try await web.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'), sleep=ms=>new Promise(r=>setTimeout(r,ms));
+                const viewport=document.querySelector('#reading-viewport'), rows=[];
+                for(const scrolling of [false,true]) for(let fontSize=12;fontSize<=32;fontSize++) {
+                    const i=fontSize%3, settings={...base,scrolling,fontSize,font:['Georgia','System','Palatino'][i],horizontalMargin:[12,20,36][i],background:['#FFFFFF','#F4EDDD','#17232E'][i],foreground:['#263440','#493F30','#D7DEE4'][i]};
+                    window.Leaf.setReadingClearance({height:0});window.Leaf.applyPreferences(settings);await sleep(140);
+                    await view.goTo(3);await sleep(80);
+                    let content=view.renderer.getContents().find(c=>c.index===3),doc=content.doc;
+                    const walker=doc.createTreeWalker(doc.body,NodeFilter.SHOW_TEXT);let node,last;
+                    while(node=walker.nextNode())if(node.textContent.trim())last=node;
+                    const end=last.textContent.trimEnd().length,range=doc.createRange();range.setStart(last,end-1);range.setEnd(last,end);
+                    const cfi=view.getCFI(3,range);await view.goTo(cfi);await sleep(100);
+                    const before={width:view.clientWidth,height:view.clientHeight,pages:view.renderer.pages,text:doc.body.textContent,cfi:view.lastLocation.cfi,bottom:range.getBoundingClientRect().bottom+doc.defaultView.frameElement.getBoundingClientRect().top};
+                    if(!scrolling){const restored=view.lastLocation.range.cloneRange();restored.setEnd(doc.body,doc.body.childNodes.length);view.lastLocation.range=restored;}
+                    const clearance=Math.round(view.clientHeight*.6);
+                    window.Leaf.setReadingClearance({height:clearance});await sleep(80);
+                    if(scrolling){const container=doc.defaultView.frameElement.getRootNode().getElementById('container');container.scrollTop=container.scrollHeight;}
+                    else viewport.scrollTop=clearance;
+                    await sleep(120);
+                    const maximumLift=viewport.scrollTop, available=view.clientHeight-clearance;
+                    const maximumFinalTop=range.getBoundingClientRect().top+doc.defaultView.frameElement.getBoundingClientRect().top;
+                    const frameAtMaximum=doc.defaultView.frameElement.getBoundingClientRect();
+                    const clip=doc.defaultView.frameElement.getRootNode().getElementById('container').getBoundingClientRect();
+                    const painted=[];const glyphs=doc.createTreeWalker(doc.body,NodeFilter.SHOW_TEXT);let textNode;
+                    while(textNode=glyphs.nextNode()) {
+                        if(!textNode.textContent.trim())continue;
+                        const textRange=doc.createRange();textRange.selectNodeContents(textNode);
+                        for(const r of textRange.getClientRects()) {
+                            const top=r.top+frameAtMaximum.top,bottom=r.bottom+frameAtMaximum.top;
+                            if(r.width&&r.height&&r.right+frameAtMaximum.left>clip.left&&r.left+frameAtMaximum.left<clip.right&&bottom>Math.max(0,clip.top)&&top<Math.min(available,clip.bottom))painted.push({top,bottom,left:r.left+frameAtMaximum.left});
+                        }
+                    }
+                    const neededLift=Math.max(0,before.bottom-available);
+                    // A landscape spread can have a tall left column and a short
+                    // final right column. Check reachability, not that the last
+                    // glyph stays visible while lifting the other column to max.
+                    if(!scrolling)viewport.scrollTop=neededLift;
+                    await sleep(40);
+                    const rect=range.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect();
+                    rows.push({scrolling,fontSize,font:settings.font,width:view.clientWidth,height:view.clientHeight,pages:view.renderer.pages,beforeWidth:before.width,beforeHeight:before.height,beforePages:before.pages,sameText:doc.body.textContent===before.text,bottom:rect.bottom+frame.top,available,top:rect.top+frame.top,loaded:view.renderer.getContents().length,cfiValid:view.resolveCFI(cfi).anchor(doc).toString()===range.toString(),keptPage:scrolling||view.lastLocation.cfi===before.cfi,maximumLift,neededLift,actualLift:viewport.scrollTop,maximumFinalTop,paintedLinesAtMaximum:painted.length,paintedAtMaximum:painted.slice(-6)});
+                    window.Leaf.setReadingClearance({height:0});await sleep(40);
+                    if(viewport.scrollTop!==0)throw new Error('Closing chat left the page lifted');
+                }
+                return rows;
+                """, arguments: ["base": preferences.payload], in: nil, contentWorld: .page)
+            let rows = try XCTUnwrap(value as? [[String: Any]])
+            XCTAssertEqual(rows.count, 42)
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows, options: .prettyPrinted), uniformTypeIdentifier: "public.json")
+            attachment.name = "End clearance 12–32 pt both flows \(size)"; attachment.lifetime = .keepAlways; add(attachment)
+            for row in rows {
+                let label = "\(size) \(row)"
+                XCTAssertEqual(row["width"] as? Double, row["beforeWidth"] as? Double, label)
+                XCTAssertEqual(row["height"] as? Double, row["beforeHeight"] as? Double, label)
+                if row["scrolling"] as? Bool == false { XCTAssertEqual(row["pages"] as? Double, row["beforePages"] as? Double, label) }
+                XCTAssertEqual(row["sameText"] as? Bool, true, label)
+                XCTAssertEqual(row["cfiValid"] as? Bool, true, label)
+                XCTAssertEqual(row["keptPage"] as? Bool, true, label)
+                XCTAssertLessThanOrEqual(try XCTUnwrap(row["bottom"] as? Double), try XCTUnwrap(row["available"] as? Double) + 2, label)
+                XCTAssertGreaterThan(try XCTUnwrap(row["top"] as? Double), -1, label)
+                XCTAssertGreaterThan(row["paintedLinesAtMaximum"] as? Int ?? 0, 0, "Maximum lift must never blank the entire page: \(label)")
+                XCTAssertLessThanOrEqual(row["loaded"] as? Int ?? 99, 3, label)
+            }
+        }
+    }
+    func testPDFClearancePreservesZoomAndPageGeometryAndRestoresInset() async throws {
+        let (book,url) = try prepare("Notes from the Coast.pdf", format: .pdf)
+        let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil); self.model = model
+        let pdf = ReaderPDFView(frame: CGRect(x: 0, y: 0, width: 390, height: 720))
+        pdf.autoScales = true; pdf.displayMode = .singlePageContinuous; pdf.displayDirection = .vertical
+        model.configurePDF(pdf, url: url)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene); let controller = UIViewController(); window.rootViewController = controller
+        controller.view.addSubview(pdf); window.makeKeyAndVisible(); self.window = window
+        pdf.frame = controller.view.bounds; pdf.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        func scrollView(_ view: UIView) -> UIScrollView? {
+            for child in view.subviews { if let scroll = child as? UIScrollView { return scroll }; if let scroll = scrollView(child) { return scroll } }; return nil
+        }
+        let scroll = try XCTUnwrap(scrollView(pdf)), page = try XCTUnwrap(pdf.document?.page(at: 3))
+        pdf.go(to: page); try await Task.sleep(for: .milliseconds(150))
+        let bounds=page.bounds(for: .cropBox), scale=pdf.scaleFactor, original=scroll.contentInset.bottom
+        let ink=try XCTUnwrap(page.selection(for: NSRange(location: 0,length: (page.string ?? "").utf16.count))).bounds(for: page)
+        let blank=max(0,pdf.convert(bounds,from:page).maxY-pdf.convert(ink,from:page).maxY)
+        for height: CGFloat in [240,480,320,0,240,0] {
+            model.setReadingClearance(height); pdf.layoutIfNeeded()
+            XCTAssertEqual(scroll.contentInset.bottom, original+max(0,height-blank), accuracy: 1)
+            XCTAssertEqual(pdf.scaleFactor, scale, accuracy: 0.001); XCTAssertEqual(page.bounds(for: .cropBox), bounds)
+            if height>0 {
+                scroll.contentOffset.y = scroll.contentSize.height+scroll.adjustedContentInset.bottom-scroll.bounds.height
+                let final=pdf.convert(ink,from:page)
+                XCTAssertLessThanOrEqual(final.maxY,pdf.bounds.height-height+2)
+                XCTAssertGreaterThan(final.maxY,0)
+            }
+        }
+    }
     func testSelectionRefreshSnapshotsTheCurrentRangeAndIgnoresCancellationInBothFlows() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         let selectWord = """
@@ -870,6 +980,7 @@ final class ReaderEngineTests: XCTestCase {
             var prefs = preferences; prefs.scrolling = scrolling
             let model = try show(book, url: url, readerPreferences: prefs)
             try await assertOpened(model, contains: "attention")
+            model.setReadingClearance(280)
             let result = try await model.webView?.callAsyncJavaScript("""
                 const view = document.querySelector('foliate-view'), r = view.renderer;
                 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

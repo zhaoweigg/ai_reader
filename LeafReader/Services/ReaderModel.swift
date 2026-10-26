@@ -38,6 +38,18 @@ final class ReaderModel: NSObject, ObservableObject {
     weak var webView: WKWebView?
     weak var pdfView: PDFView?
     var preferences: ReaderPreferences?
+    private var readingClearance: CGFloat = 0
+
+    func setReadingClearance(_ height: CGFloat) {
+        let next = max(0, height.isFinite ? height : 0)
+        guard abs(next - readingClearance) > 0.5 else { return }
+        readingClearance = next
+        applyReadingClearance()
+    }
+    private func applyReadingClearance() {
+        if let pdf = pdfView as? ReaderPDFView { pdf.readingClearance = readingClearance }
+        else if isReady { evaluate("setReadingClearance", ["height": readingClearance]) }
+    }
     var spokenHighlightLocator: String?
     var spokenHighlightView: ObjectIdentifier?
     private var searchGeneration = UUID().uuidString
@@ -380,7 +392,7 @@ final class ReaderModel: NSObject, ObservableObject {
         case "toggleControls": toggleControls()
         case "readingActivity": hideControls()
         case "bridgeReady": openWebBook()
-        case "ready": isReady = true; error = nil; synchronizeAnnotations()
+        case "ready": isReady = true; error = nil; synchronizeAnnotations(); applyReadingClearance()
         case "annotationSelected": if let value = message["id"] as? String, let id = UUID(uuidString: value) { editAnnotation(id) }
         case "error": error = message["message"] as? String ?? "This book could not be opened. Try importing a fresh copy."; isSearching = false
         case "relocate":
@@ -426,6 +438,7 @@ final class ReaderModel: NSObject, ObservableObject {
         for (page, annotation) in renderedPDFAnnotations { page.removeAnnotation(annotation) }
         renderedPDFAnnotations = []; renderedPDFPages = []; renderedPDFValues = []
         pdfView = view
+        (view as? ReaderPDFView)?.readingClearance = readingClearance
         initialPDFPage = nil
         pdfSelectionObserver = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: view, queue: .main) { [weak self, weak view] _ in
             Task { @MainActor [weak self, weak view] in

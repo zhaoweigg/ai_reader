@@ -1,3 +1,6 @@
 html,body { margin:0; padding:0; height:100%; width:100%; overflow:hidden; background:transparent; }
 foliate-view { display:block; height:100%; width:100%; }
 foliate-view::part(head), foliate-view::part(foot) { display:none; }
+/* Presentation-only lift: the page itself keeps its full height and columns. */
+#reading-viewport { height:100%; width:100%; overflow:hidden; overflow-anchor:none; }
+#reading-tail { height:0; pointer-events:none; overflow-anchor:none; }

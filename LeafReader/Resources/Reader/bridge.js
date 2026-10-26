@@ -20,6 +20,63 @@ const observedDocuments = new WeakSet();
 // An empty current selection must never resurrect an older iframe range.
 let selectedDocument;
 let chatRecallID;
+let readingClearance = 0;
+let readingViewport;
+let readingTail;
+let liftedPage;
+
+// Bound the presentation lift by this page's final painted line. A short final
+// page must not disappear above the screen after repeated upward swipes.
+function pageLiftLimit(height) {
+    const range = view?.lastLocation?.range;
+    if (!range || !readingViewport) return height;
+    const frame = range.startContainer.ownerDocument?.defaultView?.frameElement?.getBoundingClientRect();
+    if (!frame) return height;
+    const viewport = readingViewport.getBoundingClientRect();
+    const clip = range.startContainer.ownerDocument.defaultView.frameElement.getRootNode().getElementById('container')?.getBoundingClientRect() ?? viewport;
+    const offset = frame.top + readingViewport.scrollTop - viewport.top;
+    let bottom = 0;
+    // Restored endpoints may be unpainted, and element rectangles may span
+    // several columns. Only text-node ranges describe the actual painted lines.
+    const doc = range.startContainer.ownerDocument;
+    const root = range.commonAncestorContainer;
+    const nodes = [];
+    if (root.nodeType === Node.TEXT_NODE) nodes.push(root);
+    else {
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) if (range.intersectsNode(node)) nodes.push(node);
+    }
+    for (const node of nodes) {
+        const start = node === range.startContainer ? range.startOffset : 0;
+        const end = node === range.endContainer ? range.endOffset : node.length;
+        if (end <= start || !node.textContent.slice(start, end).trim()) continue;
+        const text = doc.createRange(); text.setStart(node, start); text.setEnd(node, end);
+        for (const rect of text.getClientRects()) {
+            if (!rect.width || !rect.height || rect.right + frame.left <= clip.left || rect.left + frame.left >= clip.right) continue;
+            if (rect.top + offset >= readingViewport.clientHeight || rect.bottom + offset <= 0) continue;
+            bottom = Math.max(bottom, Math.min(readingViewport.clientHeight, rect.bottom + offset));
+        }
+    }
+    return Math.min(height, Math.max(0, bottom - (readingViewport.clientHeight - height)));
+}
+function setReadingClearance({ height }) {
+    const next = Math.min(Math.max(0, innerHeight - 44), Math.max(0, Number(height) || 0));
+    const oldLimit = parseFloat(readingTail?.style.height) || 0;
+    const followEnd = oldLimit > 0 && Math.abs((readingViewport?.scrollTop ?? 0) - oldLimit) < 3;
+    readingClearance = next;
+    const paged = view && (view.isFixedLayout || !preferences?.scrolling);
+    const limit = paged ? pageLiftLimit(next) : 0;
+    if (readingTail) readingTail.style.height = `${limit}px`;
+    if (readingViewport) {
+        // The gesture callback lifts the page without changing its layout box.
+        readingViewport.scrollTop = !paged || !next ? 0 : followEnd ? limit : Math.min(readingViewport.scrollTop, limit);
+    }
+    view?.renderer?.setReadingClearance?.(next, delta => {
+        const maximum = parseFloat(readingTail?.style.height) || 0;
+        if (readingViewport) readingViewport.scrollTop = Math.max(0, Math.min(maximum, readingViewport.scrollTop + delta));
+    });
+}
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 reducedMotion.addEventListener('change', () => { if (preferences) applyPreferences(preferences); });
 
@@ -187,6 +244,7 @@ function applyPreferences(value) {
     attribute('margin', `${verticalText ? horizontal : vertical}px`);
     attribute('gap', `${gap}%`);
     attribute('max-inline-size', '680px');
+    setReadingClearance({ height: readingClearance });
     view.renderer.setStyles?.(`
         html { color-scheme: ${value.colorScheme ?? (value.background === '#17232E' ? 'dark' : 'light')}; font-size:${size}px !important;
             -webkit-text-size-adjust:none !important; text-size-adjust:none !important; }
@@ -234,7 +292,13 @@ async function open(config) {
             }
         });
         view = document.createElement('foliate-view');
-        document.body.append(view);
+        readingViewport = document.createElement('div');
+        readingViewport.id = 'reading-viewport';
+        readingTail = document.createElement('div');
+        readingTail.id = 'reading-tail';
+        readingTail.setAttribute('aria-hidden', 'true');
+        readingViewport.append(view, readingTail);
+        document.body.append(readingViewport);
         annotationLayer = createAnnotations(view, config.annotations, post);
         view.addEventListener('load', ({ detail }) => {
             if (!detail.preload) post('selection', {text:''});
@@ -244,6 +308,10 @@ async function open(config) {
         view.addEventListener('link', () => { lastLinkActivation = Date.now(); });
         view.addEventListener('external-link', event => { lastLinkActivation = Date.now(); event.preventDefault(); });
         view.addEventListener('relocate', ({detail}) => {
+            const page = `${detail.index}:${view.renderer?.start}`;
+            if (!preferences?.scrolling && page !== liftedPage && readingViewport) readingViewport.scrollTop = 0;
+            liftedPage = page;
+            setReadingClearance({ height: readingClearance });
             fixedIndex = detail.index ?? fixedIndex;
             const count = view.book.sections.length;
             const fraction = Number.isFinite(detail.fraction) ? detail.fraction : count > 1 ? fixedIndex / (count - 1) : 0;
@@ -290,6 +358,8 @@ function close() {
     previous?.close();
     previous?.book?.destroy?.();
     previous?.remove();
+    readingViewport?.remove();
+    readingViewport = null; readingTail = null; liftedPage = null;
 }
 
 function readableError(error) {
@@ -336,7 +406,7 @@ async function search({query, generation}) {
     } catch(error) { post('searchResults', {generation, items}); }
 }
 
-window.Leaf = { open, close, command, applyPreferences, search, tap,
+window.Leaf = { open, close, command, applyPreferences, search, tap, setReadingClearance,
     recallBook: async ({term, locator, id, selection}) => {
         const source=view; chatRecallID=id;
         return retrieveEarlierPassages(source,term,locator,{selection,prepare:sanitize,cancelled:()=>view!==source || chatRecallID!==id});

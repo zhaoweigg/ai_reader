@@ -492,6 +492,8 @@ export class Paginator extends HTMLElement {
     #scrollNavigating = 0
     #scrollLoadQueue = Promise.resolve()
     #chapterDividerLabel
+    #readingClearance = 0
+    #liftPage
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -823,10 +825,15 @@ export class Paginator extends HTMLElement {
     }
     #updateScrollEndSpace() {
         const last = this.#scrollViews.get(this.sections.length - 1)
-        const space = last ? Math.max(0, this.size - last.view.element.getBoundingClientRect().height) : 0
-        // Only the final short chapter gets room to restore its own first line
-        // at the top; intermediate chapters never receive viewport-sized gaps.
+        const space = last ? Math.max(0, this.size - last.view.element.getBoundingClientRect().height, this.#readingClearance) : 0
+        // Keep the final line reachable above chat, including short final chapters.
+        // Intermediate chapters never receive extra gaps.
         this.#container.style.setProperty('--leaf-book-end-space', `${space}px`)
+    }
+    setReadingClearance(height, liftPage) {
+        this.#readingClearance = Math.max(0, Number(height) || 0)
+        this.#liftPage = liftPage
+        if (this.#continuous) this.#updateScrollEndSpace()
     }
     // Chrome belongs outside the EPUB document: it must not change CFIs,
     // selection text, search, annotations, or read-aloud passage contents.
@@ -1180,8 +1187,22 @@ export class Paginator extends HTMLElement {
             if (this.#touchScrolled) e.preventDefault()
             return
         }
-        e.preventDefault()
         const touch = e.changedTouches[0]
+        if (this.#readingClearance > 0 && this.#liftPage) {
+            const dx = state.startX - touch.screenX, dy = state.startY - touch.screenY
+            if (!state.axis) {
+                e.preventDefault()
+                if (Math.hypot(dx, dy) <= 6) return
+                state.axis = Math.abs(dy) > Math.abs(dx) ? 'lift' : 'page'
+            }
+            if (state.axis === 'lift') {
+                e.preventDefault()
+                this.#liftPage(state.y - touch.screenY)
+                state.x = touch.screenX; state.y = touch.screenY
+                return
+            }
+        }
+        e.preventDefault()
         const x = touch.screenX, y = touch.screenY
         const dx = state.x - x, dy = state.y - y
         const dt = Math.max(1, e.timeStamp - state.t)

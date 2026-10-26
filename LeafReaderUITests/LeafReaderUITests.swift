@@ -1420,6 +1420,84 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testSentQuotePersistsWithQuestionInScroll() { verifySentQuote(flow: "Scroll") }
     @MainActor func testSentQuotePersistsWithQuestionInPDF() { verifySentQuote(flow: "PDF") }
 
+    @MainActor func testBookEndingAboveChatInPages() { verifyBookEndingAboveChat(flow: "Pages") }
+    @MainActor func testBookEndingAboveChatInScroll() { verifyBookEndingAboveChat(flow: "Scroll") }
+    @MainActor func testBookEndingAboveChatInPDF() { verifyBookEndingAboveChat(flow: "PDF") }
+
+    @MainActor private func verifyBookEndingAboveChat(flow: String) {
+        continueAfterFailure = false
+        let app=launchApp(); defer { orient(.portrait) }
+        openSelectionFixture(flow,app:app);showReaderControls(app)
+        if flow == "PDF" {
+            app.buttons["Contents"].tap()
+            XCTAssertTrue(app.buttons["Page 4"].waitForExistence(timeout: 5));app.buttons["Page 4"].tap()
+            showReaderControls(app)
+        } else { app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1) }
+        capture(flow+" ending before chat",app:app)
+        let title=app.staticTexts["readerChapterTitle"]
+        expectation(for: NSPredicate(format: "label CONTAINS %@",flow == "PDF" ? "Page 4" : "Carry it with you"),evaluatedWith:title)
+        waitForExpectations(timeout:10)
+        let surface=readingSurface(app), original=surface.frame
+        surface.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.4)).tap()
+        app.buttons["openReaderChat"].tap()
+        let panel=app.otherElements["readerChatPanel"]
+        XCTAssertTrue(panel.waitForExistence(timeout:5))
+        func liftEnding(_ label:String) {
+            for _ in 0..<6 {
+                let top=max(surface.frame.minY+12,app.frame.minY+12), bottom=panel.frame.minY-18
+                XCTAssertGreaterThan(bottom-top,32)
+                let start=app.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:app.frame.width*0.5,dy:bottom-app.frame.minY))
+                let end=app.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:app.frame.width*0.5,dy:top-app.frame.minY))
+                start.press(forDuration:0.01,thenDragTo:end,withVelocity:.slow,thenHoldForDuration:0.1)
+            }
+            let endings=flow == "PDF" ? surface.staticTexts.allElementsBoundByIndex : surface.staticTexts.containing(NSPredicate(format:"label CONTAINS %@","world will keep offering itself")).allElementsBoundByIndex
+            capture(flow+" final lines "+label,app:app)
+            XCTAssertFalse(endings.isEmpty)
+            let last=endings.last!
+            XCTAssertLessThanOrEqual(last.frame.maxY,panel.frame.minY+2,"Final text must clear the chat: \(last.frame) vs \(panel.frame)")
+            XCTAssertGreaterThan(last.frame.maxY,surface.frame.minY,"The ending must remain visible")
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+        }
+        liftEnding("above reading chat")
+        XCTAssertEqual(surface.frame.width,original.width,accuracy:2);XCTAssertEqual(surface.frame.height,original.height,accuracy:2)
+        let handle=app.descendants(matching:.any)["readerChatDragHandle"].firstMatch
+        let start=handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        start.press(forDuration:0.01,thenDragTo:start.withOffset(CGVector(dx:0,dy:-180)),withVelocity:.slow,thenHoldForDuration:0.1)
+        liftEnding("above expanded chat")
+        let input=app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap()
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout:5))
+        input.typeText("Question about the ending")
+        XCTAssertEqual(input.value as? String,"Question about the ending")
+        liftEnding("with keyboard")
+        XCTAssertEqual(surface.frame.height,original.height,accuracy:2)
+        app.buttons["Hide keyboard"].tap()
+        orient(.landscapeLeft);liftEnding("landscape")
+        XCTAssertEqual(input.value as? String,"Question about the ending")
+        orient(.portrait)
+        app.buttons["closeReaderChat"].tap();showReaderControls(app)
+        XCTAssertTrue(title.label.contains(flow == "PDF" ? "Page 4" : "Carry it with you"))
+        app.buttons["closeBook"].tap()
+        if flow == "PDF" { let card=app.buttons["book-Notes from the Coast"];for _ in 0..<5 where !card.isHittable {app.scrollViews.firstMatch.swipeUp()};card.tap() }
+        else {app.buttons["featuredBook"].tap()}
+        showReaderControls(app)
+        XCTAssertTrue(title.label.contains(flow == "PDF" ? "Page 4" : "Carry it with you"))
+        app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(input.value as? String,"Question about the ending")
+        capture(flow+" saved passage after reopening",app:app)
+        // Rotation preserves the passage, which can reflow onto the preceding
+        // physical page. Navigate back to the actual ending before testing it.
+        if flow == "Pages" {
+            for _ in 0..<3 {
+                let y=surface.frame.minY+40
+                let origin=app.coordinate(withNormalizedOffset:.zero)
+                origin.withOffset(CGVector(dx:app.frame.width*0.85,dy:y-app.frame.minY))
+                    .press(forDuration:0.01,thenDragTo:origin.withOffset(CGVector(dx:app.frame.width*0.15,dy:y-app.frame.minY)),withVelocity:.slow,thenHoldForDuration:0.1)
+            }
+        }
+        liftEnding("restored after reopening")
+    }
+
     @MainActor func testChatEdgeResizesInPages() { verifyChatResize(flow: "Pages") }
     @MainActor func testChatEdgeResizesInScroll() { verifyChatResize(flow: "Scroll") }
     @MainActor func testChatEdgeResizesInPDF() { verifyChatResize(flow: "PDF") }
