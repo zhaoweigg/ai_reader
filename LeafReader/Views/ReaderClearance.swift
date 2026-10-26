@@ -38,6 +38,7 @@ enum ReaderClearance {
             baselineBottom = target.contentInset.bottom
         }
         let next = min(max(0, view.bounds.height - 44), max(0, height.isFinite ? height : 0))
+        guard next > 0 || amount > 0 else { return }
         let bottom = baselineBottom + next
         guard appliedBottom == nil || abs(target.contentInset.bottom - bottom) > 0.5 else { return }
         let oldMaximum = max(-target.adjustedContentInset.top,

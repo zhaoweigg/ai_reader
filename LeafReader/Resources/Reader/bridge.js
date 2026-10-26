@@ -25,20 +25,35 @@ let readingViewport;
 let readingTail;
 let liftedPage;
 
+// Bound the presentation lift by this page's final painted line. A short final
+// page must not disappear above the screen after repeated upward swipes.
+function pageLiftLimit(height) {
+    const range = view?.lastLocation?.range?.cloneRange();
+    if (!range || !readingViewport) return height;
+    range.collapse(false);
+    if (range.endContainer.nodeType === Node.TEXT_NODE && range.endOffset > 0)
+        range.setStart(range.endContainer, range.endOffset - 1);
+    const rect = range.getBoundingClientRect();
+    const frame = range.endContainer.ownerDocument?.defaultView?.frameElement?.getBoundingClientRect();
+    if (!frame || !rect.height) return height;
+    const bottom = rect.bottom + frame.top + readingViewport.scrollTop - readingViewport.getBoundingClientRect().top;
+    return Math.min(height, Math.max(0, bottom - (readingViewport.clientHeight - height)));
+}
 function setReadingClearance({ height }) {
     const next = Math.min(Math.max(0, innerHeight - 44), Math.max(0, Number(height) || 0));
-    const followEnd = readingClearance > 0 && readingViewport?.scrollTop > 0 &&
-        Math.abs(readingViewport.scrollTop - readingClearance) < 3;
+    const oldLimit = parseFloat(readingTail?.style.height) || 0;
+    const followEnd = oldLimit > 0 && Math.abs((readingViewport?.scrollTop ?? 0) - oldLimit) < 3;
     readingClearance = next;
     const paged = view && (view.isFixedLayout || !preferences?.scrolling);
-    if (readingTail) readingTail.style.height = `${paged ? next : 0}px`;
+    const limit = paged ? pageLiftLimit(next) : 0;
+    if (readingTail) readingTail.style.height = `${limit}px`;
     if (readingViewport) {
-        // Scrolling is driven by the page gesture callback, not a second native
-        // scroll gesture competing with EPUB selection or horizontal page turns.
-        readingViewport.scrollTop = !paged || !next ? 0 : followEnd ? next : Math.min(readingViewport.scrollTop, next);
+        // The gesture callback lifts the page without changing its layout box.
+        readingViewport.scrollTop = !paged || !next ? 0 : followEnd ? limit : Math.min(readingViewport.scrollTop, limit);
     }
     view?.renderer?.setReadingClearance?.(next, delta => {
-        if (readingViewport) readingViewport.scrollTop = Math.max(0, Math.min(readingClearance, readingViewport.scrollTop + delta));
+        const maximum = parseFloat(readingTail?.style.height) || 0;
+        if (readingViewport) readingViewport.scrollTop = Math.max(0, Math.min(maximum, readingViewport.scrollTop + delta));
     });
 }
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -275,6 +290,7 @@ async function open(config) {
             const page = `${detail.index}:${view.renderer?.start}`;
             if (!preferences?.scrolling && page !== liftedPage && readingViewport) readingViewport.scrollTop = 0;
             liftedPage = page;
+            setReadingClearance({ height: readingClearance });
             fixedIndex = detail.index ?? fixedIndex;
             const count = view.book.sections.length;
             const fraction = Number.isFinite(detail.fraction) ? detail.fraction : count > 1 ? fixedIndex / (count - 1) : 0;

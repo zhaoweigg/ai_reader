@@ -1428,7 +1428,12 @@ final class LeafReaderUITests: XCTestCase {
         continueAfterFailure = false
         let app=launchApp(); defer { orient(.portrait) }
         openSelectionFixture(flow,app:app);showReaderControls(app)
-        app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1)
+        if flow == "PDF" {
+            app.buttons["Contents"].tap()
+            XCTAssertTrue(app.buttons["Page 4"].waitForExistence(timeout: 5));app.buttons["Page 4"].tap()
+            showReaderControls(app)
+        } else { app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1) }
+        capture(flow+" ending before chat",app:app)
         let title=app.staticTexts["readerChapterTitle"]
         expectation(for: NSPredicate(format: "label CONTAINS %@",flow == "PDF" ? "Page 4" : "Carry it with you"),evaluatedWith:title)
         waitForExpectations(timeout:10)
