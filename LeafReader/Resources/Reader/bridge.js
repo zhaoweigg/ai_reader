@@ -28,15 +28,20 @@ let liftedPage;
 // Bound the presentation lift by this page's final painted line. A short final
 // page must not disappear above the screen after repeated upward swipes.
 function pageLiftLimit(height) {
-    const range = view?.lastLocation?.range?.cloneRange();
+    const range = view?.lastLocation?.range;
     if (!range || !readingViewport) return height;
-    range.collapse(false);
-    if (range.endContainer.nodeType === Node.TEXT_NODE && range.endOffset > 0)
-        range.setStart(range.endContainer, range.endOffset - 1);
-    const rect = range.getBoundingClientRect();
-    const frame = range.endContainer.ownerDocument?.defaultView?.frameElement?.getBoundingClientRect();
-    if (!frame || !rect.height) return height;
-    const bottom = rect.bottom + frame.top + readingViewport.scrollTop - readingViewport.getBoundingClientRect().top;
+    const frame = range.startContainer.ownerDocument?.defaultView?.frameElement?.getBoundingClientRect();
+    if (!frame) return height;
+    const viewport = readingViewport.getBoundingClientRect();
+    const offset = frame.top + readingViewport.scrollTop - viewport.top;
+    let bottom = 0;
+    // A restored range can end on an unpainted whitespace/element boundary.
+    // Measure its painted fragments rather than collapsing to that endpoint.
+    for (const rect of range.getClientRects()) {
+        if (!rect.width || !rect.height || rect.right + frame.left <= viewport.left || rect.left + frame.left >= viewport.right) continue;
+        if (rect.top + offset >= readingViewport.clientHeight || rect.bottom + offset <= 0) continue;
+        bottom = Math.max(bottom, Math.min(readingViewport.clientHeight, rect.bottom + offset));
+    }
     return Math.min(height, Math.max(0, bottom - (readingViewport.clientHeight - height)));
 }
 function setReadingClearance({ height }) {

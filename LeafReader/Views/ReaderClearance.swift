@@ -37,7 +37,17 @@ enum ReaderClearance {
             // PDFKit may recenter a short page after zoom or rotation.
             baselineBottom = target.contentInset.bottom
         }
-        let next = min(max(0, view.bounds.height - 44), max(0, height.isFinite ? height : 0))
+        let requested = min(max(0, view.bounds.height - 44), max(0, height.isFinite ? height : 0))
+        var blank: CGFloat = 0
+        if let document = view.document, let page = document.page(at: document.pageCount - 1),
+           let text = page.string, !text.isEmpty,
+           let selection = page.selection(for: NSRange(location: 0, length: text.utf16.count)) {
+            let paper = view.convert(page.bounds(for: view.displayBox), from: page)
+            let ink = view.convert(selection.bounds(for: page), from: page)
+            blank = max(0, paper.maxY - ink.maxY)
+        }
+        // Existing trailing paper already gives the final line room above chat.
+        let next = max(0, requested - blank)
         guard next > 0 || amount > 0 else { return }
         let bottom = baselineBottom + next
         guard appliedBottom == nil || abs(target.contentInset.bottom - bottom) > 0.5 else { return }

@@ -81,6 +81,7 @@ final class ReaderEngineTests: XCTestCase {
                     const end=last.textContent.trimEnd().length,range=doc.createRange();range.setStart(last,end-1);range.setEnd(last,end);
                     const cfi=view.getCFI(3,range);await view.goTo(cfi);await sleep(100);
                     const before={width:view.clientWidth,height:view.clientHeight,pages:view.renderer.pages,text:doc.body.textContent,cfi:view.lastLocation.cfi};
+                    if(!scrolling){const restored=view.lastLocation.range.cloneRange();restored.setEnd(doc.body,doc.body.childNodes.length);view.lastLocation.range=restored;}
                     const clearance=Math.round(view.clientHeight*.6);
                     window.Leaf.setReadingClearance({height:clearance});await sleep(80);
                     if(scrolling){const container=doc.defaultView.frameElement.getRootNode().getElementById('container');container.scrollTop=container.scrollHeight;}
@@ -128,14 +129,17 @@ final class ReaderEngineTests: XCTestCase {
         let scroll = try XCTUnwrap(scrollView(pdf)), page = try XCTUnwrap(pdf.document?.page(at: 3))
         pdf.go(to: page); try await Task.sleep(for: .milliseconds(150))
         let bounds=page.bounds(for: .cropBox), scale=pdf.scaleFactor, original=scroll.contentInset.bottom
+        let ink=try XCTUnwrap(page.selection(for: NSRange(location: 0,length: (page.string ?? "").utf16.count))).bounds(for: page)
+        let blank=max(0,pdf.convert(bounds,from:page).maxY-pdf.convert(ink,from:page).maxY)
         for height: CGFloat in [240,480,320,0,240,0] {
             model.setReadingClearance(height); pdf.layoutIfNeeded()
-            XCTAssertEqual(scroll.contentInset.bottom, original+height, accuracy: 1)
+            XCTAssertEqual(scroll.contentInset.bottom, original+max(0,height-blank), accuracy: 1)
             XCTAssertEqual(pdf.scaleFactor, scale, accuracy: 0.001); XCTAssertEqual(page.bounds(for: .cropBox), bounds)
             if height>0 {
                 scroll.contentOffset.y = scroll.contentSize.height+scroll.adjustedContentInset.bottom-scroll.bounds.height
-                let final=pdf.convert(page.bounds(for: .cropBox),from:page)
+                let final=pdf.convert(ink,from:page)
                 XCTAssertLessThanOrEqual(final.maxY,pdf.bounds.height-height+2)
+                XCTAssertGreaterThan(final.maxY,0)
             }
         }
     }

@@ -1451,12 +1451,12 @@ final class LeafReaderUITests: XCTestCase {
                 start.press(forDuration:0.01,thenDragTo:end,withVelocity:.slow,thenHoldForDuration:0.1)
             }
             let endings=flow == "PDF" ? surface.staticTexts.allElementsBoundByIndex : surface.staticTexts.containing(NSPredicate(format:"label CONTAINS %@","world will keep offering itself")).allElementsBoundByIndex
+            capture(flow+" final lines "+label,app:app)
             XCTAssertFalse(endings.isEmpty)
             let last=endings.last!
             XCTAssertLessThanOrEqual(last.frame.maxY,panel.frame.minY+2,"Final text must clear the chat: \(last.frame) vs \(panel.frame)")
             XCTAssertGreaterThan(last.frame.maxY,surface.frame.minY,"The ending must remain visible")
             XCTAssertTrue(app.buttons["closeReaderChat"].exists)
-            capture(flow+" final lines "+label,app:app)
         }
         liftEnding("above reading chat")
         XCTAssertEqual(surface.frame.width,original.width,accuracy:2);XCTAssertEqual(surface.frame.height,original.height,accuracy:2)
@@ -1484,6 +1484,17 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(title.label.contains(flow == "PDF" ? "Page 4" : "Carry it with you"))
         app.buttons["openReaderChat"].tap()
         XCTAssertEqual(input.value as? String,"Question about the ending")
+        capture(flow+" saved passage after reopening",app:app)
+        // Rotation preserves the passage, which can reflow onto the preceding
+        // physical page. Navigate back to the actual ending before testing it.
+        if flow == "Pages" {
+            for _ in 0..<3 {
+                let y=surface.frame.minY+40
+                let origin=app.coordinate(withNormalizedOffset:.zero)
+                origin.withOffset(CGVector(dx:app.frame.width*0.85,dy:y-app.frame.minY))
+                    .press(forDuration:0.01,thenDragTo:origin.withOffset(CGVector(dx:app.frame.width*0.15,dy:y-app.frame.minY)),withVelocity:.slow,thenHoldForDuration:0.1)
+            }
+        }
         liftEnding("restored after reopening")
     }
 
