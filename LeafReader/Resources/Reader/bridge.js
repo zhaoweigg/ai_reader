@@ -35,12 +35,27 @@ function pageLiftLimit(height) {
     const viewport = readingViewport.getBoundingClientRect();
     const offset = frame.top + readingViewport.scrollTop - viewport.top;
     let bottom = 0;
-    // A restored range can end on an unpainted whitespace/element boundary.
-    // Measure its painted fragments rather than collapsing to that endpoint.
-    for (const rect of range.getClientRects()) {
-        if (!rect.width || !rect.height || rect.right + frame.left <= viewport.left || rect.left + frame.left >= viewport.right) continue;
-        if (rect.top + offset >= readingViewport.clientHeight || rect.bottom + offset <= 0) continue;
-        bottom = Math.max(bottom, Math.min(readingViewport.clientHeight, rect.bottom + offset));
+    // Restored endpoints may be unpainted, and element rectangles may span
+    // several columns. Only text-node ranges describe the actual painted lines.
+    const doc = range.startContainer.ownerDocument;
+    const root = range.commonAncestorContainer;
+    const nodes = [];
+    if (root.nodeType === Node.TEXT_NODE) nodes.push(root);
+    else {
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) if (range.intersectsNode(node)) nodes.push(node);
+    }
+    for (const node of nodes) {
+        const start = node === range.startContainer ? range.startOffset : 0;
+        const end = node === range.endContainer ? range.endOffset : node.length;
+        if (end <= start || !node.textContent.slice(start, end).trim()) continue;
+        const text = doc.createRange(); text.setStart(node, start); text.setEnd(node, end);
+        for (const rect of text.getClientRects()) {
+            if (!rect.width || !rect.height || rect.right + frame.left <= viewport.left || rect.left + frame.left >= viewport.right) continue;
+            if (rect.top + offset >= readingViewport.clientHeight || rect.bottom + offset <= 0) continue;
+            bottom = Math.max(bottom, Math.min(readingViewport.clientHeight, rect.bottom + offset));
+        }
     }
     return Math.min(height, Math.max(0, bottom - (readingViewport.clientHeight - height)));
 }
