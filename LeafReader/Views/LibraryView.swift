@@ -188,9 +188,10 @@ struct LibraryView: View {
             .safeAreaInset(edge: .bottom) {
                 if library.isImporting { HStack { ProgressView(); Text("Importing books… \(library.importCount) added").font(.subheadline) }.padding().frame(maxWidth: .infinity).background(.regularMaterial) }
             }
-            .confirmationDialog("Remove \(deleting?.title ?? "book")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
-                Button("Remove from library", role: .destructive) { if let deleting { library.remove(deleting.id) }; deleting = nil }
-            } message: { Text("This removes the book and its bookmarks from Leaf. Your original file stays in Files.") }
+            .alert("Remove \(deleting?.title ?? "book")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { book in
+                Button("Remove from library", role: .destructive) { library.remove(book.id); deleting = nil }
+                Button("Cancel", role: .cancel) { deleting = nil }
+            } message: { _ in Text("This removes the book and its bookmarks from Leaf. Your original file stays in Files.") }
         }
         .background {
             GeometryReader { geometry in
