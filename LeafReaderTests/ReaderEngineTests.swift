@@ -956,6 +956,7 @@ final class ReaderEngineTests: XCTestCase {
             var prefs = preferences; prefs.scrolling = scrolling
             let model = try show(book, url: url, readerPreferences: prefs)
             try await assertOpened(model, contains: "attention")
+            model.setReadingClearance(280)
             let result = try await model.webView?.callAsyncJavaScript("""
                 const view = document.querySelector('foliate-view'), r = view.renderer;
                 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
