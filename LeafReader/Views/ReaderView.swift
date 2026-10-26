@@ -38,6 +38,8 @@ struct ReaderContent: View {
     @EnvironmentObject private var aiSettings: AISettingsStore
     @EnvironmentObject private var agentTraces: AgentTraceStore
     @State private var bookViewportHeight: CGFloat = 0
+    @State private var bookViewportFrame: CGRect = .zero
+    @State private var chatFrame: CGRect?
     @State private var password = ""
     @State private var seek = 0.0
     @State private var seeking = false
@@ -136,8 +138,8 @@ struct ReaderContent: View {
         .background {
             GeometryReader { geometry in
                 Color.clear
-                    .onAppear { updateViewport(geometry.size) }
-                    .onChange(of: geometry.size) { _, size in updateViewport(size) }
+                    .onAppear { updateViewport(geometry.frame(in: .global)) }
+                    .onChange(of: geometry.frame(in: .global)) { _, frame in updateViewport(frame) }
             }
         }
         // Keep only the book full-height; the overlay uses the keyboard safe area.
@@ -164,6 +166,13 @@ struct ReaderContent: View {
                 // following the keyboard. This overlay never resizes the book.
                 .ignoresSafeArea(.container, edges: .bottom)
             }
+        }
+        .onPreferenceChange(ReaderChatFrame.self) { frame in
+            chatFrame = frame
+            model.setReadingClearance(chatIsPresented ? ReaderClearance.height(book: bookViewportFrame, chat: frame) : 0)
+        }
+        .onChange(of: chatIsPresented) { _, open in
+            if !open { model.setReadingClearance(0) }
         }
         .task(id: chatIsPresented && model.isReady && aiSettings.configuration.harness == .agent && aiSettings.configuration.sharePage) {
             // Closing the chat or the book cancels preparation; saved sections are kept.
@@ -265,8 +274,10 @@ struct ReaderContent: View {
             .presentationBackgroundInteraction(panel == .appearance ? .enabled(upThrough: .medium) : .disabled)
         }
     }
-    private func updateViewport(_ size: CGSize) {
-        bookViewportHeight = size.height
+    private func updateViewport(_ frame: CGRect) {
+        bookViewportHeight = frame.height
+        bookViewportFrame = frame
+        model.setReadingClearance(chatIsPresented ? ReaderClearance.height(book: frame, chat: chatFrame) : 0)
     }
     private func handleBookTap() -> Bool {
         guard chatIsPresented else { return false }

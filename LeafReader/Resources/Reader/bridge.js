@@ -20,6 +20,27 @@ const observedDocuments = new WeakSet();
 // An empty current selection must never resurrect an older iframe range.
 let selectedDocument;
 let chatRecallID;
+let readingClearance = 0;
+let readingViewport;
+let readingTail;
+let liftedPage;
+
+function setReadingClearance({ height }) {
+    const next = Math.min(Math.max(0, innerHeight - 44), Math.max(0, Number(height) || 0));
+    const followEnd = readingClearance > 0 && readingViewport?.scrollTop > 0 &&
+        Math.abs(readingViewport.scrollTop - readingClearance) < 3;
+    readingClearance = next;
+    const paged = view && (view.isFixedLayout || !preferences?.scrolling);
+    if (readingTail) readingTail.style.height = `${paged ? next : 0}px`;
+    if (readingViewport) {
+        // Scrolling is driven by the page gesture callback, not a second native
+        // scroll gesture competing with EPUB selection or horizontal page turns.
+        readingViewport.scrollTop = !paged || !next ? 0 : followEnd ? next : Math.min(readingViewport.scrollTop, next);
+    }
+    view?.renderer?.setReadingClearance?.(next, delta => {
+        if (readingViewport) readingViewport.scrollTop = Math.max(0, Math.min(readingClearance, readingViewport.scrollTop + delta));
+    });
+}
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 reducedMotion.addEventListener('change', () => { if (preferences) applyPreferences(preferences); });
 
@@ -187,6 +208,7 @@ function applyPreferences(value) {
     attribute('margin', `${verticalText ? horizontal : vertical}px`);
     attribute('gap', `${gap}%`);
     attribute('max-inline-size', '680px');
+    setReadingClearance({ height: readingClearance });
     view.renderer.setStyles?.(`
         html { color-scheme: ${value.colorScheme ?? (value.background === '#17232E' ? 'dark' : 'light')}; font-size:${size}px !important;
             -webkit-text-size-adjust:none !important; text-size-adjust:none !important; }
@@ -234,7 +256,13 @@ async function open(config) {
             }
         });
         view = document.createElement('foliate-view');
-        document.body.append(view);
+        readingViewport = document.createElement('div');
+        readingViewport.id = 'reading-viewport';
+        readingTail = document.createElement('div');
+        readingTail.id = 'reading-tail';
+        readingTail.setAttribute('aria-hidden', 'true');
+        readingViewport.append(view, readingTail);
+        document.body.append(readingViewport);
         annotationLayer = createAnnotations(view, config.annotations, post);
         view.addEventListener('load', ({ detail }) => {
             if (!detail.preload) post('selection', {text:''});
@@ -244,6 +272,9 @@ async function open(config) {
         view.addEventListener('link', () => { lastLinkActivation = Date.now(); });
         view.addEventListener('external-link', event => { lastLinkActivation = Date.now(); event.preventDefault(); });
         view.addEventListener('relocate', ({detail}) => {
+            const page = `${detail.index}:${view.renderer?.start}`;
+            if (!preferences?.scrolling && page !== liftedPage && readingViewport) readingViewport.scrollTop = 0;
+            liftedPage = page;
             fixedIndex = detail.index ?? fixedIndex;
             const count = view.book.sections.length;
             const fraction = Number.isFinite(detail.fraction) ? detail.fraction : count > 1 ? fixedIndex / (count - 1) : 0;
@@ -290,6 +321,8 @@ function close() {
     previous?.close();
     previous?.book?.destroy?.();
     previous?.remove();
+    readingViewport?.remove();
+    readingViewport = null; readingTail = null; liftedPage = null;
 }
 
 function readableError(error) {
@@ -336,7 +369,7 @@ async function search({query, generation}) {
     } catch(error) { post('searchResults', {generation, items}); }
 }
 
-window.Leaf = { open, close, command, applyPreferences, search, tap,
+window.Leaf = { open, close, command, applyPreferences, search, tap, setReadingClearance,
     recallBook: async ({term, locator, id, selection}) => {
         const source=view; chatRecallID=id;
         return retrieveEarlierPassages(source,term,locator,{selection,prepare:sanitize,cancelled:()=>view!==source || chatRecallID!==id});

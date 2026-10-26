@@ -685,12 +685,17 @@ final class ReaderWebView: WKWebView {
 }
 
 final class ReaderPDFView: PDFView {
+    private let clearance = PDFReadingClearance()
+    var readingClearance: CGFloat = 0 {
+        didSet { clearance.apply(readingClearance, to: self) }
+    }
     private let selectionMenu = ReaderSelectionMenuPresenter()
     var selectionHooks = ReaderSelectionHooks()
     var afterInitialLayout: (() -> Void)?
     var isHandlingNativeSelectionGesture: Bool { selectionMenu.isHandlingNativeSelectionGesture }
     override func layoutSubviews() {
         super.layoutSubviews()
+        clearance.apply(readingClearance, to: self)
         afterInitialLayout?()
     }
     override func didMoveToWindow() {

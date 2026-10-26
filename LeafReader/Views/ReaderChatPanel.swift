@@ -448,6 +448,11 @@ struct ResizableChatPanel: View {
                 })
                 .frame(height: height)
                 .background {
+                    GeometryReader { frame in
+                        Color.clear.preference(key: ReaderChatFrame.self, value: location == .reader ? frame.frame(in: .global) : nil)
+                    }
+                }
+                .background {
                     if reduceTransparency { location == .reader ? theme.background : theme.canvas }
                     else { Rectangle().fill(.ultraThinMaterial) }
                 }
