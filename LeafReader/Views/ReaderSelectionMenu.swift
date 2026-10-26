@@ -666,6 +666,7 @@ private final class ReaderSelectionOverlayView: UIView {
 final class ReaderWebView: WKWebView {
     private let selectionMenu = ReaderSelectionMenuPresenter()
     var selectionHooks = ReaderSelectionHooks()
+    var isHandlingNativeSelectionGesture: Bool { selectionMenu.isHandlingNativeSelectionGesture }
     /// Refreshes the renderer's selection snapshot before the palette reads it.
     var prepareSelection: (() async -> Void)?
     func selectionDidChange() { selectionMenu.selectionDidChange() }

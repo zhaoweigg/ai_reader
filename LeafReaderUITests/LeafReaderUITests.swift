@@ -1420,6 +1420,64 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testSentQuotePersistsWithQuestionInScroll() { verifySentQuote(flow: "Scroll") }
     @MainActor func testSentQuotePersistsWithQuestionInPDF() { verifySentQuote(flow: "PDF") }
 
+    @MainActor func testReaderControlsStayAccessibleWithChatInPages() { verifyReaderControlsWithChat(flow: "Pages") }
+    @MainActor func testReaderControlsStayAccessibleWithChatInScroll() { verifyReaderControlsWithChat(flow: "Scroll") }
+    @MainActor func testReaderControlsStayAccessibleWithChatInPDF() { verifyReaderControlsWithChat(flow: "PDF") }
+
+    @MainActor private func verifyReaderControlsWithChat(flow: String) {
+        continueAfterFailure = false
+        let app=launchApp();defer {orient(.portrait)}
+        openSelectionFixture(flow,app:app);waitForBook(app)
+        let surface=readingSurface(app), original=surface.frame
+        app.buttons["openReaderChat"].tap()
+        let panel=app.otherElements["readerChatPanel"],close=app.buttons["closeBook"]
+        XCTAssertTrue(panel.waitForExistence(timeout:5));XCTAssertFalse(close.exists)
+        func tapBook(_ x:CGFloat=0.5) {
+            let top=surface.frame.minY+90,bottom=panel.frame.minY-16
+            XCTAssertGreaterThan(bottom,top)
+            app.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:surface.frame.minX+surface.frame.width*x-app.frame.minX,dy:(top+bottom)/2-app.frame.minY)).tap()
+        }
+        var progress:String?,chapter:String?
+        for x:CGFloat in [0.5,0.12,0.88] {
+            tapBook(x)
+            XCTAssertTrue(close.waitForExistence(timeout:5));XCTAssertTrue(close.isHittable)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+            let current=app.sliders["readingProgress"].value as? String,title=app.staticTexts["readerChapterTitle"].label
+            if let progress {XCTAssertEqual(current,progress)} else {progress=current}
+            if let chapter {XCTAssertEqual(title,chapter)} else {chapter=title}
+            if x==0.5 {capture(flow+" reader Exit visible with chat",app:app)}
+            tapBook(x)
+            expectation(for:NSPredicate(format:"exists == false"),evaluatedWith:close);waitForExpectations(timeout:5)
+        }
+        selectFixturePassage(flow,app:app)
+        let quote=app.staticTexts["chatSelectedPassage"]
+        XCTAssertTrue(quote.waitForExistence(timeout:5));let quoted=quote.label
+        XCTAssertFalse(close.exists,"Selecting text must not be treated as a reader-controls tap")
+        let input=app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap();XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout:5))
+        input.typeText("Keep my exit question")
+        XCTAssertEqual(input.value as? String,"Keep my exit question")
+        tapBook()
+        XCTAssertTrue(close.waitForExistence(timeout:5));XCTAssertTrue(close.isHittable)
+        XCTAssertEqual(quote.label,quoted);XCTAssertEqual(input.value as? String,"Keep my exit question")
+        XCTAssertEqual(surface.frame.width,original.width,accuracy:2);XCTAssertEqual(surface.frame.height,original.height,accuracy:2)
+        capture(flow+" Exit reachable while composing with quote",app:app)
+        if app.buttons["Hide keyboard"].isHittable {app.buttons["Hide keyboard"].tap()}
+        orient(.landscapeLeft)
+        if close.exists {tapBook()}
+        tapBook();XCTAssertTrue(close.waitForExistence(timeout:5));XCTAssertTrue(close.isHittable)
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists);XCTAssertEqual(input.value as? String,"Keep my exit question")
+        capture(flow+" landscape Exit with chat",app:app)
+        close.tap()
+        XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout:8),"Exit must return to the library without first closing chat")
+        orient(.portrait)
+        if flow=="PDF" {let card=app.buttons["book-Notes from the Coast"];for _ in 0..<5 where !card.isHittable {app.scrollViews.firstMatch.swipeUp()};card.tap()}
+        else {app.buttons["featuredBook"].tap()}
+        waitForBook(app);app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(input.value as? String,"Keep my exit question");XCTAssertEqual(quote.label,quoted)
+        capture(flow+" draft and quote survive direct book Exit",app:app)
+    }
+
     @MainActor func testBookEndingAboveChatInPages() { verifyBookEndingAboveChat(flow: "Pages") }
     @MainActor func testBookEndingAboveChatInScroll() { verifyBookEndingAboveChat(flow: "Scroll") }
     @MainActor func testBookEndingAboveChatInPDF() { verifyBookEndingAboveChat(flow: "PDF") }

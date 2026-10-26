@@ -88,6 +88,9 @@ struct WebBookSurface: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
             guard let view = gesture.view, model.isReady else { return }
+            // WebKit's completed long press can also finish the reader's tap.
+            // Keep native selection and handle adjustments out of reader chrome.
+            if let view = view as? ReaderWebView, view.isHandlingNativeSelectionGesture { return }
             if onReaderTap?() == true { return }
             let point = gesture.location(in: view)
             model.evaluate("tap", ["x": point.x / max(1, view.bounds.width), "y": point.y / max(1, view.bounds.height)])
