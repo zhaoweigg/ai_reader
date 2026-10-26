@@ -111,7 +111,7 @@ struct ZLibraryView: View {
                         ContentUnavailableView("No books found",systemImage:"magnifyingglass",description:Text("Try another title, author, or ISBN."))
                     }
                 }
-                LazyVGrid(columns:[GridItem(.adaptive(minimum:135,maximum:190),spacing:24,alignment:.top)],alignment:.leading,spacing:25) {
+                LazyVGrid(columns:Array(repeating:GridItem(.flexible(minimum:0),spacing:14,alignment:.top),count:3),alignment:.leading,spacing:25) {
                     ForEach(catalog.books) { book in
                         NavigationLink { ZLibraryBookView(book:book,close:close) } label: {
                             VStack(alignment:.leading,spacing:8) {
