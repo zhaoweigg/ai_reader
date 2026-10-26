@@ -33,6 +33,7 @@ function pageLiftLimit(height) {
     const frame = range.startContainer.ownerDocument?.defaultView?.frameElement?.getBoundingClientRect();
     if (!frame) return height;
     const viewport = readingViewport.getBoundingClientRect();
+    const clip = range.startContainer.ownerDocument.defaultView.frameElement.getRootNode().getElementById('container')?.getBoundingClientRect() ?? viewport;
     const offset = frame.top + readingViewport.scrollTop - viewport.top;
     let bottom = 0;
     // Restored endpoints may be unpainted, and element rectangles may span
@@ -52,7 +53,7 @@ function pageLiftLimit(height) {
         if (end <= start || !node.textContent.slice(start, end).trim()) continue;
         const text = doc.createRange(); text.setStart(node, start); text.setEnd(node, end);
         for (const rect of text.getClientRects()) {
-            if (!rect.width || !rect.height || rect.right + frame.left <= viewport.left || rect.left + frame.left >= viewport.right) continue;
+            if (!rect.width || !rect.height || rect.right + frame.left <= clip.left || rect.left + frame.left >= clip.right) continue;
             if (rect.top + offset >= readingViewport.clientHeight || rect.bottom + offset <= 0) continue;
             bottom = Math.max(bottom, Math.min(readingViewport.clientHeight, rect.bottom + offset));
         }
