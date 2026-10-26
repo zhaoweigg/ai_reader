@@ -546,7 +546,8 @@ struct UITestZLibraryClient: ZLibraryServing {
         if UITesting.flag("LEAF_UI_ZLIB_RECOMMENDATIONS_FAILURE") {
             throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "GET /eapi/user/book/recommended · browser redirect · website verification required")
         }
-        return [ZLibraryBook(remoteID:"recommended",hash:"ddeeff",title:"A Field Guide to Slow Days",author:"Leaf Editions",fileExtension:"txt",size:"18 KB",language:"English",year:"2026",coverURL:nil,rating:4.7,ratingCount:18)]
+        let books = [ZLibraryBook(remoteID:"recommended",hash:"ddeeff",title:"A Field Guide to Slow Days",author:"Leaf Editions",fileExtension:"txt",size:"18 KB",language:"English",year:"2026",coverURL:nil,rating:4.7,ratingCount:18)]
+        return UITesting.flag("LEAF_UI_ZLIB_GRID") ? books + sampleBooks() : books
     }
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
         try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()
@@ -578,8 +579,15 @@ struct UITestZLibraryClient: ZLibraryServing {
     }
     private func sampleBooks() -> [ZLibraryBook] {
         let sparse = UITesting.environment("LEAF_UI_ZLIB_DETAILS") != nil
-        return [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:sparse ? "" : "epub",size:sparse ? "" : "1.8 MB",language:sparse ? "" : "English",year:sparse ? "" : "2026",coverURL:nil,rating:4.6,ratingCount:52,qualityScore:4.2),
+        let books = [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:sparse ? "" : "epub",size:sparse ? "" : "1.8 MB",language:sparse ? "" : "English",year:sparse ? "" : "2026",coverURL:nil,rating:4.6,ratingCount:52,qualityScore:4.2),
          ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"2.4 MB",language:"English",year:"2026",coverURL:nil)]
+        guard UITesting.flag("LEAF_UI_ZLIB_GRID") else { return books }
+        return books + [
+            ZLibraryBook(remoteID:"grid3",hash:"grid3",title:"墓碑：中国六十年代大饥荒纪实",author:"杨继绳",fileExtension:"pdf",size:"26.8 MB",language:"Chinese",year:"2008",coverURL:nil,rating:4.8,ratingCount:123),
+            ZLibraryBook(remoteID:"grid4",hash:"grid4",title:"Thinking, Fast and Slow",author:"Daniel Kahneman",fileExtension:"epub",size:"",language:"English",year:"2011",coverURL:nil),
+            ZLibraryBook(remoteID:"grid5",hash:"grid5",title:"A Longer Book Title That Wraps Across Several Lines",author:"An author with a long name",fileExtension:"pdf",size:"128 MB",language:"English",year:"2025",coverURL:nil,rating:4.2,ratingCount:8),
+            ZLibraryBook(remoteID:"grid6",hash:"grid6",title:"十日终焉",author:"杀虫队队员",fileExtension:"epub",size:"12.6 MB",language:"Chinese",year:"2026",coverURL:nil)
+        ]
     }
     func search(_ query: String, page: Int, order: ZLibrarySearchOrder, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
@@ -587,6 +595,7 @@ struct UITestZLibraryClient: ZLibraryServing {
         if query.lowercased() == "unavailable" { throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "POST /eapi/book/search · HTTP 200 · HTML instead of JSON") }
         if query.lowercased() == "no matches" { return ZLibrarySearchPage(books: [], hasMore: false) }
         var sample = sampleBooks()
+        if UITesting.flag("LEAF_UI_ZLIB_GRID") { return ZLibrarySearchPage(books: sample, hasMore: false) }
         if [.titleAscending, .recentlyAdded, .fileSizeDescending].contains(order) { sample.reverse() }
         if page == 1 { return ZLibrarySearchPage(books: [sample[0]], hasMore: true) }
         return ZLibrarySearchPage(books: sample, hasMore: false)

@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false, threeColumnGrid: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -12,6 +12,7 @@ final class ZLibraryUITests: XCTestCase {
         if sceneGeometry { app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = "1" }
         if let recommendations { app.launchEnvironment["LEAF_UI_ZLIB_RECOMMENDATIONS_" + recommendations.uppercased()] = "1" }
         if shelf { app.launchEnvironment["LEAF_UI_ZLIB_SHELF"] = "1" }
+        if threeColumnGrid { app.launchEnvironment["LEAF_UI_ZLIB_GRID"] = "1" }
         app.launch()
         if sceneGeometry {
             registerSceneGeometryCleanup(app: app)
@@ -22,6 +23,56 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor private func openDiscover(_ app: XCUIApplication) {
         let tab = app.tabBars.buttons["Discover"]
         XCTAssertTrue(tab.waitForExistence(timeout: 10)); tab.tap()
+    }
+    @MainActor func testThreeBooksPerRowAcrossCatalogFeedsAndSearch() {
+        continueAfterFailure = false
+        let app = launch(sceneGeometry: true, threeColumnGrid: true)
+        openDiscover(app)
+        func assertRow(_ ids: [String], next: String? = nil) {
+            let cards = ids.map { app.buttons["catalogBook-\($0)"] }
+            for card in cards { XCTAssertTrue(card.waitForExistence(timeout: 10)) }
+            let frames = cards.map(\.frame)
+            XCTAssertEqual(frames[0].minY, frames[1].minY, accuracy: 2)
+            XCTAssertEqual(frames[1].minY, frames[2].minY, accuracy: 2)
+            XCTAssertEqual(frames[0].width, frames[2].width, accuracy: 2)
+            XCTAssertGreaterThanOrEqual(frames[1].minX - frames[0].maxX, 12)
+            XCTAssertGreaterThanOrEqual(frames[2].minX - frames[1].maxX, 12)
+            XCTAssertGreaterThanOrEqual(frames[0].minX, app.frame.minX)
+            XCTAssertLessThanOrEqual(frames[2].maxX, app.frame.maxX)
+            if let next {
+                let fourth = app.buttons["catalogBook-\(next)"]
+                XCTAssertTrue(fourth.exists)
+                XCTAssertGreaterThan(fourth.frame.minY, frames[0].maxY)
+            }
+        }
+        let firstRow = ["sample", "sample2", "grid3"]
+        assertRow(firstRow, next: "grid4")
+        XCTAssertTrue(app.buttons["catalogBook-sample"].label.contains("1.8 MB"))
+        XCTAssertTrue(app.buttons["catalogBook-sample"].label.contains("52 ratings"))
+        capture("Three column popular Day portrait")
+        app.buttons["catalogBook-grid3"].tap()
+        XCTAssertTrue(app.navigationBars["Book details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["墓碑：中国六十年代大饥荒纪实"].exists)
+        app.navigationBars.buttons["Z-Library"].tap()
+        search("books", app: app)
+        assertRow(firstRow, next: "grid4")
+        capture("Three column search results Day portrait")
+        app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        browse("Recommended", app: app)
+        assertRow(["recommended", "sample", "sample2"], next: "grid3")
+        capture("Three column recommended Day portrait")
+        setReaderOrientation(.landscapeLeft, app: app)
+        let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
+        scroll.swipeUp()
+        assertRow(["recommended", "sample", "sample2"])
+        capture("Three column recommended Day landscape")
+        setReaderOrientation(.portrait, app: app)
+        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap()
+        openDiscover(app)
+        browse("Most popular", app: app)
+        assertRow(firstRow, next: "grid4")
+        capture("Three column popular Night portrait")
+        app.terminate()
     }
     @MainActor private func capture(_ name:String) {
         let attachment = XCTAttachment(screenshot:XCUIScreen.main.screenshot());attachment.name = name;attachment.lifetime = .keepAlways;add(attachment)
