@@ -80,15 +80,34 @@ final class ReaderEngineTests: XCTestCase {
                     while(node=walker.nextNode())if(node.textContent.trim())last=node;
                     const end=last.textContent.trimEnd().length,range=doc.createRange();range.setStart(last,end-1);range.setEnd(last,end);
                     const cfi=view.getCFI(3,range);await view.goTo(cfi);await sleep(100);
-                    const before={width:view.clientWidth,height:view.clientHeight,pages:view.renderer.pages,text:doc.body.textContent,cfi:view.lastLocation.cfi};
+                    const before={width:view.clientWidth,height:view.clientHeight,pages:view.renderer.pages,text:doc.body.textContent,cfi:view.lastLocation.cfi,bottom:range.getBoundingClientRect().bottom+doc.defaultView.frameElement.getBoundingClientRect().top};
                     if(!scrolling){const restored=view.lastLocation.range.cloneRange();restored.setEnd(doc.body,doc.body.childNodes.length);view.lastLocation.range=restored;}
                     const clearance=Math.round(view.clientHeight*.6);
                     window.Leaf.setReadingClearance({height:clearance});await sleep(80);
                     if(scrolling){const container=doc.defaultView.frameElement.getRootNode().getElementById('container');container.scrollTop=container.scrollHeight;}
                     else viewport.scrollTop=clearance;
                     await sleep(120);
+                    const maximumLift=viewport.scrollTop, available=view.clientHeight-clearance;
+                    const maximumFinalTop=range.getBoundingClientRect().top+doc.defaultView.frameElement.getBoundingClientRect().top;
+                    const frameAtMaximum=doc.defaultView.frameElement.getBoundingClientRect();
+                    const clip=doc.defaultView.frameElement.getRootNode().getElementById('container').getBoundingClientRect();
+                    const painted=[];const glyphs=doc.createTreeWalker(doc.body,NodeFilter.SHOW_TEXT);let textNode;
+                    while(textNode=glyphs.nextNode()) {
+                        if(!textNode.textContent.trim())continue;
+                        const textRange=doc.createRange();textRange.selectNodeContents(textNode);
+                        for(const r of textRange.getClientRects()) {
+                            const top=r.top+frameAtMaximum.top,bottom=r.bottom+frameAtMaximum.top;
+                            if(r.width&&r.height&&r.right+frameAtMaximum.left>clip.left&&r.left+frameAtMaximum.left<clip.right&&bottom>Math.max(0,clip.top)&&top<Math.min(available,clip.bottom))painted.push({top,bottom,left:r.left+frameAtMaximum.left});
+                        }
+                    }
+                    const neededLift=Math.max(0,before.bottom-available);
+                    // A landscape spread can have a tall left column and a short
+                    // final right column. Check reachability, not that the last
+                    // glyph stays visible while lifting the other column to max.
+                    if(!scrolling)viewport.scrollTop=neededLift;
+                    await sleep(40);
                     const rect=range.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect();
-                    rows.push({scrolling,fontSize,font:settings.font,width:view.clientWidth,height:view.clientHeight,pages:view.renderer.pages,beforeWidth:before.width,beforeHeight:before.height,beforePages:before.pages,sameText:doc.body.textContent===before.text,bottom:rect.bottom+frame.top,available:view.clientHeight-clearance,top:rect.top+frame.top,loaded:view.renderer.getContents().length,cfiValid:view.resolveCFI(cfi).anchor(doc).toString()===range.toString(),keptPage:scrolling||view.lastLocation.cfi===before.cfi});
+                    rows.push({scrolling,fontSize,font:settings.font,width:view.clientWidth,height:view.clientHeight,pages:view.renderer.pages,beforeWidth:before.width,beforeHeight:before.height,beforePages:before.pages,sameText:doc.body.textContent===before.text,bottom:rect.bottom+frame.top,available,top:rect.top+frame.top,loaded:view.renderer.getContents().length,cfiValid:view.resolveCFI(cfi).anchor(doc).toString()===range.toString(),keptPage:scrolling||view.lastLocation.cfi===before.cfi,maximumLift,neededLift,actualLift:viewport.scrollTop,maximumFinalTop,paintedLinesAtMaximum:painted.length,paintedAtMaximum:painted.slice(-6)});
                     window.Leaf.setReadingClearance({height:0});await sleep(40);
                     if(viewport.scrollTop!==0)throw new Error('Closing chat left the page lifted');
                 }
@@ -108,6 +127,7 @@ final class ReaderEngineTests: XCTestCase {
                 XCTAssertEqual(row["keptPage"] as? Bool, true, label)
                 XCTAssertLessThanOrEqual(try XCTUnwrap(row["bottom"] as? Double), try XCTUnwrap(row["available"] as? Double) + 2, label)
                 XCTAssertGreaterThan(try XCTUnwrap(row["top"] as? Double), -1, label)
+                XCTAssertGreaterThan(row["paintedLinesAtMaximum"] as? Int ?? 0, 0, "Maximum lift must never blank the entire page: \(label)")
                 XCTAssertLessThanOrEqual(row["loaded"] as? Int ?? 99, 3, label)
             }
         }
