@@ -261,7 +261,8 @@ function applyPreferences(value) {
 
 function flattenTOC(items = [], depth = 0) {
     return items.flatMap(item => [
-        ...(item.href != null ? [{ label: languageText(item.label) || 'Untitled section', href:String(item.href), depth }] : []),
+        ...(item.href != null ? [{ label: languageText(item.label) || 'Untitled section', href:String(item.href), depth,
+            id:item.id != null ? String(item.id) : null }] : []),
         ...flattenTOC(item.subitems ?? item.children ?? [], depth + 1)
     ]);
 }
@@ -316,6 +317,7 @@ async function open(config) {
             const count = view.book.sections.length;
             const fraction = Number.isFinite(detail.fraction) ? detail.fraction : count > 1 ? fixedIndex / (count - 1) : 0;
             post('relocate', { locator:detail.cfi || `section:${fixedIndex}`, fraction,
+                chapterID:detail.tocItem?.id != null ? String(detail.tocItem.id) : null,
                 label:languageText(detail.tocItem?.label) || (view.isFixedLayout ? `Page ${fixedIndex + 1} of ${count}` : '') });
         });
         await view.open(book);
