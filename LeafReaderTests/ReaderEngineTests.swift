@@ -1541,7 +1541,9 @@ final class ReaderEngineTests: XCTestCase {
     func testTouchStopsSlowAndFastNativeMotionInRenderedBooks() async throws {
         guard #available(iOS 17.4, *) else { throw XCTSkip("Native scroll-animation state requires iOS 17.4") }
         var trace: [[String: Any]] = []
-        for flow in ["Pages", "Scroll", "PDF"] {
+        // Pages lifts its overflow:hidden viewport in JavaScript, without native
+        // inertia. Its stop/stationary tap behavior is covered separately below.
+        for flow in ["Scroll", "PDF"] {
             let (book, url) = try prepare(flow == "PDF" ? "Notes from the Coast.pdf" : "Density.html",
                                           format: flow == "PDF" ? .pdf : .html, fixtures: flow != "PDF")
             let surface: UIView
@@ -1561,7 +1563,6 @@ final class ReaderEngineTests: XCTestCase {
                 var prefs = preferences; prefs.scrolling = flow == "Scroll"
                 let model = try show(book, url: url, readerPreferences: prefs)
                 try await assertOpened(model, contains: "窗外")
-                model.setReadingClearance(flow == "Pages" ? 280 : 0)
                 surface = try XCTUnwrap(model.webView)
                 let coordinator = WebBookSurface.Coordinator(model)
                 accepts = { coordinator.gestureRecognizer($0, shouldReceive: $1) }
@@ -1570,7 +1571,14 @@ final class ReaderEngineTests: XCTestCase {
             func scrollViews(_ view: UIView) -> [UIScrollView] {
                 ((view as? UIScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews)
             }
-            let candidates = scrollViews(surface).filter {
+            let native = scrollViews(surface)
+            let hierarchy = native.map { scroll -> [String: Any] in
+                ["type": String(describing: type(of: scroll)), "enabled": scroll.isScrollEnabled,
+                 "height": scroll.bounds.height, "contentHeight": scroll.contentSize.height]
+            }
+            let diagnostic = XCTAttachment(data: try JSONSerialization.data(withJSONObject: hierarchy), uniformTypeIdentifier: "public.json")
+            diagnostic.name = flow + " native book scroll viewports"; diagnostic.lifetime = .keepAlways; add(diagnostic)
+            let candidates = native.filter {
                 $0.isScrollEnabled && $0.bounds.height > 100 && $0.contentSize.height - $0.bounds.height > 100
             }
             let scroll = try XCTUnwrap(candidates.max { $0.bounds.height < $1.bounds.height }, "A real \(flow) book scroll viewport must exist")
