@@ -243,20 +243,30 @@ private struct ChatHistoryInteraction: ViewModifier {
 }
 
 /// Keeps the newest line visible while following. It scrolls only after the
-/// reply has actually grown, and to the true bottom edge, so the history no
-/// longer trails a line behind, overshoots and snaps back, or leaps in steps.
+/// reply has actually grown, so the history no longer trails a line behind,
+/// overshoots and snaps back, or leaps in steps. It slides to an explicit
+/// offset: an edge position would pin instantly and the slide would restart
+/// from the old offset.
 @available(iOS 18, *)
 private struct ChatHistoryFollowing: ViewModifier {
     let following: Bool
     let paused: Bool
-    @State private var position = ScrollPosition(edge: .bottom)
+    @State private var position = ScrollPosition(idType: UUID.self)
+
+    private struct Extent: Equatable {
+        var contentHeight: CGFloat
+        var bottomOffset: CGFloat
+    }
 
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
-                guard new > old + 0.5, following, !paused else { return }
-                withAnimation(.easeOut(duration: 0.22)) { position.scrollTo(edge: .bottom) }
+            .onScrollGeometryChange(for: Extent.self) { geometry in
+                Extent(contentHeight: geometry.contentSize.height,
+                       bottomOffset: max(-geometry.contentInsets.top, geometry.contentSize.height + geometry.contentInsets.bottom - geometry.containerSize.height))
+            } action: { old, new in
+                guard new.contentHeight > old.contentHeight + 0.5, following, !paused else { return }
+                withAnimation(.easeOut(duration: 0.22)) { position.scrollTo(y: new.bottomOffset) }
             }
     }
 }
