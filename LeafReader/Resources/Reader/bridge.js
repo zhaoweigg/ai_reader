@@ -445,7 +445,7 @@ window.Leaf = { open, close, command, applyPreferences, search, tap, allowsReade
         // spoken line above the listening bar. Keep this allowance through the
         // relocate callback, which also reapplies the chat's own clearance.
         spokenClearance = config.follow ? bottomClearance : 0;
-        setReadingClearance({ height:readingClearance });
+        if (view?.renderer?.scrolled) setReadingClearance({ height:readingClearance });
         return setSpokenRange(view, { ...config, bottomClearance });
     },
     clearSpokenRange: () => {
