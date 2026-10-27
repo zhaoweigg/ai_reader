@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -24,6 +24,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_STREAM"] = scrollStream ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_LEGACY"] = legacyScroll ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_PERF"] = scrollPerformance ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_FOLLOW"] = chatFollow ? "1" : "0"
         app.launchEnvironment["LEAF_UI_DICTATION_MOCK"] = dictation ? "1" : "0"
         if nativeDictation {
             let audio = Bundle(for: LeafReaderUITests.self).url(forResource: "Mandarin", withExtension: "m4a")!
@@ -3253,6 +3254,49 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(reply.waitForExistence(timeout: 5))
         orient(.landscapeLeft)
         capture(flow + " long reply after reopening in landscape", app: app)
+    }
+
+    @MainActor func testStreamingReplyFollowsSmoothlyInPages() { verifyStreamingFollow(flow: "Pages") }
+    @MainActor func testStreamingReplyFollowsSmoothlyInScroll() { verifyStreamingFollow(flow: "Scroll") }
+
+    /// While following, the history must neither jump back when the placeholder
+    /// becomes the reply nor leap a whole line at a time as text streams in.
+    @MainActor private func verifyStreamingFollow(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(chatFollow: true)
+        openSelectionFixture(flow, app: app); waitForBook(app)
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        let send = app.buttons["sendReaderChat"], history = app.scrollViews["chatMessageHistory"]
+        let geometry = app.descendants(matching: .any)["uitestChatHistoryGeometry"].firstMatch
+        func ask(_ question: String) {
+            // Close the keyboard first, so the panel does not resize while measured.
+            input.tap(); input.typeText(question)
+            if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
+            waitForExpectations(timeout: 5)
+            send.tap()
+            expectation(for: NSPredicate(format: "label == %@", "Stop response"), evaluatedWith: send)
+            waitForExpectations(timeout: 5)
+            expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
+            waitForExpectations(timeout: 30)
+        }
+        func trace() -> [String: Any] {
+            let data = (geometry.value as? String ?? "").data(using: .utf8) ?? Data()
+            return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        }
+        XCTAssertTrue(geometry.waitForExistence(timeout: 5))
+        ask("有没有出现和熊有关的游戏")
+        ask("详细些")
+        let result = trace()
+        let attachment = XCTAttachment(string: geometry.value as? String ?? "missing")
+        attachment.name = flow + " streaming follow trace"; attachment.lifetime = .keepAlways; add(attachment)
+        capture(flow + " streamed reply followed to the end", app: app)
+        XCTAssertEqual(history.value as? String, "Following latest")
+        XCTAssertGreaterThan(result["samples"] as? Int ?? 0, 20, "The second reply must stream while measured: \(result)")
+        XCTAssertLessThanOrEqual(result["maxBack"] as? Double ?? 99, 1, "Following must never move the history backward: \(result)")
+        XCTAssertLessThanOrEqual(result["maxStep"] as? Double ?? 99, 12, "Following must move in small steps, not whole lines: \(result)")
+        XCTAssertLessThanOrEqual(result["gap"] as? Double ?? 99, 4, "The last line must end visible: \(result)")
     }
 
     @MainActor func testMarkdownReplyInPages() { verifyMarkdownReply(flow: "Pages") }

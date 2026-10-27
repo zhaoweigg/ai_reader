@@ -49,12 +49,43 @@ private struct ChatHistoryOffsetProbe: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) { view.accessibilityValue = value }
 }
 
+/// How the history moves while it follows a streaming reply, for the follow test.
+private final class ChatFollowTrace {
+    private var last: ChatHistoryTestMetrics?
+    private var samples = 0, maxBack: CGFloat = 0, maxStep: CGFloat = 0, events: [String] = []
+    func record(_ metrics: ChatHistoryTestMetrics, following: Bool, streamingText: Bool) {
+        defer { last = metrics }
+        guard let last, following, streamingText else { return }
+        let delta = metrics.offset - last.offset
+        samples += 1
+        if delta < 0 { maxBack = max(maxBack, -delta) } else { maxStep = max(maxStep, delta) }
+        events.append(String(format: "%.1f/%.1f", metrics.offset, metrics.contentHeight))
+        if events.count > 60 { events.removeFirst() }
+    }
+    var json: String {
+        let gap = (last.map { $0.contentHeight - $0.offset - $0.viewportHeight }) ?? -1
+        return "{\"samples\":\(samples),\"maxBack\":\(maxBack),\"maxStep\":\(maxStep),\"gap\":\(gap),\"events\":\"\(events.joined(separator: " "))\"}"
+    }
+}
+
 private final class ChatSwipeMetrics {
     var geometry = ChatHistoryTestMetrics()
     var phase = "idle"
     var json: String {
         "{\"offset\":\(geometry.offset),\"contentHeight\":\(geometry.contentHeight),\"viewportHeight\":\(geometry.viewportHeight),\"phase\":\"\(phase)\",\"updates\":\(ChatTextWork.updates),\"formats\":\(ChatTextWork.formats),\"measurements\":\(ChatTextWork.measurements)}"
     }
+}
+
+private struct ChatFollowProbe: UIViewRepresentable {
+    let trace: ChatFollowTrace
+    func makeUIView(context: Context) -> ChatSwipeProbe.Probe {
+        let view = ChatSwipeProbe.Probe()
+        view.isAccessibilityElement = true
+        view.accessibilityIdentifier = "uitestChatHistoryGeometry"
+        view.accessibilityLabel = "Chat follow trace"
+        return view
+    }
+    func updateUIView(_ view: ChatSwipeProbe.Probe, context: Context) { view.read = { trace.json } }
 }
 
 private struct ChatSwipeProbe: UIViewRepresentable {
@@ -95,8 +126,10 @@ private struct ChatSwipeMeasurement: ViewModifier {
 private struct ChatHistoryTestMeasurement: ViewModifier {
     let following: Bool
     let selected: Bool
+    var streamingText = false
     #if DEBUG
     @State private var metrics = ChatHistoryTestMetrics()
+    @State private var follow = ChatFollowTrace()
     private var probe: some View {
         ChatHistoryOffsetProbe(value: "{\"offset\":\(metrics.offset),\"contentHeight\":\(metrics.contentHeight),\"viewportHeight\":\(metrics.viewportHeight),\"following\":\(following),\"selected\":\(selected)}")
             .frame(width: 1, height: 1).allowsHitTesting(false)
@@ -104,7 +137,16 @@ private struct ChatHistoryTestMeasurement: ViewModifier {
     #endif
     func body(content: Content) -> some View {
         #if DEBUG
-        if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
+        if UITesting.flag("LEAF_UI_CHAT_FOLLOW"), #available(iOS 18, *) {
+            // Every geometry change is recorded; the probe reads it lazily.
+            content.onScrollGeometryChange(for: ChatHistoryTestMetrics.self) { geometry in
+                ChatHistoryTestMetrics(offset: geometry.contentOffset.y, contentHeight: geometry.contentSize.height,
+                                       viewportHeight: geometry.containerSize.height)
+            } action: { [follow, following, streamingText] _, value in follow.record(value, following: following, streamingText: streamingText) }
+                .overlay(alignment: .topLeading) {
+                    ChatFollowProbe(trace: follow).frame(width: 1, height: 1).allowsHitTesting(false)
+                }
+        } else if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
             if #available(iOS 18, *) {
                 content.onScrollGeometryChange(for: ChatHistoryTestMetrics.self) { geometry in
                     ChatHistoryTestMetrics(offset: geometry.contentOffset.y, contentHeight: geometry.contentSize.height,
@@ -665,7 +707,8 @@ struct ReaderChatPanel: View {
                         .scrollDismissesKeyboard(isComposing ? .never : .interactively)
                         .accessibilityIdentifier("chatMessageHistory")
                         .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
-                        .modifier(ChatHistoryTestMeasurement(following: scrollFollowing.followsLatest, selected: selectedMessage != nil))
+                        .modifier(ChatHistoryTestMeasurement(following: scrollFollowing.followsLatest, selected: selectedMessage != nil,
+                                                             streamingText: session.messages.last.map { $0.state == .streaming && !$0.text.isEmpty } ?? false))
                         #if DEBUG
                         .modifier(ChatSwipeMeasurement())
                         #endif
