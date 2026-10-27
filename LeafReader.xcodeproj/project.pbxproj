@@ -101,6 +101,7 @@
 		EFE98F950DFB6227CCCB254E /* ReaderAssetHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C5A29FFA6B5D43FE7AF65C /* ReaderAssetHandler.swift */; };
 		F3AFD62E37C55DE98DED5815 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6B763DF832118110BAED95B /* ThemeTests.swift */; };
 		F3F8B6B6F653CF0B900E74CE /* ZLibraryClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF96FF360E492577BC90BFBA /* ZLibraryClient.swift */; };
+		F6CBBEF47D0867F93556409D /* ScrollFling.epub in Resources */ = {isa = PBXBuildFile; fileRef = B6D6D1B900D921504F3088AE /* ScrollFling.epub */; };
 		FACB375CC9D5215083FF359A /* ZLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6DF2E83336FF008A3ECB0C /* ZLibraryTests.swift */; };
 		FD3C12EFA92B6645053C6669 /* LeafReaderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 276132151BB695DA489747FD /* LeafReaderUITests.swift */; };
 /* End PBXBuildFile section */
@@ -190,6 +191,7 @@
 		AA375CCD5FE2A2A6CEEDDF5B /* ReaderPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderPreferences.swift; sourceTree = "<group>"; };
 		AE07B9A1522472930DD1E8D6 /* ChatGPTConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTConnectionView.swift; sourceTree = "<group>"; };
 		B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTests.swift; sourceTree = "<group>"; };
+		B6D6D1B900D921504F3088AE /* ScrollFling.epub */ = {isa = PBXFileReference; path = ScrollFling.epub; sourceTree = "<group>"; };
 		B70AFFFDE78951C7D2065070 /* ReaderEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderEngineTests.swift; sourceTree = "<group>"; };
 		B903372F35178474AE142CA2 /* ReadAloudSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadAloudSession.swift; sourceTree = "<group>"; };
 		BBBFEF84FF9F66E74AF30D17 /* AppleVoiceCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleVoiceCatalogTests.swift; sourceTree = "<group>"; };
@@ -399,6 +401,7 @@
 			children = (
 				0F0C5D848755DE54F2DF81FA /* ContentsLocation.epub */,
 				F271C8C2F1E75C60658A4C34 /* Mandarin.m4a */,
+				B6D6D1B900D921504F3088AE /* ScrollFling.epub */,
 			);
 			path = Fixtures;
 			sourceTree = "<group>";
@@ -555,6 +558,7 @@
 			files = (
 				7EBAC4CC3E7CAC3FFB7A032E /* ContentsLocation.epub in Resources */,
 				48596F0F4CFC8E414023BAE2 /* Mandarin.m4a in Resources */,
+				F6CBBEF47D0867F93556409D /* ScrollFling.epub in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

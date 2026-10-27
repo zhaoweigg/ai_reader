@@ -1868,6 +1868,66 @@ final class ReaderEngineTests: XCTestCase {
         let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json")
         attachment.name="Continuous chapter boundary geometry";attachment.lifetime = .keepAlways;add(attachment)
     }
+    func testBackwardFlingKeepsPaintedChaptersWhileEvictedContentReloads() async throws {
+        let (book, url) = try prepare("MemoryStress.epub", format: .epub, fixtures: true)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await waitUntil { model.isReady || model.error != nil }
+        let result = try await model.webView?.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),rows=[];
+            const ready=async indices=>{const end=performance.now()+8000;while(!indices.every(i=>r.getContents().some(c=>c.index===i&&c.doc?.readyState==='complete'))){if(performance.now()>end)throw new Error('Window not ready');await sleep(10);}await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);};
+            const section=view.book.sections[69],load=section.load;
+            try {
+                for(const locked of [false,true]) {
+                    section.load=load;await view.goTo(95);await ready([94,95,96]);
+                    await view.goTo(70);await ready([69,70,71]);
+                    const container=r.getContents()[0].doc.defaultView.frameElement.parentElement.parentElement;
+                    const offset=doc=>doc.defaultView.frameElement.parentElement.getBoundingClientRect().top-container.getBoundingClientRect().top+container.scrollTop;
+                    section.load=async()=>{await sleep(600);return load();};
+                    container.scrollTop=offset(r.getContents().find(c=>c.index===71).doc)+100;
+                    await ready([70,71,72]);
+                    const navigation=locked?r.continueScroll(-1):Promise.resolve();
+                    await sleep(20);container.scrollTop=0;
+                    for(let frame=0;frame<30;frame++) {
+                        await new Promise(requestAnimationFrame);
+                        const viewport=container.getBoundingClientRect(),contents=r.getContents();
+                        const visible=contents.some(c=>{const rect=c.doc.defaultView.frameElement.getBoundingClientRect();return rect.top<viewport.bottom&&rect.bottom>viewport.top;});
+                        rows.push({locked,frame,visible,documents:contents.length,active:contents[0].index});
+                        await sleep(25);
+                    }
+                    await navigation;await ready([68,69,70]);
+                    rows.at(-1).finalIndex=r.getContents()[0].index;
+                    const doc=r.getContents()[0].doc,range=doc.createRange(),node=doc.querySelector('p').firstChild;
+                    range.setStart(node,2);range.setEnd(node,12);
+                    rows.at(-1).sameCFI=view.resolveCFI(view.getCFI(69,range)).anchor(doc).toString()===range.toString();
+                }
+                // A new explicit destination supersedes any backward movement
+                // waiting for an older chapter; late loads must not pull it back.
+                section.load=load;await view.goTo(95);await ready([94,95,96]);
+                await view.goTo(70);await ready([69,70,71]);
+                const container=r.getContents()[0].doc.defaultView.frameElement.parentElement.parentElement;
+                const next=r.getContents().find(c=>c.index===71).doc.defaultView.frameElement.parentElement;
+                section.load=async()=>{await sleep(600);return load();};
+                container.scrollTop+=next.getBoundingClientRect().top-container.getBoundingClientRect().top+100;
+                await ready([70,71,72]);container.scrollTop=0;await sleep(40);
+                await view.goTo(90);await ready([89,90,91]);await sleep(100);
+                return {rows,explicitIndex:r.getContents()[0].index,restoredVisible:window.Leaf.isLocationVisible(view.lastLocation.cfi)};
+            } finally {section.load=load;}
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let metrics = try XCTUnwrap(result as? [String: Any]), rows = try XCTUnwrap(metrics["rows"] as? [[String: Any]])
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: metrics, options: .prettyPrinted), uniformTypeIdentifier: "public.json")
+        attachment.name = "Fast backward fling delayed chapters frame geometry"; attachment.lifetime = .keepAlways; add(attachment)
+        XCTAssertEqual(rows.count, 60)
+        for row in rows {
+            XCTAssertEqual(row["visible"] as? Bool, true, "A fling must never expose the evicted spacer: \(row)")
+            XCTAssertLessThanOrEqual(row["documents"] as? Int ?? 99, 3)
+            if let index = row["finalIndex"] as? Int { XCTAssertEqual(index, 69) }
+            if let same = row["sameCFI"] as? Bool { XCTAssertTrue(same) }
+        }
+        XCTAssertEqual(metrics["explicitIndex"] as? Int, 90)
+        XCTAssertEqual(metrics["restoredVisible"] as? Bool, true)
+        XCTAssertNil(model.error)
+    }
     func testDelayedPreviousChapterKeepsFinalPassageDuringEndNavigation() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         var prefs = preferences; prefs.scrolling = true

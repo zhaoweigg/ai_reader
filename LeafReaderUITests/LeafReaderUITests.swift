@@ -7,13 +7,13 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, contentsFixture: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
         if contentsFixture {
-            let fixture = Bundle(for: LeafReaderUITests.self).url(forResource: "ContentsLocation", withExtension: "epub")!
+            let fixture = Bundle(for: LeafReaderUITests.self).url(forResource: contentsBook, withExtension: "epub")!
             app.launchEnvironment["LEAF_UI_CONTENTS_BOOK"] = try! Data(contentsOf: fixture).base64EncodedString()
         }
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"
@@ -292,6 +292,74 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testContentsRevealsCurrentChapterInPages() { verifyContentsLocation(flow: "Pages") }
     @MainActor func testContentsRevealsCurrentChapterInScroll() { verifyContentsLocation(flow: "Scroll") }
     @MainActor func testContentsRevealsCurrentPageInPDF() { verifyContentsLocation(flow: "PDF") }
+
+    @MainActor func testFastBookSwipesAfterDistantChapterJumpInScroll() { verifyFastBookSwipes(flow: "Scroll") }
+    @MainActor func testFastBookSwipesAfterDistantChapterJumpInPages() { verifyFastBookSwipes(flow: "Pages") }
+
+    @MainActor private func verifyFastBookSwipes(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(contentsFixture: true, contentsBook: "ScrollFling")
+        let search = app.textFields["librarySearch"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Contents Location")
+        app.buttons["book-Contents Location"].tap()
+        openAppearance(app)
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons[flow].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        app.buttons[(flow == "Scroll" ? "Night" : "Paper") + " theme"].tap()
+        dismissAppearance(app)
+        showReaderControls(app); app.buttons["Contents"].tap()
+        let destination = app.buttons["第30章 归途"]
+        for _ in 0..<4 where !destination.isHittable { app.collectionViews.firstMatch.swipeUp() }
+        XCTAssertTrue(destination.isHittable); destination.tap(); waitForBook(app)
+        let surface = readingSurface(app)
+        func visibleText() {
+            var area = surface.frame.insetBy(dx: 10, dy: 20)
+            let panel = app.otherElements["readerChatPanel"]
+            if panel.exists { area.size.height = max(1, panel.frame.minY - area.minY - 12) }
+            let texts = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "这是第")).allElementsBoundByIndex
+            let content = texts + surface.images.allElementsBoundByIndex
+            XCTAssertTrue(content.contains { element in
+                let rect = element.frame
+                return rect.minX.isFinite && rect.minY.isFinite && rect.width > 0 && rect.height > 0 && rect.intersects(area)
+            }, "Actual book text or artwork must remain visible after fast gestures")
+        }
+        func swipe(_ forward: Bool, withChat: Bool) {
+            if !withChat {
+                if flow == "Scroll" { if forward { surface.swipeUp(velocity: .fast) } else { surface.swipeDown(velocity: .fast) } }
+                else { if forward { surface.swipeLeft(velocity: .fast) } else { surface.swipeRight(velocity: .fast) } }
+            } else {
+                let panel = app.otherElements["readerChatPanel"].frame
+                let top = surface.frame.minY + 30, bottom = panel.minY - 16
+                XCTAssertGreaterThan(bottom - top, 40)
+                let origin = app.coordinate(withNormalizedOffset: .zero)
+                let start = flow == "Scroll" ? CGPoint(x: surface.frame.midX, y: forward ? bottom : top)
+                    : CGPoint(x: surface.frame.width * (forward ? 0.8 : 0.2), y: (top + bottom) / 2)
+                let end = flow == "Scroll" ? CGPoint(x: surface.frame.midX, y: forward ? top : bottom)
+                    : CGPoint(x: surface.frame.width * (forward ? 0.2 : 0.8), y: (top + bottom) / 2)
+                origin.withOffset(CGVector(dx: start.x, dy: start.y)).press(forDuration: 0.01,
+                    thenDragTo: origin.withOffset(CGVector(dx: end.x, dy: end.y)), withVelocity: .fast, thenHoldForDuration: 0)
+                XCTAssertTrue(app.buttons["closeReaderChat"].exists)
+            }
+            visibleText(); XCTAssertFalse(app.otherElements["readerError"].exists)
+        }
+        for forward in [true,true,true,false,false,false] { swipe(forward, withChat: false) }
+        capture(flow + " fast forward and backward after cold chapter jump", app: app)
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Keep my fast scrolling question"); app.buttons["Hide keyboard"].tap()
+        swipe(true, withChat: true); swipe(false, withChat: true)
+        orient(.landscapeLeft); visibleText()
+        swipe(true, withChat: true); swipe(false, withChat: true)
+        XCTAssertEqual(input.value as? String, "Keep my fast scrolling question")
+        capture(flow + " landscape fast swipes keep chat and visible book", app: app)
+        app.buttons["closeReaderChat"].tap(); orient(.portrait)
+        showReaderControls(app)
+        let chapter = app.staticTexts["readerChapterTitle"].label
+        app.buttons["closeBook"].tap(); app.buttons["book-Contents Location"].tap()
+        showReaderControls(app); XCTAssertEqual(app.staticTexts["readerChapterTitle"].label, chapter)
+        visibleText(); capture(flow + " saved passage after fast swipes and reopening", app: app)
+    }
 
     @MainActor private func verifyContentsLocation(flow: String) {
         continueAfterFailure = false
