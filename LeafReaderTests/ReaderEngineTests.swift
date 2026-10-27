@@ -1872,8 +1872,10 @@ final class ReaderEngineTests: XCTestCase {
         let (book, url) = try prepare("MemoryStress.epub", format: .epub, fixtures: true)
         var prefs = preferences; prefs.scrolling = true
         let model = try show(book, url: url, readerPreferences: prefs)
-        try await waitUntil { model.isReady || model.error != nil }
-        let result = try await model.webView?.callAsyncJavaScript("""
+        try await waitUntil({ model.isReady || model.error != nil }, timeout: 60)
+        XCTAssertNil(model.error)
+        let web = try XCTUnwrap(model.isReady ? model.webView : nil, "The reader must open before the fling regression starts")
+        let result = try await web.callAsyncJavaScript("""
             const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),rows=[];
             const ready=async indices=>{const end=performance.now()+8000;while(!indices.every(i=>r.getContents().some(c=>c.index===i&&c.doc?.readyState==='complete'))){if(performance.now()>end)throw new Error('Window not ready');await sleep(10);}await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);};
             const section=view.book.sections[69],load=section.load;
