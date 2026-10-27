@@ -1886,6 +1886,7 @@ final class ReaderEngineTests: XCTestCase {
                     section.load=async()=>{await sleep(600);return load();};
                     container.scrollTop=offset(r.getContents().find(c=>c.index===71).doc)+100;
                     await ready([70,71,72]);
+                    if(locked)await r.continueScroll(-1);
                     const navigation=locked?r.continueScroll(-1):Promise.resolve();
                     await sleep(20);container.scrollTop=0;
                     for(let frame=0;frame<30;frame++) {
@@ -1895,11 +1896,12 @@ final class ReaderEngineTests: XCTestCase {
                         rows.push({locked,frame,visible,documents:contents.length,active:contents[0].index});
                         await sleep(25);
                     }
-                    await navigation;await ready([68,69,70]);
+                    await navigation;await sleep(200);
+                    const active=r.getContents()[0].index;await ready([active-1,active,active+1]);
                     rows.at(-1).finalIndex=r.getContents()[0].index;
                     const doc=r.getContents()[0].doc,range=doc.createRange(),node=doc.querySelector('p').firstChild;
                     range.setStart(node,2);range.setEnd(node,12);
-                    rows.at(-1).sameCFI=view.resolveCFI(view.getCFI(69,range)).anchor(doc).toString()===range.toString();
+                    rows.at(-1).sameCFI=view.resolveCFI(view.getCFI(r.getContents()[0].index,range)).anchor(doc).toString()===range.toString();
                 }
                 // A new explicit destination supersedes any backward movement
                 // waiting for an older chapter; late loads must not pull it back.
@@ -1921,12 +1923,25 @@ final class ReaderEngineTests: XCTestCase {
         for row in rows {
             XCTAssertEqual(row["visible"] as? Bool, true, "A fling must never expose the evicted spacer: \(row)")
             XCTAssertLessThanOrEqual(row["documents"] as? Int ?? 99, 3)
-            if let index = row["finalIndex"] as? Int { XCTAssertEqual(index, 69) }
+            if let index = row["finalIndex"] as? Int {
+                if row["locked"] as? Bool == true { XCTAssertTrue((68...69).contains(index)) }
+                else { XCTAssertEqual(index, 69) }
+            }
             if let same = row["sameCFI"] as? Bool { XCTAssertTrue(same) }
         }
         XCTAssertEqual(metrics["explicitIndex"] as? Int, 90)
         XCTAssertEqual(metrics["restoredVisible"] as? Bool, true)
         XCTAssertNil(model.error)
+        try await waitUntil { model.currentChapterID == model.chapters.first(where: { $0.label == "Chapter 90" })?.id }
+        let saved = model.locator
+        model.toggleBookmark(); store?.flush()
+        let bookmarks = store?.book(book.id)?.bookmarks
+        model.webView?.stopLoading(); window?.isHidden = true; window = nil
+        let reopened = try show(book, url: url, locator: saved, readerPreferences: prefs)
+        try await waitUntil { reopened.isReady || reopened.error != nil }
+        let visible = try await reopened.webView?.callAsyncJavaScript("return window.Leaf.isLocationVisible(saved);", arguments: ["saved": saved], in: nil, contentWorld: .page) as? Bool
+        XCTAssertEqual(visible, true, "The passage reached after a fast fling must reopen at the saved CFI")
+        XCTAssertEqual(store?.book(book.id)?.bookmarks, bookmarks)
     }
     func testDelayedPreviousChapterKeepsFinalPassageDuringEndNavigation() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)

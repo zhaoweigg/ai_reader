@@ -1535,6 +1535,8 @@ export class Paginator extends HTMLElement {
         return this.#turnPage(1, distance)
     }
     #continueScrollAtEdge() {
+        // The same native fling is already waiting for the evicted chapter.
+        if (this.#scrollBacklog > 0) return
         if (this.#continuous && this.#scrollViews.has(this.#adjacentIndex(this.#scrollContinuation?.direction ?? 1))) return
         const intent = this.#scrollContinuation
         if (!intent || !this.scrolled || this.#locked) return
