@@ -1913,7 +1913,7 @@ final class ReaderEngineTests: XCTestCase {
                 container.scrollTop+=next.getBoundingClientRect().top-container.getBoundingClientRect().top+100;
                 await ready([70,71,72]);container.scrollTop=0;await sleep(40);
                 await view.goTo(90);await ready([89,90,91]);await sleep(100);
-                return {rows,explicitIndex:r.getContents()[0].index,restoredVisible:window.Leaf.isLocationVisible(view.lastLocation.cfi)};
+                return {rows,explicitIndex:r.getContents()[0].index,finalLocator:view.lastLocation.cfi,restoredVisible:window.Leaf.isLocationVisible(view.lastLocation.cfi)};
             } finally {section.load=load;}
             """, arguments: [:], in: nil, contentWorld: .page)
         let metrics = try XCTUnwrap(result as? [String: Any]), rows = try XCTUnwrap(metrics["rows"] as? [[String: Any]])
@@ -1932,7 +1932,8 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(metrics["explicitIndex"] as? Int, 90)
         XCTAssertEqual(metrics["restoredVisible"] as? Bool, true)
         XCTAssertNil(model.error)
-        try await waitUntil { model.currentChapterID == model.chapters.first(where: { $0.label == "Chapter 90" })?.id }
+        let finalLocator = try XCTUnwrap(metrics["finalLocator"] as? String)
+        try await waitUntil { model.locator == finalLocator }
         let saved = model.locator
         model.toggleBookmark(); store?.flush()
         let bookmarks = store?.book(book.id)?.bookmarks
