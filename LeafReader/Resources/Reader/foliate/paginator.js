@@ -486,7 +486,12 @@ export class Paginator extends HTMLElement {
     #scrollLoads = new Map()
     #scrollEpoch = 0
     #scrollPrefix = 0
+    // Blank room above the window for earlier chapters that are not loaded.
+    // Prepending a chapter takes its height from here instead of moving the
+    // scroll position, because iOS drops scroll changes during a finger drag.
+    #scrollReserve = 0
     #scrollBacklog = 0
+    #touchActive = false
     #scrollSpacer
     #scrollLayout
     #scrollRendering = false
@@ -558,6 +563,11 @@ export class Paginator extends HTMLElement {
             grid-column: 1 / -1;
             grid-row: 1 / -1;
             overflow: auto;
+            /* The live window and its reserve do not map to book progress. */
+            scrollbar-width: none;
+        }
+        :host([flow="scrolled"]) #container::-webkit-scrollbar {
+            display: none;
         }
         :host([flow="scrolled"]) #container::after {
             content: '';
@@ -643,6 +653,7 @@ export class Paginator extends HTMLElement {
             if (this.scrolled) {
                 if (this.#justAnchored) this.#justAnchored = false
                 else this.#afterScroll('scroll')
+                this.#refillScrollReserve()
             }
         }, 250))
 
@@ -806,6 +817,7 @@ export class Paginator extends HTMLElement {
         this.#scrollSpacer?.remove()
         this.#scrollSpacer = null
         this.#scrollPrefix = 0
+        this.#scrollReserve = 0
         this.#scrollBacklog = 0
         this.#container.style.removeProperty('--leaf-book-end-space')
     }
@@ -821,9 +833,42 @@ export class Paginator extends HTMLElement {
         record.view.onResize = () => this.#scrollViewResized(record)
         record.height = record.view.element.getBoundingClientRect().height
         this.#scrollViews.set(this.#index, record)
-        this.#keepScrollPosition(() => this.#syncChapterDivider(record))
+        this.#keepScrollPosition(() => {
+            this.#syncChapterDivider(record)
+            this.#fillScrollReserve()
+        })
         this.#updateScrollEndSpace()
         this.#warmScrollWindow()
+    }
+    #hasSectionBefore(index) {
+        for (let i = index - 1; i >= 0; i--) if (this.sections[i]?.linear !== 'no') return true
+        return false
+    }
+    #setScrollSpacer() {
+        this.#scrollSpacer.style.height = `${this.#scrollPrefix + this.#scrollReserve}px`
+    }
+    // Keep generous room above when earlier chapters exist; none at the book start.
+    #fillScrollReserve() {
+        const first = Math.min(...this.#scrollViews.keys(), ...this.#scrollLoads.keys())
+        if (!Number.isFinite(first)) return
+        const full = this.#hasSectionBefore(first) ? Math.max(this.size, 600) * 200 : 0
+        if (full ? this.#scrollReserve >= full / 2 : !this.#scrollReserve && !this.#scrollPrefix) return
+        this.#scrollReserve = full
+        if (!full) this.#scrollPrefix = 0
+        this.#setScrollSpacer()
+    }
+    // Scroll changes stick once the reader is idle, so top up the reserve then.
+    #refillScrollReserve() {
+        if (!this.#continuous || this.#touchActive || this.#locked || this.#scrollNavigating || this.#scrollRendering) return
+        this.#keepScrollPosition(() => this.#fillScrollReserve())
+    }
+    // Earlier text changing height (images loading, reflow) takes its room
+    // from the reserve, so the reading position stays put without a scroll change.
+    #absorbAbove(delta) {
+        if (this.#scrollReserve > 0 && this.#scrollReserve >= delta) {
+            this.#scrollReserve -= delta
+            this.#setScrollSpacer()
+        } else this.#container.scrollTop += delta
     }
     #updateScrollEndSpace() {
         const last = this.#scrollViews.get(this.sections.length - 1)
@@ -874,7 +919,7 @@ export class Paginator extends HTMLElement {
         const delta = height - (record.height ?? height)
         record.height = height
         this.#updateScrollEndSpace()
-        if (record.index < this.#index && Math.abs(delta) > 0.5) this.#container.scrollTop += delta
+        if (record.index < this.#index && Math.abs(delta) > 0.5) this.#absorbAbove(delta)
         else if (record.index === this.#index) this.#scrollToAnchor(this.#anchor)
     }
     #scrollViewResized(record) {
@@ -884,7 +929,7 @@ export class Paginator extends HTMLElement {
         record.height = height
         this.#updateScrollEndSpace()
         // A passive body resize must not re-anchor a reader who is scrolling.
-        if (record.index < this.#index && Math.abs(delta) > 0.5) this.#container.scrollTop += delta
+        if (record.index < this.#index && Math.abs(delta) > 0.5) this.#absorbAbove(delta)
     }
     #wantedScrollIndexes() {
         return new Set([this.#index, this.#adjacentIndex(1), this.#adjacentIndex(-1)].filter(x => x != null))
@@ -904,7 +949,7 @@ export class Paginator extends HTMLElement {
                 this.#scrollViews.delete(index)
                 this.#releaseScrollRecord(record)
             }
-            this.#scrollSpacer.style.height = `${this.#scrollPrefix}px`
+            this.#setScrollSpacer()
             this.#updateScrollEndSpace()
         })
         // At most the current and two adjacent chapters, plus their in-flight loads.
@@ -959,9 +1004,16 @@ export class Paginator extends HTMLElement {
                     })
                     this.#syncChapterDivider(record)
                     if (index < this.#index) {
-                        this.#scrollPrefix = Math.max(0, this.#scrollPrefix - this.#scrollRecordExtent(record))
-                        if (index === 0) this.#scrollPrefix = 0
-                        this.#scrollSpacer.style.height = `${this.#scrollPrefix}px`
+                        // Evicted text first, then the reserve: the net offset
+                        // of the reading position does not change.
+                        let extent = this.#scrollRecordExtent(record)
+                        const evicted = Math.min(this.#scrollPrefix, extent)
+                        this.#scrollPrefix -= evicted
+                        this.#scrollReserve = Math.max(0, this.#scrollReserve - (extent - evicted))
+                        // The book start needs no room above; collapse it once
+                        // a scroll change can stick (otherwise on idle).
+                        if (!this.#hasSectionBefore(index) && !this.#touchActive) this.#scrollPrefix = this.#scrollReserve = 0
+                        this.#setScrollSpacer()
                     }
                     record.preparing = false
                     record.height = record.view.element.getBoundingClientRect().height
@@ -992,16 +1044,19 @@ export class Paginator extends HTMLElement {
         // A fast backward fling can enter the spacer of an evicted chapter
         // before its replacement is ready. Keep painted content on screen and
         // carry that movement into the chapter once it has been prepended.
-        const topBeforeClamp = this.#container.scrollTop
-        if (this.#scrollPrefix > 0 && topBeforeClamp < this.#scrollPrefix) {
-            this.#scrollBacklog += this.#scrollPrefix - topBeforeClamp
-            this.#container.scrollTop = this.#scrollPrefix
+        // During a finger drag a scroll change would be dropped (and counted
+        // twice), so the reader may see the blank reserve until the load.
+        const topBeforeClamp = this.#container.scrollTop, contentTop = this.#scrollPrefix + this.#scrollReserve
+        if (contentTop > 0 && topBeforeClamp < contentTop && !this.#touchActive) {
+            // Only distance across evicted text is replayed, as before the reserve.
+            this.#scrollBacklog += contentTop - Math.max(topBeforeClamp, this.#scrollReserve)
+            this.#container.scrollTop = contentTop
         }
         // Native inertia can keep moving during an awaited edge navigation.
         // Clamp it above even while activation/replay must wait for that load.
         if (this.#locked || this.#scrollNavigating) return
         if (this.#scrollBacklog > 0) {
-            const available = Math.max(0, this.#container.scrollTop - this.#scrollPrefix)
+            const available = Math.max(0, this.#container.scrollTop - this.#scrollPrefix - this.#scrollReserve)
             const distance = Math.min(this.#scrollBacklog, available)
             this.#scrollBacklog -= distance
             if (distance > 0) this.#container.scrollTop -= distance
@@ -1178,6 +1233,7 @@ export class Paginator extends HTMLElement {
         } finally { this.#locked = false }
     }
     #onTouchStart(e) {
+        this.#touchActive = true
         // Ignore new gestures until the current page has visibly settled.
         this.#touchState = null
         this.#scrollContinuation = null
@@ -1236,6 +1292,7 @@ export class Paginator extends HTMLElement {
         this.scrollBy(dx, dy)
     }
     #onTouchEnd(e) {
+        this.#touchActive = (e.touches?.length ?? 0) > 0
         const moved = this.#touchScrolled
         this.#touchScrolled = false
         const state = this.#touchState
@@ -1263,6 +1320,7 @@ export class Paginator extends HTMLElement {
         })
     }
     #onTouchCancel() {
+        this.#touchActive = false
         this.#scrollContinuation = null
         this.#scrollBacklog = 0
         const moved = this.#touchScrolled

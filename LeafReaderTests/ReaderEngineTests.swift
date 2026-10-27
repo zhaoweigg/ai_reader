@@ -1868,6 +1868,53 @@ final class ReaderEngineTests: XCTestCase {
         let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:metrics),uniformTypeIdentifier:"public.json")
         attachment.name="Continuous chapter boundary geometry";attachment.lifetime = .keepAlways;add(attachment)
     }
+    /// iOS drops scrollTop changes made during a finger drag. Reading back after
+    /// a Contents jump, each earlier chapter must be prepended without moving
+    /// the scroll position or the passage on screen.
+    func testPrependingEarlierChaptersAfterContentsJumpNeedsNoScrollChange() async throws {
+        let (book, url) = try prepare("MemoryStress.epub", format: .epub, fixtures: true)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await waitUntil({ model.isReady || model.error != nil }, timeout: 60)
+        XCTAssertNil(model.error)
+        let web = try XCTUnwrap(model.isReady ? model.webView : nil, "The reader must open before the regression starts")
+        let result = try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),rows=[];
+            const ready=async indices=>{const end=performance.now()+8000;while(!indices.every(i=>r.getContents().some(c=>c.index===i&&c.doc?.readyState==='complete'))){if(performance.now()>end)throw new Error('Window not ready');await sleep(10);}await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);};
+            const delayed=[68,67,66].map(i=>[view.book.sections[i],view.book.sections[i].load]);
+            try {
+                await view.goTo(70);await ready([69,70,71]);
+                // Slow the earlier loads so each prepend lands after the measurement.
+                for(const [section,load] of delayed)section.load=async()=>{await sleep(400);return load();};
+                const container=r.getContents()[0].doc.defaultView.frameElement.parentElement.parentElement;
+                const frame=index=>r.getContents().find(c=>c.index===index).doc.defaultView.frameElement.parentElement;
+                const offset=index=>frame(index).getBoundingClientRect().top-container.getBoundingClientRect().top+container.scrollTop;
+                for(const index of [69,68,67]) {
+                    // Pull back into the end of the previous chapter.
+                    container.scrollTop=offset(index+1)-container.clientHeight*0.4;
+                    await sleep(60);
+                    const before=container.scrollTop,boundaryBefore=frame(index+1).getBoundingClientRect().top;
+                    const preparedBefore=r.getContents().some(c=>c.index===index-1);
+                    await ready([index-1,index,index+1]);await sleep(60);
+                    rows.push({index,active:r.getContents()[0].index,preparedBefore,before,after:container.scrollTop,
+                        boundaryBefore,boundaryAfter:frame(index+1).getBoundingClientRect().top,documents:r.getContents().length});
+                }
+                return rows;
+            } finally {for(const [section,load] of delayed)section.load=load;}
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let rows = try XCTUnwrap(result as? [[String: Any]])
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows, options: .prettyPrinted), uniformTypeIdentifier: "public.json")
+        attachment.name = "Prepending after a Contents jump"; attachment.lifetime = .keepAlways; add(attachment)
+        XCTAssertEqual(rows.count, 3)
+        for row in rows {
+            XCTAssertEqual(row["preparedBefore"] as? Bool, false, "The earlier chapter must still be loading when measured: \(row)")
+            XCTAssertEqual(row["active"] as? Int, row["index"] as? Int, "\(row)")
+            XCTAssertEqual(try XCTUnwrap(row["after"] as? Double), try XCTUnwrap(row["before"] as? Double), accuracy: 1, "Prepending must not change scrollTop: \(row)")
+            XCTAssertEqual(try XCTUnwrap(row["boundaryAfter"] as? Double), try XCTUnwrap(row["boundaryBefore"] as? Double), accuracy: 1, "The passage on screen must not move: \(row)")
+            XCTAssertLessThanOrEqual(row["documents"] as? Int ?? 99, 3)
+        }
+        XCTAssertNil(model.error)
+    }
     func testBackwardFlingKeepsPaintedChaptersWhileEvictedContentReloads() async throws {
         let (book, url) = try prepare("MemoryStress.epub", format: .epub, fixtures: true)
         var prefs = preferences; prefs.scrolling = true
