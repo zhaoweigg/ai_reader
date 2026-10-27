@@ -436,11 +436,21 @@ window.Leaf = { open, close, command, applyPreferences, search, tap, allowsReade
     cancelRecall: ({id}) => { if (chatRecallID===id) chatRecallID=null; },
     sectionText: ({index}) => sectionText(view, index, sanitize),
     textBoundary: ({locator}) => textBoundary(view, locator, sanitize),
-    setSpokenRange: config => setSpokenRange(view, config),
-    clearSpokenRange: () => { if (view) clearSpokenRange(view); },
+    setSpokenRange: config => {
+        const bottomClearance = Math.max(readingClearance, config.bottomClearance || 0);
+        // The final chapter needs enough native scroll range to lift its last
+        // spoken line above the listening bar, just as it does above chat.
+        if (view?.renderer?.scrolled) view.renderer.setReadingClearance?.(config.follow ? bottomClearance : readingClearance);
+        return setSpokenRange(view, { ...config, bottomClearance });
+    },
+    clearSpokenRange: () => {
+        if (view) { clearSpokenRange(view); setReadingClearance({ height:readingClearance }); }
+    },
     readAloudChunk: ({ locator }) => readAloudChunk(view, locator, sanitize),
     revealReadAloud: ({ locator }) => revealReadAloud(view, locator),
-    clearReadAloud: () => { if (view) clearReadAloud(view); },
+    clearReadAloud: () => {
+        if (view) { clearReadAloud(view); setReadingClearance({ height:readingClearance }); }
+    },
     setAnnotations: ({ items }) => annotationLayer?.set(items),
     clearSelection: () => {
         for (const {doc} of view?.renderer?.getContents?.() ?? []) doc?.getSelection()?.removeAllRanges();

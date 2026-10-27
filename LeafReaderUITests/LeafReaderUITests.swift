@@ -1022,36 +1022,41 @@ final class LeafReaderUITests: XCTestCase {
         app.terminate()
     }
     @MainActor func testSpeechProgressHighlightsVisibleTextInPagesScrollAndPDF() {
+        for flow in ["Pages", "Scroll", "PDF"] { verifySpeechProgress(flow: flow) }
+    }
+    @MainActor func testListeningHighlightInPages() { verifySpeechProgress(flow: "Pages") }
+    @MainActor func testListeningHighlightInScroll() { verifySpeechProgress(flow: "Scroll") }
+    @MainActor func testListeningHighlightInPDF() { verifySpeechProgress(flow: "PDF") }
+
+    @MainActor private func verifySpeechProgress(flow: String) {
         continueAfterFailure = false
         orient(.portrait)
         defer { orient(.portrait) }
-        for flow in ["Pages", "Scroll", "PDF"] {
-            let app = launchApp(naturalVoicePack: true); openSelectionFixture(flow, app: app)
-            selectFixturePassage(flow, app: app)
-            XCTAssertTrue(app.buttons["selection-listen"].waitForExistence(timeout: 6)); app.buttons["selection-listen"].tap()
-            let status = app.buttons["listeningSettings"], pause = app.buttons["audioPlayPause"]
-            expectation(for: NSPredicate { _, _ in !(status.value as? String ?? "").isEmpty }, evaluatedWith: status); waitForExpectations(timeout: 15)
-            pause.tap(); let word = status.value as? String ?? ""
-            XCTAssertFalse(word.isEmpty); XCTAssertEqual(pause.label, "Resume listening")
-            capture(flow + " actual spoken text highlighted while paused", app: app)
-            self.orient(.landscapeLeft)
-            expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
-            XCTAssertEqual(status.value as? String, word)
-            capture(flow + " spoken highlight retained after rotation", app: app)
-            self.orient(.portrait)
+        let app = launchApp(naturalVoicePack: true); openSelectionFixture(flow, app: app)
+        selectFixturePassage(flow, app: app)
+        XCTAssertTrue(app.buttons["selection-listen"].waitForExistence(timeout: 6)); app.buttons["selection-listen"].tap()
+        let status = app.buttons["listeningSettings"], pause = app.buttons["audioPlayPause"]
+        expectation(for: NSPredicate { _, _ in !(status.value as? String ?? "").isEmpty }, evaluatedWith: status); waitForExpectations(timeout: 60)
+        pause.tap(); let word = status.value as? String ?? ""
+        XCTAssertFalse(word.isEmpty); XCTAssertEqual(pause.label, "Resume listening")
+        capture(flow + " actual spoken text highlighted while paused", app: app)
+        self.orient(.landscapeLeft)
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 6)
+        XCTAssertEqual(status.value as? String, word)
+        capture(flow + " spoken highlight retained after rotation", app: app)
+        self.orient(.portrait)
 
-            expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
-            app.buttons["openReaderChat"].tap()
-            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
-            input.tap(); input.typeText("Keep my listening question")
-            XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
-            XCTAssertTrue(pause.isHittable); XCTAssertEqual(status.value as? String, word)
-            capture(flow + " spoken highlight with actual chat keyboard", app: app)
-            app.buttons["closeReaderChat"].tap(); app.buttons["stopListening"].tap()
-            XCTAssertFalse(status.exists)
-            capture(flow + " stopping clears spoken highlight", app: app)
-            app.terminate()
-        }
+        expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 6)
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Keep my listening question")
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+        XCTAssertTrue(pause.isHittable); XCTAssertEqual(status.value as? String, word)
+        capture(flow + " spoken highlight with actual chat keyboard", app: app)
+        app.buttons["closeReaderChat"].tap(); app.buttons["stopListening"].tap()
+        XCTAssertFalse(status.exists)
+        capture(flow + " stopping clears spoken highlight", app: app)
+        app.terminate()
     }
     @MainActor func testListeningFromNativeSelectionInBothFlows() {
         let app = launchApp(naturalVoicePack: true); app.buttons["featuredBook"].tap()

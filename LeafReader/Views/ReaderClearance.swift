@@ -6,6 +6,11 @@ struct ReaderChatFrame: PreferenceKey {
     static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) { value = nextValue() ?? value }
 }
 
+struct ReaderAudioFrame: PreferenceKey {
+    static var defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) { value = nextValue() ?? value }
+}
+
 enum ReaderClearance {
     static func height(book: CGRect, chat: CGRect?) -> CGFloat {
         guard book.height > 0, let chat, book.intersects(chat) else { return 0 }

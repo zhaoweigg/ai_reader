@@ -167,14 +167,21 @@ function spokenLineRects(range) {
     return [new DOMRect(left, top, right - left, bottom - top)];
 }
 
-function isRenderedLineVisible(view, range) {
+function isRenderedLineVisible(view, range, bottomClearance = 0) {
     const frame = range.startContainer.ownerDocument.defaultView.frameElement;
     if (!frame) return false;
     const offset = frame.getBoundingClientRect(), viewport = view.getBoundingClientRect();
-    return spokenLineRects(range).some(rect => rect.left + offset.left >= viewport.left - 1
-        && rect.right + offset.left <= viewport.right + 1
-        && rect.top + offset.top >= viewport.top - 1
-        && rect.bottom + offset.top <= viewport.bottom + 1);
+    const clip = frame.getRootNode().getElementById?.('container')?.getBoundingClientRect() ?? viewport;
+    const left = Math.max(0, viewport.left, clip.left), right = Math.min(innerWidth, viewport.right, clip.right);
+    const top = Math.max(0, viewport.top, clip.top);
+    // Scroll's full book surface continues behind native overlays. Follow the
+    // spoken line before it enters the covered part of that surface.
+    const clearance = view.renderer.scrolled ? Math.max(0, Math.min(innerHeight - 44, bottomClearance)) : 0;
+    const bottom = Math.min(innerHeight, viewport.bottom, clip.bottom) - clearance;
+    return spokenLineRects(range).some(rect => rect.left + offset.left >= left - 1
+        && rect.right + offset.left <= right + 1
+        && rect.top + offset.top >= top - 1
+        && rect.bottom + offset.top <= bottom + 1);
 }
 function clearPaint(view) {
     for (const content of view.renderer?.getContents?.() ?? []) content.overlayer?.remove(spokenKey);
@@ -219,7 +226,7 @@ export function clearSpokenRange(view) {
     if (state) { state.revision++; state.passage = null; }
     clearPaint(view);
 }
-export async function setSpokenRange(view, { passage, locator, location, length, follow }) {
+export async function setSpokenRange(view, { passage, locator, location, length, follow, bottomClearance = 0 }) {
     if (!view?.book) return;
     let state = spokenViews.get(view);
     if (!state) {
@@ -236,13 +243,13 @@ export async function setSpokenRange(view, { passage, locator, location, length,
     if (follow) {
         const segment = state.passage.segments?.find(item => location >= item.offset && location < item.offset + item.length);
         if (segment) {
-            await revealReadAloud(view, segment.locator, Math.max(0, location - segment.offset));
+            await revealReadAloud(view, segment.locator, Math.max(0, location - segment.offset), bottomClearance);
         }
     }
     if (revision === state.revision) paintSpokenRange(view, state);
 }
 
-export async function revealReadAloud(view, locator, offset = 0) {
+export async function revealReadAloud(view, locator, offset = 0, bottomClearance = 0) {
     const source = sources.get(view);
     if (!source) return;
     const epoch = source.epoch;
@@ -276,7 +283,7 @@ export async function revealReadAloud(view, locator, offset = 0) {
         const range = content && target.anchor?.(content.doc);
         // Cached visible DOM endpoints can include text that moved off screen
         // after reflow. Measure the actual line in the mounted iframe instead.
-        if (range?.startContainer && isRenderedLineVisible(view, range)) return;
+        if (range?.startContainer && isRenderedLineVisible(view, range, bottomClearance)) return;
         await view.renderer.goTo(target);
     });
     await source.navigation;
