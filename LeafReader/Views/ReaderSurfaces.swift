@@ -30,9 +30,35 @@ extension ReaderModel {
     }
 }
 
-@MainActor private func readerHasNativeScrollMotion(_ view: UIView) -> Bool {
-    if let scroll = view as? UIScrollView, scroll.isDecelerating || scroll.isDragging { return true }
-    return view.subviews.contains(where: readerHasNativeScrollMotion)
+@MainActor private final class ReaderScrollTouch {
+    private weak var stoppingTouch: UITouch?
+    private var stoppingTimestamp: TimeInterval = -1
+
+    func accepts(_ touch: UITouch, in view: UIView?) -> Bool {
+        // Both reader tap recognizers receive the same touch. Stopping the first
+        // must not make the second mistake that touch for a stationary tap.
+        if stoppingTouch === touch, stoppingTimestamp == touch.timestamp { return false }
+        var moving: [UIScrollView] = []
+        func visit(_ view: UIView) {
+            if let scroll = view as? UIScrollView {
+                var active = scroll.isDecelerating || scroll.isDragging
+                if #available(iOS 17.4, *) { active = active || scroll.isScrollAnimating }
+                if active { moving.append(scroll) }
+            }
+            view.subviews.forEach(visit)
+        }
+        if let view { visit(view) }
+        guard !moving.isEmpty else { return true }
+        stoppingTouch = touch; stoppingTimestamp = touch.timestamp
+        for scroll in moving where !scroll.isDragging {
+            // Explicitly stop the native scroller, including a slow animated
+            // offset change. Rejecting the reader tap alone only hides chrome;
+            // it does not cancel motion in WebKit's nested scroll views.
+            if #available(iOS 17.4, *) { scroll.stopScrollingAndZooming() }
+            else { scroll.setContentOffset(scroll.contentOffset, animated: false) }
+        }
+        return false
+    }
 }
 
 struct WebBookSurface: UIViewRepresentable {
@@ -89,10 +115,11 @@ struct WebBookSurface: UIViewRepresentable {
     @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         let model: ReaderModel
         var onReaderTap: (() -> Bool)?
+        private let scrollTouch = ReaderScrollTouch()
         init(_ model: ReaderModel) { self.model = model }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            !(gestureRecognizer is UITapGestureRecognizer && gestureRecognizer.view.map(readerHasNativeScrollMotion) == true)
+            !(gestureRecognizer is UITapGestureRecognizer) || scrollTouch.accepts(touch, in: gestureRecognizer.view)
         }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
             guard let view = gesture.view as? WKWebView, model.isReady else { return }
@@ -172,10 +199,11 @@ struct PDFBookSurface: UIViewRepresentable {
         var onReaderTap: (() -> Bool)?
         var token: NSObjectProtocol?
         private var annotationTokens: [NSObjectProtocol] = []
+        private let scrollTouch = ReaderScrollTouch()
         init(_ model: ReaderModel) { self.model = model; super.init() }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            !(gestureRecognizer is UITapGestureRecognizer && gestureRecognizer.view.map(readerHasNativeScrollMotion) == true)
+            !(gestureRecognizer is UITapGestureRecognizer) || scrollTouch.accepts(touch, in: gestureRecognizer.view)
         }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
             // PDFKit can briefly clear currentSelection as its native long press
