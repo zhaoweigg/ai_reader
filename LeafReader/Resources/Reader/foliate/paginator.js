@@ -1421,6 +1421,7 @@ export class Paginator extends HTMLElement {
         // At a book edge, Scroll's page command can have no adjacent section.
         if (index == null || !this.#canGoToIndex(index)) return
         this.#scrollBacklog = 0
+        this.#scrollContinuation = null
         // A late layout callback must not start a new window for the old
         // chapter while an awaited resource load is navigating elsewhere.
         ++this.#scrollNavigating
