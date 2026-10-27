@@ -422,8 +422,9 @@ final class ReaderEngineTests: XCTestCase {
                         const segment=packet.segments.find(s=>location>=s.offset&&location<s.offset+s.length),target=view.resolveCFI(segment.locator),content=view.renderer.getContents().find(c=>c.index===target.index);
                         const range=target.anchor(content.doc),node=range.startContainer,offset=range.startOffset+location-segment.offset;
                         range.setStart(node,offset);range.setEnd(node,offset+1);
-                        const word=[...range.getClientRects()].find(r=>r.width>0&&r.height>0),frame=content.doc.defaultView.frameElement.getBoundingClientRect(),bottom=innerHeight-bottomClearance;
+                        const glyphRects=[...range.getClientRects()],word=glyphRects.find(r=>r.width>0&&r.height>0),frame=content.doc.defaultView.frameElement.getBoundingClientRect(),bottom=innerHeight-bottomClearance;
                         rows.push({size:settings.fontSize,font:settings.font,requestedClearance,bottomClearance,location,viewport:[innerWidth,innerHeight],top:word.top+frame.top,bottom:word.bottom+frame.top,
+                            glyphRects:glyphRects.map(r=>[r.left,r.top,r.width,r.height]),
                             visible:word.top+frame.top>=-1&&word.bottom+frame.top<=bottom+1,
                             sameCFI:view.resolveCFI(packet.locator).anchor(content.doc).toString()===packet.text,
                             painted:content.overlayer.element.querySelectorAll('[data-leaf-spoken-line] rect').length===1});

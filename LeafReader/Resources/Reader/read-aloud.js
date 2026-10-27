@@ -284,6 +284,23 @@ export async function revealReadAloud(view, locator, offset = 0, bottomClearance
         // Cached visible DOM endpoints can include text that moved off screen
         // after reflow. Measure the actual line in the mounted iframe instead.
         if (range?.startContainer && isRenderedLineVisible(view, range, bottomClearance)) return;
+        if (view.renderer.scrolled && bottomClearance > 0 && typeof target.anchor === 'function') {
+            const speechAnchor = target.anchor;
+            target.anchor = doc => {
+                const range = speechAnchor(doc);
+                if (!range?.getClientRects) return range;
+                // At a wrap boundary WebKit can prepend a zero-width caret
+                // from the previous line. Speech follows the painted character;
+                // anchoring the caret can leave that character below an overlay.
+                // Keep this geometry override local to speech navigation so
+                // ordinary CFI line-break anchors retain their normal behavior.
+                return { getClientRects: () => {
+                    const rects = [...range.getClientRects()];
+                    const painted = rects.filter(rect => rect.width > 0 && rect.height > 0);
+                    return painted.length ? painted : rects;
+                } };
+            };
+        }
         await view.renderer.goTo(target);
     });
     await source.navigation;
