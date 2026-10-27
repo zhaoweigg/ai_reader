@@ -413,13 +413,17 @@ final class ReaderEngineTests: XCTestCase {
                 let result = try await web.callAsyncJavaScript("""
                     const view=document.querySelector('foliate-view'),sleep=ms=>new Promise(r=>setTimeout(r,ms)),rows=[];
                     window.Leaf.applyPreferences(settings);await sleep(100);
-                    for(const bottomClearance of [110,280])for(const location of [3,300,650,12]) {
+                    for(const requestedClearance of [110,280])for(const location of [3,300,650,12]) {
+                        // UIWindow's safe area makes its actual WebView shorter
+                        // than the outer frame. Keep a real readable band in
+                        // this synthetic overlay instead of covering all but14px.
+                        const bottomClearance=Math.min(requestedClearance,Math.max(0,innerHeight-100));
                         await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location,length:1,follow:true,bottomClearance});await sleep(20);
                         const segment=packet.segments.find(s=>location>=s.offset&&location<s.offset+s.length),target=view.resolveCFI(segment.locator),content=view.renderer.getContents().find(c=>c.index===target.index);
                         const range=target.anchor(content.doc),node=range.startContainer,offset=range.startOffset+location-segment.offset;
                         range.setStart(node,offset);range.setEnd(node,offset+1);
                         const word=[...range.getClientRects()].find(r=>r.width>0&&r.height>0),frame=content.doc.defaultView.frameElement.getBoundingClientRect(),bottom=innerHeight-bottomClearance;
-                        rows.push({size:settings.fontSize,font:settings.font,bottomClearance,location,viewport:[innerWidth,innerHeight],top:word.top+frame.top,bottom:word.bottom+frame.top,
+                        rows.push({size:settings.fontSize,font:settings.font,requestedClearance,bottomClearance,location,viewport:[innerWidth,innerHeight],top:word.top+frame.top,bottom:word.bottom+frame.top,
                             visible:word.top+frame.top>=-1&&word.bottom+frame.top<=bottom+1,
                             sameCFI:view.resolveCFI(packet.locator).anchor(content.doc).toString()===packet.text,
                             painted:content.overlayer.element.querySelectorAll('[data-leaf-spoken-line] rect').length===1});
@@ -432,18 +436,19 @@ final class ReaderEngineTests: XCTestCase {
         let tail = try await web.callAsyncJavaScript("""
             const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
             let last=packet;for(let i=0;i<20;i++){const next=await window.Leaf.readAloudChunk({locator:last.nextLocator});if(!next)break;last=next;}
-            const location=last.text.length-1,bottomClearance=220;
+            const location=last.text.length-1,bottomClearance=Math.min(220,Math.max(0,innerHeight-100));
             await window.Leaf.setSpokenRange({passage:last,locator:last.locator,location,length:1,follow:true,bottomClearance});await sleep(60);
             const segment=last.segments.find(s=>location>=s.offset&&location<s.offset+s.length),target=view.resolveCFI(segment.locator),content=r.getContents().find(c=>c.index===target.index),range=target.anchor(content.doc),node=range.startContainer,offset=range.startOffset+location-segment.offset;
             range.setStart(node,offset);range.setEnd(node,offset+1);
             const word=[...range.getClientRects()].find(rect=>rect.width>0&&rect.height>0),frame=content.doc.defaultView.frameElement.getBoundingClientRect();
             const lastVisible=word.top+frame.top>=-1&&word.bottom+frame.top<=innerHeight-bottomClearance+1;
+            const lastPosition={top:word.top+frame.top,bottom:word.bottom+frame.top,availableBottom:innerHeight-bottomClearance};
             await view.goTo(0);await r.scrollToAnchor(0);await sleep(80);const before=r.start,locator=view.lastLocation.cfi;
             await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location:650,length:1,follow:false,bottomClearance});await sleep(80);
             const offPreservesPosition=Math.abs(r.start-before)<1&&view.lastLocation.cfi===locator;
             window.Leaf.clearSpokenRange();await sleep(40);
             const container=r.getContents()[0].doc.defaultView.frameElement.parentElement.parentElement;
-            return {lastVisible,offPreservesPosition,cleared:!content.overlayer.element.querySelector('[data-leaf-spoken-line]'),endSpaceAfterClear:parseFloat(container.style.getPropertyValue('--leaf-book-end-space'))||0};
+            return {lastVisible,lastPosition,offPreservesPosition,cleared:!content.overlayer.element.querySelector('[data-leaf-spoken-line]'),endSpaceAfterClear:parseFloat(container.style.getPropertyValue('--leaf-book-end-space'))||0};
             """, arguments: ["packet": encoded], in: nil, contentWorld: .page)
         let final = try XCTUnwrap(tail as? [String: Any])
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: ["rows": rows, "final": final]), uniformTypeIdentifier: "public.json")
