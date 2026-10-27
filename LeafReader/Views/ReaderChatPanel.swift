@@ -728,6 +728,9 @@ struct ReaderChatPanel: View {
                                     }
                                 }
                             }.padding(.vertical, 2)
+                                // A short chat grows inside a viewport-tall, bottom-aligned
+                                // frame, so streaming does not move the scroll offset at all.
+                                .frame(minHeight: viewport.size.height, alignment: .bottom)
                                 .background {
                                     if !ChatHistoryInteraction.usesNativeTracking {
                                         GeometryReader { content in
