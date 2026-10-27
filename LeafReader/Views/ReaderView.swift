@@ -40,6 +40,7 @@ struct ReaderContent: View {
     @State private var bookViewportHeight: CGFloat = 0
     @State private var bookViewportFrame: CGRect = .zero
     @State private var chatFrame: CGRect?
+    @State private var audioPlayerFrame: CGRect?
     @State private var password = ""
     @State private var seek = 0.0
     @State private var seeking = false
@@ -105,6 +106,9 @@ struct ReaderContent: View {
                 VStack {
                     if !chatIsPresented { Spacer(minLength: 0) }
                     ReaderAudioPlayer(session: audio) { panel = .audio }
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: ReaderAudioFrame.self, value: geometry.frame(in: .global))
+                        })
                         .padding(.horizontal, 12)
                         .padding(.top, chatIsPresented ? (showsControls ? 68 : 8) : 0)
                         .padding(.bottom, chatIsPresented ? 0 : (showsControls ? 112 : 12))
@@ -170,9 +174,15 @@ struct ReaderContent: View {
         .onPreferenceChange(ReaderChatFrame.self) { frame in
             chatFrame = frame
             model.setReadingClearance(chatIsPresented ? ReaderClearance.height(book: bookViewportFrame, chat: frame) : 0)
+            updateSpokenClearance()
+        }
+        .onPreferenceChange(ReaderAudioFrame.self) { frame in
+            audioPlayerFrame = frame
+            updateSpokenClearance()
         }
         .onChange(of: chatIsPresented) { _, open in
             if !open { model.setReadingClearance(0) }
+            updateSpokenClearance()
         }
         .task(id: chatIsPresented && model.isReady && aiSettings.configuration.harness == .agent && aiSettings.configuration.sharePage) {
             // Closing the chat or the book cancels preparation; saved sections are kept.
@@ -274,6 +284,13 @@ struct ReaderContent: View {
         bookViewportHeight = frame.height
         bookViewportFrame = frame
         model.setReadingClearance(chatIsPresented ? ReaderClearance.height(book: frame, chat: chatFrame) : 0)
+        updateSpokenClearance()
+    }
+    private func updateSpokenClearance() {
+        // Chat docks at the bottom; with chat closed the listening bar docks
+        // there instead. Its measured top includes controls and rotation.
+        model.spokenBottomClearance = ReaderClearance.height(book: bookViewportFrame,
+            chat: chatIsPresented ? chatFrame : audioPlayerFrame)
     }
     private func handleBookTap() -> Bool {
         guard chatIsPresented else { return false }

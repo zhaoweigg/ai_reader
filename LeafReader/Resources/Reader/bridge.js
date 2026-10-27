@@ -21,6 +21,7 @@ const observedDocuments = new WeakSet();
 let selectedDocument;
 let chatRecallID;
 let readingClearance = 0;
+let spokenClearance = 0;
 let readingViewport;
 let readingTail;
 let liftedPage;
@@ -87,7 +88,8 @@ function setReadingClearance({ height }) {
         // The gesture callback lifts the page without changing its layout box.
         readingViewport.scrollTop = !paged || !next ? 0 : followEnd ? limit : Math.min(readingViewport.scrollTop, limit);
     }
-    view?.renderer?.setReadingClearance?.(next, delta => {
+    const effective = view?.renderer?.scrolled ? Math.max(next, spokenClearance) : next;
+    view?.renderer?.setReadingClearance?.(effective, delta => {
         const maximum = parseFloat(readingTail?.style.height) || 0;
         if (readingViewport) readingViewport.scrollTop = Math.max(0, Math.min(maximum, readingViewport.scrollTop + delta));
     });
@@ -368,6 +370,7 @@ async function open(config) {
 }
 
 function close() {
+    spokenClearance = 0;
     lastReadingMotion = tapBeganAt = -Infinity;
     tapBeganWhileMoving = false;
     selectedDocument = undefined;
@@ -436,11 +439,25 @@ window.Leaf = { open, close, command, applyPreferences, search, tap, allowsReade
     cancelRecall: ({id}) => { if (chatRecallID===id) chatRecallID=null; },
     sectionText: ({index}) => sectionText(view, index, sanitize),
     textBoundary: ({locator}) => textBoundary(view, locator, sanitize),
-    setSpokenRange: config => setSpokenRange(view, config),
-    clearSpokenRange: () => { if (view) clearSpokenRange(view); },
+    setSpokenRange: config => {
+        const bottomClearance = Math.max(readingClearance, config.bottomClearance || 0);
+        // The final chapter needs enough native scroll range to lift its last
+        // spoken line above the listening bar. Keep this allowance through the
+        // relocate callback, which also reapplies the chat's own clearance.
+        spokenClearance = config.follow ? bottomClearance : 0;
+        if (view?.renderer?.scrolled) setReadingClearance({ height:readingClearance });
+        return setSpokenRange(view, { ...config, bottomClearance });
+    },
+    clearSpokenRange: () => {
+        spokenClearance = 0;
+        if (view) { clearSpokenRange(view); setReadingClearance({ height:readingClearance }); }
+    },
     readAloudChunk: ({ locator }) => readAloudChunk(view, locator, sanitize),
     revealReadAloud: ({ locator }) => revealReadAloud(view, locator),
-    clearReadAloud: () => { if (view) clearReadAloud(view); },
+    clearReadAloud: () => {
+        spokenClearance = 0;
+        if (view) { clearReadAloud(view); setReadingClearance({ height:readingClearance }); }
+    },
     setAnnotations: ({ items }) => annotationLayer?.set(items),
     clearSelection: () => {
         for (const {doc} of view?.renderer?.getContents?.() ?? []) doc?.getSelection()?.removeAllRanges();

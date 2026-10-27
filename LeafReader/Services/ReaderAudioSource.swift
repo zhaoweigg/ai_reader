@@ -26,7 +26,8 @@ import PDFKit
             webView.evaluateJavaScript("window.Leaf?.clearSpokenRange()", completionHandler: nil)
             return
         }
-        var arguments: [String: Any] = ["passage": NSNull(), "locator": passage.locator, "location": range.location, "length": range.length, "follow": follow]
+        var arguments: [String: Any] = ["passage": NSNull(), "locator": passage.locator, "location": range.location, "length": range.length, "follow": follow,
+                                      "bottomClearance": spokenBottomClearance]
         if spokenHighlightLocator != passage.locator || spokenHighlightView != ObjectIdentifier(webView) {
             guard let data = try? JSONEncoder().encode(passage), let packet = try? JSONSerialization.jsonObject(with: data) else { return }
             arguments["passage"] = packet
@@ -34,7 +35,7 @@ import PDFKit
         }
         // Only the bounded passage map crosses the bridge once; subsequent word
         // callbacks send offsets. The renderer retains no detached DOM ranges.
-        webView.callAsyncJavaScript("await window.Leaf.setSpokenRange({passage,locator,location,length,follow});",
+        webView.callAsyncJavaScript("await window.Leaf.setSpokenRange({passage,locator,location,length,follow,bottomClearance});",
             arguments: arguments, in: nil, in: .page, completionHandler: nil)
     }
     func readAloudPassage(at position: String?) async throws -> ReadAloudPassage? {

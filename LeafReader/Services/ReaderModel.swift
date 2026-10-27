@@ -53,6 +53,7 @@ final class ReaderModel: NSObject, ObservableObject {
     }
     var spokenHighlightLocator: String?
     var spokenHighlightView: ObjectIdentifier?
+    var spokenBottomClearance: CGFloat = 0
     private var searchGeneration = UUID().uuidString
     private var lastAutomaticRecovery: Date?
     private var memoryWarningObserver: NSObjectProtocol?
