@@ -3259,8 +3259,8 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testStreamingReplyFollowsSmoothlyInPages() { verifyStreamingFollow(flow: "Pages") }
     @MainActor func testStreamingReplyFollowsSmoothlyInScroll() { verifyStreamingFollow(flow: "Scroll") }
 
-    /// While following, the history must neither jump back when the placeholder
-    /// becomes the reply nor leap a whole line at a time as text streams in.
+    /// While following, the history must not jump back when the placeholder
+    /// becomes the reply, nor trail the newest line and catch up in leaps.
     @MainActor private func verifyStreamingFollow(flow: String) {
         continueAfterFailure = false
         let app = launchApp(chatFollow: true)
@@ -3295,7 +3295,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(history.value as? String, "Following latest")
         XCTAssertGreaterThan(result["samples"] as? Int ?? 0, 20, "The second reply must stream while measured: \(result)")
         XCTAssertLessThanOrEqual(result["maxBack"] as? Double ?? 99, 1, "Following must never move the history backward: \(result)")
-        XCTAssertLessThanOrEqual(result["maxStep"] as? Double ?? 99, 12, "Following must move in small steps, not whole lines: \(result)")
+        XCTAssertLessThanOrEqual(result["maxGap"] as? Double ?? 99, 4, "The newest line must stay at the bottom as it streams: \(result)")
         XCTAssertLessThanOrEqual(result["gap"] as? Double ?? 99, 4, "The last line must end visible: \(result)")
     }
 

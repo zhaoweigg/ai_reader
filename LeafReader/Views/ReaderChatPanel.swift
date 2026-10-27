@@ -52,19 +52,20 @@ private struct ChatHistoryOffsetProbe: UIViewRepresentable {
 /// How the history moves while it follows a streaming reply, for the follow test.
 private final class ChatFollowTrace {
     private var last: ChatHistoryTestMetrics?
-    private var samples = 0, maxBack: CGFloat = 0, maxStep: CGFloat = 0, events: [String] = []
+    private var samples = 0, maxBack: CGFloat = 0, maxStep: CGFloat = 0, maxGap: CGFloat = 0, events: [String] = []
     func record(_ metrics: ChatHistoryTestMetrics, following: Bool, streamingText: Bool) {
         defer { last = metrics }
         guard let last, following, streamingText else { return }
         let delta = metrics.offset - last.offset
         samples += 1
         if delta < 0 { maxBack = max(maxBack, -delta) } else { maxStep = max(maxStep, delta) }
+        maxGap = max(maxGap, metrics.contentHeight - metrics.offset - metrics.viewportHeight)
         events.append(String(format: "%.1f/%.1f", metrics.offset, metrics.contentHeight))
         if events.count > 60 { events.removeFirst() }
     }
     var json: String {
         let gap = (last.map { $0.contentHeight - $0.offset - $0.viewportHeight }) ?? -1
-        return "{\"samples\":\(samples),\"maxBack\":\(maxBack),\"maxStep\":\(maxStep),\"gap\":\(gap),\"events\":\"\(events.joined(separator: " "))\"}"
+        return "{\"samples\":\(samples),\"maxBack\":\(maxBack),\"maxStep\":\(maxStep),\"maxGap\":\(maxGap),\"gap\":\(gap),\"events\":\"\(events.joined(separator: " "))\"}"
     }
 }
 
@@ -242,31 +243,36 @@ private struct ChatHistoryInteraction: ViewModifier {
     }
 }
 
-/// Keeps the newest line visible while following. It scrolls only after the
-/// reply has actually grown, so the history no longer trails a line behind,
-/// overshoots and snaps back, or leaps in steps. It slides to an explicit
-/// offset: an edge position would pin instantly and the slide would restart
-/// from the old offset.
+/// Keeps the newest line visible while following. A bottom-edge scroll
+/// position stays pinned in the same layout pass as the reply grows, so the
+/// history no longer trails a line behind, catches up in jumps, or overshoots
+/// and snaps back. (An animated slide is read as scrolling and stops following.)
 @available(iOS 18, *)
 private struct ChatHistoryFollowing: ViewModifier {
     let following: Bool
     let paused: Bool
-    @State private var position = ScrollPosition(idType: UUID.self)
+    @State private var position = ScrollPosition(edge: .bottom)
+    @State private var offset = Offset()
 
-    private struct Extent: Equatable {
-        var contentHeight: CGFloat
-        var bottomOffset: CGFloat
-    }
+    /// Read only when pausing; publishing every pixel would invalidate the chat.
+    private final class Offset { var y: CGFloat = 0 }
 
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
-            .onScrollGeometryChange(for: Extent.self) { geometry in
-                Extent(contentHeight: geometry.contentSize.height,
-                       bottomOffset: max(-geometry.contentInsets.top, geometry.contentSize.height + geometry.contentInsets.bottom - geometry.containerSize.height))
-            } action: { old, new in
-                guard new.contentHeight > old.contentHeight + 0.5, following, !paused else { return }
-                withAnimation(.easeOut(duration: 0.22)) { position.scrollTo(y: new.bottomOffset) }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { [offset] _, y in offset.y = y }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
+                // Re-pin after the reader returns to the bottom.
+                guard new > old + 0.5, following, !paused else { return }
+                if position.edge != .bottom { position.scrollTo(edge: .bottom) }
+            }
+            .onChange(of: paused) { _, paused in
+                // Selected text must not move under its handles while the reply grows.
+                if paused { position.scrollTo(y: offset.y) }
+                else if following { position.scrollTo(edge: .bottom) }
+            }
+            .onChange(of: following) { _, following in
+                if following, !paused { position.scrollTo(edge: .bottom) }
             }
     }
 }
