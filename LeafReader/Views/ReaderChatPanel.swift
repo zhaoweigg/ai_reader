@@ -259,12 +259,24 @@ private struct ChatHistoryFollowing: ViewModifier {
     /// Read only when pausing; publishing every pixel would invalidate the chat.
     private final class Offset { var y: CGFloat = 0 }
 
+    private struct Extent: Equatable {
+        var contentHeight: CGFloat
+        var gap: CGFloat
+        var container: CGFloat
+    }
+
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { [offset] _, y in offset.y = y }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
-                guard new > old + 0.5, following, !paused else { return }
+            .onScrollGeometryChange(for: Extent.self) { geometry in
+                Extent(contentHeight: geometry.contentSize.height,
+                       gap: geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height,
+                       container: geometry.containerSize.height)
+            } action: { old, new in
+                // Only when growth left the newest line below the bottom: a pinned
+                // history needs no change, and a collapsed panel has no bottom to follow.
+                guard new.contentHeight > old.contentHeight + 0.5, new.gap > 1, new.container > 40, following, !paused else { return }
                 position.scrollTo(edge: .bottom)
             }
             .onChange(of: paused) { _, paused in
