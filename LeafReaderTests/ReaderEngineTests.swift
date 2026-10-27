@@ -1538,6 +1538,82 @@ final class ReaderEngineTests: XCTestCase {
             model.webView?.stopLoading();window?.isHidden = true;window = nil
         }
     }
+    func testTouchStopsSlowAndFastNativeMotionInRenderedBooks() async throws {
+        guard #available(iOS 17.4, *) else { throw XCTSkip("Native scroll-animation state requires iOS 17.4") }
+        var trace: [[String: Any]] = []
+        // Pages lifts its overflow:hidden viewport in JavaScript, without native
+        // inertia. Its stop/stationary tap behavior is covered separately below.
+        for flow in ["Scroll", "PDF"] {
+            let (book, url) = try prepare(flow == "PDF" ? "Notes from the Coast.pdf" : "Density.html",
+                                          format: flow == "PDF" ? .pdf : .html, fixtures: flow != "PDF")
+            let surface: UIView
+            let accepts: (UITapGestureRecognizer, UITouch) -> Bool
+            if flow == "PDF" {
+                let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil); self.model = model
+                let pdf = ReaderPDFView(frame: CGRect(x: 0, y: 0, width: 390, height: 720))
+                pdf.autoScales = true; pdf.displayMode = .singlePageContinuous; pdf.displayDirection = .vertical
+                model.configurePDF(pdf, url: url)
+                let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+                let window = UIWindow(windowScene: scene), controller = UIViewController(); window.rootViewController = controller
+                controller.view.addSubview(pdf); window.makeKeyAndVisible(); self.window = window
+                pdf.frame = controller.view.bounds; pdf.layoutIfNeeded(); surface = pdf
+                let coordinator = PDFBookSurface.Coordinator(model)
+                accepts = { coordinator.gestureRecognizer($0, shouldReceive: $1) }
+            } else {
+                var prefs = preferences; prefs.scrolling = flow == "Scroll"
+                let model = try show(book, url: url, readerPreferences: prefs)
+                try await assertOpened(model, contains: "窗外")
+                surface = try XCTUnwrap(model.webView)
+                let coordinator = WebBookSurface.Coordinator(model)
+                accepts = { coordinator.gestureRecognizer($0, shouldReceive: $1) }
+            }
+            try await Task.sleep(for: .milliseconds(350))
+            func scrollViews(_ view: UIView) -> [UIScrollView] {
+                ((view as? UIScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews)
+            }
+            let native = scrollViews(surface)
+            let hierarchy = native.map { scroll -> [String: Any] in
+                ["type": String(describing: type(of: scroll)), "enabled": scroll.isScrollEnabled,
+                 "height": scroll.bounds.height, "contentHeight": scroll.contentSize.height]
+            }
+            let diagnostic = XCTAttachment(data: try JSONSerialization.data(withJSONObject: hierarchy), uniformTypeIdentifier: "public.json")
+            diagnostic.name = flow + " native book scroll viewports"; diagnostic.lifetime = .keepAlways; add(diagnostic)
+            let candidates = native.filter {
+                $0.isScrollEnabled && $0.bounds.height > 100 && $0.contentSize.height - $0.bounds.height > 100
+            }
+            let scroll = try XCTUnwrap(candidates.max { $0.bounds.height < $1.bounds.height }, "A real \(flow) book scroll viewport must exist")
+            let maximum = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
+            let baseline = maximum / 2
+            let tap = UITapGestureRecognizer(), doubleTap = UITapGestureRecognizer(); doubleTap.numberOfTapsRequired = 2
+            surface.addGestureRecognizer(tap); surface.addGestureRecognizer(doubleTap)
+            for distance: CGFloat in [24, -24, min(180, maximum / 3), -min(180, maximum / 3)] {
+                scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: baseline), animated: false)
+                let start = scroll.contentOffset.y
+                scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: start + distance), animated: true)
+                try await Task.sleep(for: .milliseconds(60))
+                XCTAssertTrue(scroll.isScrollAnimating, "Exercise ongoing motion, not an already settled page")
+                XCTAssertFalse(scroll.isDecelerating, "This is the animated-motion path missed by the old deceleration-only check")
+                let before = scroll.contentOffset.y
+                XCTAssertGreaterThan(abs(before - start), 0.5, "The rendered viewport must actually have moved before the touch")
+                let touch = UITouch()
+                XCTAssertFalse(accepts(tap, touch), "A moving-book touch stops motion without becoming a reader tap")
+                XCTAssertFalse(accepts(doubleTap, touch), "Both recognizers must consume the same stopping touch")
+                let stopped = scroll.contentOffset.y
+                var samples = [stopped]
+                for _ in 0..<8 { try await Task.sleep(for: .milliseconds(40)); samples.append(scroll.contentOffset.y) }
+                XCTAssertFalse(scroll.isScrollAnimating)
+                XCTAssertLessThanOrEqual((samples.max() ?? stopped) - (samples.min() ?? stopped), 1, "The book must stay at the stopped location")
+                XCTAssertEqual(stopped, before, accuracy: 1, "Stopping must not jump the passage")
+                XCTAssertTrue(accepts(tap, UITouch()), "The next stationary touch is available immediately")
+                trace.append(["flow": flow, "distance": distance, "nativeViewport": String(describing: type(of: scroll)), "before": before, "stopped": stopped, "samples": samples])
+            }
+            surface.removeGestureRecognizer(tap); surface.removeGestureRecognizer(doubleTap)
+            model?.webView?.stopLoading(); window?.isHidden = true; window = nil
+        }
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: trace), uniformTypeIdentifier: "public.json")
+        attachment.name = "Actual slow and fast native book motion stopped at touch"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
     func testStoppingScrollTapDoesNotToggleControlsAfterInertiaEndsInBothFlows() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         for scrolling in [false, true] {
