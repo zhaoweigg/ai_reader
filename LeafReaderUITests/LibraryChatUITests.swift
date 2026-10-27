@@ -166,15 +166,45 @@ final class LibraryChatUITests: XCTestCase {
         XCTAssertFalse(app.textViews.matching(identifier: "chatQuestion").firstMatch.exists)
     }
     @MainActor func testRemovingClosedChatBookKeepsChatClosedAndFallsBackToGeneral() {
+        continueAfterFailure = false
         let app = launch()
+        registerSceneGeometryCleanup(app: app)
         app.buttons["openLibraryChat"].tap()
         chooseBook(app)
         input(app).tap(); input(app).typeText("Keep this book draft separate")
         app.buttons["closeReaderChat"].tap()
         let card = app.buttons["book-The Art of Noticing"]
-        for _ in 0..<3 where !card.isHittable { app.swipeUp() }
-        card.press(forDuration: 1)
-        app.buttons["Remove book"].tap(); app.buttons["Remove from library"].tap()
+        func openRemoval() -> XCUIElement {
+            for _ in 0..<6 where !card.isHittable { app.scrollViews.firstMatch.swipeUp() }
+            XCTAssertTrue(card.isHittable)
+            card.press(forDuration: 1)
+            app.buttons["Remove book"].tap()
+            let alert = app.alerts.firstMatch
+            XCTAssertTrue(alert.waitForExistence(timeout: 5), "Removal uses a centered alert, never a root-anchored popover")
+            XCTAssertTrue(alert.staticTexts["Remove The Art of Noticing?"].exists)
+            XCTAssertTrue(alert.buttons["Cancel"].isHittable)
+            XCTAssertTrue(alert.buttons["Remove from library"].isHittable)
+            XCTAssertEqual(alert.frame.midX, app.frame.midX, accuracy: 4)
+            XCTAssertEqual(alert.frame.midY, app.frame.midY, accuracy: app.frame.height * 0.08)
+            return alert
+        }
+        var alert = openRemoval()
+        capture("Centered library removal Day portrait")
+        alert.buttons["Cancel"].tap()
+        XCTAssertTrue(card.exists, "Cancel keeps the selected book")
+        setReaderOrientation(.landscapeLeft, app: app)
+        alert = openRemoval()
+        capture("Centered library removal Day landscape")
+        alert.buttons["Cancel"].tap()
+        XCTAssertTrue(card.exists)
+        setReaderOrientation(.portrait, app: app)
+        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap()
+        app.tabBars.buttons["Library"].tap()
+        alert = openRemoval()
+        capture("Centered library removal Night portrait")
+        alert.buttons["Remove from library"].tap()
+        XCTAssertFalse(card.exists, "Confirm removes the book named in the alert")
+        XCTAssertTrue(app.buttons["book-Notes from the Coast"].exists, "Other books remain in the library")
         XCTAssertTrue(app.buttons["openLibraryChat"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["closeReaderChat"].exists, "Removing a previously chatted book must not open chat")
         app.buttons["openLibraryChat"].tap()
