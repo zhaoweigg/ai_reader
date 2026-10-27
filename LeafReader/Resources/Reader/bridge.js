@@ -24,6 +24,21 @@ let readingClearance = 0;
 let readingViewport;
 let readingTail;
 let liftedPage;
+let lastReadingMotion = -Infinity;
+let tapBeganAt = -Infinity;
+let tapBeganWhileMoving = false;
+
+function noteReadingMotion() { lastReadingMotion = performance.now(); }
+function beginReadingTouch(event) {
+    tapBeganAt = performance.now();
+    // WebKit stops inertia on touch-down, before UIKit delivers its delayed
+    // single tap. Keep that touch's intent even after scrolling has stopped.
+    tapBeganWhileMoving = event.touches.length === 1 && tapBeganAt - lastReadingMotion < 120;
+}
+function allowsReaderTap() {
+    return !(tapBeganWhileMoving && performance.now() - tapBeganAt < 1000);
+}
+document.addEventListener('touchstart', beginReadingTouch, { capture:true, passive:true });
 
 // Bound the presentation lift by this page's final painted line. A short final
 // page must not disappear above the screen after repeated upward swipes.
@@ -125,6 +140,7 @@ function observeReadingTouches(doc, index) {
     });
     let start;
     doc.addEventListener('touchstart', event => {
+        beginReadingTouch(event);
         const point = event.touches.length === 1 ? event.touches[0] : null;
         start = point && { x:point.clientX, y:point.clientY };
     }, { passive:true });
@@ -137,7 +153,7 @@ function observeReadingTouches(doc, index) {
 }
 
 function tap({ x, y }) {
-    if (!view?.renderer || Date.now() - lastLinkActivation < 500) return;
+    if (!view?.renderer || !allowsReaderTap() || Date.now() - lastLinkActivation < 500) return;
     const point = { x:x * innerWidth, y:y * innerHeight };
     for (const content of view.renderer.getContents?.() ?? []) {
         const { doc } = content;
@@ -295,6 +311,7 @@ async function open(config) {
         view = document.createElement('foliate-view');
         readingViewport = document.createElement('div');
         readingViewport.id = 'reading-viewport';
+        readingViewport.addEventListener('scroll', noteReadingMotion, { passive:true });
         readingTail = document.createElement('div');
         readingTail.id = 'reading-tail';
         readingTail.setAttribute('aria-hidden', 'true');
@@ -321,6 +338,7 @@ async function open(config) {
                 label:languageText(detail.tocItem?.label) || (view.isFixedLayout ? `Page ${fixedIndex + 1} of ${count}` : '') });
         });
         await view.open(book);
+        view.renderer.addEventListener('scroll', noteReadingMotion);
         view.renderer.setChapterDivider?.(doc => {
             const language = languageText(book.metadata?.language) || doc.documentElement.lang;
             return /^(?:zh|zho|chi|chinese)(?:[-_ ]|$)/i.test(language.trim()) ? '下一章' : 'Next Chapter';
@@ -350,6 +368,8 @@ async function open(config) {
 }
 
 function close() {
+    lastReadingMotion = tapBeganAt = -Infinity;
+    tapBeganWhileMoving = false;
     selectedDocument = undefined;
     if (view) clearReadAloud(view);
     post('selection', {text:''});
@@ -408,7 +428,7 @@ async function search({query, generation}) {
     } catch(error) { post('searchResults', {generation, items}); }
 }
 
-window.Leaf = { open, close, command, applyPreferences, search, tap, setReadingClearance,
+window.Leaf = { open, close, command, applyPreferences, search, tap, allowsReaderTap, setReadingClearance,
     recallBook: async ({term, locator, id, selection}) => {
         const source=view; chatRecallID=id;
         return retrieveEarlierPassages(source,term,locator,{selection,prepare:sanitize,cancelled:()=>view!==source || chatRecallID!==id});
