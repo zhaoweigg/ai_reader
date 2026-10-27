@@ -188,6 +188,15 @@ enum ReaderChatSizing {
     }
 }
 
+private struct ChatHistoryFollowsLatest: ViewModifier {
+    let following: Bool
+    let paused: Bool
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) { content.modifier(ChatHistoryFollowing(following: following, paused: paused)) }
+        else { content }
+    }
+}
+
 private struct ChatHistoryInteraction: ViewModifier {
     @Binding var following: ChatScrollFollowing
     @GestureState private var dragging = false
@@ -230,6 +239,25 @@ private struct ChatHistoryInteraction: ViewModifier {
                     else { DispatchQueue.main.async { following.endDragging() } }
                 }
         }
+    }
+}
+
+/// Keeps the newest line visible while following. It scrolls only after the
+/// reply has actually grown, and to the true bottom edge, so the history no
+/// longer trails a line behind, overshoots and snaps back, or leaps in steps.
+@available(iOS 18, *)
+private struct ChatHistoryFollowing: ViewModifier {
+    let following: Bool
+    let paused: Bool
+    @State private var position = ScrollPosition(edge: .bottom)
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
+                guard new > old + 0.5, following, !paused else { return }
+                withAnimation(.easeOut(duration: 0.22)) { position.scrollTo(edge: .bottom) }
+            }
     }
 }
 
@@ -713,11 +741,19 @@ struct ReaderChatPanel: View {
                         .modifier(ChatSwipeMeasurement())
                         #endif
                         .modifier(ChatHistoryInteraction(following: $scrollFollowing))
+                        .modifier(ChatHistoryFollowsLatest(following: scrollFollowing.followsLatest, paused: selectedMessage != nil))
                         .onPreferenceChange(ChatHistoryAtBottom.self) { atBottom in
                             if !ChatHistoryInteraction.usesNativeTracking, let atBottom { scrollFollowing.updateAtBottom(atBottom) }
                         }
                         .onChange(of: session.messages.last?.text) { _, _ in
-                            if selectedMessage == nil, scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                            // iOS 18 follows actual content growth (ChatHistoryFollowing).
+                            guard #unavailable(iOS 18) else { return }
+                            // Let the new text lay out first, then slide to it.
+                            DispatchQueue.main.async {
+                                if selectedMessage == nil, scrollFollowing.followsLatest, let last = session.messages.last {
+                                    withAnimation(.easeOut(duration: 0.22)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                                }
+                            }
                         }
                         .onChange(of: session.isSending) { _, sending in
                             if sending {
