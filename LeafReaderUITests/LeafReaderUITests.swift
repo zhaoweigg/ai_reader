@@ -361,6 +361,49 @@ final class LeafReaderUITests: XCTestCase {
         visibleText(); capture(flow + " saved passage after fast swipes and reopening", app: app)
     }
 
+    /// A held pull toward the previous chapter right after a Contents jump must
+    /// stay at that chapter boundary while earlier chapters load above it.
+    @MainActor func testHeldScrollBackAfterContentsJumpStaysAtPreviousChapter() {
+        continueAfterFailure = false
+        let app = launchApp(contentsFixture: true, contentsBook: "ScrollFling")
+        let search = app.textFields["librarySearch"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Contents Location")
+        app.buttons["book-Contents Location"].tap()
+        openAppearance(app)
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
+        dismissAppearance(app)
+        showReaderControls(app); app.buttons["Contents"].tap()
+        let destination = app.buttons["第30章 归途"]
+        for _ in 0..<4 where !destination.isHittable { app.collectionViews.firstMatch.swipeUp() }
+        XCTAssertTrue(destination.isHittable); destination.tap(); waitForBook(app)
+        let surface = readingSurface(app)
+        func visibleChapters() -> Set<Int> {
+            let area = surface.frame.insetBy(dx: 10, dy: 20)
+            let regex = try! NSRegularExpression(pattern: "这是第(\\d+)章")
+            return Set(surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "这是第")).allElementsBoundByIndex.compactMap { text in
+                guard text.frame.intersects(area), let match = regex.firstMatch(in: text.label, range: NSRange(text.label.startIndex..., in: text.label)),
+                      let range = Range(match.range(at: 1), in: text.label) else { return nil }
+                return Int(text.label[range])
+            })
+        }
+        XCTAssertTrue(visibleChapters().contains(30), "\(visibleChapters())")
+        // Keep the finger down after the pull, so chapter loads finish during the touch.
+        func heldPull(allowed: Set<Int>, _ name: String) {
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).press(forDuration: 0.01,
+                thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)), withVelocity: .slow, thenHoldForDuration: 2.5)
+            let seen = visibleChapters()
+            capture(name, app: app)
+            XCTAssertFalse(seen.isEmpty, "Book text must stay visible after the pull")
+            XCTAssertTrue(seen.isSubset(of: allowed), "Expected chapters \(allowed.sorted()) after the pull, saw \(seen.sorted())")
+        }
+        heldPull(allowed: [29, 30], "Held pull back after Contents jump")
+        heldPull(allowed: [28, 29, 30], "Second held pull back after Contents jump")
+        showReaderControls(app)
+        let title = app.staticTexts["readerChapterTitle"].label
+        XCTAssertTrue(title.contains("第29章") || title.contains("第28章") || title.contains("第30章"), title)
+    }
+
     @MainActor private func verifyContentsLocation(flow: String) {
         continueAfterFailure = false
         let pdf = flow == "PDF"
