@@ -486,6 +486,7 @@ export class Paginator extends HTMLElement {
     #scrollLoads = new Map()
     #scrollEpoch = 0
     #scrollPrefix = 0
+    #scrollBacklog = 0
     #scrollSpacer
     #scrollLayout
     #scrollRendering = false
@@ -805,6 +806,7 @@ export class Paginator extends HTMLElement {
         this.#scrollSpacer?.remove()
         this.#scrollSpacer = null
         this.#scrollPrefix = 0
+        this.#scrollBacklog = 0
         this.#container.style.removeProperty('--leaf-book-end-space')
     }
     #startScrollWindow() {
@@ -986,7 +988,24 @@ export class Paginator extends HTMLElement {
         this.#scrollLoadQueue = record.promise.catch(() => {})
     }
     #activateScrolledView() {
-        if (!this.#continuous || this.#locked || this.#scrollNavigating || this.#scrollRendering) return
+        if (!this.#continuous || this.#scrollRendering) return
+        // A fast backward fling can enter the spacer of an evicted chapter
+        // before its replacement is ready. Keep painted content on screen and
+        // carry that movement into the chapter once it has been prepended.
+        const topBeforeClamp = this.#container.scrollTop
+        if (this.#scrollPrefix > 0 && topBeforeClamp < this.#scrollPrefix) {
+            this.#scrollBacklog += this.#scrollPrefix - topBeforeClamp
+            this.#container.scrollTop = this.#scrollPrefix
+        }
+        // Native inertia can keep moving during an awaited edge navigation.
+        // Clamp it above even while activation/replay must wait for that load.
+        if (this.#locked || this.#scrollNavigating) return
+        if (this.#scrollBacklog > 0) {
+            const available = Math.max(0, this.#container.scrollTop - this.#scrollPrefix)
+            const distance = Math.min(this.#scrollBacklog, available)
+            this.#scrollBacklog -= distance
+            if (distance > 0) this.#container.scrollTop -= distance
+        }
         const top = this.#container.scrollTop + this.#margin + 1
         const records = [...this.#scrollViews.values()]
             .filter(record => !this.#scrollLoads.has(record.index))
@@ -1078,6 +1097,7 @@ export class Paginator extends HTMLElement {
     }
     render() {
         if (!this.#view?.ready || this.#scrollNavigating) return
+        this.#scrollBacklog = 0
         if (!this.scrolled && this.#scrollViews.size) this.#clearScrollWindow()
         this.#scrollRendering = true
         this.#view.render(this.#beforeRender({
@@ -1161,6 +1181,7 @@ export class Paginator extends HTMLElement {
         // Ignore new gestures until the current page has visibly settled.
         this.#touchState = null
         this.#scrollContinuation = null
+        this.#scrollBacklog = 0
         if (this.#locked || this.#view?.document.getSelection()?.isCollapsed === false) return
         const touch = e.changedTouches[0]
         this.#touchState = {
@@ -1243,6 +1264,7 @@ export class Paginator extends HTMLElement {
     }
     #onTouchCancel() {
         this.#scrollContinuation = null
+        this.#scrollBacklog = 0
         const moved = this.#touchScrolled
         this.#touchScrolled = false
         this.#touchState = null
@@ -1398,6 +1420,8 @@ export class Paginator extends HTMLElement {
     async #goTo({ index, anchor, select}) {
         // At a book edge, Scroll's page command can have no adjacent section.
         if (index == null || !this.#canGoToIndex(index)) return
+        this.#scrollBacklog = 0
+        this.#scrollContinuation = null
         // A late layout callback must not start a new window for the old
         // chapter while an awaited resource load is navigating elsewhere.
         ++this.#scrollNavigating
@@ -1512,6 +1536,8 @@ export class Paginator extends HTMLElement {
         return this.#turnPage(1, distance)
     }
     #continueScrollAtEdge() {
+        // The same native fling is already waiting for the evicted chapter.
+        if (this.#scrollBacklog > 0) return
         if (this.#continuous && this.#scrollViews.has(this.#adjacentIndex(this.#scrollContinuation?.direction ?? 1))) return
         const intent = this.#scrollContinuation
         if (!intent || !this.scrolled || this.#locked) return
@@ -1529,7 +1555,10 @@ export class Paginator extends HTMLElement {
         try {
             await this.#goTo({ index, anchor: direction > 0 ? () => 0 : () => 1 })
             this.dispatchEvent(new Event('scroll'))
-        } finally { this.#locked = false }
+        } finally {
+            this.#locked = false
+            this.#activateScrolledView()
+        }
     }
     prevSection() {
         return this.goTo({ index: this.#adjacentIndex(-1) })
