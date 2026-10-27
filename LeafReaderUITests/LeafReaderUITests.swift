@@ -311,7 +311,11 @@ final class LeafReaderUITests: XCTestCase {
         }
         let current = app.buttons["currentContentsChapter"]
         func openContents(_ expected: String) {
-            showReaderControls(app); app.buttons["Contents"].tap()
+            if !app.buttons["closeBook"].exists {
+                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            }
+            XCTAssertTrue(app.buttons["Contents"].waitForExistence(timeout: 5))
+            app.buttons["Contents"].tap()
             XCTAssertTrue(current.waitForExistence(timeout: 5))
             expectation(for: NSPredicate { _, _ in current.isHittable && current.label == expected }, evaluatedWith: current)
             waitForExpectations(timeout: 6)
@@ -327,19 +331,24 @@ final class LeafReaderUITests: XCTestCase {
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.typeText("Keep my Contents question")
         app.buttons["Hide keyboard"].tap()
+        readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Book taps must keep the chat and draft")
+        XCTAssertEqual(input.value as? String, "Keep my Contents question")
+        // Contents lives in the bottom reader toolbar, under the chat overlay.
+        // Intentionally close chat before using that toolbar, then restore its draft.
+        app.buttons["closeReaderChat"].tap()
         openContents(pdf ? "Page 2" : "第24章 归途")
         let previous = pdf ? "Page 1" : "第23章 归途"
         app.buttons[previous].tap()
-        XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
-        XCTAssertEqual(input.value as? String, "Keep my Contents question")
         openContents(previous)
         app.buttons[pdf ? "Page 2" : "第24章 归途"].tap()
         openContents(pdf ? "Page 2" : "第24章 归途")
         app.buttons["Done"].tap()
         orient(.landscapeLeft)
         openContents(pdf ? "Page 2" : "第24章 归途")
-        capture(flow + " Contents current location landscape with retained chat", app: app)
+        capture(flow + " Contents current location landscape", app: app)
         app.buttons["Done"].tap()
+        app.buttons["openReaderChat"].tap()
         XCTAssertEqual(input.value as? String, "Keep my Contents question")
         app.buttons["closeReaderChat"].tap()
         orient(.portrait)
