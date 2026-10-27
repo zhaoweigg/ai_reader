@@ -136,6 +136,17 @@ final class LibraryStore: ObservableObject {
             book.author = author
             books.append(book)
         }
+        #if DEBUG
+        if let encoded = UITesting.environment("LEAF_UI_CONTENTS_BOOK"), let data = Data(base64Encoded: encoded) {
+            let fixture = disk.root.appendingPathComponent("Contents Location.epub")
+            try data.write(to: fixture)
+            defer { try? FileManager.default.removeItem(at: fixture) }
+            var book = try disk.prepareImport(fixture, existing: Set(books.map(\.fingerprint)))
+            book.title = "Contents Location"
+            book.locator = "section:23"; book.progress = 0.65
+            books.append(book)
+        }
+        #endif
     }
 
     func update(_ id: UUID, _ change: (inout Book) -> Void, immediately: Bool = false) {

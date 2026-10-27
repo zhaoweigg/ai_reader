@@ -12,6 +12,7 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var locator = ""
     @Published var fraction = 0.0
     @Published var chapters: [Chapter] = []
+    @Published private(set) var currentChapterID: String?
     @Published var searchResults: [BookSearchResult] = []
     @Published var isSearching = false
     @Published var hasSearched = false
@@ -84,6 +85,7 @@ final class ReaderModel: NSObject, ObservableObject {
     func reload() {
         library.flush()
         error = nil; isReady = false; isSearching = false; selectedWebText = ""; liveSelection = nil
+        currentChapterID = nil
         selectedWebLocator = nil; selectedWebChapter = nil
         selectedWebPreceding = nil; selectedWebFollowing = nil; selectedWebProgress = nil
         searchGeneration = UUID().uuidString
@@ -399,6 +401,7 @@ final class ReaderModel: NSObject, ObservableObject {
             locator = message["locator"] as? String ?? locator
             fraction = min(1, max(0, message["fraction"] as? Double ?? fraction))
             chapterTitle = message["label"] as? String ?? ""
+            currentChapterID = message["chapterID"] as? String
             library.setPosition(bookID, locator: locator, fraction: fraction)
         case "metadata":
             let cover = (message["cover"] as? String).flatMap { Data(base64Encoded: $0) }
@@ -406,7 +409,7 @@ final class ReaderModel: NSObject, ObservableObject {
         case "toc":
             chapters = (message["items"] as? [[String: Any]] ?? []).compactMap {
                 guard let href = $0["href"] as? String, let label = $0["label"] as? String else { return nil }
-                return Chapter(label: label, href: href, depth: $0["depth"] as? Int ?? 0)
+                return Chapter(label: label, href: href, depth: $0["depth"] as? Int ?? 0, tocID: $0["id"] as? String)
             }
         case "searchResults":
             guard message["generation"] as? String == searchGeneration else { return }
@@ -501,6 +504,7 @@ final class ReaderModel: NSObject, ObservableObject {
         guard index != NSNotFound else { return }
         if locator != PDFLocator.page(index) { hideControls() }
         locator = PDFLocator.page(index); fraction = doc.pageCount > 1 ? Double(index) / Double(doc.pageCount - 1) : 0
+        currentChapterID = PDFLocator.page(index)
         chapterTitle = "Page \(index + 1) of \(doc.pageCount)"
         library.setPosition(bookID, locator: locator, fraction: fraction)
         synchronizeAnnotations()

@@ -76,10 +76,12 @@ extension Book {
 }
 
 struct Chapter: Identifiable, Equatable {
-    var id: String { href }
+    var id: String { tocID ?? href }
     let label: String
     let href: String
     var depth: Int = 0
+    // A volume and its first chapter can share an href; TOC identity stays unique.
+    var tocID: String? = nil
 }
 
 struct BookSearchResult: Identifiable {

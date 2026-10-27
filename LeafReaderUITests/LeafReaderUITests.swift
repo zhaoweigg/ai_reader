@@ -7,11 +7,15 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, contentsFixture: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
+        if contentsFixture {
+            let fixture = Bundle(for: LeafReaderUITests.self).url(forResource: "ContentsLocation", withExtension: "epub")!
+            app.launchEnvironment["LEAF_UI_CONTENTS_BOOK"] = try! Data(contentsOf: fixture).base64EncodedString()
+        }
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
@@ -283,6 +287,80 @@ final class LeafReaderUITests: XCTestCase {
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
         revealAppearanceControl(app, app.buttons["compactLayout"])
         XCTAssertTrue(app.buttons["compactLayout"].isSelected)
+    }
+
+    @MainActor func testContentsRevealsCurrentChapterInPages() { verifyContentsLocation(flow: "Pages") }
+    @MainActor func testContentsRevealsCurrentChapterInScroll() { verifyContentsLocation(flow: "Scroll") }
+    @MainActor func testContentsRevealsCurrentPageInPDF() { verifyContentsLocation(flow: "PDF") }
+
+    @MainActor private func verifyContentsLocation(flow: String) {
+        continueAfterFailure = false
+        let pdf = flow == "PDF"
+        let app = launchApp(contentsFixture: !pdf)
+        if pdf { openSelectionFixture(flow, app: app) }
+        else {
+            let search = app.textFields["librarySearch"]
+            XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Contents Location")
+            app.buttons["book-Contents Location"].tap()
+            openAppearance(app)
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+            dismissAppearance(app)
+        }
+        let current = app.buttons["currentContentsChapter"]
+        func openContents(_ expected: String) {
+            // A reopened web book briefly shows a disabled toolbar while restoring.
+            showReaderControls(app)
+            app.buttons["Contents"].tap()
+            XCTAssertTrue(current.waitForExistence(timeout: 5))
+            expectation(for: NSPredicate { _, _ in current.isHittable && current.label == expected }, evaluatedWith: current)
+            waitForExpectations(timeout: 6)
+            XCTAssertEqual(current.value as? String, "Reading here")
+            XCTAssertTrue(current.isSelected)
+            XCTAssertEqual(app.buttons.matching(identifier: "currentContentsChapter").count, 1)
+        }
+        openContents(pdf ? "Page 2" : "第24章 归途")
+        capture(flow + " Contents opens at the current location", app: app)
+        // Opening/dismissing Contents alone must not jump to the chapter start.
+        app.buttons["Done"].tap()
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Keep my Contents question")
+        app.buttons["Hide keyboard"].tap()
+        readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Book taps must keep the chat and draft")
+        XCTAssertEqual(input.value as? String, "Keep my Contents question")
+        // Contents lives in the bottom reader toolbar, under the chat overlay.
+        // Intentionally close chat before using that toolbar, then restore its draft.
+        app.buttons["closeReaderChat"].tap()
+        openContents(pdf ? "Page 2" : "第24章 归途")
+        let previous = pdf ? "Page 1" : "第23章 归途"
+        app.buttons[previous].tap()
+        openContents(previous)
+        app.buttons[pdf ? "Page 2" : "第24章 归途"].tap()
+        openContents(pdf ? "Page 2" : "第24章 归途")
+        app.buttons["Done"].tap()
+        orient(.landscapeLeft)
+        openContents(pdf ? "Page 2" : "第24章 归途")
+        capture(flow + " Contents current location landscape", app: app)
+        app.buttons["Done"].tap()
+        app.buttons["openReaderChat"].tap()
+        XCTAssertEqual(input.value as? String, "Keep my Contents question")
+        app.buttons["closeReaderChat"].tap()
+        orient(.portrait)
+        showReaderControls(app); app.buttons["closeBook"].tap()
+        app.buttons[pdf ? "book-Notes from the Coast" : "book-Contents Location"].tap()
+        openContents(pdf ? "Page 2" : "第24章 归途")
+        app.buttons["Done"].tap()
+        for (position, expected) in [(1.0, pdf ? "Page 4" : "第36章 归途"), (0.0, pdf ? "Page 1" : "第1章 归途")] {
+            showReaderControls(app)
+            app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: position)
+            openContents(expected)
+            capture(flow + " Contents " + (position == 1 ? "book end" : "book beginning"), app: app)
+            app.buttons["Done"].tap()
+        }
     }
 
     @MainActor func testPDFNavigationRestoresSavedPage() {

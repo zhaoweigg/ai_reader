@@ -246,11 +246,7 @@ struct ReaderContent: View {
                                 .id(annotation.id)
                         }
                     case .contents:
-                        List(model.chapters) { chapter in
-                            Button { model.send("navigate", value: chapter.href); self.panel = nil } label: {
-                                Text(chapter.label).padding(.leading, CGFloat(chapter.depth) * 16).foregroundStyle(.primary)
-                            }.listRowBackground(theme.surface)
-                        }.leafFormStyle().overlay { if model.chapters.isEmpty { ContentUnavailableView("No table of contents", systemImage: "list.bullet", description: Text("Use the progress slider to move through this book.")) } }.navigationTitle("Contents")
+                        ReaderContentsView(model: model) { self.panel = nil }
                     case .bookmarks:
                         if let current = library.book(book.id) {
                             ReaderSavedPassagesView(book: current, onNavigate: { model.send("navigate", value: $0); self.panel = nil },
@@ -328,6 +324,58 @@ struct ReaderContent: View {
     }
     private func panelButton(_ title: String, _ image: String, _ panel: ReaderPanel) -> some View {
         Button { self.panel = panel } label: { VStack(spacing: 4) { Image(systemName: image).font(.system(size: 18)); Text(title).font(.system(size: 10)) }.frame(minWidth: 48, minHeight: 44) }.accessibilityLabel(title)
+    }
+}
+
+struct ReaderContentsView: View {
+    @Environment(\.leafTheme) private var theme
+    @ObservedObject var model: ReaderModel
+    let onNavigate: () -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            List(model.chapters) { chapter in
+                let current = chapter.id == model.currentChapterID
+                Button {
+                    model.send("navigate", value: chapter.href)
+                    onNavigate()
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(chapter.label).fontWeight(current ? .semibold : .regular)
+                            if current {
+                                Text("Reading here").font(.caption).foregroundStyle(theme.accent)
+                            }
+                        }
+                        .padding(.leading, CGFloat(chapter.depth) * 16)
+                        Spacer(minLength: 0)
+                        if current {
+                            Image(systemName: "book.fill").foregroundStyle(theme.accent).accessibilityHidden(true)
+                        }
+                    }
+                    .foregroundStyle(theme.foreground)
+                    .padding(.vertical, 4)
+                }
+                .accessibilityIdentifier(current ? "currentContentsChapter" : "contentsChapter-\(chapter.id)")
+                .accessibilityLabel(chapter.label)
+                .accessibilityValue(current ? "Reading here" : "")
+                .accessibilityAddTraits(current ? .isSelected : [])
+                .listRowBackground(current ? theme.accent.opacity(0.12) : theme.surface)
+                .id(chapter.id)
+            }
+            .leafFormStyle()
+            .task(id: model.currentChapterID) {
+                // Wait for the sheet's List to lay out before revealing a distant row.
+                await Task.yield()
+                if let id = model.currentChapterID { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+        .overlay {
+            if model.chapters.isEmpty {
+                ContentUnavailableView("No table of contents", systemImage: "list.bullet", description: Text("Use the progress slider to move through this book."))
+            }
+        }
+        .navigationTitle("Contents")
     }
 }
 

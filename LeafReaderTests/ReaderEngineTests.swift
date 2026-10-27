@@ -60,6 +60,44 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(ReaderClearance.height(book: book, chat: CGRect(x: 8, y: 270, width: 374, height: 240)), 586)
         XCTAssertEqual(ReaderClearance.height(book: book, chat: CGRect(x: 8, y: 900, width: 374, height: 240)), 0)
     }
+    func testContentsTracksExactTOCIdentityAcrossBothFlowsAndReopen() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let chapters = model.chapters
+            for index in [0, 1, 2, 1, 3, 0, 2] {
+                model.send("navigate", value: chapters[index].href)
+                try await waitUntil { model.currentChapterID == chapters[index].id }
+                XCTAssertEqual(model.chapterTitle, chapters[index].label)
+            }
+            let locator = model.locator
+            model.webView?.stopLoading(); window?.isHidden = true; window = nil
+            let reopened = try show(book, url: url, locator: locator, readerPreferences: prefs)
+            try await waitUntil { reopened.isReady && reopened.currentChapterID == chapters[2].id }
+            XCTAssertNil(reopened.error)
+            reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
+        }
+    }
+
+    func testContentsDistinguishesDuplicateTitlesAndSharedTargetsAndClearsUnknownLocation() throws {
+        let (book, _) = try prepare("The Art of Noticing.epub", format: .epub)
+        let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil)
+        model.receive(["type": "toc", "items": [
+            ["id": "0", "label": "Volume", "href": "chapter.xhtml"],
+            ["id": "1", "label": "Return", "href": "chapter.xhtml", "depth": 1],
+            ["id": "2", "label": "Return", "href": "chapter.xhtml#later", "depth": 1]
+        ]])
+        XCTAssertEqual(Set(model.chapters.map(\.id)).count, 3)
+        for id in ["1", "2", "0"] {
+            model.receive(["type": "relocate", "chapterID": id, "label": "Return", "locator": "epubcfi(/6/2!/4/2:0)"])
+            XCTAssertEqual(model.chapters.filter { $0.id == model.currentChapterID }.count, 1)
+            XCTAssertEqual(model.currentChapterID, id)
+        }
+        model.receive(["type": "relocate", "locator": "epubcfi(/6/4!/4/2:0)"])
+        XCTAssertNil(model.currentChapterID, "An unmapped passage must not retain the previous chapter marker")
+    }
     func testFinalEPUBLineStaysReachableWithChatWithoutRepaginationInBothFlows() async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         let model = try show(book, url: url)
