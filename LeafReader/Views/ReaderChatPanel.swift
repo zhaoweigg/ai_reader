@@ -246,7 +246,9 @@ private struct ChatHistoryInteraction: ViewModifier {
 /// Keeps the newest line visible while following. A bottom-edge scroll
 /// position stays pinned in the same layout pass as the reply grows, so the
 /// history no longer trails a line behind, catches up in jumps, or overshoots
-/// and snaps back. (An animated slide is read as scrolling and stops following.)
+/// and snaps back. Growth re-pins it after the reader returns to the bottom
+/// (a no-op while pinned). Not animated: a programmatic slide is read as the
+/// reader scrolling, and re-pinning on that would feed back.
 @available(iOS 18, *)
 private struct ChatHistoryFollowing: ViewModifier {
     let following: Bool
@@ -262,17 +264,12 @@ private struct ChatHistoryFollowing: ViewModifier {
             .scrollPosition($position)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { [offset] _, y in offset.y = y }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
-                // Re-pin after the reader returns to the bottom.
                 guard new > old + 0.5, following, !paused else { return }
-                if position.edge != .bottom { position.scrollTo(edge: .bottom) }
+                position.scrollTo(edge: .bottom)
             }
             .onChange(of: paused) { _, paused in
                 // Selected text must not move under its handles while the reply grows.
                 if paused { position.scrollTo(y: offset.y) }
-                else if following { position.scrollTo(edge: .bottom) }
-            }
-            .onChange(of: following) { _, following in
-                if following, !paused { position.scrollTo(edge: .bottom) }
             }
     }
 }
