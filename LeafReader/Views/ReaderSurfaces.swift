@@ -30,6 +30,11 @@ extension ReaderModel {
     }
 }
 
+@MainActor private func readerHasNativeScrollMotion(_ view: UIView) -> Bool {
+    if let scroll = view as? UIScrollView, scroll.isDecelerating || scroll.isDragging { return true }
+    return view.subviews.contains(where: readerHasNativeScrollMotion)
+}
+
 struct WebBookSurface: UIViewRepresentable {
     @ObservedObject var model: ReaderModel
     let url: URL
@@ -86,14 +91,22 @@ struct WebBookSurface: UIViewRepresentable {
         var onReaderTap: (() -> Bool)?
         init(_ model: ReaderModel) { self.model = model }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            !(gestureRecognizer is UITapGestureRecognizer && gestureRecognizer.view.map(readerHasNativeScrollMotion) == true)
+        }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
-            guard let view = gesture.view, model.isReady else { return }
+            guard let view = gesture.view as? WKWebView, model.isReady else { return }
             // WebKit's completed long press can also finish the reader's tap.
             // Keep native selection and handle adjustments out of reader chrome.
             if let view = view as? ReaderWebView, view.isHandlingNativeSelectionGesture { return }
-            if onReaderTap?() == true { return }
             let point = gesture.location(in: view)
-            model.evaluate("tap", ["x": point.x / max(1, view.bounds.width), "y": point.y / max(1, view.bounds.height)])
+            let payload = ["x": point.x / max(1, view.bounds.width), "y": point.y / max(1, view.bounds.height)]
+            view.evaluateJavaScript("window.Leaf.allowsReaderTap()") { [weak self, weak view] allowed, _ in
+                guard let self, let view, self.model.webView === view, allowed as? Bool == true else { return }
+                if let view = view as? ReaderWebView, view.isHandlingNativeSelectionGesture { return }
+                if self.onReaderTap?() == true { return }
+                self.model.evaluate("tap", payload)
+            }
         }
         @objc func panned(_ gesture: UIPanGestureRecognizer) {
             if gesture.state == .began { model.hideControls() }
@@ -161,6 +174,9 @@ struct PDFBookSurface: UIViewRepresentable {
         private var annotationTokens: [NSObjectProtocol] = []
         init(_ model: ReaderModel) { self.model = model; super.init() }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            !(gestureRecognizer is UITapGestureRecognizer && gestureRecognizer.view.map(readerHasNativeScrollMotion) == true)
+        }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
             // PDFKit can briefly clear currentSelection as its native long press
             // finishes. That interaction must never become an edge-page tap.

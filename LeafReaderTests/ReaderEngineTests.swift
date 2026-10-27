@@ -1538,6 +1538,77 @@ final class ReaderEngineTests: XCTestCase {
             model.webView?.stopLoading();window?.isHidden = true;window = nil
         }
     }
+    func testStoppingScrollTapDoesNotToggleControlsAfterInertiaEndsInBothFlows() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await waitUntil({ model.isReady || model.error != nil }, timeout: 60)
+            XCTAssertNil(model.error)
+            let web = try XCTUnwrap(model.isReady ? model.webView : nil)
+            if !scrolling { _ = try await waitForLayout(model, preferences: prefs) }
+            model.setReadingClearance(280)
+            let coordinator = WebBookSurface.Coordinator(model)
+            var chatControlTaps = 0
+            coordinator.onReaderTap = { chatControlTaps += 1; return true }
+            let nativeTap = UITapGestureRecognizer(); web.addGestureRecognizer(nativeTap)
+            var trace: [[String: Any]] = []
+            for forward in [true, false] {
+                model.hideControls()
+                let result = try await web.callAsyncJavaScript("""
+                    const view=document.querySelector('foliate-view'),r=view.renderer,doc=r.getContents()[0].doc;
+                    await doc.fonts.ready;
+                    const surface=scrolled ? doc.defaultView.frameElement.parentElement.parentElement : document.getElementById('reading-viewport');
+                    const before=surface.scrollTop;
+                    const moved=new Promise((resolve,reject)=>{
+                        const timer=setTimeout(()=>reject(new Error('Expected actual book scrolling')),3000);
+                        surface.addEventListener('scroll',()=>{clearTimeout(timer);resolve();},{once:true});
+                    });
+                    surface.scrollTop+=forward ? 32 : -32;
+                    await moved;
+                    const touch=(type)=>{
+                        const e=new Event(type,{bubbles:true,cancelable:true}),point={screenX:180,screenY:220,clientX:180,clientY:220};
+                        Object.defineProperties(e,{changedTouches:{value:[point]},touches:{value:type==='touchend'?[]:[point]}});doc.dispatchEvent(e);
+                    };
+                    touch('touchstart');touch('touchend');
+                    // UIKit waits for its double-tap recognizer before invoking
+                    // single tap. Inertia is already over by that callback.
+                    await new Promise(resolve=>setTimeout(resolve,350));
+                    window.Leaf.tap({x:0.5,y:0.5});
+                    return {forward,moved:Math.abs(surface.scrollTop-before)>1,allowedAfterDelay:window.Leaf.allowsReaderTap()};
+                    """, arguments: ["scrolled": scrolling, "forward": forward], in: nil, contentWorld: .page)
+                let row = try XCTUnwrap(result as? [String: Any])
+                XCTAssertEqual(row["moved"] as? Bool, true)
+                XCTAssertEqual(row["allowedAfterDelay"] as? Bool, false)
+                coordinator.tapped(nativeTap)
+                try await Task.sleep(for: .milliseconds(100))
+                XCTAssertFalse(model.controlsVisible, "A stop-scrolling tap must not become a delayed controls toggle")
+                XCTAssertEqual(chatControlTaps, forward ? 0 : 1, "The open-chat controls callback must also ignore a stopping tap")
+                let saved = model.locator
+                let stationary = try await web.callAsyncJavaScript("""
+                    const doc=document.querySelector('foliate-view').renderer.getContents()[0].doc;
+                    for(const type of ['touchstart','touchend']) {
+                        const e=new Event(type,{bubbles:true,cancelable:true}),p={screenX:180,screenY:220,clientX:180,clientY:220};
+                        Object.defineProperties(e,{changedTouches:{value:[p]},touches:{value:type==='touchend'?[]:[p]}});doc.dispatchEvent(e);
+                    }
+                    return window.Leaf.allowsReaderTap();
+                    """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+                XCTAssertEqual(stationary, true, "The next stationary tap must work immediately")
+                coordinator.tapped(nativeTap)
+                try await waitUntil { chatControlTaps == (forward ? 1 : 2) }
+                model.evaluate("tap", ["x": 0.5, "y": 0.5])
+                try await waitUntil { model.controlsVisible }
+                XCTAssertEqual(model.locator, saved)
+                trace.append(row)
+            }
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: trace), uniformTypeIdentifier: "public.json")
+            attachment.name = scrolling ? "Scroll stopping versus stationary tap" : "Pages lifted-book stopping versus stationary tap"
+            attachment.lifetime = .keepAlways; add(attachment)
+            web.removeGestureRecognizer(nativeTap)
+            web.stopLoading(); window?.isHidden = true; window = nil
+        }
+    }
+
     func testNativeSelectionTouchesYieldWithoutTurningPagesAndClearRestoresNavigationInBothFlows() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         for scrolling in [false, true] {
