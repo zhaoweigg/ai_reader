@@ -311,10 +311,8 @@ final class LeafReaderUITests: XCTestCase {
         }
         let current = app.buttons["currentContentsChapter"]
         func openContents(_ expected: String) {
-            if !app.buttons["closeBook"].exists {
-                readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-            }
-            XCTAssertTrue(app.buttons["Contents"].waitForExistence(timeout: 5))
+            // A reopened web book briefly shows a disabled toolbar while restoring.
+            showReaderControls(app)
             app.buttons["Contents"].tap()
             XCTAssertTrue(current.waitForExistence(timeout: 5))
             expectation(for: NSPredicate { _, _ in current.isHittable && current.label == expected }, evaluatedWith: current)
