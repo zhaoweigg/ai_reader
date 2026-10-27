@@ -444,6 +444,19 @@ struct UITestChatProvider: ChatProvider {
                         }
                         continuation.yield(.finished(truncated: false)); continuation.finish(); return
                     }
+                    if UITesting.flag("LEAF_UI_CHAT_FOLLOW") {
+                        // A placeholder first, then small Chinese chunks that wrap and break paragraphs.
+                        try await Task.sleep(for: .milliseconds(700))
+                        let reply = (1...3).map { "第\($0)段：有，是一场限时十分钟的体力型淘汰游戏，发生在第三十七到四十四章。场地四面高墙，中央有一块圆形铁板；大铁门打开后，一只体型异常巨大的黑熊进场，门随即关闭。" }.joined(separator: "\n\n")
+                        var index = reply.startIndex
+                        while index < reply.endIndex {
+                            let next = reply.index(index, offsetBy: 4, limitedBy: reply.endIndex) ?? reply.endIndex
+                            continuation.yield(.text(String(reply[index..<next])))
+                            index = next
+                            try await Task.sleep(for: .milliseconds(60))
+                        }
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
                     if UITesting.flag("LEAF_UI_CHAT_MARKDOWN") {
                         continuation.yield(.text("## 人物\n\n这是**李"))
                         try await Task.sleep(for: .milliseconds(250))

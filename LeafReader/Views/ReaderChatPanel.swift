@@ -49,12 +49,44 @@ private struct ChatHistoryOffsetProbe: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) { view.accessibilityValue = value }
 }
 
+/// How the history moves while it follows a streaming reply, for the follow test.
+private final class ChatFollowTrace {
+    private var last: ChatHistoryTestMetrics?
+    private var samples = 0, maxBack: CGFloat = 0, maxStep: CGFloat = 0, maxGap: CGFloat = 0, events: [String] = []
+    func record(_ metrics: ChatHistoryTestMetrics, following: Bool, streamingText: Bool) {
+        defer { last = metrics }
+        guard let last, following, streamingText else { return }
+        let delta = metrics.offset - last.offset
+        samples += 1
+        if delta < 0 { maxBack = max(maxBack, -delta) } else { maxStep = max(maxStep, delta) }
+        maxGap = max(maxGap, metrics.contentHeight - metrics.offset - metrics.viewportHeight)
+        events.append(String(format: "%.1f/%.1f", metrics.offset, metrics.contentHeight))
+        if events.count > 60 { events.removeFirst() }
+    }
+    var json: String {
+        let gap = (last.map { $0.contentHeight - $0.offset - $0.viewportHeight }) ?? -1
+        return "{\"samples\":\(samples),\"maxBack\":\(maxBack),\"maxStep\":\(maxStep),\"maxGap\":\(maxGap),\"gap\":\(gap),\"events\":\"\(events.joined(separator: " "))\"}"
+    }
+}
+
 private final class ChatSwipeMetrics {
     var geometry = ChatHistoryTestMetrics()
     var phase = "idle"
     var json: String {
         "{\"offset\":\(geometry.offset),\"contentHeight\":\(geometry.contentHeight),\"viewportHeight\":\(geometry.viewportHeight),\"phase\":\"\(phase)\",\"updates\":\(ChatTextWork.updates),\"formats\":\(ChatTextWork.formats),\"measurements\":\(ChatTextWork.measurements)}"
     }
+}
+
+private struct ChatFollowProbe: UIViewRepresentable {
+    let trace: ChatFollowTrace
+    func makeUIView(context: Context) -> ChatSwipeProbe.Probe {
+        let view = ChatSwipeProbe.Probe()
+        view.isAccessibilityElement = true
+        view.accessibilityIdentifier = "uitestChatHistoryGeometry"
+        view.accessibilityLabel = "Chat follow trace"
+        return view
+    }
+    func updateUIView(_ view: ChatSwipeProbe.Probe, context: Context) { view.read = { trace.json } }
 }
 
 private struct ChatSwipeProbe: UIViewRepresentable {
@@ -95,8 +127,10 @@ private struct ChatSwipeMeasurement: ViewModifier {
 private struct ChatHistoryTestMeasurement: ViewModifier {
     let following: Bool
     let selected: Bool
+    var streamingText = false
     #if DEBUG
     @State private var metrics = ChatHistoryTestMetrics()
+    @State private var follow = ChatFollowTrace()
     private var probe: some View {
         ChatHistoryOffsetProbe(value: "{\"offset\":\(metrics.offset),\"contentHeight\":\(metrics.contentHeight),\"viewportHeight\":\(metrics.viewportHeight),\"following\":\(following),\"selected\":\(selected)}")
             .frame(width: 1, height: 1).allowsHitTesting(false)
@@ -104,7 +138,16 @@ private struct ChatHistoryTestMeasurement: ViewModifier {
     #endif
     func body(content: Content) -> some View {
         #if DEBUG
-        if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
+        if UITesting.flag("LEAF_UI_CHAT_FOLLOW"), #available(iOS 18, *) {
+            // Every geometry change is recorded; the probe reads it lazily.
+            content.onScrollGeometryChange(for: ChatHistoryTestMetrics.self) { geometry in
+                ChatHistoryTestMetrics(offset: geometry.contentOffset.y, contentHeight: geometry.contentSize.height,
+                                       viewportHeight: geometry.containerSize.height)
+            } action: { [follow, following, streamingText] _, value in follow.record(value, following: following, streamingText: streamingText) }
+                .overlay(alignment: .topLeading) {
+                    ChatFollowProbe(trace: follow).frame(width: 1, height: 1).allowsHitTesting(false)
+                }
+        } else if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
             if #available(iOS 18, *) {
                 content.onScrollGeometryChange(for: ChatHistoryTestMetrics.self) { geometry in
                     ChatHistoryTestMetrics(offset: geometry.contentOffset.y, contentHeight: geometry.contentSize.height,
@@ -143,6 +186,15 @@ enum ReaderChatSizing {
             desired = max(limits.lowerBound, min(fullHeight / 3, availableHeight * 0.5))
         } else { desired = fullHeight * CGFloat(fraction.isFinite && fraction > 0 ? fraction : 1.0 / 3) }
         return min(limits.upperBound, max(limits.lowerBound, desired))
+    }
+}
+
+private struct ChatHistoryFollowsLatest: ViewModifier {
+    let following: Bool
+    let paused: Bool
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) { content.modifier(ChatHistoryFollowing(following: following, paused: paused)) }
+        else { content }
     }
 }
 
@@ -188,6 +240,49 @@ private struct ChatHistoryInteraction: ViewModifier {
                     else { DispatchQueue.main.async { following.endDragging() } }
                 }
         }
+    }
+}
+
+/// Keeps the newest line visible while following. A bottom-edge scroll
+/// position stays pinned in the same layout pass as the reply grows, so the
+/// history no longer trails a line behind, catches up in jumps, or overshoots
+/// and snaps back. Growth re-pins it after the reader returns to the bottom
+/// (a no-op while pinned). Not animated: a programmatic slide is read as the
+/// reader scrolling, and re-pinning on that would feed back.
+@available(iOS 18, *)
+private struct ChatHistoryFollowing: ViewModifier {
+    let following: Bool
+    let paused: Bool
+    @State private var position = ScrollPosition(edge: .bottom)
+    @State private var offset = Offset()
+
+    /// Read only when pausing; publishing every pixel would invalidate the chat.
+    private final class Offset { var y: CGFloat = 0 }
+
+    private struct Extent: Equatable {
+        var contentHeight: CGFloat
+        var gap: CGFloat
+        var container: CGFloat
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { [offset] _, y in offset.y = y }
+            .onScrollGeometryChange(for: Extent.self) { geometry in
+                Extent(contentHeight: geometry.contentSize.height,
+                       gap: geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height,
+                       container: geometry.containerSize.height)
+            } action: { old, new in
+                // Only when growth left the newest line below the bottom: a pinned
+                // history needs no change, and a collapsed panel has no bottom to follow.
+                guard new.contentHeight > old.contentHeight + 0.5, new.gap > 1, new.container > 40, following, !paused else { return }
+                position.scrollTo(edge: .bottom)
+            }
+            .onChange(of: paused) { _, paused in
+                // Selected text must not move under its handles while the reply grows.
+                if paused { position.scrollTo(y: offset.y) }
+            }
     }
 }
 
@@ -645,6 +740,9 @@ struct ReaderChatPanel: View {
                                     }
                                 }
                             }.padding(.vertical, 2)
+                                // A short chat grows inside a viewport-tall, bottom-aligned
+                                // frame, so streaming does not move the scroll offset at all.
+                                .frame(minHeight: viewport.size.height, alignment: .bottom)
                                 .background {
                                     if !ChatHistoryInteraction.usesNativeTracking {
                                         GeometryReader { content in
@@ -665,16 +763,25 @@ struct ReaderChatPanel: View {
                         .scrollDismissesKeyboard(isComposing ? .never : .interactively)
                         .accessibilityIdentifier("chatMessageHistory")
                         .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
-                        .modifier(ChatHistoryTestMeasurement(following: scrollFollowing.followsLatest, selected: selectedMessage != nil))
+                        .modifier(ChatHistoryTestMeasurement(following: scrollFollowing.followsLatest, selected: selectedMessage != nil,
+                                                             streamingText: session.messages.last.map { $0.state == .streaming && !$0.text.isEmpty } ?? false))
                         #if DEBUG
                         .modifier(ChatSwipeMeasurement())
                         #endif
                         .modifier(ChatHistoryInteraction(following: $scrollFollowing))
+                        .modifier(ChatHistoryFollowsLatest(following: scrollFollowing.followsLatest, paused: selectedMessage != nil))
                         .onPreferenceChange(ChatHistoryAtBottom.self) { atBottom in
                             if !ChatHistoryInteraction.usesNativeTracking, let atBottom { scrollFollowing.updateAtBottom(atBottom) }
                         }
                         .onChange(of: session.messages.last?.text) { _, _ in
-                            if selectedMessage == nil, scrollFollowing.followsLatest, let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                            // iOS 18 follows actual content growth (ChatHistoryFollowing).
+                            guard #unavailable(iOS 18) else { return }
+                            // Let the new text lay out first, then slide to it.
+                            DispatchQueue.main.async {
+                                if selectedMessage == nil, scrollFollowing.followsLatest, let last = session.messages.last {
+                                    withAnimation(.easeOut(duration: 0.22)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                                }
+                            }
                         }
                         .onChange(of: session.isSending) { _, sending in
                             if sending {
