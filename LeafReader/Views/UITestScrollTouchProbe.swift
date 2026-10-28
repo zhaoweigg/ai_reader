@@ -42,14 +42,6 @@ import UIKit
         }
     }
 
-    /// Whether each viewport still reports motion right after the stop call.
-    private static var stops: [(TimeInterval, String)] = []
-    static func noteStop(_ scrolls: [UIScrollView]) {
-        guard UITesting.flag("LEAF_UI_SCROLL_TOUCH_TRACE") else { return }
-        let state = scrolls.map { "\(type(of: $0)) decel=\($0.isDecelerating) tracking=\($0.isTracking) y=\($0.contentOffset.y)" }.joined(separator: "; ")
-        stops = (stops + [(CACurrentMediaTime(), state)]).suffix(20)
-    }
-
     private static func sample() {
         guard let book else { return }
         frames = (frames + [(CACurrentMediaTime(), book.contentOffset.y, book.isDecelerating, book.isTracking)]).suffix(720)
@@ -60,8 +52,7 @@ import UIKit
         let views = entries.map { entry in "{\(entry.summary),\"now\":\(entry.scroll?.contentOffset.y ?? -1)}" }
         let frameList = frames.map { String(format: "[%.3f,%.2f,%d,%d]", $0.0 - now, $0.1, $0.2 ? 1 : 0, $0.3 ? 1 : 0) }
         let touchList = touches.map { String(format: "[%.3f,\"%@\"]", $0.0 - now, $0.1) }
-        let stopList = stops.map { String(format: "[%.3f,\"%@\"]", $0.0 - now, $0.1) }
-        return "{\"result\":\"\(accepted)\",\"views\":[\(views.joined(separator: ","))],\"touches\":[\(touchList.joined(separator: ","))],\"stops\":[\(stopList.joined(separator: ","))],\"frames\":[\(frameList.joined(separator: ","))]}"
+        return "{\"result\":\"\(accepted)\",\"views\":[\(views.joined(separator: ","))],\"touches\":[\(touchList.joined(separator: ","))],\"frames\":[\(frameList.joined(separator: ","))]}"
     }
 }
 

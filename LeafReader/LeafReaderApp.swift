@@ -52,6 +52,10 @@ struct LeafReaderApp: App {
         catalogCredentials.service += ".zlibrary"
         _catalog = StateObject(wrappedValue: ZLibraryStore(defaults: defaults, credentials: catalogCredentials, client: catalogClient, discoversFromLibrary: catalogDiscovery))
         readingDefaults = defaults
+        if root == nil {
+            ReaderScrollDiagnostics.shared.configure(defaults: .standard,
+                directory: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("Diagnostics", isDirectory: true))
+        }
     }
 
     var body: some Scene {
