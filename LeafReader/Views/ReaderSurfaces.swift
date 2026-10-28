@@ -33,6 +33,23 @@ extension ReaderModel {
 @MainActor private final class ReaderScrollTouch {
     private weak var stoppingTouch: UITouch?
     private var stoppingTimestamp: TimeInterval = -1
+    private var observations: [ObjectIdentifier: NSKeyValueObservation] = [:]
+    private var lastCoast: [ObjectIdentifier: TimeInterval] = [:]
+
+    /// UIKit halts a coasting scroll view as soon as a finger lands on it, so
+    /// by the time a tap recognizer asks, a slow slide no longer reports
+    /// deceleration. Remember when each viewport last moved without a finger.
+    private func watch(_ scroll: UIScrollView) {
+        let id = ObjectIdentifier(scroll)
+        guard observations[id] == nil else { return }
+        observations[id] = scroll.observe(\.contentOffset, options: [.old, .new]) { [weak self] scroll, change in
+            guard change.oldValue != change.newValue else { return }
+            MainActor.assumeIsolated {
+                guard !scroll.isTracking else { return }
+                self?.lastCoast[id] = CACurrentMediaTime()
+            }
+        }
+    }
 
     func accepts(_ touch: UITouch, in view: UIView?) -> Bool {
         // Both reader tap recognizers receive the same touch. Stopping the first
@@ -42,8 +59,11 @@ extension ReaderModel {
         func visit(_ view: UIView) {
             if let scroll = view as? UIScrollView {
                 all.append(scroll)
+                watch(scroll)
                 var active = scroll.isDecelerating || scroll.isDragging
                 if #available(iOS 17.4, *) { active = active || scroll.isScrollAnimating }
+                // A slide this touch just halted still counts as motion.
+                if let coast = lastCoast[ObjectIdentifier(scroll)], touch.timestamp - coast < 0.15 { active = true }
                 if active { moving.append(scroll) }
             }
             view.subviews.forEach(visit)
