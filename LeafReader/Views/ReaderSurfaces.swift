@@ -72,7 +72,7 @@ extension ReaderModel {
         }
         if let view { visit(view) }
         #if DEBUG
-        ReaderScrollTouchTrace.record(all, accepted: moving.isEmpty) { scroll in
+        ReaderScrollTouchTrace.record(all, accepted: moving.isEmpty, at: touch.timestamp) { scroll in
             self.lastCoast[ObjectIdentifier(scroll)].map { touch.timestamp - $0 }
         }
         #endif

@@ -496,6 +496,61 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    /// A slow, short pull leaves the page drifting after the finger lifts. A tap
+    /// during that drift must stop it where it is, without opening the controls.
+    @MainActor func testTapStopsSlowShortDriftInScroll() {
+        continueAfterFailure = true
+        let app = launchApp(scrollTouchTrace: true)
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        openAppearance(app)
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
+        dismissAppearance(app)
+        let surface = readingSurface(app), probe = app.descendants(matching: .any)["uitestScrollTouch"].firstMatch
+        XCTAssertTrue(probe.waitForExistence(timeout: 5))
+        if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        XCTAssertTrue(UITestQuiescence.install(), "XCUITest's idle wait could not be bypassed")
+        let frame = surface.frame, screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            screen.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.minX + frame.width * x, dy: frame.minY + frame.height * y))
+        }
+        var drifted = 0
+        // XCUITest velocities are pixels per second (3 px per point here).
+        for speed in [300.0, 450.0, 600.0, 800.0] {
+            for delay in [0.15, 0.4] {
+                UITestQuiescence.skipped = true
+                point(0.5, 0.62).press(forDuration: 0.01, thenDragTo: point(0.5, 0.54),
+                    withVelocity: XCUIGestureVelocity(rawValue: speed), thenHoldForDuration: 0)
+                Thread.sleep(forTimeInterval: delay)
+                point(0.3, 0.5).tap()
+                UITestQuiescence.skipped = false
+                Thread.sleep(forTimeInterval: 1.2)
+                let json = probe.value as? String ?? ""
+                let trace = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
+                let frames = (trace["frames"] as? [[Any]] ?? []).compactMap { f -> (Double, Double, Int)? in
+                    guard f.count == 4, let t = f[0] as? Double, let y = f[1] as? Double, let d = f[2] as? Int else { return nil }
+                    return (t, y, d)
+                }
+                let tapAt = (trace["touches"] as? [[Any]])?.last?.first as? Double ?? 0
+                let before = frames.filter { $0.0 > tapAt - 0.15 && $0.0 <= tapAt }.map(\.1)
+                let after = frames.filter { $0.0 > tapAt + 0.05 }.map(\.1)
+                let movingAtTap = (before.max() ?? 0) - (before.min() ?? 0) > 0.5
+                let driftAfter = (after.max() ?? 0) - (after.min() ?? 0)
+                let deceleratingAfter = frames.filter { $0.0 > tapAt + 0.05 }.contains { $0.2 == 1 }
+                let name = "speed \(Int(speed)) delay \(delay)"
+                let attachment = XCTAttachment(string: "\(name): movingAtTap=\(movingAtTap) driftAfter=\(driftAfter) deceleratingAfter=\(deceleratingAfter) controls=\(app.buttons["closeBook"].exists)\n\(json)")
+                attachment.name = name + " drift trace"; attachment.lifetime = .keepAlways; add(attachment)
+                if movingAtTap {
+                    drifted += 1
+                    XCTAssertLessThanOrEqual(driftAfter, 1, "\(name): a tap during the drift must stop it")
+                    XCTAssertFalse(app.buttons["closeBook"].exists, "\(name): the stopping tap must not open the controls")
+                }
+                if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+            }
+        }
+        XCTAssertGreaterThan(drifted, 0, "At least one slow short pull must still be drifting when the tap lands")
+    }
+
     @MainActor func testHeldScrollBackAfterContentsJumpStaysAtPreviousChapter() {
         continueAfterFailure = false
         let app = launchApp(contentsFixture: true, contentsBook: "ScrollFling")

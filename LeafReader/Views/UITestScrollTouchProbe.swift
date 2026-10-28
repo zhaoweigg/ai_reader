@@ -12,8 +12,18 @@ import UIKit
     }
     private static var entries: [Entry] = []
     private static var accepted = "none"
+    // Every frame of the book viewport and every touch decision, so a test can
+    // see whether a drift kept moving after the touch that should stop it.
+    private weak static var book: UIScrollView?
+    private static var frames: [(TimeInterval, CGFloat, Bool, Bool)] = []
+    private static var touches: [(TimeInterval, String)] = []
+    private static var link: CADisplayLink?
+    private final class Ticker: NSObject {
+        @objc func tick() { MainActor.assumeIsolated { ReaderScrollTouchTrace.sample() } }
+    }
+    private static let ticker = Ticker()
 
-    static func record(_ scrolls: [UIScrollView], accepted: Bool, coastAge: (UIScrollView) -> TimeInterval?) {
+    static func record(_ scrolls: [UIScrollView], accepted: Bool, at timestamp: TimeInterval, coastAge: (UIScrollView) -> TimeInterval?) {
         guard UITesting.flag("LEAF_UI_SCROLL_TOUCH_TRACE") else { return }
         self.accepted = accepted ? "tap" : "stop"
         entries = scrolls.map { scroll in
@@ -22,11 +32,27 @@ import UIKit
             let age = coastAge(scroll).map { String(format: "%.3f", $0) } ?? "null"
             return Entry(scroll, "\"coastAge\":\(age),\"type\":\"\(type(of: scroll))\",\"dragging\":\(scroll.isDragging),\"tracking\":\(scroll.isTracking),\"decelerating\":\(scroll.isDecelerating),\"animating\":\(animating),\"offset\":\(scroll.contentOffset.y),\"height\":\(scroll.bounds.height),\"contentHeight\":\(scroll.contentSize.height)")
         }
+        // The tallest scrollable viewport is the book's Scroll container.
+        book = scrolls.filter { $0.contentSize.height - $0.bounds.height > 100 }.max { $0.bounds.height < $1.bounds.height } ?? book
+        touches = (touches + [(timestamp, self.accepted)]).suffix(40)
+        if link == nil {
+            let link = CADisplayLink(target: ticker, selector: #selector(Ticker.tick))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+    }
+
+    private static func sample() {
+        guard let book else { return }
+        frames = (frames + [(CACurrentMediaTime(), book.contentOffset.y, book.isDecelerating, book.isTracking)]).suffix(720)
     }
 
     static var json: String {
+        let now = CACurrentMediaTime()
         let views = entries.map { entry in "{\(entry.summary),\"now\":\(entry.scroll?.contentOffset.y ?? -1)}" }
-        return "{\"result\":\"\(accepted)\",\"views\":[\(views.joined(separator: ","))]}"
+        let frameList = frames.map { String(format: "[%.3f,%.2f,%d,%d]", $0.0 - now, $0.1, $0.2 ? 1 : 0, $0.3 ? 1 : 0) }
+        let touchList = touches.map { String(format: "[%.3f,\"%@\"]", $0.0 - now, $0.1) }
+        return "{\"result\":\"\(accepted)\",\"views\":[\(views.joined(separator: ","))],\"touches\":[\(touchList.joined(separator: ","))],\"frames\":[\(frameList.joined(separator: ","))]}"
     }
 }
 
