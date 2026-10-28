@@ -461,6 +461,68 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertNil(model.error)
     }
 
+    func testScrollSpeechRevealVerifiesLayoutAndCancelsStaleRecovery() async throws {
+        let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
+        var prefs = preferences; prefs.scrolling = true; prefs.fontSize = 13; prefs.font = "Palatino"
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await waitUntil({ model.isReady || model.error != nil }, timeout: 60)
+        XCTAssertNil(model.error)
+        let web = try XCTUnwrap(model.webView)
+        window?.frame.size = CGSize(width: 720, height: 390)
+        try await Task.sleep(for: .milliseconds(200))
+        var rows: [[String: Any]] = []
+        for mode in ["ignored", "reverted", "superseded", "stopped", "followOff", "blocked"] {
+            let result = try await web.callAsyncJavaScript("""
+                const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+                window.Leaf.clearSpokenRange();await view.goTo(0);await r.scrollToAnchor(0);await sleep(80);
+                const packet=await window.Leaf.readAloudChunk({locator:'section:0'}),c=r.getContents()[0],frame=c.doc.defaultView.frameElement,container=frame.getRootNode().getElementById('container');
+                const bottomClearance=Math.min(194,Math.max(0,innerHeight-100)),before=container.scrollTop,calls=[];
+                const original=r.goTo.bind(r);
+                r.goTo=async target=>{
+                    const bounds=[...target.anchor(c.doc).getClientRects()].find(rect=>rect.width>0&&rect.height>0);
+                    calls.push(bounds.top);
+                    if(mode==='blocked'||(mode!=='reverted'&&calls.length===1))return;
+                    await original(target);
+                    if(mode==='reverted'&&calls.length===1)requestAnimationFrame(()=>{container.scrollTop=before;});
+                };
+                const config={passage:packet,locator:packet.locator,location:650,length:1,follow:true,bottomClearance};
+                try {
+                    const pending=window.Leaf.setSpokenRange(config);
+                    for(let i=0;!calls.length&&i<100;i++)await sleep(1);
+                    if(mode==='superseded')await Promise.all([pending,window.Leaf.setSpokenRange({...config,location:300})]);
+                    else {
+                        if(mode==='stopped')window.Leaf.clearSpokenRange();
+                        if(mode==='followOff')await window.Leaf.setSpokenRange({...config,location:12,follow:false});
+                        await pending;
+                    }
+                    await sleep(20);
+                    const location=mode==='superseded'?300:650,segment=packet.segments.find(s=>location>=s.offset&&location<s.offset+s.length),target=view.resolveCFI(segment.locator),range=target.anchor(c.doc),node=range.startContainer,offset=range.startOffset+location-segment.offset;
+                    range.setStart(node,offset);range.setEnd(node,offset+1);
+                    const rect=[...range.getClientRects()].find(rect=>rect.width>0&&rect.height>0),top=rect.top+frame.getBoundingClientRect().top,bottom=rect.bottom+frame.getBoundingClientRect().top;
+                    return {mode,calls,top,bottom,visible:top>=-1&&bottom<=innerHeight-bottomClearance+1,stayed:Math.abs(container.scrollTop-before)<1,
+                        staleRetried:calls.slice(1).includes(calls[0]),painted:!!c.overlayer.element.querySelector('[data-leaf-spoken-line]')};
+                } finally {r.goTo=original;}
+                """, arguments: ["mode": mode], in: nil, contentWorld: .page)
+            let row = try XCTUnwrap(result as? [String: Any]); rows.append(row)
+            let calls = try XCTUnwrap(row["calls"] as? [Double])
+            if mode == "blocked" { XCTAssertEqual(calls.count, 3); XCTAssertEqual(row["visible"] as? Bool, false) }
+            else if mode == "stopped" || mode == "followOff" {
+                XCTAssertEqual(calls.count, 1); XCTAssertEqual(row["stayed"] as? Bool, true)
+                if mode == "stopped" { XCTAssertEqual(row["painted"] as? Bool, false) }
+            } else {
+                XCTAssertEqual(row["visible"] as? Bool, true, "\(row)")
+                XCTAssertEqual(row["painted"] as? Bool, true)
+                XCTAssertGreaterThanOrEqual(calls.count, 2); XCTAssertLessThanOrEqual(calls.count, 3)
+                if mode == "superseded" { XCTAssertEqual(row["staleRetried"] as? Bool, false) }
+                let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) } }
+                let shot = XCTAttachment(image: try XCTUnwrap(image)); shot.name = "Scroll speech recovery \(mode)"; shot.lifetime = .keepAlways; add(shot)
+            }
+        }
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows), uniformTypeIdentifier: "public.json")
+        attachment.name = "Bounded Scroll speech recovery and cancellation"; attachment.lifetime = .keepAlways; add(attachment)
+        XCTAssertNil(model.error)
+    }
+
     func testScrollSpeechFollowRepeatedMovesKeepTheRequestedLineVisible() async throws {
         let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
         var prefs = preferences; prefs.scrolling = true
