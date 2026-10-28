@@ -386,13 +386,19 @@ final class LeafReaderUITests: XCTestCase {
                 .max { ($0["height"] as? Double ?? 0) < ($1["height"] as? Double ?? 0) }
         }
         if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        // An app gesture waits for Leaf to go idle, which outlasts the whole
+        // coast. SpringBoard's coordinates reach the same screen point without
+        // that wait, so the tap lands while the page is still sliding.
+        let frame = surface.frame, screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            screen.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.minX + frame.width * x, dy: frame.minY + frame.height * y))
+        }
         // XCUITest velocities are pixels per second. A release this fast keeps
         // the page coasting into a slow tail by the time the tap lands.
         for (name, speed) in [("slow", 1600.0), ("very slow", 1000.0)] {
-            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)).press(forDuration: 0.01,
-                thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55)),
+            point(0.5, 0.7).press(forDuration: 0.01, thenDragTo: point(0.5, 0.55),
                 withVelocity: XCUIGestureVelocity(rawValue: speed), thenHoldForDuration: 0)
-            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).tap()
+            point(0.3, 0.5).tap()
             let atTap = trace()
             Thread.sleep(forTimeInterval: 0.8)
             let later = trace()
