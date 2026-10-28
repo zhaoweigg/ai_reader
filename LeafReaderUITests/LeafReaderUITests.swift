@@ -245,18 +245,26 @@ final class LeafReaderUITests: XCTestCase {
         checkAppearanceSystemLabelContrast(scrolling: true)
     }
 
+    @MainActor func testAppearanceSystemLabelsTrackDuskInPDFWithoutSceneFixture() {
+        checkAppearanceSystemLabelContrast(scrolling: false, pdf: true)
+    }
+
     /// A live theme change must also update native controls in the already-open
     /// sheet. No scene geometry fixture or rotation participates in this check.
-    @MainActor private func checkAppearanceSystemLabelContrast(scrolling: Bool) {
+    @MainActor private func checkAppearanceSystemLabelContrast(scrolling: Bool, pdf: Bool = false) {
         let app = launchApp(geometryFixture: false)
-        app.buttons["featuredBook"].tap()
+        if pdf {
+            let card = app.buttons["book-Notes from the Coast"]
+            for _ in 0..<5 where !card.isHittable { app.scrollViews.firstMatch.swipeUp() }
+            card.tap()
+        } else { app.buttons["featuredBook"].tap() }
         openAppearance(app)
         if scrolling {
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
         }
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
-        let flow = scrolling ? "Scroll" : "Pages"
+        let flow = pdf ? "PDF" : scrolling ? "Scroll" : "Pages"
         for theme in ["Dusk", "Paper", "Night", "Day"] {
             let choice = app.buttons[theme + " theme"]
             revealAppearanceControl(app, choice)
