@@ -496,6 +496,100 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    /// One drift case: how fast the page moved just before the tap, how far it
+    /// kept going after it, and whether the tap opened the reader controls.
+    private struct DriftCase { let name: String; let speedAtTap: Double; let driftAfter: Double; let controls: Bool }
+
+    /// Pulls the Scroll page slowly over a short distance, taps after `delays`,
+    /// and reads every recorded frame. XCUITest's idle wait is skipped so the
+    /// tap can land while the page is still drifting.
+    @MainActor private func runDriftSweep(chat: Bool = false, speeds: [Double], delays: [Double]) -> [DriftCase] {
+        let app = launchApp(scrollTouchTrace: true)
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        openAppearance(app)
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
+        dismissAppearance(app)
+        let surface = readingSurface(app), probe = app.descendants(matching: .any)["uitestScrollTouch"].firstMatch
+        XCTAssertTrue(probe.waitForExistence(timeout: 5))
+        if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        // With Ask Leaf open, pull and tap in the book area above the panel.
+        var top = 0.54, tapY = 0.5
+        if chat {
+            app.buttons["openReaderChat"].tap()
+            XCTAssertTrue(app.otherElements["readerChatPanel"].waitForExistence(timeout: 5))
+            if app.keyboards.firstMatch.exists { app.keyboards.buttons["Hide keyboard"].firstMatch.tap() }
+            let panelTop = (app.otherElements["readerChatPanel"].frame.minY - surface.frame.minY) / surface.frame.height
+            top = max(0.12, panelTop - 0.2); tapY = max(0.08, top - 0.12)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Ask Leaf must stay open for the drift sweep")
+        }
+        XCTAssertTrue(UITestQuiescence.install(), "XCUITest's idle wait could not be bypassed")
+        let frame = surface.frame, screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            screen.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.minX + frame.width * x, dy: frame.minY + frame.height * y))
+        }
+        var cases: [DriftCase] = []
+        // XCUITest velocities are pixels per second (3 px per point here).
+        for speed in speeds {
+            for delay in delays {
+                UITestQuiescence.skipped = true
+                point(0.5, top + 0.08).press(forDuration: 0.01, thenDragTo: point(0.5, top),
+                    withVelocity: XCUIGestureVelocity(rawValue: speed), thenHoldForDuration: 0)
+                Thread.sleep(forTimeInterval: delay)
+                point(0.3, tapY).tap()
+                UITestQuiescence.skipped = false
+                Thread.sleep(forTimeInterval: 1.5)
+                let json = probe.value as? String ?? ""
+                let trace = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
+                let frames = (trace["frames"] as? [[Any]] ?? []).compactMap { f -> (Double, Double)? in
+                    guard f.count == 4, let t = f[0] as? Double, let y = f[1] as? Double else { return nil }
+                    return (t, y)
+                }
+                let tapAt = (trace["touches"] as? [[Any]])?.last?.first as? Double ?? 0
+                let before = frames.filter { $0.0 > tapAt - 0.1 && $0.0 <= tapAt }
+                let speedAtTap = before.count > 1 ? abs(before.last!.1 - before.first!.1) / max(0.001, before.last!.0 - before.first!.0) : 0
+                // Visible motion after the tap. Refilling the space reserved for
+                // earlier chapters shifts the coordinate by a whole reserve in one
+                // frame without moving the text, so such jumps are not drift.
+                let after = frames.filter { $0.0 > tapAt + 0.05 }.map(\.1)
+                let driftAfter = zip(after, after.dropFirst()).map { abs($1 - $0) }.filter { $0 < 500 }.reduce(0, +)
+                let item = DriftCase(name: "\(chat ? "chat " : "")speed \(Int(speed)) delay \(delay)", speedAtTap: speedAtTap,
+                                     driftAfter: driftAfter, controls: app.buttons["closeBook"].exists)
+                cases.append(item)
+                let attachment = XCTAttachment(string: "\(item)\n\(json)")
+                attachment.name = item.name + " drift trace"; attachment.lifetime = .keepAlways; add(attachment)
+                if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: tapY)).tap() }
+            }
+        }
+        app.terminate()
+        return cases
+    }
+
+    /// A slow, short pull leaves the page drifting after the finger lifts. A tap
+    /// during that drift must stop it where it is, without opening the controls.
+    @MainActor func testTapStopsSlowShortDriftInScroll() {
+        continueAfterFailure = true
+        let cases = runDriftSweep(speeds: [450, 600, 900], delays: [0.15, 0.5, 0.8, 1.1, 1.4])
+        let drifting = cases.filter { $0.speedAtTap > 5 }
+        XCTAssertFalse(drifting.isEmpty, "At least one slow short pull must still be drifting when the tap lands: \(cases)")
+        for item in drifting {
+            XCTAssertLessThanOrEqual(item.driftAfter, 1, "\(item.name): a tap during the drift must stop it (\(item.speedAtTap) pt/s at the tap)")
+            XCTAssertFalse(item.controls, "\(item.name): the stopping tap must not open the controls")
+        }
+    }
+
+    /// The reported case: the same slow short drift while Ask Leaf is open.
+    @MainActor func testTapStopsSlowShortDriftWithChatInScroll() {
+        continueAfterFailure = true
+        let cases = runDriftSweep(chat: true, speeds: [450, 600, 900], delays: [0.15, 0.5, 0.8, 1.1, 1.4])
+        let drifting = cases.filter { $0.speedAtTap > 5 }
+        XCTAssertFalse(drifting.isEmpty, "At least one slow short pull must still be drifting when the tap lands: \(cases)")
+        for item in drifting {
+            XCTAssertLessThanOrEqual(item.driftAfter, 1, "\(item.name): a tap during the drift must stop it (\(item.speedAtTap) pt/s at the tap)")
+            XCTAssertFalse(item.controls, "\(item.name): the stopping tap must not open the controls")
+        }
+    }
+
     @MainActor func testHeldScrollBackAfterContentsJumpStaysAtPreviousChapter() {
         continueAfterFailure = false
         let app = launchApp(contentsFixture: true, contentsBook: "ScrollFling")

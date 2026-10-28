@@ -71,11 +71,11 @@ extension ReaderModel {
             view.subviews.forEach(visit)
         }
         if let view { visit(view) }
+        let coastAge = { (scroll: UIScrollView) in self.lastCoast[ObjectIdentifier(scroll)].map { touch.timestamp - $0 } }
         #if DEBUG
-        ReaderScrollTouchTrace.record(all, accepted: moving.isEmpty) { scroll in
-            self.lastCoast[ObjectIdentifier(scroll)].map { touch.timestamp - $0 }
-        }
+        ReaderScrollTouchTrace.record(all, accepted: moving.isEmpty, at: touch.timestamp, coastAge: coastAge)
         #endif
+        ReaderScrollDiagnostics.shared.touch(touch, scrolls: all, moving: moving, coastAge: coastAge)
         guard !moving.isEmpty else { return true }
         stoppingTouch = touch; stoppingTimestamp = touch.timestamp
         for scroll in moving where !scroll.isDragging {
@@ -85,6 +85,7 @@ extension ReaderModel {
             if #available(iOS 17.4, *) { scroll.stopScrollingAndZooming() }
             else { scroll.setContentOffset(scroll.contentOffset, animated: false) }
         }
+        ReaderScrollDiagnostics.shared.afterStop(moving)
         // The slide is over; the next stationary touch is an ordinary tap.
         for scroll in moving { lastCoast[ObjectIdentifier(scroll)] = nil }
         return false
