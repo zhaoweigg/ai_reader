@@ -237,6 +237,73 @@ final class LeafReaderUITests: XCTestCase {
         capture("Reader theme selector after rotation", app: app)
     }
 
+    @MainActor func testAppearanceSystemLabelsTrackDuskInPagesWithoutSceneFixture() {
+        checkAppearanceSystemLabelContrast(scrolling: false)
+    }
+
+    @MainActor func testAppearanceSystemLabelsTrackDuskInScrollWithoutSceneFixture() {
+        checkAppearanceSystemLabelContrast(scrolling: true)
+    }
+
+    /// A live theme change must also update native controls in the already-open
+    /// sheet. No scene geometry fixture or rotation participates in this check.
+    @MainActor private func checkAppearanceSystemLabelContrast(scrolling: Bool) {
+        let app = launchApp(geometryFixture: false)
+        app.buttons["featuredBook"].tap()
+        openAppearance(app)
+        if scrolling {
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
+        }
+        app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        let flow = scrolling ? "Scroll" : "Pages"
+        for theme in ["Dusk", "Paper", "Night", "Day"] {
+            let choice = app.buttons[theme + " theme"]
+            revealAppearanceControl(app, choice)
+            choice.tap()
+            XCTAssertTrue(choice.isSelected)
+            capture(flow + " live " + theme + " Appearance labels without scene fixture", app: app)
+            let dark = theme == "Dusk" || theme == "Night"
+            assertAppearanceLabelInk(app.navigationBars["Appearance"].staticTexts["Appearance"],
+                                     lightInk: dark, app: app)
+            for tab in ["Font", "Layout"] {
+                assertAppearanceLabelInk(app.segmentedControls["appearanceTabs"].buttons[tab],
+                                         lightInk: dark, app: app)
+            }
+        }
+    }
+
+    /// Check rendered ink, not just accessibility existence/selection: the
+    /// original QA100-005 case passed while its title was black on dark gray.
+    @MainActor private func assertAppearanceLabelInk(_ label: XCUIElement, lightInk: Bool, app: XCUIApplication,
+                                                     file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(label.exists, file: file, line: line)
+        guard let source = app.screenshot().image.cgImage else { return XCTFail("Missing Appearance screenshot", file: file, line: line) }
+        let frame = label.frame.intersection(app.frame)
+        guard frame.width > 10, frame.height > 8 else { return XCTFail("Appearance label is not visible", file: file, line: line) }
+        let scaleX = CGFloat(source.width) / app.frame.width, scaleY = CGFloat(source.height) / app.frame.height
+        let rect = CGRect(x: (frame.minX - app.frame.minX) * scaleX, y: (frame.minY - app.frame.minY) * scaleY,
+                          width: frame.width * scaleX, height: frame.height * scaleY)
+        guard let crop = source.cropping(to: rect) else { return XCTFail("Missing Appearance label crop", file: file, line: line) }
+        let width = crop.width, height = crop.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let ink = pixels.withUnsafeMutableBytes { buffer -> Int in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return 0 }
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: width, height: height))
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            return stride(from: 0, to: bytes.count, by: 4).reduce(0) { count, i in
+                let visible = lightInk
+                    ? bytes[i] > 160 && bytes[i + 1] > 160 && bytes[i + 2] > 160
+                    : bytes[i] < 128 && bytes[i + 1] < 128 && bytes[i + 2] < 128
+                return count + (visible ? 1 : 0)
+            }
+        }
+        XCTAssertGreaterThan(ink, width * height / 200,
+                             "\(label.label) needs visible \(lightInk ? "light" : "dark") ink after the theme changes", file: file, line: line)
+    }
+
     @MainActor func testLibrarySearchFiltersTitles() {
         let app = launchApp()
         let search = app.textFields["librarySearch"]
