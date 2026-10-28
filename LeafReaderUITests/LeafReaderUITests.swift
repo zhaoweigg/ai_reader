@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -25,6 +25,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_LEGACY"] = legacyScroll ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_PERF"] = scrollPerformance ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_FOLLOW"] = chatFollow ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_SCROLL_TOUCH_TRACE"] = scrollTouchTrace ? "1" : "0"
         app.launchEnvironment["LEAF_UI_DICTATION_MOCK"] = dictation ? "1" : "0"
         if nativeDictation {
             let audio = Bundle(for: LeafReaderUITests.self).url(forResource: "Mandarin", withExtension: "m4a")!
@@ -439,6 +440,62 @@ final class LeafReaderUITests: XCTestCase {
 
     /// A held pull toward the previous chapter right after a Contents jump must
     /// stay at that chapter boundary while earlier chapters load above it.
+    /// A slow drag released over the book keeps sliding; a tap during that
+    /// slow tail must stop it where it is, without opening the controls.
+    @MainActor func testTapStopsSlowScrollSlideInScroll() {
+        continueAfterFailure = false
+        let app = launchApp(scrollTouchTrace: true)
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        openAppearance(app)
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
+        dismissAppearance(app)
+        let surface = readingSurface(app), probe = app.descendants(matching: .any)["uitestScrollTouch"].firstMatch
+        XCTAssertTrue(probe.waitForExistence(timeout: 5))
+        func trace() -> [String: Any] {
+            (try? JSONSerialization.jsonObject(with: Data((probe.value as? String ?? "").utf8))) as? [String: Any] ?? [:]
+        }
+        func book(_ trace: [String: Any]) -> [String: Any]? {
+            // The tallest scrollable native viewport is the book's Scroll container.
+            ((trace["views"] as? [[String: Any]]) ?? []).filter { ($0["contentHeight"] as? Double ?? 0) - ($0["height"] as? Double ?? 0) > 100 }
+                .max { ($0["height"] as? Double ?? 0) < ($1["height"] as? Double ?? 0) }
+        }
+        if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        // Every gesture first waits for Leaf to go idle, which outlasts the whole
+        // coast (SS3/SS5 tapped 0.52 s and 0.15 s after the slide ended), so skip
+        // that wait for the drag and the tap. SpringBoard coordinates on this
+        // simulator avoid re-querying the book between them.
+        XCTAssertTrue(UITestQuiescence.install(), "XCUITest's idle wait could not be bypassed")
+        let frame = surface.frame, screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            screen.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.minX + frame.width * x, dy: frame.minY + frame.height * y))
+        }
+        // XCUITest velocities are pixels per second. A release this fast keeps
+        // the page coasting into a slow tail by the time the tap lands.
+        for (name, speed) in [("slow", 1600.0), ("very slow", 1000.0)] {
+            UITestQuiescence.skipped = true
+            point(0.5, 0.7).press(forDuration: 0.01, thenDragTo: point(0.5, 0.55),
+                withVelocity: XCUIGestureVelocity(rawValue: speed), thenHoldForDuration: 0)
+            point(0.3, 0.5).tap()
+            UITestQuiescence.skipped = false
+            let atTap = trace()
+            Thread.sleep(forTimeInterval: 0.8)
+            let later = trace()
+            let attachment = XCTAttachment(string: "at tap: \(atTap)\nlater: \(later)")
+            attachment.name = name + " slide tap trace"; attachment.lifetime = .keepAlways; add(attachment)
+            capture(name + " slide after tap", app: app)
+            let view = book(later)
+            XCTAssertNotNil(view, "The book's native scroll viewport must be traced: \(later)")
+            // Only a tap that actually caught the page moving exercises the stop.
+            let coastAge = view?["coastAge"] as? Double ?? .infinity
+            XCTAssertLessThan(coastAge, 0.15, "The \(name) slide must still be moving when the tap lands: \(atTap)")
+            let stopped = view?["offset"] as? Double ?? .nan, now = view?["now"] as? Double ?? .nan
+            XCTAssertEqual(now, stopped, accuracy: 2, "The \(name) slide must stop at the tap: \(later)")
+            XCTAssertFalse(app.buttons["closeBook"].exists, "A tap that stops a slide must not open the reader controls: \(atTap)")
+            if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        }
+    }
+
     @MainActor func testHeldScrollBackAfterContentsJumpStaysAtPreviousChapter() {
         continueAfterFailure = false
         let app = launchApp(contentsFixture: true, contentsBook: "ScrollFling")
@@ -3669,5 +3726,29 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         XCTAssertEqual(input.value as? String, "Why does the character think this?")
         capture("AI night draft after hiding keyboard", app: app)
+    }
+}
+
+/// XCUITest waits for the app to go idle before and after every gesture, which
+/// makes touching a still-coasting page impossible. While `skipped` is set,
+/// XCUITest's own pre/post-event skip checks answer yes for every app process.
+enum UITestQuiescence {
+    nonisolated(unsafe) static var skipped = false
+    nonisolated(unsafe) private static var installed = false
+    static func install() -> Bool {
+        if installed { return true }
+        guard let process = NSClassFromString("XCUIApplicationProcess") else { return false }
+        typealias Check = @convention(c) (AnyObject, Selector) -> Bool
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let selector = NSSelectorFromString(name)
+            guard let method = class_getInstanceMethod(process, selector) else { return false }
+            let original = unsafeBitCast(method_getImplementation(method), to: Check.self)
+            let replacement: @convention(block) (AnyObject) -> Bool = { process in
+                skipped || original(process, selector)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(replacement))
+        }
+        installed = true
+        return true
     }
 }
