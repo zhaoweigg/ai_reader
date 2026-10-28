@@ -62,8 +62,10 @@ extension ReaderModel {
                 watch(scroll)
                 var active = scroll.isDecelerating || scroll.isDragging
                 if #available(iOS 17.4, *) { active = active || scroll.isScrollAnimating }
-                // A slide this touch just halted still counts as motion.
-                if let coast = lastCoast[ObjectIdentifier(scroll)], (0..<0.15).contains(touch.timestamp - coast) { active = true }
+                // A slide this touch just halted still counts as motion. The touch
+                // is stamped at touch-down, so coast frames drawn before it was
+                // delivered can be slightly newer; only a bogus stamp is far off.
+                if let coast = lastCoast[ObjectIdentifier(scroll)], (-1..<0.15).contains(touch.timestamp - coast) { active = true }
                 if active { moving.append(scroll) }
             }
             view.subviews.forEach(visit)

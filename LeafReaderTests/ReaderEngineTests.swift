@@ -1808,6 +1808,11 @@ final class ReaderEngineTests: XCTestCase {
                 XCTAssertFalse(accepts(tap, halting), "The touch that halted a slow slide stops it instead of opening the controls")
                 XCTAssertFalse(accepts(doubleTap, halting), "Both recognizers must consume the halting touch")
                 XCTAssertTrue(accepts(tap, TimedTouch(at: CACurrentMediaTime())), "Once stopped, the next touch is an ordinary tap")
+                // On a device the touch-down stamp precedes delivery, so the last
+                // coast frame can be a little newer than the touch that halts it.
+                scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: stopped), animated: false)
+                XCTAssertTrue(accepts(tap, TimedTouch(at: CACurrentMediaTime() + 0.2)), "A touch well after the slide ended is an ordinary tap")
+                XCTAssertFalse(accepts(tap, TimedTouch(at: CACurrentMediaTime() - 0.03)), "A touch stamped before the last coast frame still stops the slide")
                 trace.append(["flow": flow, "distance": distance, "nativeViewport": String(describing: type(of: scroll)), "before": before, "stopped": stopped, "samples": samples])
             }
             surface.removeGestureRecognizer(tap); surface.removeGestureRecognizer(doubleTap)
