@@ -33,21 +33,49 @@ extension ReaderModel {
 @MainActor private final class ReaderScrollTouch {
     private weak var stoppingTouch: UITouch?
     private var stoppingTimestamp: TimeInterval = -1
+    private var observations: [ObjectIdentifier: NSKeyValueObservation] = [:]
+    private var lastCoast: [ObjectIdentifier: TimeInterval] = [:]
+
+    /// UIKit halts a coasting scroll view as soon as a finger lands on it, so
+    /// by the time a tap recognizer asks, a slow slide no longer reports
+    /// deceleration. Remember when each viewport last moved without a finger.
+    private func watch(_ scroll: UIScrollView) {
+        let id = ObjectIdentifier(scroll)
+        guard observations[id] == nil else { return }
+        observations[id] = scroll.observe(\.contentOffset, options: [.old, .new]) { [weak self] scroll, change in
+            guard change.oldValue != change.newValue else { return }
+            MainActor.assumeIsolated {
+                guard !scroll.isTracking else { return }
+                self?.lastCoast[id] = CACurrentMediaTime()
+            }
+        }
+    }
 
     func accepts(_ touch: UITouch, in view: UIView?) -> Bool {
         // Both reader tap recognizers receive the same touch. Stopping the first
         // must not make the second mistake that touch for a stationary tap.
         if stoppingTouch === touch, stoppingTimestamp == touch.timestamp { return false }
-        var moving: [UIScrollView] = []
+        var moving: [UIScrollView] = [], all: [UIScrollView] = []
         func visit(_ view: UIView) {
             if let scroll = view as? UIScrollView {
+                all.append(scroll)
+                watch(scroll)
                 var active = scroll.isDecelerating || scroll.isDragging
                 if #available(iOS 17.4, *) { active = active || scroll.isScrollAnimating }
+                // A slide this touch just halted still counts as motion. The touch
+                // is stamped at touch-down, so coast frames drawn before it was
+                // delivered can be slightly newer; only a bogus stamp is far off.
+                if let coast = lastCoast[ObjectIdentifier(scroll)], (-1..<0.15).contains(touch.timestamp - coast) { active = true }
                 if active { moving.append(scroll) }
             }
             view.subviews.forEach(visit)
         }
         if let view { visit(view) }
+        #if DEBUG
+        ReaderScrollTouchTrace.record(all, accepted: moving.isEmpty) { scroll in
+            self.lastCoast[ObjectIdentifier(scroll)].map { touch.timestamp - $0 }
+        }
+        #endif
         guard !moving.isEmpty else { return true }
         stoppingTouch = touch; stoppingTimestamp = touch.timestamp
         for scroll in moving where !scroll.isDragging {
@@ -57,6 +85,8 @@ extension ReaderModel {
             if #available(iOS 17.4, *) { scroll.stopScrollingAndZooming() }
             else { scroll.setContentOffset(scroll.contentOffset, animated: false) }
         }
+        // The slide is over; the next stationary touch is an ordinary tap.
+        for scroll in moving { lastCoast[ObjectIdentifier(scroll)] = nil }
         return false
     }
 }

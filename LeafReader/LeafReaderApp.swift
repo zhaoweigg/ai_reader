@@ -59,6 +59,7 @@ struct LeafReaderApp: App {
             AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(agentTraces).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
                 #if DEBUG
                 .background(UITestSceneGeometryBridge())
+                .background(UITestScrollTouchProbe())
                 #endif
         }
     }
