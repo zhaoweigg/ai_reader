@@ -249,6 +249,17 @@ export async function setSpokenRange(view, { passage, locator, location, length,
     if (revision === state.revision) paintSpokenRange(view, state);
 }
 
+function afterSpokenLayout() {
+    return new Promise(resolve => {
+        let frame;
+        const finish = () => { clearTimeout(timer); cancelAnimationFrame(frame); resolve(); };
+        // Background WebKit may suspend animation frames. Release the queue
+        // through a timer as well, and leave no pending frame callback behind.
+        const timer = setTimeout(finish, 100);
+        frame = requestAnimationFrame(() => { frame = requestAnimationFrame(finish); });
+    });
+}
+
 export async function revealReadAloud(view, locator, offset = 0, bottomClearance = 0) {
     const source = sources.get(view);
     if (!source) return;
@@ -312,7 +323,7 @@ export async function revealReadAloud(view, locator, offset = 0, bottomClearance
         // busy renderer or late offset restoration must not strand this line
         // under the controls until a later speech callback happens to move it.
         for (let retry = 0; retry < 3; ++retry) {
-            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            await afterSpokenLayout();
             if (!current()) return;
             const content = view.renderer.getContents?.().find(item => item.index === target.index);
             const range = content && speechAnchor(content.doc);
