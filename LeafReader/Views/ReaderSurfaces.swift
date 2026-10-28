@@ -78,13 +78,22 @@ extension ReaderModel {
         #endif
         guard !moving.isEmpty else { return true }
         stoppingTouch = touch; stoppingTimestamp = touch.timestamp
-        for scroll in moving where !scroll.isDragging {
+        #if DEBUG
+        let mode = UITesting.environment("LEAF_UI_SCROLL_STOP_MODE") ?? "stop"
+        #else
+        let mode = "stop"
+        #endif
+        for scroll in moving where !scroll.isDragging && mode != "none" {
             // Explicitly stop the native scroller, including a slow animated
             // offset change. Rejecting the reader tap alone only hides chrome;
             // it does not cancel motion in WebKit's nested scroll views.
             if #available(iOS 17.4, *) { scroll.stopScrollingAndZooming() }
             else { scroll.setContentOffset(scroll.contentOffset, animated: false) }
+            if mode == "offset" { scroll.setContentOffset(scroll.contentOffset, animated: false) }
         }
+        #if DEBUG
+        ReaderScrollTouchTrace.noteStop(moving)
+        #endif
         // The slide is over; the next stationary touch is an ordinary tap.
         for scroll in moving { lastCoast[ObjectIdentifier(scroll)] = nil }
         return false
