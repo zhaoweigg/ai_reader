@@ -274,6 +274,7 @@ struct ReaderContent: View {
                 }
             }
             .environment(\.leafTheme, theme)
+            .preferredColorScheme(theme.colorScheme)
             .tint(theme.accent)
             .presentationDetents(panel == .appearance ? [.medium, .large] : [.large])
             .presentationDragIndicator(panel == .appearance ? .visible : .automatic)
