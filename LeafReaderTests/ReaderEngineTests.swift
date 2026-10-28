@@ -478,10 +478,12 @@ final class ReaderEngineTests: XCTestCase {
                 const packet=await window.Leaf.readAloudChunk({locator:'section:0'}),c=r.getContents()[0],frame=c.doc.defaultView.frameElement,container=frame.getRootNode().getElementById('container');
                 const bottomClearance=Math.min(194,Math.max(0,innerHeight-100)),before=container.scrollTop,calls=[];
                 const requestFrame=window.requestAnimationFrame,cancelFrame=window.cancelAnimationFrame;
-                let framesRequested=0,framesCancelled=0;
+                let framesRequested=0,framesCancelled=0;const suspendedFrames=new Map();
                 if(mode==='unframed') {
-                    window.requestAnimationFrame=()=>++framesRequested;
-                    window.cancelAnimationFrame=()=>framesCancelled++;
+                    window.requestAnimationFrame=callback=>{
+                        framesRequested++;const id=requestFrame.call(window,()=>{});suspendedFrames.set(id,callback);return id;
+                    };
+                    window.cancelAnimationFrame=id=>{framesCancelled++;suspendedFrames.delete(id);cancelFrame.call(window,id);};
                 }
                 const original=r.goTo.bind(r);
                 r.goTo=async target=>{
@@ -507,7 +509,10 @@ final class ReaderEngineTests: XCTestCase {
                     const rect=[...range.getClientRects()].find(rect=>rect.width>0&&rect.height>0),top=rect.top+frame.getBoundingClientRect().top,bottom=rect.bottom+frame.getBoundingClientRect().top;
                     return {mode,calls,top,bottom,framesRequested,framesCancelled,visible:top>=-1&&bottom<=innerHeight-bottomClearance+1,stayed:Math.abs(container.scrollTop-before)<1,
                         staleRetried:calls.slice(1).includes(calls[0]),painted:!!c.overlayer.element.querySelector('[data-leaf-spoken-line]')};
-                } finally {r.goTo=original;window.requestAnimationFrame=requestFrame;window.cancelAnimationFrame=cancelFrame;}
+                } finally {
+                    r.goTo=original;window.requestAnimationFrame=requestFrame;window.cancelAnimationFrame=cancelFrame;
+                    for(const callback of suspendedFrames.values())requestFrame.call(window,callback);
+                }
                 """, arguments: ["mode": mode], in: nil, contentWorld: .page)
             let row = try XCTUnwrap(result as? [String: Any]); rows.append(row)
             let calls = try XCTUnwrap(row["calls"] as? [Double])
