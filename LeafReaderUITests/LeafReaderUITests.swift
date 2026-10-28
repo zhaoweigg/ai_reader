@@ -504,7 +504,7 @@ final class LeafReaderUITests: XCTestCase {
     /// Pulls the Scroll page slowly over a short distance, taps after `delays`,
     /// and reads every recorded frame. XCUITest's idle wait is skipped so the
     /// tap can land while the page is still drifting.
-    @MainActor private func runDriftSweep(stopMode: String?, speeds: [Double], delays: [Double]) -> [DriftCase] {
+    @MainActor private func runDriftSweep(stopMode: String?, chat: Bool = false, speeds: [Double], delays: [Double]) -> [DriftCase] {
         let app = launchApp(scrollTouchTrace: true, scrollStopMode: stopMode)
         app.buttons["featuredBook"].tap(); waitForBook(app)
         openAppearance(app)
@@ -514,6 +514,16 @@ final class LeafReaderUITests: XCTestCase {
         let surface = readingSurface(app), probe = app.descendants(matching: .any)["uitestScrollTouch"].firstMatch
         XCTAssertTrue(probe.waitForExistence(timeout: 5))
         if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        // With Ask Leaf open, pull and tap in the book area above the panel.
+        var top = 0.54, tapY = 0.5
+        if chat {
+            app.buttons["openReaderChat"].tap()
+            XCTAssertTrue(app.otherElements["readerChatPanel"].waitForExistence(timeout: 5))
+            if app.keyboards.firstMatch.exists { app.keyboards.buttons["Hide keyboard"].firstMatch.tap() }
+            let panelTop = (app.otherElements["readerChatPanel"].frame.minY - surface.frame.minY) / surface.frame.height
+            top = max(0.12, panelTop - 0.2); tapY = max(0.08, top - 0.12)
+            XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Ask Leaf must stay open for the drift sweep")
+        }
         XCTAssertTrue(UITestQuiescence.install(), "XCUITest's idle wait could not be bypassed")
         let frame = surface.frame, screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
@@ -524,10 +534,10 @@ final class LeafReaderUITests: XCTestCase {
         for speed in speeds {
             for delay in delays {
                 UITestQuiescence.skipped = true
-                point(0.5, 0.62).press(forDuration: 0.01, thenDragTo: point(0.5, 0.54),
+                point(0.5, top + 0.08).press(forDuration: 0.01, thenDragTo: point(0.5, top),
                     withVelocity: XCUIGestureVelocity(rawValue: speed), thenHoldForDuration: 0)
                 Thread.sleep(forTimeInterval: delay)
-                point(0.3, 0.5).tap()
+                point(0.3, tapY).tap()
                 UITestQuiescence.skipped = false
                 Thread.sleep(forTimeInterval: 1.5)
                 let json = probe.value as? String ?? ""
@@ -540,12 +550,12 @@ final class LeafReaderUITests: XCTestCase {
                 let before = frames.filter { $0.0 > tapAt - 0.1 && $0.0 <= tapAt }
                 let speedAtTap = before.count > 1 ? abs(before.last!.1 - before.first!.1) / max(0.001, before.last!.0 - before.first!.0) : 0
                 let after = frames.filter { $0.0 > tapAt + 0.05 }.map(\.1)
-                let item = DriftCase(name: "\(stopMode ?? "stop") speed \(Int(speed)) delay \(delay)", speedAtTap: speedAtTap,
+                let item = DriftCase(name: "\(chat ? "chat " : "")\(stopMode ?? "stop") speed \(Int(speed)) delay \(delay)", speedAtTap: speedAtTap,
                                      driftAfter: (after.max() ?? 0) - (after.min() ?? 0), controls: app.buttons["closeBook"].exists)
                 cases.append(item)
                 let attachment = XCTAttachment(string: "\(item)\n\(json)")
                 attachment.name = item.name + " drift trace"; attachment.lifetime = .keepAlways; add(attachment)
-                if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+                if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: tapY)).tap() }
             }
         }
         app.terminate()
@@ -563,6 +573,28 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertLessThanOrEqual(item.driftAfter, 1, "\(item.name): a tap during the drift must stop it (\(item.speedAtTap) pt/s at the tap)")
             XCTAssertFalse(item.controls, "\(item.name): the stopping tap must not open the controls")
         }
+    }
+
+    /// The reported case: the same slow short drift while Ask Leaf is open.
+    @MainActor func testTapStopsSlowShortDriftWithChatInScroll() {
+        continueAfterFailure = true
+        let cases = runDriftSweep(stopMode: nil, chat: true, speeds: [450, 600, 900], delays: [0.15, 0.5, 0.8, 1.1, 1.4])
+        let drifting = cases.filter { $0.speedAtTap > 5 }
+        XCTAssertFalse(drifting.isEmpty, "At least one slow short pull must still be drifting when the tap lands: \(cases)")
+        for item in drifting {
+            XCTAssertLessThanOrEqual(item.driftAfter, 1, "\(item.name): a tap during the drift must stop it (\(item.speedAtTap) pt/s at the tap)")
+            XCTAssertFalse(item.controls, "\(item.name): the stopping tap must not open the controls")
+        }
+    }
+
+    /// Diagnostic: with Ask Leaf open and Leaf's stop disabled, does UIKit alone stop the drift?
+    @MainActor func testSlowDriftWithChatUIKitOnlyDiagnostic() {
+        continueAfterFailure = true
+        let summary = runDriftSweep(stopMode: "none", chat: true, speeds: [450, 900], delays: [0.15, 0.5, 0.8, 1.1, 1.4]).map {
+            String(format: "%@: speedAtTap=%.0f driftAfter=%.1f controls=%@", $0.name, $0.speedAtTap, $0.driftAfter, $0.controls ? "yes" : "no")
+        }
+        let attachment = XCTAttachment(string: summary.joined(separator: "\n"))
+        attachment.name = "Chat stop mode summary"; attachment.lifetime = .keepAlways; add(attachment)
     }
 
     /// Diagnostic: the same slow drifts with Leaf's stop disabled (UIKit alone)
