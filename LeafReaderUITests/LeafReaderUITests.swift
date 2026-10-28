@@ -2714,22 +2714,26 @@ final class LeafReaderUITests: XCTestCase {
                 app.buttons["closeReaderChat"].tap()
                 let closeSeconds = ProcessInfo.processInfo.systemUptime - closeStart
                 let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: panel)
-                XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed)
+                let closeResult = XCTWaiter.wait(for: [closed], timeout: 5)
                 let launcher = app.buttons["openReaderChat"]
-                XCTAssertTrue(launcher.waitForExistence(timeout: 5)); XCTAssertTrue(launcher.isHittable)
+                let launcherExists = launcher.waitForExistence(timeout: 5)
+                let launcherHittable = launcherExists && launcher.isHittable
                 let keyboardVisible = keyboard.exists && keyboard.frame.intersects(app.frame)
-                XCTAssertFalse(keyboardVisible, "Closing chat must also remove its keyboard from the screen")
-                capture(condition + " after Close", app: app)
                 let report: [String: Any] = ["condition": condition, "flow": flow, "hideKeyboardFirst": hideFirst,
                     "testID": app.launchEnvironment["LEAF_UI_TEST_ID"] ?? "", "sceneGeometryFixture": true,
-                    "audioStarted": false, "keyboardBefore": NSStringFromCGRect(keyboardBefore),
+                    "audioStarted": false, "keyboardBefore": ["x": keyboardBefore.minX, "y": keyboardBefore.minY, "width": keyboardBefore.width, "height": keyboardBefore.height],
                     "hideKeyboardActionSeconds": hideSeconds, "closeActionSeconds": closeSeconds,
                     "elapsedSeconds": ProcessInfo.processInfo.systemUptime - began,
+                    "closeExpectationCompleted": closeResult == .completed,
                     "chatPresentAfterClose": panel.exists, "keyboardVisibleAfterClose": keyboardVisible,
-                    "launcherHittableAfterClose": launcher.isHittable]
+                    "launcherHittableAfterClose": launcherHittable]
                 reports.append(report)
                 let attachment = XCTAttachment(data: try! JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
                 attachment.name = condition + " action timing and state"; attachment.lifetime = .keepAlways; add(attachment)
+                capture(condition + " after Close", app: app)
+                XCTAssertEqual(closeResult, .completed)
+                XCTAssertTrue(launcherExists); XCTAssertTrue(launcherHittable)
+                XCTAssertFalse(keyboardVisible, "Closing chat must also remove its keyboard from the screen")
             }
         }
     }
