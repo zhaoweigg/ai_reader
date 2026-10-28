@@ -38,9 +38,10 @@ extension ReaderModel {
         // Both reader tap recognizers receive the same touch. Stopping the first
         // must not make the second mistake that touch for a stationary tap.
         if stoppingTouch === touch, stoppingTimestamp == touch.timestamp { return false }
-        var moving: [UIScrollView] = []
+        var moving: [UIScrollView] = [], all: [UIScrollView] = []
         func visit(_ view: UIView) {
             if let scroll = view as? UIScrollView {
+                all.append(scroll)
                 var active = scroll.isDecelerating || scroll.isDragging
                 if #available(iOS 17.4, *) { active = active || scroll.isScrollAnimating }
                 if active { moving.append(scroll) }
@@ -48,6 +49,9 @@ extension ReaderModel {
             view.subviews.forEach(visit)
         }
         if let view { visit(view) }
+        #if DEBUG
+        ReaderScrollTouchTrace.record(all, accepted: moving.isEmpty)
+        #endif
         guard !moving.isEmpty else { return true }
         stoppingTouch = touch; stoppingTimestamp = touch.timestamp
         for scroll in moving where !scroll.isDragging {

@@ -52,6 +52,7 @@
 		62E2499891727C708E313390 /* KokoroModelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A014A572292DC05A6C0789 /* KokoroModelStore.swift */; };
 		62F63446B4398663F2EEB393 /* ChatScrollFollowingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833E41CE2FEB4E7A66694630 /* ChatScrollFollowingTests.swift */; };
 		65B49DB9ADAD380F69073981 /* ChatGPTAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 229584F749B3CCD25F03CD5A /* ChatGPTAccountStore.swift */; };
+		6765B431B341B65506C6C447 /* UITestScrollTouchProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19EC3265992221C3E36A28F /* UITestScrollTouchProbe.swift */; };
 		6B85BEA3040860E753242175 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D59E60786ADEDA73444D967C /* SettingsView.swift */; };
 		6E9ADECBA5E3CC649895ABA1 /* ChatGPTSubscriptionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BAAB2D0ADFB4B6AD2057EFA /* ChatGPTSubscriptionProvider.swift */; };
 		6F3E0FC0ECA3238758363E78 /* AISettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2711FF9B669B7E4658B2DAE6 /* AISettingsStore.swift */; };
@@ -204,6 +205,7 @@
 		C62F03A2C012E7FD2C2F2AE2 /* LibraryDisk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryDisk.swift; sourceTree = "<group>"; };
 		C7FDBF4B5F72934389E456C5 /* ChatProvider+Agent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatProvider+Agent.swift"; sourceTree = "<group>"; };
 		CEC6851EC27447414454AFF7 /* ChatGPTOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTOAuth.swift; sourceTree = "<group>"; };
+		D19EC3265992221C3E36A28F /* UITestScrollTouchProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestScrollTouchProbe.swift; sourceTree = "<group>"; };
 		D1F25FA3CF6923499A67C834 /* ReaderChatPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderChatPanel.swift; sourceTree = "<group>"; };
 		D59E60786ADEDA73444D967C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		D7B596C7A37807FDBC583EA2 /* ReaderAnnotationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAnnotationsView.swift; sourceTree = "<group>"; };
@@ -297,6 +299,7 @@
 				D59E60786ADEDA73444D967C /* SettingsView.swift */,
 				24297F21BBA41AD9AFD4A205 /* ThemePicker.swift */,
 				BC121F68853537778A0E3CC2 /* UITestSceneGeometry.swift */,
+				D19EC3265992221C3E36A28F /* UITestScrollTouchProbe.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -657,6 +660,7 @@
 				BE304B8B6ABD0D54C31DA0B1 /* TarBzip2Extractor.swift in Sources */,
 				11F98810E05BCDC675C839EC /* ThemePicker.swift in Sources */,
 				426155C7059E798D7A043711 /* UITestSceneGeometry.swift in Sources */,
+				6765B431B341B65506C6C447 /* UITestScrollTouchProbe.swift in Sources */,
 				450FBFE809E2396034EBDCD9 /* UITesting.swift in Sources */,
 				D9CC609F0D4142FA91D26A0A /* ZLibraryBrowserSession.swift in Sources */,
 				F3F8B6B6F653CF0B900E74CE /* ZLibraryClient.swift in Sources */,
