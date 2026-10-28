@@ -386,9 +386,11 @@ final class LeafReaderUITests: XCTestCase {
                 .max { ($0["height"] as? Double ?? 0) < ($1["height"] as? Double ?? 0) }
         }
         if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
-        // An app gesture waits for Leaf to go idle, which outlasts the whole
-        // coast. SpringBoard's coordinates reach the same screen point without
-        // that wait, so the tap lands while the page is still sliding.
+        // Every gesture first waits for Leaf to go idle, which outlasts the whole
+        // coast (SS3/SS5 tapped 0.52 s and 0.15 s after the slide ended), so skip
+        // that wait for the drag and the tap. SpringBoard coordinates on this
+        // simulator avoid re-querying the book between them.
+        XCTAssertTrue(UITestQuiescence.install(), "XCUITest's idle wait could not be bypassed")
         let frame = surface.frame, screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             screen.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.minX + frame.width * x, dy: frame.minY + frame.height * y))
@@ -396,9 +398,11 @@ final class LeafReaderUITests: XCTestCase {
         // XCUITest velocities are pixels per second. A release this fast keeps
         // the page coasting into a slow tail by the time the tap lands.
         for (name, speed) in [("slow", 1600.0), ("very slow", 1000.0)] {
+            UITestQuiescence.skipped = true
             point(0.5, 0.7).press(forDuration: 0.01, thenDragTo: point(0.5, 0.55),
                 withVelocity: XCUIGestureVelocity(rawValue: speed), thenHoldForDuration: 0)
             point(0.3, 0.5).tap()
+            UITestQuiescence.skipped = false
             let atTap = trace()
             Thread.sleep(forTimeInterval: 0.8)
             let later = trace()
@@ -3647,5 +3651,29 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         XCTAssertEqual(input.value as? String, "Why does the character think this?")
         capture("AI night draft after hiding keyboard", app: app)
+    }
+}
+
+/// XCUITest waits for the app to go idle before and after every gesture, which
+/// makes touching a still-coasting page impossible. While `skipped` is set,
+/// XCUITest's own pre/post-event skip checks answer yes for every app process.
+enum UITestQuiescence {
+    nonisolated(unsafe) static var skipped = false
+    nonisolated(unsafe) private static var installed = false
+    static func install() -> Bool {
+        if installed { return true }
+        guard let process = NSClassFromString("XCUIApplicationProcess") else { return false }
+        typealias Check = @convention(c) (AnyObject, Selector) -> Bool
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let selector = NSSelectorFromString(name)
+            guard let method = class_getInstanceMethod(process, selector) else { return false }
+            let original = unsafeBitCast(method_getImplementation(method), to: Check.self)
+            let replacement: @convention(block) (AnyObject) -> Bool = { process in
+                skipped || original(process, selector)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(replacement))
+        }
+        installed = true
+        return true
     }
 }
