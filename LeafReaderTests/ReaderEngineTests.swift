@@ -1799,6 +1799,15 @@ final class ReaderEngineTests: XCTestCase {
                 XCTAssertLessThanOrEqual((samples.max() ?? stopped) - (samples.min() ?? stopped), 1, "The book must stay at the stopped location")
                 XCTAssertEqual(stopped, before, accuracy: 1, "Stopping must not jump the passage")
                 XCTAssertTrue(accepts(tap, UITouch()), "The next stationary touch is available immediately")
+                // UIKit halts a slow coast as soon as the finger lands, before the
+                // recognizers ask, so that touch sees a still viewport. A finger-free
+                // move just before it must still make it a stop, not a reader tap.
+                scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: stopped > 2 ? stopped - 2 : stopped + 2), animated: false)
+                XCTAssertFalse(scroll.isDecelerating || scroll.isScrollAnimating, "Reproduce the already-halted coast")
+                let halting = TimedTouch(at: CACurrentMediaTime())
+                XCTAssertFalse(accepts(tap, halting), "The touch that halted a slow slide stops it instead of opening the controls")
+                XCTAssertFalse(accepts(doubleTap, halting), "Both recognizers must consume the halting touch")
+                XCTAssertTrue(accepts(tap, TimedTouch(at: CACurrentMediaTime())), "Once stopped, the next touch is an ordinary tap")
                 trace.append(["flow": flow, "distance": distance, "nativeViewport": String(describing: type(of: scroll)), "before": before, "stopped": stopped, "samples": samples])
             }
             surface.removeGestureRecognizer(tap); surface.removeGestureRecognizer(doubleTap)
@@ -2863,6 +2872,13 @@ final class ReaderEngineTests: XCTestCase {
     override func location(in view: UIView?) -> CGPoint {
         CGPoint(x:(view?.bounds.width ?? 0)/2,y:(view?.bounds.height ?? 0)/2)
     }
+}
+
+/// A touch on the media clock; `UITouch()` reports a zero timestamp.
+@MainActor private final class TimedTouch: UITouch {
+    private let at: TimeInterval
+    init(at: TimeInterval) { self.at = at; super.init() }
+    override var timestamp: TimeInterval { at }
 }
 
 @MainActor private final class MemorySchemeTask: NSObject, WKURLSchemeTask {

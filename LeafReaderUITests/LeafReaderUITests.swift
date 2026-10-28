@@ -386,10 +386,11 @@ final class LeafReaderUITests: XCTestCase {
                 .max { ($0["height"] as? Double ?? 0) < ($1["height"] as? Double ?? 0) }
         }
         if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
-        for (name, speed) in [("slow", 260.0), ("very slow", 120.0)] {
-            // Pull the passage up slowly and let go, so the page keeps sliding on its own.
-            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72)).press(forDuration: 0.01,
-                thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42)),
+        // XCUITest velocities are pixels per second. A release this fast keeps
+        // the page coasting into a slow tail by the time the tap lands.
+        for (name, speed) in [("slow", 1600.0), ("very slow", 1000.0)] {
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)).press(forDuration: 0.01,
+                thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55)),
                 withVelocity: XCUIGestureVelocity(rawValue: speed), thenHoldForDuration: 0)
             surface.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).tap()
             let atTap = trace()
@@ -400,6 +401,9 @@ final class LeafReaderUITests: XCTestCase {
             capture(name + " slide after tap", app: app)
             let view = book(later)
             XCTAssertNotNil(view, "The book's native scroll viewport must be traced: \(later)")
+            // Only a tap that actually caught the page moving exercises the stop.
+            let coastAge = view?["coastAge"] as? Double ?? .infinity
+            XCTAssertLessThan(coastAge, 0.15, "The \(name) slide must still be moving when the tap lands: \(atTap)")
             let stopped = view?["offset"] as? Double ?? .nan, now = view?["now"] as? Double ?? .nan
             XCTAssertEqual(now, stopped, accuracy: 2, "The \(name) slide must stop at the tap: \(later)")
             XCTAssertFalse(app.buttons["closeBook"].exists, "A tap that stops a slide must not open the reader controls: \(atTap)")

@@ -63,14 +63,16 @@ extension ReaderModel {
                 var active = scroll.isDecelerating || scroll.isDragging
                 if #available(iOS 17.4, *) { active = active || scroll.isScrollAnimating }
                 // A slide this touch just halted still counts as motion.
-                if let coast = lastCoast[ObjectIdentifier(scroll)], touch.timestamp - coast < 0.15 { active = true }
+                if let coast = lastCoast[ObjectIdentifier(scroll)], (0..<0.15).contains(touch.timestamp - coast) { active = true }
                 if active { moving.append(scroll) }
             }
             view.subviews.forEach(visit)
         }
         if let view { visit(view) }
         #if DEBUG
-        ReaderScrollTouchTrace.record(all, accepted: moving.isEmpty)
+        ReaderScrollTouchTrace.record(all, accepted: moving.isEmpty) { scroll in
+            self.lastCoast[ObjectIdentifier(scroll)].map { touch.timestamp - $0 }
+        }
         #endif
         guard !moving.isEmpty else { return true }
         stoppingTouch = touch; stoppingTimestamp = touch.timestamp
@@ -81,6 +83,8 @@ extension ReaderModel {
             if #available(iOS 17.4, *) { scroll.stopScrollingAndZooming() }
             else { scroll.setContentOffset(scroll.contentOffset, animated: false) }
         }
+        // The slide is over; the next stationary touch is an ordinary tap.
+        for scroll in moving { lastCoast[ObjectIdentifier(scroll)] = nil }
         return false
     }
 }

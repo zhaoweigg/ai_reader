@@ -13,13 +13,14 @@ import UIKit
     private static var entries: [Entry] = []
     private static var accepted = "none"
 
-    static func record(_ scrolls: [UIScrollView], accepted: Bool) {
+    static func record(_ scrolls: [UIScrollView], accepted: Bool, coastAge: (UIScrollView) -> TimeInterval?) {
         guard UITesting.flag("LEAF_UI_SCROLL_TOUCH_TRACE") else { return }
         self.accepted = accepted ? "tap" : "stop"
         entries = scrolls.map { scroll in
             var animating = false
             if #available(iOS 17.4, *) { animating = scroll.isScrollAnimating }
-            return Entry(scroll, "\"type\":\"\(type(of: scroll))\",\"dragging\":\(scroll.isDragging),\"tracking\":\(scroll.isTracking),\"decelerating\":\(scroll.isDecelerating),\"animating\":\(animating),\"offset\":\(scroll.contentOffset.y),\"height\":\(scroll.bounds.height),\"contentHeight\":\(scroll.contentSize.height)")
+            let age = coastAge(scroll).map { String(format: "%.3f", $0) } ?? "null"
+            return Entry(scroll, "\"coastAge\":\(age),\"type\":\"\(type(of: scroll))\",\"dragging\":\(scroll.isDragging),\"tracking\":\(scroll.isTracking),\"decelerating\":\(scroll.isDecelerating),\"animating\":\(animating),\"offset\":\(scroll.contentOffset.y),\"height\":\(scroll.bounds.height),\"contentHeight\":\(scroll.contentSize.height)")
         }
     }
 
