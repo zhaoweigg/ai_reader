@@ -249,16 +249,30 @@ export async function setSpokenRange(view, { passage, locator, location, length,
     if (revision === state.revision) paintSpokenRange(view, state);
 }
 
+function afterSpokenLayout() {
+    return new Promise(resolve => {
+        let frame;
+        const finish = () => { clearTimeout(timer); cancelAnimationFrame(frame); resolve(); };
+        // Background WebKit may suspend animation frames. Release the queue
+        // through a timer as well, and leave no pending frame callback behind.
+        const timer = setTimeout(finish, 100);
+        frame = requestAnimationFrame(() => { frame = requestAnimationFrame(finish); });
+    });
+}
+
 export async function revealReadAloud(view, locator, offset = 0, bottomClearance = 0) {
     const source = sources.get(view);
     if (!source) return;
     const epoch = source.epoch;
     const request = `${locator}@${offset}`;
+    const revision = spokenViews.get(view)?.revision;
     source.latestReveal = request;
+    const current = () => source.epoch === epoch && source.latestReveal === request && view.book
+        && (revision == null || spokenViews.get(view)?.revision === revision);
     // Rapid Next/Previous actions must finish at the newest passage, even if an
     // earlier reveal is still waiting for a cold chapter document to load.
     source.navigation = (source.navigation ?? Promise.resolve()).catch(() => {}).then(async () => {
-        if (source.epoch !== epoch || source.latestReveal !== request || !view.book) return;
+        if (!current()) return;
         const target = view.resolveNavigation(locator);
         if (!target) return;
         const anchor = target.anchor;
@@ -284,8 +298,9 @@ export async function revealReadAloud(view, locator, offset = 0, bottomClearance
         // Cached visible DOM endpoints can include text that moved off screen
         // after reflow. Measure the actual line in the mounted iframe instead.
         if (range?.startContainer && isRenderedLineVisible(view, range, bottomClearance)) return;
-        if (view.renderer.scrolled && bottomClearance > 0 && typeof target.anchor === 'function') {
-            const speechAnchor = target.anchor;
+        const followsScroll = view.renderer.scrolled && bottomClearance > 0;
+        const speechAnchor = target.anchor;
+        if (followsScroll && typeof speechAnchor === 'function') {
             target.anchor = doc => {
                 const range = speechAnchor(doc);
                 if (!range?.getClientRects) return range;
@@ -302,6 +317,22 @@ export async function revealReadAloud(view, locator, offset = 0, bottomClearance
             };
         }
         await view.renderer.goTo(target);
+        if (!followsScroll || typeof speechAnchor !== 'function') return;
+        // Navigation can finish before WebKit applies its scroll/layout update.
+        // Verify the painted result after a frame has rendered. A temporarily
+        // busy renderer or late offset restoration must not strand this line
+        // under the controls until a later speech callback happens to move it.
+        for (let retry = 0; retry < 3; ++retry) {
+            await afterSpokenLayout();
+            if (!current()) return;
+            const content = view.renderer.getContents?.().find(item => item.index === target.index);
+            const range = content && speechAnchor(content.doc);
+            if (!range?.startContainer || isRenderedLineVisible(view, range, bottomClearance)) return;
+            if (retry === 2) return;
+            await new Promise(resolve => setTimeout(resolve, 50));
+            if (!current()) return;
+            await view.renderer.goTo(target);
+        }
     });
     await source.navigation;
 }
