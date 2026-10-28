@@ -461,6 +461,55 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertNil(model.error)
     }
 
+    func testScrollSpeechFollowRepeatedMovesKeepTheRequestedLineVisible() async throws {
+        let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, readerPreferences: prefs)
+        try await waitUntil({ model.isReady || model.error != nil }, timeout: 60)
+        XCTAssertNil(model.error)
+        let web = try XCTUnwrap(model.webView)
+        window?.frame.size = CGSize(width: 720, height: 390)
+        try await Task.sleep(for: .milliseconds(200))
+        let result = try await web.callAsyncJavaScript("""
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            const packet=await window.Leaf.readAloudChunk({locator:'section:0'}),rows=[],events=[];
+            let step;
+            const snapshot=()=>{
+                const c=r.getContents()[0],frame=c.doc.defaultView.frameElement,container=frame.getRootNode().getElementById('container');
+                return {step,start:r.start,top:container.scrollTop,max:container.scrollHeight-container.clientHeight,frame:frame.getBoundingClientRect().top,endSpace:container.style.getPropertyValue('--leaf-book-end-space')};
+            };
+            const original=r.goTo.bind(r);
+            r.goTo=async target=>{events.push({event:'navigation-start',...snapshot()});await original(target);events.push({event:'navigation-end',...snapshot()});};
+            const relocated=()=>events.push({event:'relocate',...snapshot()});r.addEventListener('relocate',relocated);
+            try {
+                for(let round=0;round<24;round++) {
+                    const size=[12,13,14,13][round%4];
+                    window.Leaf.applyPreferences({...settings,fontSize:size,font:'Palatino'});await sleep(100);
+                    for(const requestedClearance of [110,280])for(const location of [3,300,650,12]) {
+                        step=`${round}:${requestedClearance}:${location}`;
+                        const bottomClearance=Math.min(requestedClearance,Math.max(0,innerHeight-100));
+                        const start=events.length;
+                        await window.Leaf.setSpokenRange({passage:packet,locator:packet.locator,location,length:1,follow:true,bottomClearance});
+                        const immediate=snapshot();await sleep(20);
+                        const segment=packet.segments.find(s=>location>=s.offset&&location<s.offset+s.length),target=view.resolveCFI(segment.locator),c=r.getContents().find(c=>c.index===target.index),range=target.anchor(c.doc),node=range.startContainer,offset=range.startOffset+location-segment.offset;
+                        range.setStart(node,offset);range.setEnd(node,offset+1);
+                        const rect=[...range.getClientRects()].find(rect=>rect.width>0&&rect.height>0),frame=c.doc.defaultView.frameElement.getBoundingClientRect();
+                        const top=rect.top+frame.top,bottom=rect.bottom+frame.top,visible=top>=-1&&bottom<=innerHeight-bottomClearance+1;
+                        rows.push({step,size,location,bottomClearance,viewport:[innerWidth,innerHeight],top,bottom,visible,immediate,after:snapshot(),events:events.slice(start)});
+                    }
+                }
+                return {rows,events};
+            } finally {r.goTo=original;r.removeEventListener('relocate',relocated);}
+            """, arguments: ["settings": prefs.payload], in: nil, contentWorld: .page)
+        let data = try XCTUnwrap(result as? [String: Any])
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: data), uniformTypeIdentifier: "public.json")
+        attachment.name = "Repeated Scroll speech navigation and geometry"; attachment.lifetime = .keepAlways; add(attachment)
+        let rows = try XCTUnwrap(data["rows"] as? [[String: Any]])
+        XCTAssertEqual(rows.count, 192)
+        for row in rows { XCTAssertEqual(row["visible"] as? Bool, true, "\(row)") }
+        XCTAssertNil(model.error)
+    }
+
     func testSpokenPositionFollowsInsideLongChineseParagraphInBothFlows() async throws {
         let (book, url) = try prepare("SpokenLines.html", format: .html, fixtures: true)
         for scrolling in [false, true] {
