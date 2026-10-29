@@ -606,6 +606,8 @@ final class LeafReaderUITests: XCTestCase {
         capture("Synced library before download", app: app)
 
         app.tabBars.buttons["Settings"].tap()
+        // The reading appearance controls come first; the Sync row is below them.
+        for _ in 0..<5 where !app.buttons["openICloudSync"].isHittable { app.swipeUp() }
         app.buttons["openICloudSync"].tap()
         let status = app.staticTexts["syncStatus"]
         XCTAssertTrue(status.waitForExistence(timeout: 5))

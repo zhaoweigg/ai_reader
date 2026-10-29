@@ -324,6 +324,10 @@ final class ICloudSync: ObservableObject {
     /// Records when shared settings change, so the newer change wins on another
     /// device. Writes only when something changed: it runs on every defaults change.
     private func stampSettings() {
+        // Writing the stamps posts another defaults change synchronously.
+        guard !stamping else { return }
+        stamping = true
+        defer { stamping = false }
         var stamps = defaults.dictionary(forKey: Keys.stamps) as? [String: Date] ?? [:]
         var snapshot = defaults.dictionary(forKey: Keys.snapshot) as? [String: Data] ?? [:]
         var changed = false
@@ -332,8 +336,9 @@ final class ICloudSync: ObservableObject {
             snapshot[key] = data; stamps[key] = Date(); changed = true
         }
         guard changed else { return }
-        defaults.set(stamps, forKey: Keys.stamps); defaults.set(snapshot, forKey: Keys.snapshot)
+        defaults.set(snapshot, forKey: Keys.snapshot); defaults.set(stamps, forKey: Keys.stamps)
     }
+    private var stamping = false
 
     private func encodedSetting(_ key: String) -> Data? {
         defaults.object(forKey: key).flatMap { try? PropertyListSerialization.data(fromPropertyList: [$0], format: .binary, options: 0) }
@@ -352,7 +357,7 @@ final class ICloudSync: ObservableObject {
         guard !incoming.isEmpty else { return }
         // Record the incoming values first, so the change observer does not
         // restamp them as this device's own edits.
-        defaults.set(stamps, forKey: Keys.stamps); defaults.set(snapshot, forKey: Keys.snapshot)
+        defaults.set(snapshot, forKey: Keys.snapshot); defaults.set(stamps, forKey: Keys.stamps)
         for (key, value) in incoming { defaults.set(value, forKey: key) }
     }
 
