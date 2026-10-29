@@ -131,7 +131,7 @@ private final class HistoryProvider: ChatProvider {
         let first = ReadingChatContext(title: context.title, author: context.author, chapter: context.chapter,
                                        text: "选中的第一句话。", source: "selection", locator: "first")
         let latest = ReadingChatContext(title: context.title, author: context.author, chapter: context.chapter,
-                                        text: "新的选中文字 🌿", source: "selection", locator: "latest")
+                                        text: "”\n\n　　是是是！阿目被抽了一巴掌，反而笑得更灿烂了。\n\n各位大哥大姐，我们真的错了。 🌿", source: "selection", locator: "latest")
         session.draft = "Why does this matter?\nMy interpretation is…"
         let draft = session.draft
         session.attachLiveSelection(first, chatIsPresented: false)
@@ -142,6 +142,7 @@ private final class HistoryProvider: ChatProvider {
         session.attachLiveSelection(nil, chatIsPresented: true)
         session.attachLiveSelection(ReadingChatContext(title: "", author: "", chapter: "", text: " \n", source: "selection", locator: ""), chatIsPresented: true)
         XCTAssertEqual(session.selectedContext, latest, "Losing native selection to the keyboard must keep the quote")
+        XCTAssertEqual(session.selectedContext?.previewText, "” 是是是！阿目被抽了一巴掌，反而笑得更灿烂了。 各位大哥大姐，我们真的错了。 🌿")
         XCTAssertEqual(session.draft, draft)
         XCTAssertTrue(session.messages.isEmpty, "Selection alone must never submit a question")
         // Exercise the scheduled checkpoint, without explicitly flushing the session.

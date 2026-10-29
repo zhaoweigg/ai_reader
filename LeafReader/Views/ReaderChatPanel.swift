@@ -632,7 +632,8 @@ struct ReaderChatPanel: View {
                 HStack(spacing: 6) {
                     Image(systemName: "leaf.fill").font(.system(size: 15, weight: .medium)).foregroundStyle(accent).accessibilityHidden(true)
                     if compact || isComposing, let selection = session.selectedContext {
-                        Text(selection.text).font(.caption).lineLimit(1).layoutPriority(-1).accessibilityIdentifier("chatSelectedPassage")
+                        Text(selection.previewText).font(.caption).lineLimit(1).layoutPriority(-1)
+                            .accessibilityLabel(selection.text).accessibilityIdentifier("chatSelectedPassage")
                         Button { session.removeSelection() } label: { Image(systemName: "xmark.circle").frame(width: 44, height: 44) }
                             .accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
                         if !isComposing { selectionActions(compact: true) }
@@ -829,7 +830,8 @@ struct ReaderChatPanel: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(settings.configuration.sharePage ? "Selected text" : "Selected text · passage sharing is off")
                             .font(.caption.weight(.medium))
-                        Text(selection.text).font(.caption).foregroundStyle(.secondary).lineLimit(isComposing ? 1 : 2)
+                        Text(selection.previewText).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            .accessibilityLabel(selection.text)
                             .accessibilityIdentifier("chatSelectedPassage")
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     Button { session.removeSelection() } label: {
@@ -966,7 +968,8 @@ private struct ReaderChatMessageBubble: View {
                             Spacer(minLength: 8)
                             Image(systemName: quoteExpanded ? "chevron.up" : "chevron.down").font(.caption2)
                         }.foregroundStyle(accent)
-                        Text(context.text).font(.caption).foregroundStyle(.secondary)
+                        Text(quoteExpanded ? context.text : context.previewText).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel(context.text)
                             .lineLimit(quoteExpanded ? nil : 2)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("chatQuotedPassage")
