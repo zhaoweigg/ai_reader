@@ -334,8 +334,12 @@ final class ReaderModel: NSObject, ObservableObject {
     func toggleControls() {
         guard isReady, !isLocked, error == nil else { return }
         controlsVisible.toggle()
+        ReaderScrollDiagnostics.shared.note("controls", ["visible": controlsVisible, "via": "toggle"])
     }
-    func hideControls() { controlsVisible = false }
+    func hideControls() {
+        if controlsVisible { ReaderScrollDiagnostics.shared.note("controls", ["visible": false, "via": "hide"]) }
+        controlsVisible = false
+    }
     func toggleBookmark() {
         library.toggleBookmark(bookID, locator: locator, fraction: fraction,
                                label: chapterTitle.isEmpty ? "Saved at \(positionLabel)" : chapterTitle)
@@ -392,8 +396,8 @@ final class ReaderModel: NSObject, ObservableObject {
             readerSelectionMenuTrace("selection", source: webView, context: !selectedWebText.isEmpty)
             #endif
             updateLiveSelection()
-        case "toggleControls": toggleControls()
-        case "readingActivity": hideControls()
+        case "toggleControls": ReaderScrollDiagnostics.shared.note("bridge", ["type": type]); toggleControls()
+        case "readingActivity": ReaderScrollDiagnostics.shared.note("bridge", ["type": type]); hideControls()
         case "bridgeReady": openWebBook()
         case "ready": isReady = true; error = nil; synchronizeAnnotations(); applyReadingClearance()
         case "annotationSelected": if let value = message["id"] as? String, let id = UUID(uuidString: value) { editAnnotation(id) }

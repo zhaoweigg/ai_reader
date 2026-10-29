@@ -28,6 +28,7 @@ extension ReaderModel {
         gesture.delegate = delegate
         view.addGestureRecognizer(gesture)
     }
+    ReaderScrollDiagnostics.shared.observe(view)
 }
 
 @MainActor private final class ReaderScrollTouch {
@@ -157,12 +158,15 @@ struct WebBookSurface: UIViewRepresentable {
         }
         @objc func tapped(_ gesture: UITapGestureRecognizer) {
             guard let view = gesture.view as? WKWebView, model.isReady else { return }
+            let point = gesture.location(in: view)
+            ReaderScrollDiagnostics.shared.note("tapAction", ["state": gesture.state.rawValue, "x": point.x, "y": point.y,
+                                                              "selecting": (view as? ReaderWebView)?.isHandlingNativeSelectionGesture ?? false])
             // WebKit's completed long press can also finish the reader's tap.
             // Keep native selection and handle adjustments out of reader chrome.
             if let view = view as? ReaderWebView, view.isHandlingNativeSelectionGesture { return }
-            let point = gesture.location(in: view)
             let payload = ["x": point.x / max(1, view.bounds.width), "y": point.y / max(1, view.bounds.height)]
             view.evaluateJavaScript("window.Leaf.allowsReaderTap()") { [weak self, weak view] allowed, _ in
+                ReaderScrollDiagnostics.shared.note("tapAllowed", ["allowed": allowed as? Bool ?? false])
                 guard let self, let view, self.model.webView === view, allowed as? Bool == true else { return }
                 if let view = view as? ReaderWebView, view.isHandlingNativeSelectionGesture { return }
                 if self.onReaderTap?() == true { return }
@@ -170,6 +174,10 @@ struct WebBookSurface: UIViewRepresentable {
             }
         }
         @objc func panned(_ gesture: UIPanGestureRecognizer) {
+            if gesture.state != .changed {
+                let shift = gesture.translation(in: gesture.view)
+                ReaderScrollDiagnostics.shared.note("panAction", ["state": gesture.state.rawValue, "dx": shift.x, "dy": shift.y])
+            }
             if gesture.state == .began { model.hideControls() }
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {

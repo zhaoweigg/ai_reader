@@ -29,6 +29,12 @@ struct LeafReaderApp: App {
                 chatProvider = UITestChatProvider(slow: UITesting.flag("LEAF_UI_CHAT_SLOW"))
             }
             defaults = UITesting.defaults
+            // The drift tests run with the touch recorder on, so its observer
+            // recognizer is proven not to change how reader taps behave.
+            if UITesting.flag("LEAF_UI_SCROLL_TOUCH_TRACE"), let root {
+                ReaderScrollDiagnostics.shared.configure(defaults: defaults, environment: ["LEAF_SCROLL_DIAGNOSTICS": "1"],
+                                                         directory: root.appendingPathComponent("Diagnostics", isDirectory: true))
+            }
             if UITesting.flag("LEAF_UI_SYNC_FIXTURE"), let root {
                 syncFolder = UITestSyncFixture.seed(next: root)
                 defaults.set(false, forKey: ICloudSync.Keys.keepBooks)
