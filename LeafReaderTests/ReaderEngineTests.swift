@@ -1831,11 +1831,14 @@ final class ReaderEngineTests: XCTestCase {
         let (book, _) = try prepare("Density.html", format: .html, fixtures: true)
         let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil); self.model = model
         let coordinator = WebBookSurface.Coordinator(model)
+        // A recognizer holds its view weakly, so the surfaces live for the whole test.
+        var surfaces: [UIView] = []
         func surface(with scroll: ScriptedScroll) -> UITapGestureRecognizer {
             let view = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 720))
             scroll.frame = view.bounds; scroll.contentSize = CGSize(width: 390, height: 9000)
             view.addSubview(scroll)
             let tap = UITapGestureRecognizer(); view.addGestureRecognizer(tap)
+            surfaces.append(view)
             return tap
         }
         let drifting = ScriptedScroll(dragging: true, decelerating: true, tracking: false)
@@ -1847,6 +1850,7 @@ final class ReaderEngineTests: XCTestCase {
         let otherTap = surface(with: held)
         XCTAssertFalse(coordinator.gestureRecognizer(otherTap, shouldReceive: UITouch()), "A second touch during a drag is not a reader tap")
         XCTAssertFalse(held.stopped, "A page under a dragging finger is left to the finger")
+        XCTAssertEqual(surfaces.count, 2)
     }
 
     func testStoppingScrollTapDoesNotToggleControlsAfterInertiaEndsInBothFlows() async throws {
