@@ -1,6 +1,5 @@
 import SwiftUI
 import WebKit
-import ImageIO
 
 struct ZLibraryView: View {
     @Environment(\.leafTheme) private var theme
@@ -151,6 +150,7 @@ struct ZLibraryView: View {
         .refreshable { catalog.traceCatalogLoad("pull to refresh"); await catalog.reload() }
         #if DEBUG
         .overlay(alignment: .bottomLeading) {
+            if UITesting.flag("LEAF_UI_ZLIB_THUMBNAILS") { ZLibraryImageDiagnostics() }
             if UITesting.flag("LEAF_UI_ZLIB_TRACE") {
                 Text(catalog.loadTrace.joined(separator: " | ")).font(.system(size: 1)).opacity(0.02)
                     .frame(width: 2, height: 2).accessibilityIdentifier("zlibraryLoadTrace")
@@ -365,30 +365,41 @@ private struct ZLibrarySignInWebView: UIViewRepresentable {
     }
 }
 
-struct ZLibraryCover: View {
+@MainActor struct ZLibraryCover: View {
     let book: ZLibraryBook
-    @State private var image: UIImage?
+    private let images: ZLibraryImages
+    @State private var loaded: (url: URL, image: UIImage)?
+    init(book: ZLibraryBook, images: ZLibraryImages = .shared) {
+        self.book = book; self.images = images
+        _loaded = State(initialValue: book.coverURL.flatMap { url in images.cachedImage(url).map { (url, $0) } })
+    }
+    private var image: UIImage? {
+        guard let url = book.coverURL else { return nil }
+        return loaded?.url == url ? loaded?.image : images.cachedImage(url)
+    }
     var body: some View {
         ZStack {
             if let image { Image(uiImage:image).resizable().scaledToFit() }
             else { BookCover(book:book.placeholder) }
         }.aspectRatio(0.68,contentMode:.fit).clipShape(.rect(cornerRadius:8))
-            .task(id:book.coverURL) { if let url = book.coverURL { image = await ZLibraryImages.shared.image(url) } }
+            .task(id: book.coverURL) {
+                guard let url = book.coverURL else { loaded = nil; return }
+                guard loaded?.url != url else { return }
+                let image = await images.image(url)
+                guard !Task.isCancelled else { return }
+                loaded = image.map { (url, $0) }
+            }
+            .onDisappear { loaded = nil }
     }
 }
-@MainActor private final class ZLibraryImages {
-    static let shared = ZLibraryImages()
-    private let cache = NSCache<NSURL,UIImage>()
-    init() { cache.countLimit = 40;cache.totalCostLimit = 8 * 1024 * 1024 }
-    func image(_ url:URL) async -> UIImage? {
-        if let image = cache.object(forKey:url as NSURL) { return image }
-        do {
-            let payload = try await ZLibraryHTTPTransport().send(URLRequest(url:url),toFile:false,progress: { _ in })
-            try Task.checkCancellation()
-            guard (200...299).contains(payload.response.statusCode),
-                  let source = CGImageSourceCreateWithData(payload.data as CFData,nil),
-                  let cg = CGImageSourceCreateThumbnailAtIndex(source,0,[kCGImageSourceCreateThumbnailFromImageAlways:true,kCGImageSourceThumbnailMaxPixelSize:360,kCGImageSourceCreateThumbnailWithTransform:true] as CFDictionary) else { return nil }
-            let image = UIImage(cgImage:cg);cache.setObject(image,forKey:url as NSURL,cost:cg.bytesPerRow*cg.height);return image
-        } catch { return nil }
+
+#if DEBUG
+private struct ZLibraryImageDiagnostics: View {
+    @ObservedObject private var images = ZLibraryImages.shared
+    var body: some View {
+        Text("total=\(images.transferCounts.values.reduce(0, +));unique=\(images.transferCounts.count);active=\(images.activeTransfers);first=\(images.transferCounts[URL(string: "https://covers.example/0.png")!, default: 0])")
+            .font(.system(size: 1)).opacity(0.02).frame(width: 2, height: 2)
+            .accessibilityIdentifier("zlibraryThumbnailTransfers")
     }
 }
+#endif

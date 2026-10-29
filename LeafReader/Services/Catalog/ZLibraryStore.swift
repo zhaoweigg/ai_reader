@@ -578,6 +578,11 @@ struct UITestZLibraryClient: ZLibraryServing {
         _ = try await ZLibraryClient(transport: UITestPopularRedirectTransport()).object(path, origin: try ZLibraryOrigin("https://catalog.example"), session: session, form: path == "book/search" ? ["message": "fixture"] : nil)
     }
     private func sampleBooks() -> [ZLibraryBook] {
+        if UITesting.flag("LEAF_UI_ZLIB_THUMBNAILS") {
+            return (0..<72).map { index in ZLibraryBook(remoteID: "cover\(index)", hash: "cover\(index)",
+                title: "Catalog cover \(index + 1)", author: "Leaf Editions", fileExtension: "epub", size: "1 MB", language: "English", year: "2026",
+                coverURL: URL(string: "https://covers.example/\(index).png")) }
+        }
         let sparse = UITesting.environment("LEAF_UI_ZLIB_DETAILS") != nil
         let books = [ZLibraryBook(remoteID:"sample",hash:"aabbcc",title:"The Art of Noticing",author:"Leaf Editions",fileExtension:sparse ? "" : "epub",size:sparse ? "" : "1.8 MB",language:sparse ? "" : "English",year:sparse ? "" : "2026",coverURL:nil,rating:4.6,ratingCount:52,qualityScore:4.2),
          ZLibraryBook(remoteID:"sample2",hash:"ccddaa",title:"Notes from the Coast",author:"Rowan Hale",fileExtension:"pdf",size:"2.4 MB",language:"English",year:"2026",coverURL:nil)]

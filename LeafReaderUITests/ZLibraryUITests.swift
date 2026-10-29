@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false, threeColumnGrid: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false, threeColumnGrid: Bool = false, thumbnails: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -13,6 +13,7 @@ final class ZLibraryUITests: XCTestCase {
         if let recommendations { app.launchEnvironment["LEAF_UI_ZLIB_RECOMMENDATIONS_" + recommendations.uppercased()] = "1" }
         if shelf { app.launchEnvironment["LEAF_UI_ZLIB_SHELF"] = "1" }
         if threeColumnGrid { app.launchEnvironment["LEAF_UI_ZLIB_GRID"] = "1" }
+        if thumbnails { app.launchEnvironment["LEAF_UI_ZLIB_THUMBNAILS"] = "1" }
         app.launch()
         if sceneGeometry {
             registerSceneGeometryCleanup(app: app)
@@ -23,6 +24,65 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor private func openDiscover(_ app: XCUIApplication) {
         let tab = app.tabBars.buttons["Discover"]
         XCTAssertTrue(tab.waitForExistence(timeout: 10)); tab.tap()
+    }
+    @MainActor func testCatalogThumbnailsStayLoadedAcrossScrollingDetailsFeedsAndSearch() {
+        continueAfterFailure = false
+        let app = launch(sceneGeometry: true, shelf: true, threeColumnGrid: true, thumbnails: true)
+        openDiscover(app)
+        let metrics = app.staticTexts["zlibraryThumbnailTransfers"]
+        func value(_ key: String) -> Int {
+            let pair = metrics.label.split(separator: ";").first { $0.hasPrefix(key + "=") }
+            return pair.flatMap { Int($0.split(separator: "=").last ?? "") } ?? -1
+        }
+        var originalFirstTransfers: Int?
+        func settled() {
+            XCTAssertTrue(metrics.waitForExistence(timeout: 5))
+            expectation(for: NSPredicate { _, _ in value("active") == 0 && value("first") > 0 }, evaluatedWith: metrics)
+            waitForExpectations(timeout: 10)
+            if originalFirstTransfers == nil { originalFirstTransfers = value("first") }
+            XCTAssertEqual(value("first"), originalFirstTransfers, "A loaded first cover must not be downloaded again: \(metrics.label)")
+        }
+        func top() {
+            let field = app.textFields["zlibrarySearchField"]
+            let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
+            for _ in 0..<12 where !field.isHittable { scroll.swipeDown() }
+            XCTAssertTrue(field.isHittable); settled()
+        }
+        settled()
+        capture("Thumbnail cache popular cold Day portrait")
+        let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
+        for pass in 0..<3 {
+            for _ in 0..<4 { scroll.swipeUp() }
+            capture("Thumbnail cache scrolled pass \(pass + 1)")
+            top()
+            XCTAssertTrue(app.buttons["catalogBook-cover0"].isHittable)
+            XCTAssertEqual(value("first"), originalFirstTransfers)
+        }
+        capture("Thumbnail cache returned first row")
+        app.buttons["catalogBook-cover0"].tap()
+        XCTAssertTrue(app.navigationBars["Book details"].waitForExistence(timeout: 5))
+        capture("Thumbnail cache detail reuses grid cover")
+        app.navigationBars.buttons["Z-Library"].tap(); settled()
+        search("covers", app: app)
+        XCTAssertTrue(app.buttons["catalogBook-cover0"].waitForExistence(timeout: 10)); settled()
+        capture("Thumbnail cache search shares loaded cover")
+        app.buttons["zlibraryClearSearch"].tap(); settled()
+        app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        browse("Recommended", app: app); settled()
+        XCTAssertTrue(app.buttons["catalogBook-cover0"].exists)
+        setReaderOrientation(.landscapeLeft, app: app); settled()
+        capture("Thumbnail cache recommended Day landscape")
+        setReaderOrientation(.portrait, app: app)
+        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap()
+        app.tabBars.buttons["Library"].tap()
+        XCTAssertTrue(app.staticTexts["discoverShelfTitle"].waitForExistence(timeout: 10))
+        capture("Thumbnail cache library shelf Night")
+        openDiscover(app); settled()
+        browse("Most popular", app: app); settled()
+        capture("Thumbnail cache popular Night portrait")
+        app.buttons["zlibraryRefresh"].tap(); waitForCatalogLoad(app); settled()
+        XCTAssertEqual(value("first"), originalFirstTransfers)
+        app.terminate()
     }
     @MainActor func testThreeBooksPerRowAcrossCatalogFeedsAndSearch() {
         continueAfterFailure = false
