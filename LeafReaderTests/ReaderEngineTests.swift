@@ -3004,9 +3004,13 @@ private struct QuotePreviewReaderHarness: View {
             ReaderChatPanel(session: chat, bookTitle: "Quote preview", isComposing: state.composing,
                 onClose: {}, onSettings: {}, onButtonSettings: {}, onSend: {}, onResize: { _, _ in },
                 onResizeStep: { _ in }, onResetSize: {})
-                .frame(height: 280).padding(8)
+                .frame(height: 280)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous)).padding(8)
         }
         .environment(\.leafTheme, preferences.theme)
+        .foregroundStyle(preferences.theme.foreground).tint(preferences.theme.accent)
+        .preferredColorScheme(preferences.theme.colorScheme)
         .onChange(of: model.liveSelection) { _, selection in chat.attachLiveSelection(selection, chatIsPresented: true) }
     }
 }
