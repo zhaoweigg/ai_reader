@@ -1828,7 +1828,8 @@ final class ReaderEngineTests: XCTestCase {
     /// dragging viewport.
     func testTouchStopsADriftThatStillReportsDragging() throws {
         guard #available(iOS 17.4, *) else { throw XCTSkip("stopScrollingAndZooming requires iOS 17.4") }
-        let model = ReaderModel(bookID: UUID(), library: try XCTUnwrap(store), initialLocator: nil); self.model = model
+        let (book, _) = try prepare("Density.html", format: .html, fixtures: true)
+        let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil); self.model = model
         let coordinator = WebBookSurface.Coordinator(model)
         func surface(with scroll: ScriptedScroll) -> UITapGestureRecognizer {
             let view = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 720))
