@@ -78,7 +78,10 @@ extension ReaderModel {
         ReaderScrollDiagnostics.shared.touch(touch, scrolls: all, moving: moving, coastAge: coastAge)
         guard !moving.isEmpty else { return true }
         stoppingTouch = touch; stoppingTimestamp = touch.timestamp
-        for scroll in moving where !scroll.isDragging {
+        // A drift after lift-off still reports isDragging until it settles, and
+        // on a device UIKit does not always halt it for the new touch. Leave
+        // only a page that a finger is actually dragging right now.
+        for scroll in moving where scroll.isDecelerating || !scroll.isDragging {
             // Explicitly stop the native scroller, including a slow animated
             // offset change. Rejecting the reader tap alone only hides chrome;
             // it does not cancel motion in WebKit's nested scroll views.
