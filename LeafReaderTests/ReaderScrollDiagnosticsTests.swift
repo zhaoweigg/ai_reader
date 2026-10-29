@@ -43,4 +43,44 @@ final class ReaderScrollDiagnosticsTests: XCTestCase {
         XCTAssertEqual(state["coastAge"] as? Double, 0.01)
         XCTAssertTrue(events.contains { $0["event"] as? String == "stopped" })
     }
+
+    func testRelaunchingKeepsEarlierEventsAndNotesGetRecorded() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ReaderScrollDiagnosticsTests.\(UUID().uuidString)"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let first = ReaderScrollDiagnostics()
+        first.configure(defaults: defaults, environment: ["LEAF_SCROLL_DIAGNOSTICS": "1"], directory: directory)
+        first.note("tapAction", ["state": 3, "x": 12.5])
+        first.note("controls", ["visible": true, "via": "toggle"])
+        first.flush(force: true)
+
+        // A later launch (an update, or reopening from the Home Screen) must not erase what was just reproduced.
+        let second = ReaderScrollDiagnostics()
+        second.configure(defaults: defaults, environment: [:], directory: directory)
+        second.note("panAction", ["state": 1])
+        second.flush(force: true)
+        let data = try Data(contentsOf: XCTUnwrap(second.file))
+        let events = try XCTUnwrap((try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any]))["events"] as? [[String: Any]])
+        let names = events.map { $0["event"] as? String }
+        XCTAssertEqual(names, ["launch", "tapAction", "controls", "launch", "panAction"])
+        XCTAssertEqual(events[1]["x"] as? Double, 12.5)
+        XCTAssertEqual(events[2]["via"] as? String, "toggle")
+        XCTAssertEqual(events[3]["kept"] as? Int, 3, "The second launch reports how many earlier events it kept")
+    }
+
+    func testTouchObserverIsInstalledOnceAndNeverRecognizes() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ReaderScrollDiagnosticsTests.\(UUID().uuidString)"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let diagnostics = ReaderScrollDiagnostics()
+        let view = UIView()
+        diagnostics.observe(view)
+        XCTAssertTrue(view.gestureRecognizers?.isEmpty ?? true, "Nothing is installed while recording is off")
+        diagnostics.configure(defaults: defaults, environment: ["LEAF_SCROLL_DIAGNOSTICS": "1"], directory: directory)
+        diagnostics.observe(view); diagnostics.observe(view)
+        let observers = view.gestureRecognizers?.compactMap { $0 as? ReaderTouchObserver } ?? []
+        XCTAssertEqual(observers.count, 1)
+        let observer = try XCTUnwrap(observers.first)
+        XCTAssertFalse(observer.cancelsTouchesInView)
+        XCTAssertFalse(observer.canPrevent(UITapGestureRecognizer()), "The observer must not change how the reader's own recognizers behave")
+        XCTAssertFalse(observer.canBePrevented(by: UITapGestureRecognizer()))
+    }
 }
