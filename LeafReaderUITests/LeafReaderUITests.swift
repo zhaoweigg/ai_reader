@@ -633,6 +633,43 @@ final class LeafReaderUITests: XCTestCase {
     /// A device joining an iCloud Drive folder that another device filled lists
     /// the synced book with its position before the file is here, downloads it
     /// when opened, and shows the folder in Settings › iCloud.
+    /// Settings › Diagnostics records reader touches without a special launch,
+    /// shows how much was recorded, offers the file for sharing, and clears it.
+    @MainActor func testDiagnosticsRecordingCanBeTurnedOnSharedAndCleared() {
+        continueAfterFailure = false
+        let app = launchApp()
+        func openDiagnostics() {
+            app.tabBars.buttons["Settings"].tap()
+            for _ in 0..<6 where !app.switches["diagnosticsRecording"].isHittable { app.swipeUp() }
+            XCTAssertTrue(app.switches["diagnosticsRecording"].waitForExistence(timeout: 5))
+        }
+        openDiagnostics()
+        XCTAssertEqual(app.switches["diagnosticsRecording"].value as? String, "0", "Recording is off by default")
+        XCTAssertFalse(app.buttons["diagnosticsShare"].exists, "Nothing to share before recording")
+        app.switches["diagnosticsRecording"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(app.switches["diagnosticsRecording"].value as? String, "1")
+        capture("Diagnostics on", app: app)
+
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        let surface = readingSurface(app)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
+        app.buttons["closeBook"].tap()
+
+        openDiagnostics()
+        let count = app.staticTexts["diagnosticsCount"]
+        XCTAssertTrue(count.waitForExistence(timeout: 5))
+        XCTAssertNotEqual(count.label, "0 events", "The reader tap was recorded")
+        XCTAssertTrue(app.buttons["diagnosticsShare"].waitForExistence(timeout: 5), "The recording can be shared")
+        app.buttons["diagnosticsClear"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "1 events"), evaluatedWith: count)
+        waitForExpectations(timeout: 5)
+        app.switches["diagnosticsRecording"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(app.switches["diagnosticsRecording"].value as? String, "0")
+        capture("Diagnostics cleared and off", app: app)
+    }
+
     @MainActor func testANewDeviceListsASyncedBookAndDownloadsItWhenOpened() {
         continueAfterFailure = false
         let app = launchApp(syncFixture: true)

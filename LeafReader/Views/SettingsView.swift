@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var sync: ICloudSync
+    @ObservedObject private var diagnostics = ReaderScrollDiagnostics.shared
     var body: some View {
         NavigationStack {
             Form {
@@ -23,6 +24,19 @@ struct SettingsView: View {
                         formatRow("Comics", "CBZ")
                         Text("Choose DRM-free files up to 100 MB. KFX, ACSM, CBR, and DjVu need conversion before importing.")
                             .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Section {
+                        Toggle("Record reader touches", isOn: Binding(get: { diagnostics.isEnabled }, set: { diagnostics.setEnabled($0) }))
+                            .accessibilityIdentifier("diagnosticsRecording")
+                        LabeledContent("Recorded") { Text("\(diagnostics.eventCount) events").accessibilityIdentifier("diagnosticsCount") }
+                        if diagnostics.fileSize > 0, let file = diagnostics.file {
+                            ShareLink(item: file) { Label("Share recording", systemImage: "square.and.arrow.up") }
+                                .accessibilityIdentifier("diagnosticsShare")
+                        }
+                        Button("Clear recording", role: .destructive) { diagnostics.clear() }
+                            .disabled(diagnostics.eventCount == 0).accessibilityIdentifier("diagnosticsClear")
+                    } header: { Text("Diagnostics") } footer: {
+                        Text("For tracking down scrolling and tap problems. While on, Leaf records the book's scroll positions and touch timings, never its text. Share the recording when reporting a problem, then clear it.")
                     }
                     Section("Made for unhurried reading") {
                         Label(sync.isConnected ? "Books sync through your iCloud Drive" : "Books stay on this device", systemImage: sync.isConnected ? "icloud" : "internaldrive")

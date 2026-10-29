@@ -6,12 +6,15 @@ import UIKit.UIGestureRecognizerSubclass
 /// `LEAF_SCROLL_DIAGNOSTICS=1` enabled it for the next 24 hours, and it records
 /// offsets, states and timings only, never book text. Earlier launches' events
 /// are kept, so a relaunch does not erase what was just reproduced.
-@MainActor final class ReaderScrollDiagnostics {
+@MainActor final class ReaderScrollDiagnostics: ObservableObject {
     static let shared = ReaderScrollDiagnostics()
     static let enabledUntilKey = "readerScrollDiagnosticsUntil"
     static let limit = 8000
-    private(set) var isEnabled = false
+    @Published private(set) var isEnabled = false
+    @Published private(set) var eventCount = 0
     private(set) var file: URL?
+    private var defaults: UserDefaults?
+    private var directory: URL?
     private weak var book: UIScrollView?
     private weak var lastTouch: UITouch?
     private var lastTouchTime: TimeInterval = -1
@@ -27,13 +30,49 @@ import UIKit.UIGestureRecognizerSubclass
     private lazy var ticker: Ticker = { let ticker = Ticker(); ticker.owner = self; return ticker }()
 
     func configure(defaults: UserDefaults, environment: [String: String] = ProcessInfo.processInfo.environment, directory: URL?, now: Date = Date()) {
+        self.defaults = defaults; self.directory = directory
         if environment["LEAF_SCROLL_DIAGNOSTICS"] == "1" {
             defaults.set(now.addingTimeInterval(24 * 3600), forKey: Self.enabledUntilKey)
+        }
+        if let directory {
+            file = directory.appendingPathComponent("scroll-diagnostics.json")
+            eventCount = Self.existingEvents(file!).count
         }
         guard let directory, let until = defaults.object(forKey: Self.enabledUntilKey) as? Date, until > now else {
             isEnabled = false
             return
         }
+        start(directory: directory, now: now)
+    }
+
+    /// Settings › Diagnostics turns recording on without a special launch; it
+    /// then stays on until turned off there.
+    func setEnabled(_ enabled: Bool, now: Date = Date()) {
+        guard let defaults, let directory else { return }
+        if enabled {
+            defaults.set(now.addingTimeInterval(365 * 24 * 3600), forKey: Self.enabledUntilKey)
+            if !isEnabled { start(directory: directory, now: now) }
+        } else {
+            defaults.removeObject(forKey: Self.enabledUntilKey)
+            flush(force: true)
+            isEnabled = false
+        }
+    }
+
+    /// Forgets everything recorded so far, on disk too.
+    func clear() {
+        events = []; eventCount = 0; dirty = false; lastFrame = ""
+        if let file { try? FileManager.default.removeItem(at: file) }
+        if isEnabled { note("cleared") }
+    }
+
+    /// Bytes on disk, for the Settings row.
+    var fileSize: Int64 {
+        guard let file, let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return 0 }
+        return Int64(size)
+    }
+
+    private func start(directory: URL, now: Date) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent("scroll-diagnostics.json")
         self.file = file
@@ -132,6 +171,7 @@ import UIKit.UIGestureRecognizerSubclass
     private func append(_ event: String) {
         events.append(event)
         if events.count > Self.limit { events.removeFirst(events.count - Self.limit) }
+        eventCount = events.count
         dirty = true
     }
 
