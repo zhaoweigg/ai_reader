@@ -61,7 +61,9 @@ import UIKit.UIGestureRecognizerSubclass
 
     /// Forgets everything recorded so far, on disk too.
     func clear() {
-        events = []; eventCount = 0; dirty = false; lastFrame = ""
+        // The last sampled frame is kept, so a still page is not logged again
+        // right after clearing; the next change is.
+        events = []; eventCount = 0; dirty = false
         if let file { try? FileManager.default.removeItem(at: file) }
         if isEnabled { note("cleared") }
     }

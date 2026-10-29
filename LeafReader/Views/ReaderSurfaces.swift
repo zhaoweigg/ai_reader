@@ -33,10 +33,11 @@ extension ReaderModel {
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesMoved(touches, with: event)
+        // The start point is replaced by the next touch-down, never cleared: a
+        // reset between two moves must not make the second move look like a start.
         guard state == .possible, let start, let point = touches.first?.location(in: nil) else { return }
         if hypot(point.x - start.x, point.y - start.y) > Self.allowedMovement { state = .failed }
     }
-    override func reset() { super.reset(); start = nil }
 }
 
 @MainActor private func installReaderGestures(on view: UIView, target: NSObject, delegate: UIGestureRecognizerDelegate, tap action: Selector, pan panAction: Selector) {
