@@ -2907,19 +2907,19 @@ final class ReaderEngineTests: XCTestCase {
 
 /// A scroll view reporting chosen UIKit motion states, recording whether it was stopped.
 @MainActor private final class ScriptedScroll: UIScrollView {
-    private let dragging: Bool, tracking: Bool
-    private var decelerating: Bool
+    private let scriptedDragging: Bool, scriptedTracking: Bool
+    private var scriptedDecelerating: Bool
     private(set) var stopped = false
     init(dragging: Bool, decelerating: Bool, tracking: Bool) {
-        self.dragging = dragging; self.decelerating = decelerating; self.tracking = tracking
+        scriptedDragging = dragging; scriptedDecelerating = decelerating; scriptedTracking = tracking
         super.init(frame: .zero)
     }
     required init?(coder: NSCoder) { fatalError() }
-    override var isDragging: Bool { dragging && !stopped }
-    override var isDecelerating: Bool { decelerating }
-    override var isTracking: Bool { tracking }
+    override var isDragging: Bool { scriptedDragging && !stopped }
+    override var isDecelerating: Bool { scriptedDecelerating }
+    override var isTracking: Bool { scriptedTracking }
     @available(iOS 17.4, *)
-    override func stopScrollingAndZooming() { stopped = true; decelerating = false }
+    override func stopScrollingAndZooming() { stopped = true; scriptedDecelerating = false }
 }
 
 /// A touch on the media clock; `UITouch()` reports a zero timestamp.
