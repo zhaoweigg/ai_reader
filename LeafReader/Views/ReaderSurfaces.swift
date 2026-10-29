@@ -25,18 +25,27 @@ extension ReaderModel {
 /// settled scroll then hid again. Once the finger has moved as far as a scroll
 /// takes to start, this is no tap.
 @MainActor final class ReaderTapRecognizer: UITapGestureRecognizer {
-    static let allowedMovement: CGFloat = 10
-    private var start: CGPoint?
+    private var gate = TapMovementGate()
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
-        start = touches.first?.location(in: nil)
+        if let point = touches.first?.location(in: nil) { gate.begin(at: point) }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesMoved(touches, with: event)
-        // The start point is replaced by the next touch-down, never cleared: a
-        // reset between two moves must not make the second move look like a start.
-        guard state == .possible, let start, let point = touches.first?.location(in: nil) else { return }
-        if hypot(point.x - start.x, point.y - start.y) > Self.allowedMovement { state = .failed }
+        guard let point = touches.first?.location(in: nil), gate.scrolled(to: point), state == .possible else { return }
+        state = .failed
+    }
+}
+
+/// Where a touch landed and whether it has since moved as far as a scroll
+/// takes to begin. The start is replaced by the next touch-down, never cleared.
+struct TapMovementGate {
+    static let allowedMovement: CGFloat = 10
+    private var start: CGPoint?
+    mutating func begin(at point: CGPoint) { start = point }
+    mutating func scrolled(to point: CGPoint) -> Bool {
+        guard let start else { return false }
+        return hypot(point.x - start.x, point.y - start.y) > Self.allowedMovement
     }
 }
 
