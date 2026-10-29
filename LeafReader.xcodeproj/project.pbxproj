@@ -84,8 +84,10 @@
 		BAE84B9CFB4A8A3492DA836A /* LeafReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09FE5DD36BCC4F16362E9EA /* LeafReaderApp.swift */; };
 		BE304B8B6ABD0D54C31DA0B1 /* TarBzip2Extractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 089DA1290103380875CED85C /* TarBzip2Extractor.swift */; };
 		C1191F779B70CD82A1CEF063 /* ChatProvider+Agent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7FDBF4B5F72934389E456C5 /* ChatProvider+Agent.swift */; };
+		C13BF4B47A4F2C4B6BB918AF /* ZLibraryImageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 687B8AAE8964C70DF3E0FB05 /* ZLibraryImageTests.swift */; };
 		C28F300180E7E803C9941677 /* Samples in Resources */ = {isa = PBXBuildFile; fileRef = 1DFADC00594A53824F3A7DC6 /* Samples */; };
 		C323E799B40EC06789B081DA /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53EF7C81ECA87AA792CB61CD /* Book.swift */; };
+		C55DDE3AB2D1065B945F88A9 /* ZLibraryImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5480FF7C571B63EE4F195093 /* ZLibraryImages.swift */; };
 		C730CCBBA3FDEE0CF9BC2543 /* BookCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC483DB37697EED2DA2BC84 /* BookCover.swift */; };
 		C787599E72120592DA445D2D /* ReaderChatPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F25FA3CF6923499A67C834 /* ReaderChatPanel.swift */; };
 		CA53E0D5B88DDD43C8306E39 /* ChatHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14B74EB530BE5F91DAC4B044 /* ChatHistoryStore.swift */; };
@@ -165,12 +167,14 @@
 		4C20E5A828AAC6404D28EC9E /* ChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMarkdown.swift; sourceTree = "<group>"; };
 		4F54C849D003EAC52FC2783C /* ReadingAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingAgentTests.swift; sourceTree = "<group>"; };
 		53EF7C81ECA87AA792CB61CD /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
+		5480FF7C571B63EE4F195093 /* ZLibraryImages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryImages.swift; sourceTree = "<group>"; };
 		56D4D8913088D871C0A664F5 /* ReaderAudioSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAudioSource.swift; sourceTree = "<group>"; };
 		5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryChatUITests.swift; sourceTree = "<group>"; };
 		5E6DF2E83336FF008A3ECB0C /* ZLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryTests.swift; sourceTree = "<group>"; };
 		613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryUITests.swift; sourceTree = "<group>"; };
 		63D0097D2F2FDE06A85F710B /* ChatDictationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDictationTests.swift; sourceTree = "<group>"; };
 		6850C7062B504A73A5242F98 /* ChatGPTBrowserSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTBrowserSignIn.swift; sourceTree = "<group>"; };
+		687B8AAE8964C70DF3E0FB05 /* ZLibraryImageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryImageTests.swift; sourceTree = "<group>"; };
 		6AB29A7913A706F43291361B /* BookmarksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarksView.swift; sourceTree = "<group>"; };
 		6C58276EB1F4A939EEC2C0D2 /* Reader */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Reader; path = LeafReader/Resources/Reader; sourceTree = SOURCE_ROOT; };
 		6C632D3424C29D507323DF84 /* ReaderChatSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderChatSession.swift; sourceTree = "<group>"; };
@@ -359,6 +363,7 @@
 				4F54C849D003EAC52FC2783C /* ReadingAgentTests.swift */,
 				E6B763DF832118110BAED95B /* ThemeTests.swift */,
 				FC7F6702710B8ED091479F1B /* ZLibraryBrowserTests.swift */,
+				687B8AAE8964C70DF3E0FB05 /* ZLibraryImageTests.swift */,
 				5E6DF2E83336FF008A3ECB0C /* ZLibraryTests.swift */,
 			);
 			path = LeafReaderTests;
@@ -450,6 +455,7 @@
 			children = (
 				03415DD750D6982938373279 /* ZLibraryBrowserSession.swift */,
 				FF96FF360E492577BC90BFBA /* ZLibraryClient.swift */,
+				5480FF7C571B63EE4F195093 /* ZLibraryImages.swift */,
 				27735E21F07ADCA25D2777AC /* ZLibraryStore.swift */,
 			);
 			path = Catalog;
@@ -671,6 +677,7 @@
 				450FBFE809E2396034EBDCD9 /* UITesting.swift in Sources */,
 				D9CC609F0D4142FA91D26A0A /* ZLibraryBrowserSession.swift in Sources */,
 				F3F8B6B6F653CF0B900E74CE /* ZLibraryClient.swift in Sources */,
+				C55DDE3AB2D1065B945F88A9 /* ZLibraryImages.swift in Sources */,
 				965F9070210F18463495A4F4 /* ZLibraryStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -697,6 +704,7 @@
 				E3AAFA83D719A71F8B9B715B /* ReadingAgentTests.swift in Sources */,
 				F3AFD62E37C55DE98DED5815 /* ThemeTests.swift in Sources */,
 				7C844B57B05FA6D0F755360A /* ZLibraryBrowserTests.swift in Sources */,
+				C13BF4B47A4F2C4B6BB918AF /* ZLibraryImageTests.swift in Sources */,
 				FACB375CC9D5215083FF359A /* ZLibraryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
