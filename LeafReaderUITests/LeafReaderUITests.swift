@@ -580,6 +580,45 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     /// The reported case: the same slow short drift while Ask Leaf is open.
+    /// Recorded on an iPhone (build 109): short slow pulls of 21-39 pt ended in
+    /// a tap that opened the controls, which the settled scroll then hid. With
+    /// and without Ask Leaf, such a pull must leave the controls alone, while a
+    /// still tap afterwards must open them as before.
+    @MainActor func testShortSlowPullDoesNotOpenTheControlsInScroll() {
+        continueAfterFailure = true
+        let app = launchApp()
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        openAppearance(app)
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons["Scroll"].tap()
+        dismissAppearance(app)
+        let surface = readingSurface(app)
+        if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        for chat in [false, true] {
+            if chat {
+                app.buttons["openReaderChat"].tap()
+                XCTAssertTrue(app.otherElements["readerChatPanel"].waitForExistence(timeout: 5))
+                if app.keyboards.firstMatch.exists { app.keyboards.buttons["Hide keyboard"].firstMatch.tap() }
+            }
+            let top = chat ? 0.3 : 0.55
+            // 25-35 pt pulls at finger speed, like the recorded ones (3 px per point here).
+            for pull in [25.0, 35.0] {
+                let from = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: top + pull / surface.frame.height))
+                from.press(forDuration: 0.05, thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: top)),
+                           withVelocity: XCUIGestureVelocity(rawValue: 300), thenHoldForDuration: 0)
+                XCTAssertFalse(app.buttons["closeBook"].waitForExistence(timeout: 1.5),
+                               "A \(Int(pull)) pt pull\(chat ? " with Ask Leaf open" : "") must not open the controls")
+                capture("After a \(Int(pull)) pt pull\(chat ? " with chat" : "")", app: app)
+            }
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: top)).tap()
+            XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 3), "A still tap\(chat ? " with Ask Leaf open" : "") still opens the controls")
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: top)).tap()
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeBook"])
+            waitForExpectations(timeout: 3)
+            if chat { app.buttons["closeReaderChat"].tap() }
+        }
+    }
+
     @MainActor func testTapStopsSlowShortDriftWithChatInScroll() {
         continueAfterFailure = true
         let cases = runDriftSweep(chat: true, speeds: [450, 600, 900], delays: [0.15, 0.5, 0.8, 1.1, 1.4])
@@ -594,6 +633,45 @@ final class LeafReaderUITests: XCTestCase {
     /// A device joining an iCloud Drive folder that another device filled lists
     /// the synced book with its position before the file is here, downloads it
     /// when opened, and shows the folder in Settings › iCloud.
+    /// Settings › Diagnostics records reader touches without a special launch,
+    /// shows how much was recorded, offers the file for sharing, and clears it.
+    @MainActor func testDiagnosticsRecordingCanBeTurnedOnSharedAndCleared() {
+        continueAfterFailure = false
+        let app = launchApp()
+        func openDiagnostics() {
+            app.tabBars.buttons["Settings"].tap()
+            for _ in 0..<6 where !app.switches["diagnosticsRecording"].isHittable { app.swipeUp() }
+            XCTAssertTrue(app.switches["diagnosticsRecording"].waitForExistence(timeout: 5))
+        }
+        openDiagnostics()
+        XCTAssertEqual(app.switches["diagnosticsRecording"].value as? String, "0", "Recording is off by default")
+        XCTAssertFalse(app.buttons["diagnosticsShare"].exists, "Nothing to share before recording")
+        app.switches["diagnosticsRecording"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(app.switches["diagnosticsRecording"].value as? String, "1")
+        capture("Diagnostics on", app: app)
+
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        let surface = readingSurface(app)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
+        app.buttons["closeBook"].tap()
+
+        openDiagnostics()
+        let count = app.staticTexts["diagnosticsCount"]
+        XCTAssertTrue(count.waitForExistence(timeout: 5))
+        XCTAssertNotEqual(count.value as? String, "0", "The reader tap was recorded: \(count.label)")
+        XCTAssertTrue(app.buttons["diagnosticsShare"].waitForExistence(timeout: 5), "The recording can be shared")
+        // The Clear row sits at the bottom of Settings, under the floating tab bar until scrolled up.
+        for _ in 0..<4 where !app.buttons["diagnosticsClear"].isHittable { app.swipeUp() }
+        app.buttons["diagnosticsClear"].tap()
+        expectation(for: NSPredicate(format: "value == %@", "1"), evaluatedWith: count)
+        waitForExpectations(timeout: 5)
+        app.switches["diagnosticsRecording"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(app.switches["diagnosticsRecording"].value as? String, "0")
+        capture("Diagnostics cleared and off", app: app)
+    }
+
     @MainActor func testANewDeviceListsASyncedBookAndDownloadsItWhenOpened() {
         continueAfterFailure = false
         let app = launchApp(syncFixture: true)

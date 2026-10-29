@@ -29,12 +29,6 @@ struct LeafReaderApp: App {
                 chatProvider = UITestChatProvider(slow: UITesting.flag("LEAF_UI_CHAT_SLOW"))
             }
             defaults = UITesting.defaults
-            // The drift tests run with the touch recorder on, so its observer
-            // recognizer is proven not to change how reader taps behave.
-            if UITesting.flag("LEAF_UI_SCROLL_TOUCH_TRACE"), let root {
-                ReaderScrollDiagnostics.shared.configure(defaults: defaults, environment: ["LEAF_SCROLL_DIAGNOSTICS": "1"],
-                                                         directory: root.appendingPathComponent("Diagnostics", isDirectory: true))
-            }
             if UITesting.flag("LEAF_UI_SYNC_FIXTURE"), let root {
                 syncFolder = UITestSyncFixture.seed(next: root)
                 defaults.set(false, forKey: ICloudSync.Keys.keepBooks)
@@ -67,10 +61,15 @@ struct LeafReaderApp: App {
         let syncState = root.map { $0.appendingPathComponent("SyncState", isDirectory: true) }
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("LeafSync", isDirectory: true)
         _sync = StateObject(wrappedValue: ICloudSync(library: libraryStore, defaults: defaults, stateDirectory: syncState, folderOverride: syncFolder))
-        if root == nil {
-            ReaderScrollDiagnostics.shared.configure(defaults: .standard,
-                directory: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("Diagnostics", isDirectory: true))
-        }
+        // The recorder is configured on every launch so Settings › Diagnostics
+        // can turn it on and off; the drift UI tests start with it on, so its
+        // observer recognizer is proven not to change how reader taps behave.
+        var diagnosticsEnvironment = ProcessInfo.processInfo.environment
+        #if DEBUG
+        if UITesting.flag("LEAF_UI_SCROLL_TOUCH_TRACE") { diagnosticsEnvironment["LEAF_SCROLL_DIAGNOSTICS"] = "1" }
+        #endif
+        ReaderScrollDiagnostics.shared.configure(defaults: defaults, environment: diagnosticsEnvironment,
+            directory: (root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)?.appendingPathComponent("Diagnostics", isDirectory: true))
     }
 
     var body: some Scene {

@@ -67,6 +67,39 @@ final class ReaderScrollDiagnosticsTests: XCTestCase {
         XCTAssertEqual(events[3]["kept"] as? Int, 3, "The second launch reports how many earlier events it kept")
     }
 
+    func testSettingsCanTurnRecordingOnOffAndClearIt() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ReaderScrollDiagnosticsTests.\(UUID().uuidString)"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let diagnostics = ReaderScrollDiagnostics()
+        diagnostics.configure(defaults: defaults, environment: [:], directory: directory)
+        XCTAssertFalse(diagnostics.isEnabled)
+        diagnostics.setEnabled(true)
+        XCTAssertTrue(diagnostics.isEnabled, "The Settings switch records without a special launch")
+        diagnostics.note("tapAction", ["state": 3])
+        diagnostics.flush(force: true)
+        XCTAssertEqual(diagnostics.eventCount, 2, "The launch marker and the note")
+        XCTAssertGreaterThan(diagnostics.fileSize, 0)
+
+        let relaunched = ReaderScrollDiagnostics()
+        relaunched.configure(defaults: defaults, environment: [:], directory: directory)
+        XCTAssertTrue(relaunched.isEnabled, "Turned on in Settings, recording survives a relaunch")
+        XCTAssertEqual(relaunched.eventCount, 3)
+
+        relaunched.clear()
+        XCTAssertEqual(relaunched.eventCount, 1, "Clearing keeps only a marker for the clear itself while still recording")
+        relaunched.flush(force: true)
+        relaunched.setEnabled(false)
+        XCTAssertFalse(relaunched.isEnabled)
+        relaunched.note("tapAction", ["state": 3])
+        XCTAssertEqual(relaunched.eventCount, 1, "Nothing is recorded while off")
+        let off = ReaderScrollDiagnostics()
+        off.configure(defaults: defaults, environment: [:], directory: directory)
+        XCTAssertFalse(off.isEnabled, "Turned off in Settings, a relaunch stays off")
+        off.clear()
+        XCTAssertEqual(off.eventCount, 0)
+        XCTAssertEqual(off.fileSize, 0, "Clearing while off removes the file")
+    }
+
     func testTouchObserverIsInstalledOnceAndNeverRecognizes() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ReaderScrollDiagnosticsTests.\(UUID().uuidString)"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

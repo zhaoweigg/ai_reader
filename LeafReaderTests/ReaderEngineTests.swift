@@ -1935,6 +1935,24 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(surfaces.count, 2)
     }
 
+    /// Recorded on an iPhone (build 109): three short slow pulls of 21-39 points
+    /// each ended in UIKit's tap recognizer firing, which opened the controls
+    /// until the settled scroll hid them again. The reader's tap gives up once
+    /// the finger has moved as far as a scroll takes to begin.
+    func testReaderTapGivesUpOnceTheFingerHasMovedAScrollDistance() {
+        var gate = TapMovementGate()
+        XCTAssertFalse(gate.scrolled(to: CGPoint(x: 200, y: 200)), "Nothing has landed yet")
+        gate.begin(at: CGPoint(x: 120, y: 500))
+        XCTAssertFalse(gate.scrolled(to: CGPoint(x: 121, y: 496)), "4 pt may still be a tap")
+        XCTAssertFalse(gate.scrolled(to: CGPoint(x: 122, y: 491)), "9 pt may still be a tap")
+        XCTAssertTrue(gate.scrolled(to: CGPoint(x: 122, y: 489)), "11 pt from where the finger landed scrolled, however many moves it took")
+        XCTAssertTrue(gate.scrolled(to: CGPoint(x: 115, y: 461)), "The recorded 39 pt pull")
+        gate.begin(at: CGPoint(x: 300, y: 300))
+        XCTAssertFalse(gate.scrolled(to: CGPoint(x: 303, y: 304)), "A new touch measures from its own landing point")
+        let recognizer = ReaderTapRecognizer()
+        XCTAssertTrue(recognizer.delaysTouchesEnded, "The reader tap keeps UIKit's tap timing; only the movement rule is stricter")
+    }
+
     func testStoppingScrollTapDoesNotToggleControlsAfterInertiaEndsInBothFlows() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         for scrolling in [false, true] {
