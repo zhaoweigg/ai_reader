@@ -660,12 +660,12 @@ final class LeafReaderUITests: XCTestCase {
         openDiagnostics()
         let count = app.staticTexts["diagnosticsCount"]
         XCTAssertTrue(count.waitForExistence(timeout: 5))
-        XCTAssertNotEqual(count.label, "0 events", "The reader tap was recorded")
+        XCTAssertNotEqual(count.value as? String, "0", "The reader tap was recorded: \(count.label)")
         XCTAssertTrue(app.buttons["diagnosticsShare"].waitForExistence(timeout: 5), "The recording can be shared")
         // The Clear row sits at the bottom of Settings, under the floating tab bar until scrolled up.
         for _ in 0..<4 where !app.buttons["diagnosticsClear"].isHittable { app.swipeUp() }
         app.buttons["diagnosticsClear"].tap()
-        expectation(for: NSPredicate(format: "label == %@", "1 events"), evaluatedWith: count)
+        expectation(for: NSPredicate(format: "value == %@", "1"), evaluatedWith: count)
         waitForExpectations(timeout: 5)
         app.switches["diagnosticsRecording"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(app.switches["diagnosticsRecording"].value as? String, "0")

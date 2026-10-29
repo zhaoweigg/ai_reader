@@ -28,7 +28,11 @@ struct SettingsView: View {
                     Section {
                         Toggle("Record reader touches", isOn: Binding(get: { diagnostics.isEnabled }, set: { diagnostics.setEnabled($0) }))
                             .accessibilityIdentifier("diagnosticsRecording")
-                        LabeledContent("Recorded") { Text("\(diagnostics.eventCount) events").accessibilityIdentifier("diagnosticsCount") }
+                        HStack {
+                            Text("Recorded"); Spacer()
+                            Text("\(diagnostics.eventCount) events").foregroundStyle(.secondary)
+                                .accessibilityIdentifier("diagnosticsCount").accessibilityValue("\(diagnostics.eventCount)")
+                        }
                         if diagnostics.fileSize > 0, let file = diagnostics.file {
                             ShareLink(item: file) { Label("Share recording", systemImage: "square.and.arrow.up") }
                                 .accessibilityIdentifier("diagnosticsShare")
