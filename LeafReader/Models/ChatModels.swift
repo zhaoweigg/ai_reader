@@ -164,6 +164,9 @@ struct ReadingChatContext: Codable, Equatable {
     var progress: Double? = nil
     var bookRecall: ReadingBookRecall? = nil
     var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// Compact quote previews must not spend their line limit on paragraph breaks.
+    /// Keep `text` verbatim for the prompt, saved history, and expanded quotation.
+    var previewText: String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
     func bounded(_ limits: ReadingContextLimits = .capture) -> Self {
         let recall = bookRecall?.bounded()
         let recallCount = recall?.excerpts.reduce(0) { $0 + $1.text.count } ?? 0

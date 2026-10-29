@@ -1732,6 +1732,88 @@ final class ReaderEngineTests: XCTestCase {
             model.webView?.stopLoading();window?.isHidden = true;window = nil
         }
     }
+    func testMultilineQuotePreviewShowsFollowingParagraphInBothFlows() async throws {
+        let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            prefs.theme = scrolling ? .night : .paper
+            let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil)
+            let chat = ReaderChatSession()
+            let state = QuotePreviewTestState()
+            try showQuotePreview(model, book: book, url: url, preferences: prefs, chat: chat, state: state)
+            try await assertOpened(model, contains: "窗外")
+            let web = try XCTUnwrap(model.webView)
+            let selected = try await web.evaluateJavaScript("""
+                (() => {
+                    const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+                    const [first, next] = doc.querySelectorAll('p');
+                    const range = doc.createRange();
+                    range.setStart(first.firstChild, first.firstChild.length - 1);
+                    range.setEnd(next.firstChild, 16);
+                    const selection = doc.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+                    return selection.toString();
+                })()
+                """) as? String
+            let raw = try XCTUnwrap(selected)
+            XCTAssertTrue(raw.hasPrefix("。\n\n"), "Reproduce a punctuation-only first line followed by a blank line")
+            try await waitUntil { chat.selectedContext?.text == raw }
+            XCTAssertTrue(chat.selectedContext?.previewText.hasPrefix("。 第2段。午后的阳光") == true)
+            let location = model.locator
+            try await captureQuotePreview(scrolling ? "Scroll Night" : "Pages Paper", chat: chat, state: state)
+            XCTAssertEqual(model.locator, location, "Quote presentation must not navigate the book")
+            XCTAssertEqual(chat.selectedContext?.text, raw, "Presentation must keep the exact selected range text")
+            XCTAssertEqual(chat.draft, "为什么这么说？")
+            model.webView?.stopLoading(); window?.isHidden = true; window = nil
+        }
+    }
+    func testMultilineQuotePreviewInRenderedPDF() async throws {
+        let (book, url) = try prepare("Notes from the Coast.pdf", format: .pdf)
+        let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil)
+        let chat = ReaderChatSession(), state = QuotePreviewTestState()
+        try showQuotePreview(model, book: book, url: url, preferences: preferences, chat: chat, state: state)
+        try await waitUntil { model.isReady && model.pdfView?.document != nil }
+        let pdf = try XCTUnwrap(model.pdfView), page = try XCTUnwrap(pdf.document?.page(at: 1))
+        pdf.go(to: page)
+        let rawPage = try XCTUnwrap(page.string) as NSString
+        let start = rawPage.range(of: ".").location
+        XCTAssertNotEqual(start, NSNotFound)
+        let selection = try XCTUnwrap(page.selection(for: NSRange(location: start, length: min(230, rawPage.length - start))))
+        pdf.setCurrentSelection(selection, animate: false)
+        let raw = try XCTUnwrap(selection.string)
+        try await waitUntil { chat.selectedContext?.text == raw }
+        XCTAssertFalse(chat.selectedContext?.previewText.contains("\n") ?? true)
+        let location = model.locator
+        try await captureQuotePreview("PDF Day", chat: chat, state: state)
+        XCTAssertEqual(model.locator, location)
+        XCTAssertEqual(chat.selectedContext?.text, raw)
+        XCTAssertEqual(chat.draft, "为什么这么说？")
+    }
+    private func showQuotePreview(_ model: ReaderModel, book: Book, url: URL, preferences: ReaderPreferences,
+                                  chat: ReaderChatSession, state: QuotePreviewTestState) throws {
+        self.model = model
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "quote-preview-\(UUID())"))
+        let settings = AISettingsStore(defaults: defaults)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 720)
+        chat.draft = "为什么这么说？"
+        window.rootViewController = UIHostingController(rootView: QuotePreviewReaderHarness(model: model, chat: chat, state: state,
+            url: url, format: book.format, preferences: preferences).environmentObject(settings))
+        window.makeKeyAndVisible(); self.window = window
+    }
+    private func captureQuotePreview(_ name: String, chat: ReaderChatSession, state: QuotePreviewTestState) async throws {
+        for (size, composing) in [(CGSize(width: 390, height: 720), false), (CGSize(width: 720, height: 390), false),
+                                  (CGSize(width: 390, height: 720), true)] {
+            window?.frame.size = size; state.composing = composing
+            try await Task.sleep(for: .milliseconds(250))
+            let window = try XCTUnwrap(window)
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name + (composing ? " composing-header preview" : size.width > size.height ? " landscape preview" : " portrait preview")
+            attachment.lifetime = .keepAlways; add(attachment)
+            XCTAssertFalse(chat.selectedContext?.previewText.contains("\n") ?? true)
+        }
+    }
     func testTouchStopsSlowAndFastNativeMotionInRenderedBooks() async throws {
         guard #available(iOS 17.4, *) else { throw XCTSkip("Native scroll-animation state requires iOS 17.4") }
         var trace: [[String: Any]] = []
@@ -2901,6 +2983,35 @@ final class ReaderEngineTests: XCTestCase {
             model.send("navigate", value: "pdf:\(index)"); model.pdfPageChanged()
             XCTAssertEqual(model.locator, "pdf:\(index)")
         }
+    }
+}
+
+@MainActor private final class QuotePreviewTestState: ObservableObject {
+    @Published var composing = false
+}
+
+private struct QuotePreviewReaderHarness: View {
+    @ObservedObject var model: ReaderModel
+    @ObservedObject var chat: ReaderChatSession
+    @ObservedObject var state: QuotePreviewTestState
+    let url: URL
+    let format: BookFormat
+    let preferences: ReaderPreferences
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            if format == .pdf { PDFBookSurface(model: model, url: url, theme: preferences.theme) }
+            else { WebBookSurface(model: model, url: url, preferences: preferences) }
+            ReaderChatPanel(session: chat, bookTitle: "Quote preview", isComposing: state.composing,
+                onClose: {}, onSettings: {}, onButtonSettings: {}, onSend: {}, onResize: { _, _ in },
+                onResizeStep: { _ in }, onResetSize: {})
+                .frame(height: 280)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous)).padding(8)
+        }
+        .environment(\.leafTheme, preferences.theme)
+        .foregroundStyle(preferences.theme.foreground).tint(preferences.theme.accent)
+        .preferredColorScheme(preferences.theme.colorScheme)
+        .onChange(of: model.liveSelection) { _, selection in chat.attachLiveSelection(selection, chatIsPresented: true) }
     }
 }
 
