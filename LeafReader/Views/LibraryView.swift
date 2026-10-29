@@ -7,6 +7,7 @@ struct LibraryView: View {
     @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var catalog: ZLibraryStore
+    @EnvironmentObject private var sync: ICloudSync
     @Environment(\.scenePhase) private var scenePhase
     let onImport: () -> Void
     let onOpen: (UUID) -> Void
@@ -97,6 +98,11 @@ struct LibraryView: View {
                             Button { self.format = nil } label: { Label("\(format.label) only", systemImage: "xmark.circle.fill").font(.caption) }
                         }
                     }
+                    if sync.isConnected, cloudOnly > 0 {
+                        Label("\(cloudOnly) book\(cloudOnly == 1 ? " is" : "s are") in iCloud Drive. Tap a book to download it.", systemImage: "icloud")
+                            .font(.footnote).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(theme.surface, in: .rect(cornerRadius: 12)).accessibilityIdentifier("libraryCloudBanner")
+                    }
                     if visible.isEmpty {
                         ContentUnavailableView {
                             Label(library.books.isEmpty ? "Make room for a good book" : "No books here yet", systemImage: "book.closed")
@@ -111,6 +117,7 @@ struct LibraryView: View {
                                 Button { openBook(book.id) } label: {
                                     VStack(alignment: .leading, spacing: 9) {
                                         BookCover(book: book, coverURL: library.coverURL(book))
+                                            .overlay(alignment: .topTrailing) { cloudBadge(book) }
                                         Text(book.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                         Text(book.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                         HStack {
@@ -191,7 +198,9 @@ struct LibraryView: View {
             .alert("Remove \(deleting?.title ?? "book")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { book in
                 Button("Remove from library", role: .destructive) { library.remove(book.id); deleting = nil }
                 Button("Cancel", role: .cancel) { deleting = nil }
-            } message: { _ in Text("This removes the book and its bookmarks from Leaf. Your original file stays in Files.") }
+            } message: { _ in Text(sync.isConnected
+                ? "This removes the book, its bookmarks and highlights from Leaf on all your devices and from iCloud Drive. Your original file stays in Files."
+                : "This removes the book and its bookmarks from Leaf. Your original file stays in Files.") }
         }
         .background {
             GeometryReader { geometry in
@@ -240,6 +249,17 @@ struct LibraryView: View {
     }
     private func closeChat() { chat?.close(); chat = nil; chatBook = nil }
     private func openBook(_ id: UUID) { closeChat(); onOpen(id) }
+    private var cloudOnly: Int { library.books.filter { !library.isDownloaded($0) }.count }
+    /// Books synced from iCloud Drive whose files are not on this device yet.
+    @ViewBuilder private func cloudBadge(_ book: Book) -> some View {
+        if sync.downloading.contains(book.id) {
+            ProgressView().padding(7).background(.thinMaterial, in: .circle).padding(6)
+        } else if sync.isConnected, !library.isDownloaded(book) {
+            Image(systemName: "icloud.and.arrow.down").font(.caption.weight(.semibold)).foregroundStyle(.blue)
+                .padding(7).background(.thinMaterial, in: .circle).padding(6)
+                .accessibilityLabel("In iCloud Drive").accessibilityIdentifier("cloudBadge-\(book.title)")
+        }
+    }
     private var discoverShelf: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {

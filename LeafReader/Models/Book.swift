@@ -43,6 +43,10 @@ struct Book: Identifiable, Codable, Equatable {
     var isFavorite = false
     var bookmarks: [BookBookmark] = []
     var annotations: [BookAnnotation] = []
+    // When the reading position and favorite last changed, so iCloud sync can
+    // keep the newer one. Older libraries have none.
+    var positionUpdatedAt: Date?
+    var favoriteUpdatedAt: Date?
     var isFinished: Bool { progress >= 0.995 }
     var progressLabel: String { isFinished ? "Finished" : "\(Int(progress * 100))% read" }
     var paletteIndex: Int { Int(fingerprint.prefix(4), radix: 16).map { $0 % 5 } ?? 0 }
@@ -53,6 +57,7 @@ extension Book {
     private enum CodingKeys: String, CodingKey {
         case id, title, author, fileName, format, fingerprint, importedAt, lastOpenedAt
         case progress, locator, coverFileName, metadataVersion, catalogSource, isFavorite, bookmarks, annotations
+        case positionUpdatedAt, favoriteUpdatedAt
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -72,6 +77,8 @@ extension Book {
         isFavorite = try values.decode(Bool.self, forKey: .isFavorite)
         bookmarks = try values.decode([BookBookmark].self, forKey: .bookmarks)
         annotations = try values.decodeIfPresent([BookAnnotation].self, forKey: .annotations) ?? []
+        positionUpdatedAt = try values.decodeIfPresent(Date.self, forKey: .positionUpdatedAt)
+        favoriteUpdatedAt = try values.decodeIfPresent(Date.self, forKey: .favoriteUpdatedAt)
     }
 }
 

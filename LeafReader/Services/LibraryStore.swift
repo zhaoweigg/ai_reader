@@ -12,6 +12,8 @@ final class LibraryStore: ObservableObject {
     private var saveTask: Task<Void, Never>?
     private let metadataLoader: (Book, URL) async throws -> BookMetadata
     private var metadataTasks: [UUID: Task<Void, Never>] = [:]
+    /// Called after the library is saved, so iCloud sync can follow local changes.
+    var onSave: (() -> Void)?
 
     init(root: URL? = nil, seedSamples: Bool = true,
          metadataLoader: @escaping (Book, URL) async throws -> BookMetadata = { book, url in try await BookMetadataLoader.load(book, from: url) }) {
@@ -35,6 +37,8 @@ final class LibraryStore: ObservableObject {
     func book(_ id: UUID) -> Book? { books.first { $0.id == id } }
     func fileURL(_ book: Book) -> URL? { disk?.fileURL(book) }
     func coverURL(_ book: Book) -> URL? { book.coverFileName.flatMap { disk?.coversDirectory.appendingPathComponent($0) } }
+    /// A synced book can be listed before its file has been downloaded to this device.
+    func isDownloaded(_ book: Book) -> Bool { fileURL(book).map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
 
     func importBooks(_ urls: [URL]) async {
         guard !isImporting, canSave, let disk else {
@@ -159,6 +163,7 @@ final class LibraryStore: ObservableObject {
         update(id) { book in
             book.locator = locator
             book.progress = min(1, max(0, fraction.isFinite ? fraction : 0))
+            book.positionUpdatedAt = Date()
         }
     }
     func setMetadata(_ id: UUID, title: String?, author: String?, cover: Data?) {
@@ -174,7 +179,7 @@ final class LibraryStore: ObservableObject {
             }
         }
     }
-    func toggleFavorite(_ id: UUID) { update(id, { $0.isFavorite.toggle() }, immediately: true) }
+    func toggleFavorite(_ id: UUID) { update(id, { $0.isFavorite.toggle(); $0.favoriteUpdatedAt = Date() }, immediately: true) }
     func toggleBookmark(_ id: UUID, locator: String, fraction: Double, label: String) {
         guard !locator.isEmpty else { return }
         update(id, { book in
@@ -209,6 +214,7 @@ final class LibraryStore: ObservableObject {
         // Publish only after an atomic disk write succeeds, including pending reading progress.
         try disk.save(updated)
         books = updated
+        onSave?()
     }
     func remove(_ id: UUID) {
         guard canSave, let disk, let book = book(id) else { return }
@@ -217,8 +223,22 @@ final class LibraryStore: ObservableObject {
             try disk.save(remaining)
             books = remaining
             metadataTasks.removeValue(forKey: id)?.cancel()
+            onSave?()
             try disk.removeFiles(book)
         } catch { notice = LibraryNotice(title: "Could not remove book", message: error.localizedDescription) }
+    }
+    /// Replaces the library with the result of an iCloud merge. Books that were
+    /// removed on another device lose their local files; new ones are listed
+    /// before their files are downloaded.
+    func adoptSynced(_ updated: [Book]) {
+        guard canSave, let disk, updated != books else { return }
+        saveTask?.cancel()
+        let removed = books.filter { old in !updated.contains { $0.id == old.id } }
+        do {
+            try disk.save(updated)
+            books = updated
+            for book in removed { metadataTasks.removeValue(forKey: book.id)?.cancel(); try? disk.removeFiles(book) }
+        } catch { notice = LibraryNotice(title: "iCloud changes could not be saved", message: error.localizedDescription) }
     }
     private func scheduleSave() {
         saveTask?.cancel()
@@ -231,7 +251,7 @@ final class LibraryStore: ObservableObject {
     func flush() {
         saveTask?.cancel()
         guard canSave, let disk else { return }
-        do { try disk.save(books) }
+        do { try disk.save(books); onSave?() }
         catch { notice = LibraryNotice(title: "Reading position could not be saved", message: error.localizedDescription) }
     }
 }

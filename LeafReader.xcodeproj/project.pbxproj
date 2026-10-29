@@ -22,11 +22,13 @@
 		240E576211DE00CEFEFC6B1E /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DDD91EF78808E1BD8AE415A /* ChatTests.swift */; };
 		262B7A06D68B8DB11254B6DD /* Fixtures in Resources */ = {isa = PBXBuildFile; fileRef = 8BEDAE49739E86E86ABC4D4D /* Fixtures */; };
 		2E28072A5C0CFC5100F00BEF /* ReaderAudioSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56D4D8913088D871C0A664F5 /* ReaderAudioSource.swift */; };
+		2EB0B2F7BDFF044EEED7C4E7 /* ICloudSyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B73369460267BAB24E3521C /* ICloudSyncView.swift */; };
 		30AC44B6FCED33B9B5D44150 /* ReaderChatSizingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6B988ABBAD66FABEDB1E8E /* ReaderChatSizingTests.swift */; };
 		36730BF910AF1DBF55AE4EA9 /* ChatProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2776E6B6192B8E7EC19E4B8F /* ChatProvider.swift */; };
 		36F755B418C2FEF435D15F7C /* AgentTraceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE2ACC3497C3F4EA3FBBB31B /* AgentTraceViews.swift */; };
 		37772D9866BAB74D1B83475E /* SelectableChatText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16EDBA099FA817359D742983 /* SelectableChatText.swift */; };
 		396307293181749082A3EC8A /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E54628DCA060E482092CC828 /* Accelerate.framework */; };
+		39D2C18DF85C766105BAC111 /* SyncRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ED98147DE846BB43C9EB14D /* SyncRecords.swift */; };
 		3CE4DD0B4CCDD09FF1146D4D /* ChatDictationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63D0097D2F2FDE06A85F710B /* ChatDictationTests.swift */; };
 		3FD99BFAA6C100E30E07044C /* ReaderAnnotationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7B596C7A37807FDBC583EA2 /* ReaderAnnotationsView.swift */; };
 		40137AAE22983BAD512DC3BF /* KokoroSpeechTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C494CF7B965049F41D1A360F /* KokoroSpeechTests.swift */; };
@@ -58,10 +60,12 @@
 		6E9ADECBA5E3CC649895ABA1 /* ChatGPTSubscriptionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BAAB2D0ADFB4B6AD2057EFA /* ChatGPTSubscriptionProvider.swift */; };
 		6F3E0FC0ECA3238758363E78 /* AISettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2711FF9B669B7E4658B2DAE6 /* AISettingsStore.swift */; };
 		716D839DBA091435CCFAF605 /* LibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */; };
+		76C6BDD11182F205EF722219 /* SyncFolder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833243C5AEA94BA073C5301D /* SyncFolder.swift */; };
 		774B77B273DC3C1C1F409DE5 /* ReaderScrollDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F4438414B72FB5A72D5A7DC /* ReaderScrollDiagnosticsTests.swift */; };
 		78A529FF823C019A8445E417 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9567239B01E0D6638DA1D06 /* LibraryView.swift */; };
 		7C844B57B05FA6D0F755360A /* ZLibraryBrowserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC7F6702710B8ED091479F1B /* ZLibraryBrowserTests.swift */; };
 		7EBAC4CC3E7CAC3FFB7A032E /* ContentsLocation.epub in Resources */ = {isa = PBXBuildFile; fileRef = 0F0C5D848755DE54F2DF81FA /* ContentsLocation.epub */; };
+		827659DF8F1B242DC4636AEF /* ICloudSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3261A411C5720D9611347C0 /* ICloudSyncTests.swift */; };
 		881BD131FA79A734A5B9CA05 /* RoutingReadAloudSpeaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC47A3E67B25E6750339FC1E /* RoutingReadAloudSpeaker.swift */; };
 		88921C02F99C02FBC5B4505E /* ReaderPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA375CCD5FE2A2A6CEEDDF5B /* ReaderPreferences.swift */; };
 		9110C50975F238750DA3ED00 /* BookMetadataLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8899A77310F180B812766D5D /* BookMetadataLoader.swift */; };
@@ -71,7 +75,9 @@
 		965F9070210F18463495A4F4 /* ZLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27735E21F07ADCA25D2777AC /* ZLibraryStore.swift */; };
 		973AB757D5F2D3E1BA34EF5D /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782B9AF3266BE06B1B489337 /* ReaderView.swift */; };
 		9990D24CD222A8DE97366F3D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 95E3F1CC0A69A7431FDFC29B /* Assets.xcassets */; };
+		9FDE449BF1CDC010D2A50853 /* ICloudSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5754DB6074DAEF0659BF7985 /* ICloudSync.swift */; };
 		9FDFD316CCFF5922818A3F5A /* Reader in Resources */ = {isa = PBXBuildFile; fileRef = 6C58276EB1F4A939EEC2C0D2 /* Reader */; };
+		A02E6957E4B774BD9E2C1720 /* UITestSyncFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A03E87E1579D24E12921C8 /* UITestSyncFixture.swift */; };
 		A09C3F2A4E802FDB0B0BCA75 /* AnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FD904DA89A963355B4AFD5B /* AnnotationTests.swift */; };
 		A0F241BB7DE8E32BBDA9E790 /* sherpa-onnx.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = EAA7D1682D716B3839C5C03A /* sherpa-onnx.xcframework */; };
 		A1D006D09F935A9B62AD1EA9 /* ChatDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C0FAFC34AC96D5DA6976E5 /* ChatDictation.swift */; };
@@ -142,6 +148,7 @@
 		1C6B988ABBAD66FABEDB1E8E /* ReaderChatSizingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderChatSizingTests.swift; sourceTree = "<group>"; };
 		1DDD91EF78808E1BD8AE415A /* ChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTests.swift; sourceTree = "<group>"; };
 		1DFADC00594A53824F3A7DC6 /* Samples */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Samples; path = LeafReader/Resources/Samples; sourceTree = SOURCE_ROOT; };
+		1ED98147DE846BB43C9EB14D /* SyncRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRecords.swift; sourceTree = "<group>"; };
 		229584F749B3CCD25F03CD5A /* ChatGPTAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTAccountStore.swift; sourceTree = "<group>"; };
 		241FD63FE84D0DB2819A589D /* AISettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISettingsView.swift; sourceTree = "<group>"; };
 		24297F21BBA41AD9AFD4A205 /* ThemePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePicker.swift; sourceTree = "<group>"; };
@@ -169,6 +176,8 @@
 		53EF7C81ECA87AA792CB61CD /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
 		5480FF7C571B63EE4F195093 /* ZLibraryImages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryImages.swift; sourceTree = "<group>"; };
 		56D4D8913088D871C0A664F5 /* ReaderAudioSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAudioSource.swift; sourceTree = "<group>"; };
+		5754DB6074DAEF0659BF7985 /* ICloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudSync.swift; sourceTree = "<group>"; };
+		5B73369460267BAB24E3521C /* ICloudSyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudSyncView.swift; sourceTree = "<group>"; };
 		5C305916984C83F7392C1B44 /* LibraryChatUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryChatUITests.swift; sourceTree = "<group>"; };
 		5E6DF2E83336FF008A3ECB0C /* ZLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryTests.swift; sourceTree = "<group>"; };
 		613F9428E98C91D6AA32F0F6 /* ZLibraryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZLibraryUITests.swift; sourceTree = "<group>"; };
@@ -183,6 +192,7 @@
 		764F9B499BFF20AAAEF67FB2 /* LeafReader.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = LeafReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		782B9AF3266BE06B1B489337 /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
 		7A228DC38545B9BC6725AE25 /* KokoroSentenceSplitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroSentenceSplitter.swift; sourceTree = "<group>"; };
+		833243C5AEA94BA073C5301D /* SyncFolder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncFolder.swift; sourceTree = "<group>"; };
 		833E41CE2FEB4E7A66694630 /* ChatScrollFollowingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatScrollFollowingTests.swift; sourceTree = "<group>"; };
 		838E9128584120BF12A9D1AC /* ReaderClearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderClearance.swift; sourceTree = "<group>"; };
 		8899A77310F180B812766D5D /* BookMetadataLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookMetadataLoader.swift; sourceTree = "<group>"; };
@@ -215,6 +225,7 @@
 		CEC6851EC27447414454AFF7 /* ChatGPTOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTOAuth.swift; sourceTree = "<group>"; };
 		D19EC3265992221C3E36A28F /* UITestScrollTouchProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestScrollTouchProbe.swift; sourceTree = "<group>"; };
 		D1F25FA3CF6923499A67C834 /* ReaderChatPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderChatPanel.swift; sourceTree = "<group>"; };
+		D3261A411C5720D9611347C0 /* ICloudSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudSyncTests.swift; sourceTree = "<group>"; };
 		D59E60786ADEDA73444D967C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		D7B596C7A37807FDBC583EA2 /* ReaderAnnotationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAnnotationsView.swift; sourceTree = "<group>"; };
 		DB89A39521EB5C1CB63BFC12 /* LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryStore.swift; sourceTree = "<group>"; };
@@ -222,6 +233,7 @@
 		DEC483DB37697EED2DA2BC84 /* BookCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookCover.swift; sourceTree = "<group>"; };
 		DF80E5104B8142DE4B5A3FCC /* ReadingAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingAgent.swift; sourceTree = "<group>"; };
 		DF8F5668FCD9D8ABD500192D /* ReaderAppearancePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderAppearancePanel.swift; sourceTree = "<group>"; };
+		E1A03E87E1579D24E12921C8 /* UITestSyncFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSyncFixture.swift; sourceTree = "<group>"; };
 		E54628DCA060E482092CC828 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		E6B763DF832118110BAED95B /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
 		E9CBBF39DAF2F59A5F37C5B6 /* ReadAloudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadAloudTests.swift; sourceTree = "<group>"; };
@@ -263,6 +275,16 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		31ED8E150B80772E565BEC85 /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				5754DB6074DAEF0659BF7985 /* ICloudSync.swift */,
+				833243C5AEA94BA073C5301D /* SyncFolder.swift */,
+				1ED98147DE846BB43C9EB14D /* SyncRecords.swift */,
+			);
+			path = Sync;
+			sourceTree = "<group>";
+		};
 		60AC48A60443F0C7A664968C /* Chat */ = {
 			isa = PBXGroup;
 			children = (
@@ -293,6 +315,7 @@
 				6AB29A7913A706F43291361B /* BookmarksView.swift */,
 				AE07B9A1522472930DD1E8D6 /* ChatGPTConnectionView.swift */,
 				4C20E5A828AAC6404D28EC9E /* ChatMarkdown.swift */,
+				5B73369460267BAB24E3521C /* ICloudSyncView.swift */,
 				C30FC3F239F7C9AB36F0AFB5 /* LibraryChatOverlay.swift */,
 				F9567239B01E0D6638DA1D06 /* LibraryView.swift */,
 				D7B596C7A37807FDBC583EA2 /* ReaderAnnotationsView.swift */,
@@ -308,6 +331,7 @@
 				24297F21BBA41AD9AFD4A205 /* ThemePicker.swift */,
 				BC121F68853537778A0E3CC2 /* UITestSceneGeometry.swift */,
 				D19EC3265992221C3E36A28F /* UITestScrollTouchProbe.swift */,
+				E1A03E87E1579D24E12921C8 /* UITestSyncFixture.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -354,6 +378,7 @@
 				A536CA4524C2454C20024AEF /* ChatMarkdownTests.swift */,
 				833E41CE2FEB4E7A66694630 /* ChatScrollFollowingTests.swift */,
 				1DDD91EF78808E1BD8AE415A /* ChatTests.swift */,
+				D3261A411C5720D9611347C0 /* ICloudSyncTests.swift */,
 				C494CF7B965049F41D1A360F /* KokoroSpeechTests.swift */,
 				B5F7F6F93F5DD3ACD8118904 /* LibraryTests.swift */,
 				E9CBBF39DAF2F59A5F37C5B6 /* ReadAloudTests.swift */,
@@ -446,6 +471,7 @@
 				FBE3E9591184C7FEDE46AC16 /* Catalog */,
 				60AC48A60443F0C7A664968C /* Chat */,
 				70AB1BF38C8721A95B13A0F9 /* Speech */,
+				31ED8E150B80772E565BEC85 /* Sync */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -639,6 +665,8 @@
 				CE3F5B2B76E940DDD061A8A8 /* ChatModels.swift in Sources */,
 				C1191F779B70CD82A1CEF063 /* ChatProvider+Agent.swift in Sources */,
 				36730BF910AF1DBF55AE4EA9 /* ChatProvider.swift in Sources */,
+				9FDE449BF1CDC010D2A50853 /* ICloudSync.swift in Sources */,
+				2EB0B2F7BDFF044EEED7C4E7 /* ICloudSyncView.swift in Sources */,
 				62E2499891727C708E313390 /* KokoroModelStore.swift in Sources */,
 				074DE7B05A6DAD736C007E00 /* KokoroReadAloudSpeaker.swift in Sources */,
 				E0C458A10966C1817D623F5F /* KokoroSentenceSplitter.swift in Sources */,
@@ -670,10 +698,13 @@
 				881BD131FA79A734A5B9CA05 /* RoutingReadAloudSpeaker.swift in Sources */,
 				37772D9866BAB74D1B83475E /* SelectableChatText.swift in Sources */,
 				6B85BEA3040860E753242175 /* SettingsView.swift in Sources */,
+				76C6BDD11182F205EF722219 /* SyncFolder.swift in Sources */,
+				39D2C18DF85C766105BAC111 /* SyncRecords.swift in Sources */,
 				BE304B8B6ABD0D54C31DA0B1 /* TarBzip2Extractor.swift in Sources */,
 				11F98810E05BCDC675C839EC /* ThemePicker.swift in Sources */,
 				426155C7059E798D7A043711 /* UITestSceneGeometry.swift in Sources */,
 				6765B431B341B65506C6C447 /* UITestScrollTouchProbe.swift in Sources */,
+				A02E6957E4B774BD9E2C1720 /* UITestSyncFixture.swift in Sources */,
 				450FBFE809E2396034EBDCD9 /* UITesting.swift in Sources */,
 				D9CC609F0D4142FA91D26A0A /* ZLibraryBrowserSession.swift in Sources */,
 				F3F8B6B6F653CF0B900E74CE /* ZLibraryClient.swift in Sources */,
@@ -695,6 +726,7 @@
 				5727AF09338FB8CFB5DA3339 /* ChatMarkdownTests.swift in Sources */,
 				62F63446B4398663F2EEB393 /* ChatScrollFollowingTests.swift in Sources */,
 				240E576211DE00CEFEFC6B1E /* ChatTests.swift in Sources */,
+				827659DF8F1B242DC4636AEF /* ICloudSyncTests.swift in Sources */,
 				40137AAE22983BAD512DC3BF /* KokoroSpeechTests.swift in Sources */,
 				716D839DBA091435CCFAF605 /* LibraryTests.swift in Sources */,
 				D0146216C2B09D9D5FA9A427 /* ReadAloudTests.swift in Sources */,
