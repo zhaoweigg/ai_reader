@@ -1935,6 +1935,27 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(surfaces.count, 2)
     }
 
+    /// Recorded on an iPhone (build 109): three short slow pulls of 21-39 points
+    /// each ended in UIKit's tap recognizer firing, which opened the controls
+    /// until the settled scroll hid them again. The reader's tap gives up once
+    /// the finger has moved as far as a scroll takes to begin.
+    func testReaderTapFailsOnceTheFingerHasMovedAScrollDistance() throws {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 720))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene); window.addSubview(view); window.makeKeyAndVisible(); self.window = window
+        for (distance, fails) in [(4.0, false), (9.0, false), (11.0, true), (21.0, true), (39.0, true)] {
+            let tap = ReaderTapRecognizer(); view.addGestureRecognizer(tap)
+            defer { view.removeGestureRecognizer(tap) }
+            let touch = PlacedTouch(at: CGPoint(x: 120, y: 500))
+            tap.touchesBegan([touch], with: UIEvent())
+            touch.place(CGPoint(x: 121, y: 500 - distance * 0.6))
+            tap.touchesMoved([touch], with: UIEvent())
+            touch.place(CGPoint(x: 122, y: 500 - distance))
+            tap.touchesMoved([touch], with: UIEvent())
+            XCTAssertEqual(tap.state == .failed, fails, "A finger that moved \(distance) pt \(fails ? "scrolled, so it is no tap" : "may still be tapping")")
+        }
+    }
+
     func testStoppingScrollTapDoesNotToggleControlsAfterInertiaEndsInBothFlows() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)
         for scrolling in [false, true] {
@@ -3036,6 +3057,15 @@ private struct QuotePreviewReaderHarness: View {
     override var isTracking: Bool { scriptedTracking }
     @available(iOS 17.4, *)
     override func stopScrollingAndZooming() { stopped = true; scriptedDecelerating = false }
+}
+
+/// A touch at a chosen window point that can be moved.
+@MainActor private final class PlacedTouch: UITouch {
+    private var point: CGPoint
+    init(at point: CGPoint) { self.point = point; super.init() }
+    func place(_ point: CGPoint) { self.point = point }
+    override func location(in view: UIView?) -> CGPoint { point }
+    override var timestamp: TimeInterval { CACurrentMediaTime() }
 }
 
 /// A touch on the media clock; `UITouch()` reports a zero timestamp.

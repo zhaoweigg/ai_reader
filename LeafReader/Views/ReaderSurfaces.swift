@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 import PDFKit
+import UIKit.UIGestureRecognizerSubclass
 
 extension ReaderModel {
     /// The selection palette's view of this model. Every closure holds the model
@@ -17,9 +18,30 @@ extension ReaderModel {
     }
 }
 
+/// UIKit's tap recognizer tolerates far more finger movement than a scroll
+/// needs to begin, and the reader's recognizers run alongside the native
+/// scroll views instead of being cancelled by them. A short slow pull (20-40
+/// points) therefore used to end in a tap that opened the controls, which the
+/// settled scroll then hid again. Once the finger has moved as far as a scroll
+/// takes to start, this is no tap.
+@MainActor final class ReaderTapRecognizer: UITapGestureRecognizer {
+    static let allowedMovement: CGFloat = 10
+    private var start: CGPoint?
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        start = touches.first?.location(in: nil)
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesMoved(touches, with: event)
+        guard state == .possible, let start, let point = touches.first?.location(in: nil) else { return }
+        if hypot(point.x - start.x, point.y - start.y) > Self.allowedMovement { state = .failed }
+    }
+    override func reset() { super.reset(); start = nil }
+}
+
 @MainActor private func installReaderGestures(on view: UIView, target: NSObject, delegate: UIGestureRecognizerDelegate, tap action: Selector, pan panAction: Selector) {
-    let tap = UITapGestureRecognizer(target: target, action: action)
-    let doubleTap = UITapGestureRecognizer()
+    let tap = ReaderTapRecognizer(target: target, action: action)
+    let doubleTap = ReaderTapRecognizer()
     doubleTap.numberOfTapsRequired = 2
     tap.require(toFail: doubleTap)
     let pan = UIPanGestureRecognizer(target: target, action: panAction)
