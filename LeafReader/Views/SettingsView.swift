@@ -2,11 +2,17 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.leafTheme) private var theme
+    @EnvironmentObject private var sync: ICloudSync
     var body: some View {
         NavigationStack {
             Form {
                 ReaderAppearanceControls()
                 Group {
+                    Section("Sync") {
+                        NavigationLink { ICloudSyncView() } label: {
+                            LabeledContent { Text(sync.isConnected ? "On" : "Off") } label: { Label("iCloud", systemImage: "icloud") }
+                        }.accessibilityIdentifier("openICloudSync")
+                    }
                     Section("Reading companion") {
                         NavigationLink("Floating button") { ReaderChatButtonSettings() }.accessibilityIdentifier("openChatButtonSettings")
                         NavigationLink("AI settings") { AISettingsView() }.accessibilityIdentifier("openAISettings")
@@ -19,7 +25,7 @@ struct SettingsView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     Section("Made for unhurried reading") {
-                        Label("Books stay on this device", systemImage: "internaldrive")
+                        Label(sync.isConnected ? "Books sync through your iCloud Drive" : "Books stay on this device", systemImage: sync.isConnected ? "icloud" : "internaldrive")
                         Label("Offline reading; optional AI chat", systemImage: "wifi.slash")
                         NavigationLink("Open-source acknowledgments") { AcknowledgmentsView() }
                         HStack { Text("Leaf"); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0").foregroundStyle(.secondary) }

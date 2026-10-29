@@ -63,6 +63,8 @@ final class ChatHistoryStore: ChatHistoryStorage {
                 CREATE INDEX IF NOT EXISTS conversation_sequence ON messages(conversation, sequence);
                 CREATE TABLE IF NOT EXISTS drafts (conversation TEXT PRIMARY KEY NOT NULL, payload BLOB NOT NULL);
                 CREATE TABLE IF NOT EXISTS selected_drafts (conversation TEXT PRIMARY KEY NOT NULL, payload BLOB NOT NULL);
+                CREATE TABLE IF NOT EXISTS deleted_messages (conversation TEXT NOT NULL, id TEXT NOT NULL, deleted_at REAL NOT NULL,
+                    PRIMARY KEY(conversation, id));
                 """)
         } catch {
             sqlite3_close(database); database = nil
@@ -146,13 +148,18 @@ final class ChatHistoryStore: ChatHistoryStorage {
         }
     }
     func remove(_ messageID: UUID) throws {
-        let statement = try prepare("DELETE FROM messages WHERE conversation = ? AND id = ?")
-        defer { sqlite3_finalize(statement) }
-        bind(conversation, to: statement, at: 1); bind(messageID.uuidString, to: statement, at: 2)
-        guard sqlite3_step(statement) == SQLITE_DONE else { throw ChatHistoryError.write }
+        try transaction {
+            try recordDeletion(conversation, ids: [messageID])
+            let statement = try prepare("DELETE FROM messages WHERE conversation = ? AND id = ?")
+            defer { sqlite3_finalize(statement) }
+            bind(conversation, to: statement, at: 1); bind(messageID.uuidString, to: statement, at: 2)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw ChatHistoryError.write }
+        }
     }
     func clear() throws {
         try transaction {
+            // Other devices must remove these messages too, not bring them back.
+            try recordDeletion(conversation, ids: messageIDs(conversation))
             for table in ["messages", "drafts", "selected_drafts"] {
                 let statement = try prepare("DELETE FROM \(table) WHERE conversation = ?")
                 defer { sqlite3_finalize(statement) }
@@ -163,6 +170,91 @@ final class ChatHistoryStore: ChatHistoryStorage {
         // Discard old WAL pages too; failures here do not undo the committed clear.
         sqlite3_wal_checkpoint_v2(database, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
     }
+    // MARK: iCloud sync
+
+    /// Every conversation with messages or deletions on this device.
+    func conversations() throws -> [String] {
+        let statement = try prepare("SELECT DISTINCT conversation FROM messages UNION SELECT DISTINCT conversation FROM deleted_messages")
+        defer { sqlite3_finalize(statement) }
+        var result: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let text = sqlite3_column_text(statement, 0) { result.append(String(cString: text)) }
+        }
+        return result
+    }
+    /// A conversation's messages in order, with the messages deleted from it.
+    func export(_ conversation: String) throws -> SyncedConversation {
+        let statement = try prepare("SELECT payload FROM messages WHERE conversation = ? ORDER BY sequence ASC")
+        defer { sqlite3_finalize(statement) }
+        bind(conversation, to: statement, at: 1)
+        var messages: [ReaderChatMessage] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let bytes = sqlite3_column_blob(statement, 0),
+                  let message = try? JSONDecoder().decode(ReaderChatMessage.self, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))) else { continue }
+            messages.append(message)
+        }
+        let deletions = try prepare("SELECT id, deleted_at FROM deleted_messages WHERE conversation = ?")
+        defer { sqlite3_finalize(deletions) }
+        bind(conversation, to: deletions, at: 1)
+        var deleted: [UUID: Date] = [:]
+        while sqlite3_step(deletions) == SQLITE_ROW {
+            if let text = sqlite3_column_text(deletions, 0), let id = UUID(uuidString: String(cString: text)) {
+                deleted[id] = Date(timeIntervalSince1970: sqlite3_column_double(deletions, 1))
+            }
+        }
+        return SyncedConversation(conversation: conversation, messages: messages, deleted: deleted)
+    }
+    /// Applies a merged conversation: deletions are removed here, messages
+    /// this device lacks are appended in order, and finished replies replace
+    /// copies saved mid-stream. Local messages are never reordered.
+    func adopt(_ synced: SyncedConversation) throws {
+        let local = try export(synced.conversation)
+        try transaction {
+            let newlyDeleted = synced.deleted.filter { local.deleted[$0.key] == nil }
+            for (id, date) in newlyDeleted {
+                let statement = try prepare("INSERT OR IGNORE INTO deleted_messages(conversation, id, deleted_at) VALUES(?, ?, ?)")
+                defer { sqlite3_finalize(statement) }
+                bind(synced.conversation, to: statement, at: 1); bind(id.uuidString, to: statement, at: 2)
+                sqlite3_bind_double(statement, 3, date.timeIntervalSince1970)
+                guard sqlite3_step(statement) == SQLITE_DONE else { throw ChatHistoryError.write }
+                let remove = try prepare("DELETE FROM messages WHERE conversation = ? AND id = ?")
+                defer { sqlite3_finalize(remove) }
+                bind(synced.conversation, to: remove, at: 1); bind(id.uuidString, to: remove, at: 2)
+                guard sqlite3_step(remove) == SQLITE_DONE else { throw ChatHistoryError.write }
+            }
+            for message in synced.messages {
+                guard synced.deleted[message.id] == nil else { continue }
+                let existing = local.messages.first { $0.id == message.id }
+                if let existing, existing == message || existing.state != .streaming { continue }
+                let statement = try prepare("INSERT INTO messages(conversation, id, payload) VALUES(?, ?, ?) ON CONFLICT(conversation, id) DO UPDATE SET payload=excluded.payload")
+                defer { sqlite3_finalize(statement) }
+                bind(synced.conversation, to: statement, at: 1); bind(message.id.uuidString, to: statement, at: 2)
+                try bind(JSONEncoder().encode(message), to: statement, at: 3)
+                guard sqlite3_step(statement) == SQLITE_DONE else { throw ChatHistoryError.write }
+            }
+        }
+    }
+    private func messageIDs(_ conversation: String) throws -> [UUID] {
+        let statement = try prepare("SELECT id FROM messages WHERE conversation = ?")
+        defer { sqlite3_finalize(statement) }
+        bind(conversation, to: statement, at: 1)
+        var ids: [UUID] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let text = sqlite3_column_text(statement, 0), let id = UUID(uuidString: String(cString: text)) { ids.append(id) }
+        }
+        return ids
+    }
+    private func recordDeletion(_ conversation: String, ids: [UUID]) throws {
+        let now = Date().timeIntervalSince1970
+        for id in ids {
+            let statement = try prepare("INSERT OR REPLACE INTO deleted_messages(conversation, id, deleted_at) VALUES(?, ?, ?)")
+            defer { sqlite3_finalize(statement) }
+            bind(conversation, to: statement, at: 1); bind(id.uuidString, to: statement, at: 2)
+            sqlite3_bind_double(statement, 3, now)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw ChatHistoryError.write }
+        }
+    }
+
     private func exists(_ condition: String, cursor: Int64) throws -> Bool {
         let statement = try prepare("SELECT 1 FROM messages WHERE conversation = ? AND \(condition) LIMIT 1")
         defer { sqlite3_finalize(statement) }

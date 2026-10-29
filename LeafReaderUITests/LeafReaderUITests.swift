@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -26,6 +26,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_PERF"] = scrollPerformance ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_FOLLOW"] = chatFollow ? "1" : "0"
         app.launchEnvironment["LEAF_UI_SCROLL_TOUCH_TRACE"] = scrollTouchTrace ? "1" : "0"
+        if syncFixture { app.launchEnvironment["LEAF_UI_SYNC_FIXTURE"] = "1"; app.launchEnvironment["LEAF_UI_EMPTY_LIBRARY"] = "1" }
         app.launchEnvironment["LEAF_UI_DICTATION_MOCK"] = dictation ? "1" : "0"
         if nativeDictation {
             let audio = Bundle(for: LeafReaderUITests.self).url(forResource: "Mandarin", withExtension: "m4a")!
@@ -588,6 +589,45 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertLessThanOrEqual(item.driftAfter, 1, "\(item.name): a tap during the drift must stop it (\(item.speedAtTap) pt/s at the tap)")
             XCTAssertFalse(item.controls, "\(item.name): the stopping tap must not open the controls")
         }
+    }
+
+    /// A device joining an iCloud Drive folder that another device filled lists
+    /// the synced book with its position before the file is here, downloads it
+    /// when opened, and shows the folder in Settings › iCloud.
+    @MainActor func testANewDeviceListsASyncedBookAndDownloadsItWhenOpened() {
+        continueAfterFailure = false
+        let app = launchApp(syncFixture: true)
+        let title = "A Field Guide to Slow Days"
+        let book = app.buttons["book-\(title)"], badge = app.descendants(matching: .any)["cloudBadge-\(title)"]
+        XCTAssertTrue(book.waitForExistence(timeout: 15), "The synced book is listed on the new device")
+        XCTAssertTrue(badge.waitForExistence(timeout: 5), "A book still in iCloud Drive shows a cloud badge")
+        XCTAssertTrue(app.descendants(matching: .any)["libraryCloudBanner"].exists)
+        XCTAssertTrue(app.staticTexts["40% read"].exists, "The reading position arrives with the book")
+        capture("Synced library before download", app: app)
+
+        app.tabBars.buttons["Settings"].tap()
+        // The reading appearance controls come first; the Sync row is below them.
+        for _ in 0..<5 where !app.buttons["openICloudSync"].isHittable { app.swipeUp() }
+        app.buttons["openICloudSync"].tap()
+        let status = app.staticTexts["syncStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertEqual(status.label, "Up to date")
+        XCTAssertTrue(app.switches["syncKeepBooks"].exists)
+        capture("iCloud settings", app: app)
+        app.navigationBars.buttons.firstMatch.tap()
+        app.tabBars.buttons["Library"].tap()
+
+        book.tap()
+        waitForBook(app)
+        let surface = readingSurface(app)
+        if !app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 5))
+        app.buttons["closeBook"].tap()
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: badge)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.descendants(matching: .any)["libraryCloudBanner"].exists, "Once downloaded, nothing is waiting in iCloud Drive")
+        capture("Synced library after download", app: app)
     }
 
     @MainActor func testHeldScrollBackAfterContentsJumpStaysAtPreviousChapter() {

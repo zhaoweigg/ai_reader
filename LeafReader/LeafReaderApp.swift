@@ -7,6 +7,7 @@ struct LeafReaderApp: App {
     @StateObject private var aiSettings: AISettingsStore
     @StateObject private var catalog: ZLibraryStore
     @StateObject private var agentTraces: AgentTraceStore
+    @StateObject private var sync: ICloudSync
     private let readingDefaults: UserDefaults
 
     init() {
@@ -18,6 +19,7 @@ struct LeafReaderApp: App {
         var chatCredentials = KeychainChatCredentials()
         var catalogClient: (any ZLibraryServing)?
         var catalogDiscovery = true
+        var syncFolder: URL?
         #if DEBUG
         if let id = UITesting.testID {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUITests/\(id.uuidString)", isDirectory: true)
@@ -27,6 +29,10 @@ struct LeafReaderApp: App {
                 chatProvider = UITestChatProvider(slow: UITesting.flag("LEAF_UI_CHAT_SLOW"))
             }
             defaults = UITesting.defaults
+            if UITesting.flag("LEAF_UI_SYNC_FIXTURE"), let root {
+                syncFolder = UITestSyncFixture.seed(next: root)
+                defaults.set(false, forKey: ICloudSync.Keys.keepBooks)
+            }
             if UITesting.flag("LEAF_UI_CHATGPT_CONNECTED") {
                 chatGPT = ChatGPTAccountStore.uiTestConnected(defaults: defaults, credentials: chatCredentials)
             }
@@ -52,6 +58,9 @@ struct LeafReaderApp: App {
         catalogCredentials.service += ".zlibrary"
         _catalog = StateObject(wrappedValue: ZLibraryStore(defaults: defaults, credentials: catalogCredentials, client: catalogClient, discoversFromLibrary: catalogDiscovery))
         readingDefaults = defaults
+        let syncState = root.map { $0.appendingPathComponent("SyncState", isDirectory: true) }
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("LeafSync", isDirectory: true)
+        _sync = StateObject(wrappedValue: ICloudSync(library: libraryStore, defaults: defaults, stateDirectory: syncState, folderOverride: syncFolder))
         if root == nil {
             ReaderScrollDiagnostics.shared.configure(defaults: .standard,
                 directory: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("Diagnostics", isDirectory: true))
@@ -60,7 +69,7 @@ struct LeafReaderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(agentTraces).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
+            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(agentTraces).environmentObject(sync).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
                 #if DEBUG
                 .background(UITestSceneGeometryBridge())
                 .background(UITestScrollTouchProbe())
@@ -81,6 +90,7 @@ struct AppView: View {
     private var theme: ReadingTheme { ReadingTheme(rawValue: themeName) ?? .day }
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var catalog: ZLibraryStore
+    @EnvironmentObject private var sync: ICloudSync
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = AppTab.library
     @State private var discoverStack = UUID()
@@ -90,7 +100,7 @@ struct AppView: View {
     @State private var drainingImports = false
     var body: some View {
         TabView(selection: $tab) {
-            LibraryView(onImport: { importing = true }, onOpen: { destination = ReadingDestination(id: $0) },
+            LibraryView(onImport: { importing = true }, onOpen: { open($0) },
                         onDiscover: { catalog.show($0); tab = .discover },
                         onSearchCatalog: { catalog.show(query: $0); tab = .discover })
                 .tabItem { Label("Library", systemImage: "books.vertical") }.tag(AppTab.library)
@@ -99,7 +109,7 @@ struct AppView: View {
                 ZLibraryView(close: { tab = .library; discoverStack = UUID() })
             }.id(discoverStack)
                 .tabItem { Label("Discover", systemImage: "safari") }.tag(AppTab.discover)
-            BookmarksView(onOpen: { id, locator in destination = ReadingDestination(id: id, locator: locator) })
+            BookmarksView(onOpen: { id, locator in open(id, locator: locator) })
                 .tabItem { Label("Bookmarks", systemImage: "bookmark") }.tag(AppTab.bookmarks)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }.tag(AppTab.settings)
@@ -111,7 +121,7 @@ struct AppView: View {
             }
         }
         .onOpenURL { enqueue([$0]) }
-        .task { await library.refreshMissingMetadata() }
+        .task { await library.refreshMissingMetadata(); sync.schedule(after: 0) }
         .fullScreenCover(item: $destination, onDismiss: { library.flush() }) { target in
             ReaderView(bookID: target.id, initialLocator: target.locator).environmentObject(library).environment(\.leafTheme, theme)
         }
@@ -120,13 +130,28 @@ struct AppView: View {
             if phase != .active {
                 library.flush()
                 Task { try? await catalog.saveWebsiteContext() }
-            }
+            } else { sync.schedule(after: 0) }
         }
         .onChange(of: library.isImporting) { _, busy in if !busy { processQueue() } }
         .environment(\.leafTheme, theme)
         .preferredColorScheme(theme.colorScheme)
         .tint(theme.accent)
         .toolbarBackground(theme.canvas, for: .tabBar)
+    }
+    /// A book synced from iCloud may not be on this device yet; download it first.
+    private func open(_ id: UUID, locator: String? = nil) {
+        guard let book = library.book(id), !library.isDownloaded(book), sync.isConnected else {
+            destination = ReadingDestination(id: id, locator: locator); return
+        }
+        Task {
+            do {
+                try await sync.download(book)
+                destination = ReadingDestination(id: id, locator: locator)
+            } catch {
+                library.notice = LibraryNotice(title: "Could not download “\(book.title)”",
+                    message: "Check that iCloud Drive is on and connected, then try again. \(error.localizedDescription)")
+            }
+        }
     }
     private func enqueue(_ urls: [URL]) { pendingURLs.append(contentsOf: urls); processQueue() }
     private func processQueue() {
