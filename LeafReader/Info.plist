@@ -45,9 +45,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.22.2</string>
+	<string>1.24.0</string>
 	<key>CFBundleVersion</key>
-	<string>110</string>
+	<string>112</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -55,6 +55,13 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Reader/fonts/LXGWWenKaiLite-Regular.ttf</string>
+		<string>Reader/fonts/NotoSerifCJKsc-Regular.otf</string>
+		<string>Reader/fonts/LXGWNeoZhiSong.ttf</string>
+		<string>Reader/fonts/LXGWNeoXiHei.ttf</string>
+	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>

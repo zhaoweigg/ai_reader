@@ -54,6 +54,33 @@ final class ThemeTests: XCTestCase {
         }
     }
 
+    func testBundledTypefacesRegisterNativelyShipLicensesAndReachThePage() throws {
+        let reader = try XCTUnwrap(Bundle.main.url(forResource: "Reader", withExtension: nil))
+        let shipped = Set(try FileManager.default.contentsOfDirectory(atPath: reader.appendingPathComponent("fonts").path))
+        for name in ["Georgia", "Palatino", "System"] { XCTAssertNotNil(ReaderTypeface(rawValue: name), name) }
+        XCTAssertEqual(ReaderTypeface.bundled.map(\.rawValue), ["LXGW WenKai Lite", "Noto Serif CJK SC", "LXGW Neo ZhiSong", "LXGW Neo XiHei"])
+        for face in ReaderTypeface.bundled {
+            let file = try XCTUnwrap(face.file, face.title)
+            XCTAssertTrue(shipped.contains(file), "\(file) must ship in Reader/fonts")
+            // Info.plist registers the same file, so native previews use the real face.
+            let native = try XCTUnwrap(UIFont(name: face.rawValue, size: 17), "\(face.rawValue) is not registered through UIAppFonts")
+            XCTAssertEqual(native.familyName, face.rawValue)
+            XCTAssertNotNil(face.detail, face.title)
+            let prefs = ReaderPreferences(fontSize: 19, lineHeight: 1.65, font: face.rawValue, theme: .day, scrolling: false)
+            XCTAssertEqual(prefs.payload["fontFile"] as? String, file)
+            XCTAssertEqual(prefs.payload["fontGeneric"] as? String, face.generic)
+        }
+        for prefix in ["LXGWWenKaiLite", "NotoSerifCJK", "LXGWNeoZhiSong", "LXGWNeoXiHei"] {
+            XCTAssertTrue(shipped.contains { $0.hasPrefix(prefix) && $0.contains("LICENSE") }, "\(prefix) license must ship for Acknowledgments")
+        }
+        let georgia = ReaderPreferences(fontSize: 19, lineHeight: 1.65, font: "Georgia", theme: .day, scrolling: false)
+        XCTAssertNil(georgia.payload["fontFile"])
+        XCTAssertEqual(georgia.payload["fontGeneric"] as? String, "serif")
+        XCTAssertEqual(ReaderPreferences(fontSize: 19, lineHeight: 1.65, font: "System", theme: .day, scrolling: false).payload["fontGeneric"] as? String, "sans-serif")
+        // A name synced from a newer build still produces a usable payload.
+        XCTAssertEqual(ReaderPreferences(fontSize: 19, lineHeight: 1.65, font: "Unknown Face", theme: .day, scrolling: false).typeface, .georgia)
+    }
+
     private func contrast(_ first: String, _ second: String) -> Double {
         func luminance(_ hex: String) -> Double {
             let value = UInt32(hex.dropFirst(), radix: 16)!

@@ -83,9 +83,6 @@ struct ReaderAppearanceControls: View {
 
     @ViewBuilder private var fontControls: some View {
         Section {
-            Picker("Typeface", selection: $font) {
-                Text("Georgia").tag("Georgia"); Text("Palatino").tag("Palatino"); Text("System").tag("System")
-            }
             VStack(spacing: 4) {
                 HStack { Text("Text size"); Spacer(); Text("\(Int(fontSize)) pt").foregroundStyle(.secondary) }
                 HStack(spacing: 8) {
@@ -97,6 +94,19 @@ struct ReaderAppearanceControls: View {
                         .disabled(fontSize >= 32).accessibilityLabel("Larger text").accessibilityIdentifier("increaseTextSize")
                 }.buttonStyle(.borderless)
             }
+        }
+        Section("Typeface") {
+            // Each row is set in its own face so the choice can be seen before it is made.
+            Picker("Typeface", selection: $font) {
+                ForEach(ReaderTypeface.allCases) { face in
+                    HStack {
+                        Text(face.title).font(face.font(size: 17))
+                        if let detail = face.detail { Spacer(); Text(detail).font(.footnote).foregroundStyle(.secondary) }
+                    }
+                    .tag(face.rawValue)
+                }
+            }
+            .pickerStyle(.inline).labelsHidden().accessibilityIdentifier("typeface")
         }
         Section("Line spacing") {
             HStack(spacing: 8) {

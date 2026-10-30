@@ -238,7 +238,11 @@ function applyPreferences(value) {
     }
     view.renderer.toggleAttribute('animated', !value.scrolling && !reducedMotion.matches);
     if (view.isFixedLayout) { view.renderer.setAttribute('zoom', 'fit-page'); return; }
-    const font = value.font === 'System' ? '-apple-system, sans-serif' : `"${value.font}", serif`;
+    const generic = value.fontGeneric ?? (value.font === 'System' ? 'sans-serif' : 'serif');
+    const font = value.font === 'System' ? `-apple-system, ${generic}` : `"${value.font}", ${generic}`;
+    // A bundled face is declared in every chapter document; WebKit decodes the file once.
+    const fontFace = value.fontFile ? `@font-face { font-family:"${value.font}"; font-display:block;
+            src:url("${new URL(`fonts/${value.fontFile}`, location.href).href}"); }` : '';
     const bounded = (value, fallback, min, max) => Number.isFinite(Number(value))
         ? Math.min(max, Math.max(min, Number(value))) : fallback;
     const size = bounded(value.fontSize, 19, 12, 32);
@@ -263,7 +267,7 @@ function applyPreferences(value) {
     attribute('gap', `${gap}%`);
     attribute('max-inline-size', '680px');
     setReadingClearance({ height: readingClearance });
-    view.renderer.setStyles?.(`
+    view.renderer.setStyles?.(`${fontFace}
         html { color-scheme: ${value.colorScheme ?? (value.background === '#17232E' ? 'dark' : 'light')}; font-size:${size}px !important;
             -webkit-text-size-adjust:none !important; text-size-adjust:none !important; }
         html, body { background:${value.background} !important; color:${value.foreground} !important; }
