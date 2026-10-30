@@ -62,7 +62,11 @@ struct AcknowledgmentsView: View {
     private let licenses = [
         ("foliate-js", "foliate/LICENSE", "https://github.com/johnfactotum/foliate-js"),
         ("zip.js", "foliate/vendor/zip-lib/LICENSE", "https://github.com/gildas-lormeau/zip.js"),
-        ("fflate", "foliate/vendor/fflate-lib/LICENSE", "https://github.com/101arrowz/fflate")
+        ("fflate", "foliate/vendor/fflate-lib/LICENSE", "https://github.com/101arrowz/fflate"),
+        ("霞鹜文楷 LXGW WenKai Lite", "fonts/LXGWWenKaiLite-LICENSE.txt", "https://github.com/lxgw/LxgwWenKai-Lite"),
+        ("思源宋体 Noto Serif CJK", "fonts/NotoSerifCJK-LICENSE.txt", "https://github.com/notofonts/noto-cjk"),
+        ("霞鹜新致宋 LXGW Neo ZhiSong", "fonts/LXGWNeoZhiSong-LICENSE.md", "https://github.com/lxgw/LxgwNeoZhiSong"),
+        ("霞鹜新晰黑 LXGW Neo XiHei", "fonts/LXGWNeoXiHei-LICENSE.md", "https://github.com/lxgw/LxgwNeoXiHei")
     ]
     var body: some View {
         List {
@@ -74,7 +78,10 @@ struct AcknowledgmentsView: View {
                     }
                 }.listRowBackground(theme.surface)
             }
-            Section { Text("The bundled sample books are original short works created for Leaf. They are included for demonstrating the reader.").font(.footnote) }.listRowBackground(theme.surface)
+            Section {
+                Text("The Chinese typefaces are bundled as released, except 思源宋体, which is subset to Chinese, punctuation and Latin characters to save space.").font(.footnote)
+                Text("The bundled sample books are original short works created for Leaf. They are included for demonstrating the reader.").font(.footnote)
+            }.listRowBackground(theme.surface)
         }.leafFormStyle().navigationTitle("Acknowledgments").navigationBarTitleDisplayMode(.inline)
     }
 }

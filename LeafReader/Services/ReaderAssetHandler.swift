@@ -50,6 +50,8 @@ final class ReaderAssetHandler: NSObject, WKURLSchemeHandler {
             case "html": mime = "text/html; charset=utf-8"
             case "css": mime = "text/css; charset=utf-8"
             case "wasm": mime = "application/wasm"
+            case "ttf": mime = "font/ttf"
+            case "otf": mime = "font/otf"
             default: mime = "application/octet-stream"
             }
         }

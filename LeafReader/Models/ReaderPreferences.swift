@@ -95,6 +95,50 @@ extension View {
     func leafFormStyle() -> some View { modifier(LeafFormStyle()) }
 }
 
+/// Typefaces the reader offers. The raw value is the saved `reader.font` preference and
+/// the CSS family name, so the three original choices keep their stored values. Chinese
+/// faces ship in `Reader/fonts`; the page declares them with `@font-face` and Info.plist
+/// registers the same files for native previews.
+enum ReaderTypeface: String, CaseIterable, Identifiable {
+    case georgia = "Georgia", palatino = "Palatino", system = "System"
+    case wenKai = "LXGW WenKai Lite", notoSerif = "Noto Serif CJK SC"
+    case zhiSong = "LXGW Neo ZhiSong", xiHei = "LXGW Neo XiHei"
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .georgia, .palatino, .system: return rawValue
+        case .wenKai: return "霞鹜文楷"
+        case .notoSerif: return "思源宋体"
+        case .zhiSong: return "霞鹜新致宋"
+        case .xiHei: return "霞鹜新晰黑"
+        }
+    }
+    var detail: String? {
+        switch self {
+        case .georgia, .palatino, .system: return nil
+        case .wenKai: return "楷体 · WenKai"
+        case .notoSerif: return "宋体 · Noto Serif"
+        case .zhiSong: return "宋体 · ZhiSong"
+        case .xiHei: return "黑体 · XiHei"
+        }
+    }
+    /// The bundled file under `Reader/fonts`; nil for faces the system provides.
+    var file: String? {
+        switch self {
+        case .georgia, .palatino, .system: return nil
+        case .wenKai: return "LXGWWenKaiLite-Regular.ttf"
+        case .notoSerif: return "NotoSerifCJKsc-Regular.otf"
+        case .zhiSong: return "LXGWNeoZhiSong.ttf"
+        case .xiHei: return "LXGWNeoXiHei.ttf"
+        }
+    }
+    /// The generic family that fills in glyphs the face lacks.
+    var generic: String { self == .system || self == .xiHei ? "sans-serif" : "serif" }
+    static let bundled = allCases.filter { $0.file != nil }
+    static func named(_ name: String) -> ReaderTypeface { ReaderTypeface(rawValue: name) ?? .georgia }
+    func font(size: CGFloat) -> Font { self == .system ? .system(size: size) : .custom(rawValue, size: size) }
+}
+
 struct ReaderPreferences: Equatable {
     var fontSize: Double
     var lineHeight: Double
@@ -104,11 +148,14 @@ struct ReaderPreferences: Equatable {
     var horizontalMargin: Double = 20
     var verticalMargin: Double = 12
     var paragraphSpacing: Double = 0.65
+    var typeface: ReaderTypeface { ReaderTypeface.named(font) }
     var payload: [String: Any] {
-        ["fontSize": fontSize, "lineHeight": lineHeight, "font": font,
+        var value: [String: Any] = ["fontSize": fontSize, "lineHeight": lineHeight, "font": font, "fontGeneric": typeface.generic,
          "background": theme.backgroundHex, "foreground": theme.foregroundHex, "scrolling": scrolling,
          "colorScheme": theme.isDark ? "dark" : "light", "accent": theme.accentHex,
          "horizontalMargin": horizontalMargin, "verticalMargin": verticalMargin, "paragraphSpacing": paragraphSpacing]
+        if let file = typeface.file { value["fontFile"] = file }
+        return value
     }
 }
 

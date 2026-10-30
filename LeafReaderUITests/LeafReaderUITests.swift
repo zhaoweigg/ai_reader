@@ -363,6 +363,34 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["compactLayout"].isSelected)
     }
 
+    @MainActor func testChineseTypefaceChoiceAppliesAndPersistsAcrossRelaunch() {
+        let app = launchApp()
+        app.swipeUp()
+        app.buttons["book-The Art of Noticing"].tap()
+        openAppearance(app)
+        // The inline Picker exposes each row as a button carrying the picker's
+        // identifier and the row's combined label ("霞鹜文楷, 楷体 · WenKai").
+        func typefaceRow(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+            app.buttons.matching(identifier: "typeface").matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        }
+        let wenKai = typefaceRow(app, "霞鹜文楷")
+        revealAppearanceControl(app, wenKai)
+        XCTAssertTrue(typefaceRow(app, "Georgia").isSelected)
+        wenKai.tap()
+        XCTAssertTrue(wenKai.isSelected)
+        XCTAssertFalse(typefaceRow(app, "Georgia").isSelected)
+        capture("Aa Typeface rows", app: app)
+        dismissAppearance(app)
+        capture("WenKai reading page", app: app)
+        app.terminate()
+        app.launch()
+        app.buttons["featuredBook"].tap()
+        openAppearance(app)
+        let restored = typefaceRow(app, "霞鹜文楷")
+        revealAppearanceControl(app, restored)
+        XCTAssertTrue(restored.isSelected)
+        XCTAssertFalse(typefaceRow(app, "Georgia").isSelected)
+    }
     @MainActor func testContentsRevealsCurrentChapterInPages() { verifyContentsLocation(flow: "Pages") }
     @MainActor func testContentsRevealsCurrentChapterInScroll() { verifyContentsLocation(flow: "Scroll") }
     @MainActor func testContentsRevealsCurrentPageInPDF() { verifyContentsLocation(flow: "PDF") }

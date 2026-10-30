@@ -34,7 +34,7 @@ WebKit can terminate its separate renderer for reasons it does not disclose to L
 
 ## Features
 
-Version **1.23.0 (111)** uses Apple speech only. Listen offers downloaded Enhanced and Premium Apple voices, automatic language matching, playback speed and follow controls. The Natural voice engine, model download UI and native inference libraries have been removed. Existing Apple voice/rate preferences and saved listening cursors are preserved; old engine preferences are discarded, and the app removes its obsolete downloaded model directory on a normal launch. No model or inference framework download is required to build Leaf.
+Version **1.24.1 (113)** uses Apple speech only. Listen offers downloaded Enhanced and Premium Apple voices, automatic language matching, playback speed and follow controls. The Natural voice engine, model download UI and native inference libraries have been removed. Existing Apple voice/rate preferences and saved listening cursors are preserved; old engine preferences are discarded, and the app removes its obsolete downloaded model directory on a normal launch. No model or inference framework download is required to build Leaf.
 
 - Multi-file import from Files and iCloud Drive, plus Open in Leaf from another app.
 - App-owned file copies, SHA-256 duplicate detection, atomic library manifests, and visible import errors.
