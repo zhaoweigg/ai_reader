@@ -1482,16 +1482,29 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["playbackSpeed"].tap(); app.buttons["1.5×"].tap()
         XCTAssertEqual(pause.label, "Resume listening", "Changing speed must keep paused audio paused")
         capture(flow + " Apple playback paused speed retained", app: app)
-        let originalPassage = app.staticTexts["spokenPassage"].label
+        let passage = app.staticTexts["spokenPassage"]
+        let originalPassage = passage.label
+        let originalLocation = passage.value as? String ?? ""
+        XCTAssertFalse(originalLocation.isEmpty)
         app.buttons["audioNext"].tap()
         XCTAssertEqual(pause.label, "Resume listening")
-        expectation(for: NSPredicate { _, _ in app.staticTexts["spokenPassage"].label != originalPassage }, evaluatedWith: app)
+        // The sample EPUB repeats paragraphs. Identity is its actual source
+        // locator, not whether the visible text happens to be different.
+        expectation(for: NSPredicate { _, _ in
+            guard let location = passage.value as? String else { return false }
+            return !location.isEmpty && location != originalLocation
+        }, evaluatedWith: app)
         waitForExpectations(timeout: 8)
+        let nextLocation = passage.value as? String ?? ""
+        XCTAssertFalse(passage.label.isEmpty)
         let previous = app.buttons["audioPrevious"]
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: previous); waitForExpectations(timeout: 8)
         previous.tap(); XCTAssertEqual(pause.label, "Resume listening")
-        expectation(for: NSPredicate(format: "label == %@", originalPassage), evaluatedWith: app.staticTexts["spokenPassage"])
+        expectation(for: NSPredicate(format: "value == %@", originalLocation), evaluatedWith: passage)
         waitForExpectations(timeout: 8)
+        XCTAssertEqual(passage.label, originalPassage)
+        let locations = XCTAttachment(string: "Original: \(originalLocation)\nNext: \(nextLocation)\nRestored: \(passage.value as? String ?? "")")
+        locations.name = flow + " actual listening passage locations"; locations.lifetime = .keepAlways; add(locations)
         app.buttons["stopListening"].tap()
         showReaderControls(app); app.buttons["closeBook"].tap()
         app.buttons["featuredBook"].tap(); showReaderControls(app); app.buttons["Listen"].tap()

@@ -38,7 +38,13 @@ struct ReaderAudioPlayer: View {
                     .accessibilityLabel("Stop listening").accessibilityIdentifier("stopListening")
             }
             if let error = session.error { Text(error).font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading) }
-            else if let passage = session.passage { Text(passage.text).font(.caption).lineLimit(1).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("spokenPassage") }
+            else if let passage = session.passage {
+                Text(passage.text).font(.caption).lineLimit(1).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("spokenPassage")
+                #if DEBUG
+                    // Equal paragraphs still have distinct source locations.
+                    .accessibilityValue(UITesting.testID == nil ? "" : passage.locator)
+                #endif
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22))
