@@ -103,7 +103,6 @@ struct ReaderAppearanceControls: View {
                         Text(face.title).font(face.font(size: 17))
                         if let detail = face.detail { Spacer(); Text(detail).font(.footnote).foregroundStyle(.secondary) }
                     }
-                    .accessibilityElement(children: .combine).accessibilityIdentifier("typeface-\(face.rawValue)")
                     .tag(face.rawValue)
                 }
             }
