@@ -716,7 +716,7 @@ final class ReaderEngineTests: XCTestCase {
             let web = try XCTUnwrap(model.webView)
             let loaded = try await model.readAloudPassage(at: "section:0")
             let passage = try XCTUnwrap(loaded)
-            let starts = KokoroSentenceSplitter.split(passage.text).map(\.range.location)
+            let starts = ReadAloudSentenceSplitter.split(passage.text).map(\.range.location)
             XCTAssertGreaterThan(starts.count, 5, "The fixture paragraph has several sentences")
             _ = try await web.evaluateJavaScript("""
                 window.__paints=[];const original=window.Leaf.setSpokenRange;

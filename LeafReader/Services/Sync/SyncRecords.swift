@@ -131,8 +131,8 @@ struct SyncedSettings: Codable, Equatable {
         "reader.theme", "reader.font", "reader.fontSize", "reader.lineHeight", "reader.scrolling",
         "reader.horizontalMargin", "reader.verticalMargin", "reader.paragraphSpacing",
         "reader.chatButtonTransparency", "chat.dictationLanguage",
-        "audio.engine", "audio.voice", "audio.kokoroVoice", "audio.followsText", "audio.speed",
-        "audio.speed.system", "audio.speed.kokoro",
+        "audio.voice", "audio.followsText", "audio.speed",
+        "audio.speed.system",
         "ai.configuration", "zlibrary.origin", "zlibrary.feed", "zlibrary.searchOrder"
     ]
 }

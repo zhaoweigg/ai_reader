@@ -3,19 +3,15 @@ import Foundation
 /// One spoken unit of a passage: the text handed to the synthesizer and its
 /// UTF-16 range inside the passage, so playback progress maps back to the
 /// reader's highlight and bookmark offsets.
-struct KokoroSentence: Equatable {
+struct ReadAloudSentence: Equatable {
     let text: String
     let range: NSRange
 }
 
-/// Splits passage text into short chunks for streaming synthesis: whole
-/// sentences when they are short, otherwise clauses cut at commas or spaces.
-/// Chunk size bounds both first-audio latency (a chunk must finish synthesizing
-/// before it can play) and progress precision (ranges are exact only at chunk
-/// boundaries). Kokoro's Chinese front end spends roughly ten phoneme tokens per
-/// character, so Chinese chunks stay well under the English limit; 48 Chinese
-/// characters took about 3 s to synthesize on a 2-thread Mac run.
-enum KokoroSentenceSplitter {
+/// Sentence/clause boundaries keep Apple speech progress moving even when a
+/// voice reports utterance starts without individual word ranges. UTF-16 offsets
+/// stay relative to the original passage for highlighting and saved cursors.
+enum ReadAloudSentenceSplitter {
     static let englishLimit = 160
     static let chineseLimit = 48
     private static let terminators: Set<UInt16> = [0x2E, 0x21, 0x3F, 0x3B, 0x0A, 0x3002, 0xFF01, 0xFF1F, 0xFF1B, 0x2026]
@@ -33,9 +29,9 @@ enum KokoroSentenceSplitter {
         return abbreviations.contains(word)
     }
 
-    static func split(_ text: String) -> [KokoroSentence] {
+    static func split(_ text: String) -> [ReadAloudSentence] {
         let units = Array(text.utf16)
-        var sentences: [KokoroSentence] = []
+        var sentences: [ReadAloudSentence] = []
         var start = 0
         var index = 0
         var han = 0
@@ -47,7 +43,7 @@ enum KokoroSentenceSplitter {
             if last > first {
                 let piece = String(utf16CodeUnits: Array(units[first..<last]), count: last - first)
                 if piece.unicodeScalars.contains(where: { $0.properties.isAlphabetic || $0.properties.numericType != nil }) {
-                    sentences.append(KokoroSentence(text: piece, range: NSRange(location: first, length: last - first)))
+                    sentences.append(ReadAloudSentence(text: piece, range: NSRange(location: first, length: last - first)))
                 }
             }
             start = end; han = 0

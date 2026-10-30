@@ -54,6 +54,6 @@ enum AppleVoiceCatalog {
 enum AppleReadingVoiceError: LocalizedError {
     case downloadRequired
     var errorDescription: String? {
-        "No Enhanced or Premium Apple voice is installed for this language. Download one in iPhone Accessibility settings, or use the natural voice pack."
+        "No Enhanced or Premium Apple voice is installed for this language. Download one in iPhone Accessibility settings, then return to Leaf."
     }
 }

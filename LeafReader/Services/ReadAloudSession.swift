@@ -38,7 +38,7 @@ enum ReadAloudError: LocalizedError {
     }
 }
 
-/// The shared audio session of both speech engines.
+/// The audio session used by Apple narration.
 enum ReadAloudAudioSession {
     static let willActivate = Notification.Name("LeafWillActivateReadAloudAudio")
     /// Takes the spoken-audio playback category; other apps' audio ducks or pauses.
@@ -58,18 +58,12 @@ enum ReadAloudAudioSession {
     var finished: (() -> Void)? { get set }
     var progressed: ((NSRange) -> Void)? { get set }
     func speak(_ text: String, language: String, voice: String, speed: Double) throws
-    /// Optional warm-up for the passage that follows the one being spoken.
-    func prepare(_ text: String, language: String, voice: String, speed: Double)
     func pause()
     func resume() -> Bool
     func stop()
 }
-extension ReadAloudSpeaking {
-    func prepare(_ text: String, language: String, voice: String, speed: Double) {}
-}
-
 /// The iPhone voice. A passage is spoken as a queue of sentence/clause-sized
-/// utterances (the Kokoro chunk limits) rather than one utterance, because only
+/// utterances rather than one utterance, because only
 /// some voices report word ranges through `willSpeakRangeOfSpeechString`; with a
 /// voice that reports none, a single utterance per passage left the highlight on
 /// the passage's first line until the next passage. Every utterance start is
@@ -87,7 +81,7 @@ extension ReadAloudSpeaking {
     var finished: (() -> Void)?
     var progressed: ((NSRange) -> Void)?
     // Direct speaker adapters can exercise system timing with simulator voices.
-    // Production routing always opts into the strict downloaded-quality policy.
+    // Production always uses the strict downloaded-quality policy.
     init(requiresHighQuality: Bool = false, installedVoices: @escaping () -> [AppleReadingVoice] = { AppleVoiceCatalog.installed }) {
         self.requiresHighQuality = requiresHighQuality; self.installedVoices = installedVoices
         super.init()
@@ -108,8 +102,8 @@ extension ReadAloudSpeaking {
         let rate = min(AVSpeechUtteranceMaximumSpeechRate,
             max(AVSpeechUtteranceMinimumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(speed)))
         // A passage with no letters or digits yields no chunks; speak it whole.
-        var chunks = KokoroSentenceSplitter.split(text)
-        if chunks.isEmpty { chunks = [KokoroSentence(text: text, range: NSRange(location: 0, length: (text as NSString).length))] }
+        var chunks = ReadAloudSentenceSplitter.split(text)
+        if chunks.isEmpty { chunks = [ReadAloudSentence(text: text, range: NSRange(location: 0, length: (text as NSString).length))] }
         queue = chunks.map { chunk in
             let utterance = AVSpeechUtterance(string: chunk.text)
             utterance.voice = selected; utterance.rate = rate
@@ -173,25 +167,10 @@ extension ReadAloudSpeaking {
         if let passage, let spokenRange { highlight?(passage, spokenRange, followsText) }
     } }
     @Published var speed: Double { didSet {
-        defaults.set(speed, forKey: Self.speedKey(engine))
+        defaults.set(speed, forKey: "audio.speed.system")
         restartVoice()
     } }
     @Published var voice: String { didSet { defaults.set(voice, forKey: "audio.voice"); restartVoice() } }
-    /// Natural voice can fall back only to a downloaded Enhanced/Premium voice.
-    @Published var engine: ReadAloudEngine { didSet {
-        defaults.set(engine.rawValue, forKey: "audio.engine")
-        // Assign even when the rates match: speed's observer restarts the new
-        // engine exactly once, using its rate and the existing listening cursor.
-        speed = Self.savedSpeed(for: engine, defaults: defaults)
-    } }
-    /// Kokoro voice id, or empty for automatic selection by the text's script.
-    @Published var kokoroVoice: String { didSet { defaults.set(kokoroVoice, forKey: "audio.kokoroVoice"); restartVoice() } }
-    /// True while the on-device model is generating audio that has not started playing.
-    @Published private(set) var isBuffering = false
-    /// Why the last passage used an eligible Apple voice instead of Natural.
-    @Published private(set) var fallbackReason: String?
-    var voiceModel: KokoroModelStore? { (speaker as? RoutingReadAloudSpeaker)?.kokoro.store }
-    var effectiveVoice: String { engine == .kokoro ? ReadAloudEngine.kokoroPrefix + kokoroVoice : voice }
     var source: ((String?) async throws -> ReadAloudPassage?)?
     var reveal: ((String) async -> Void)?
     var clearSource: (() -> Void)?
@@ -201,7 +180,6 @@ extension ReadAloudSpeaking {
     private let bookmarkURL: URL?
     private var loadTask: Task<Void, Never>?
     private var prefetch: Task<ReadAloudPassage?, Error>?
-    private var warmTask: Task<Void, Never>?
     private var revealTask: Task<Void, Never>?
     private var generation = UUID()
     private var offset = 0
@@ -215,31 +193,31 @@ extension ReadAloudSpeaking {
     var isPlaying: Bool { state == .playing || state == .loading }
     var speedLabel: String { String(format: "%g×", speed) }
 
-    private static func speedKey(_ engine: ReadAloudEngine) -> String { "audio.speed.\(engine.rawValue)" }
-    private static func savedSpeed(for engine: ReadAloudEngine, defaults: UserDefaults) -> Double {
-        let saved = defaults.double(forKey: speedKey(engine))
+    private static func savedSpeed(defaults: UserDefaults) -> Double {
+        let saved = defaults.double(forKey: "audio.speed.system")
         if saved.isFinite && (0.5...2).contains(saved) { return saved }
-        // Seed both independent preferences from the old shared speed once.
-        // New speed changes never overwrite that migration value or the other engine.
+        // Preserve Apple's own rate, or migrate the pre-engine shared preference.
         let legacy = defaults.double(forKey: "audio.speed")
         let migrated = legacy.isFinite && (0.5...2).contains(legacy) ? legacy : 1
-        defaults.set(migrated, forKey: speedKey(engine))
+        defaults.set(migrated, forKey: "audio.speed.system")
         return migrated
     }
 
     init(bookmarkURL: URL? = nil, defaults: UserDefaults = .standard, speaker: (any ReadAloudSpeaking)? = nil) {
         self.bookmarkURL = bookmarkURL; self.defaults = defaults
-        self.speaker = speaker ?? RoutingReadAloudSpeaker(system: SystemReadAloudSpeaker(requiresHighQuality: true), kokoro: KokoroReadAloudSpeaker(store: .shared))
-        let restoredEngine = ReadAloudEngine(rawValue: defaults.string(forKey: "audio.engine") ?? "") ?? .kokoro
-        let appleSpeed = Self.savedSpeed(for: .system, defaults: defaults)
-        let naturalSpeed = Self.savedSpeed(for: .kokoro, defaults: defaults)
-        speed = restoredEngine == .system ? appleSpeed : naturalSpeed
+        var highQuality = true
+        #if DEBUG
+        // Explicit simulator UI launches can exercise real AVSpeech playback with
+        // the runtime's installed voices; ordinary launches always stay strict.
+        if UITesting.testID != nil, UITesting.flag("LEAF_UI_APPLE_SPEECH") { highQuality = false }
+        #endif
+        self.speaker = speaker ?? SystemReadAloudSpeaker(requiresHighQuality: highQuality)
+        speed = Self.savedSpeed(defaults: defaults)
+        for key in ["audio.engine", "audio.kokoroVoice", "audio.speed.kokoro"] { defaults.removeObject(forKey: key) }
         let savedVoice = defaults.string(forKey: "audio.voice") ?? ""
         let eligibleVoice = AppleVoiceCatalog.installed.contains(where: { $0.id == savedVoice }) ? savedVoice : ""
         voice = eligibleVoice
         if savedVoice != eligibleVoice { defaults.set(eligibleVoice, forKey: "audio.voice") }
-        engine = restoredEngine
-        kokoroVoice = defaults.string(forKey: "audio.kokoroVoice") ?? ""
         followsText = defaults.object(forKey: "audio.followsText") == nil || defaults.bool(forKey: "audio.followsText")
         if let bookmarkURL, let data = try? Data(contentsOf: bookmarkURL) {
             bookmark = try? JSONDecoder().decode(ReadAloudBookmark.self, from: data)
@@ -255,14 +233,6 @@ extension ReadAloudSpeaking {
             self.spokenText = (passage.text as NSString).substring(with: spoken)
             self.highlight?(passage, spoken, self.followsText)
             if Date().timeIntervalSince(self.lastSavedAt) > 1 { self.saveBookmark() }
-        }
-        (self.speaker as? ReadAloudBufferingReporter)?.buffering = { [weak self] buffering in self?.isBuffering = buffering }
-        (self.speaker as? RoutingReadAloudSpeaker)?.onFallback = { [weak self] reason in self?.fallbackReason = reason }
-        (self.speaker as? RoutingReadAloudSpeaker)?.failed = { [weak self] error in
-            guard let self, self.passage != nil, self.state == .playing || self.state == .paused else { return }
-            self.fail(error); self.isBuffering = false
-            self.saveBookmark()
-            ReadAloudAudioSession.deactivate()
         }
         notificationTokens.append(NotificationCenter.default.addObserver(forName: ChatDictationSession.willRecord, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pause() }
@@ -295,7 +265,12 @@ extension ReadAloudSpeaking {
         }
         state = .playing
         if isLoading { state = .loading; return }
-        if passage != nil, !speaker.resume() { speakCurrent() }
+        if passage != nil {
+            // Dictation may have changed the category and released the session.
+            do { try ReadAloudAudioSession.activate() }
+            catch { fail(error); saveBookmark(); return }
+            if !speaker.resume() { speakCurrent() }
+        }
     }
     func next() { guard passage != nil, !isLoading else { return }; advance() }
     func previous() {
@@ -314,8 +289,8 @@ extension ReadAloudSpeaking {
         clearHighlight()
         generation = UUID(); loadTask?.cancel(); loadTask = nil
         isLoading = false
-        prefetch?.cancel(); prefetch = nil; warmTask?.cancel(); warmTask = nil
-        revealTask?.cancel(); revealTask = nil; speaker.stop(); isBuffering = false
+        prefetch?.cancel(); prefetch = nil
+        revealTask?.cancel(); revealTask = nil; speaker.stop()
         clearSource?()
     }
     private func load(at locator: String?, prepared: Task<ReadAloudPassage?, Error>? = nil) {
@@ -344,12 +319,6 @@ extension ReadAloudSpeaking {
                 let cursor = next.nextLocator
                 let prefetch = Task { try Task.checkCancellation(); return try await source(cursor) }
                 self.prefetch = prefetch
-                // Warm the on-device voice for the next passage once its text is known.
-                warmTask?.cancel()
-                warmTask = Task { [weak self] in
-                    guard let upcoming = try? await prefetch.value, let self, !Task.isCancelled, generation == token else { return }
-                    speaker.prepare(upcoming.text, language: upcoming.language, voice: effectiveVoice, speed: speed)
-                }
                 if state != .paused { speakCurrent() }
             } catch {
                 guard !Task.isCancelled, generation == token else { return }
@@ -364,7 +333,7 @@ extension ReadAloudSpeaking {
         if offset > 0, CFStringIsSurrogateLowCharacter(text.character(at: offset)) { offset -= 1 }
         utteranceOffset = offset
         do {
-            try speaker.speak(text.substring(from: offset), language: passage.language, voice: effectiveVoice, speed: speed)
+            try speaker.speak(text.substring(from: offset), language: passage.language, voice: voice, speed: speed)
             state = .playing
             // Start/resume at the saved speech offset, not at the beginning of
             // its up-to-800-character passage while waiting for a voice callback.
@@ -389,8 +358,8 @@ extension ReadAloudSpeaking {
         clearHighlight()
         let paused = state == .paused
         history.append(passage.locator); if history.count > 50 { history.removeFirst() }
-        let prepared = prefetch; prefetch = nil; warmTask?.cancel(); warmTask = nil
-        speaker.stop(); isBuffering = false; loadTask?.cancel(); generation = UUID(); offset = 0
+        let prepared = prefetch; prefetch = nil
+        speaker.stop(); loadTask?.cancel(); generation = UUID(); offset = 0
         state = paused ? .paused : .loading
         load(at: passage.nextLocator, prepared: prepared)
     }

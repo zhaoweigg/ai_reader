@@ -34,82 +34,59 @@ import PDFKit
         while !condition(), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(condition())
     }
-    func testVoiceTypesKeepIndependentSpeedsAfterSwitchingAndReopening() {
+    func testAppleSpeedPersistsAcrossBooksAndReopening() {
         let (session, _, _, defaults) = setup()
-        session.speed = 1.75
-        session.engine = .system
-        XCTAssertEqual(session.speed, 1, "Natural speed changes cannot change Apple's initial speed")
         session.speed = 0.75
-        for _ in 0..<8 {
-            session.engine = .kokoro; XCTAssertEqual(session.speed, 1.75)
-            session.engine = .system; XCTAssertEqual(session.speed, 0.75)
-        }
         let reopened = ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker())
-        XCTAssertEqual(reopened.engine, .system); XCTAssertEqual(reopened.speed, 0.75)
-        reopened.engine = .kokoro; XCTAssertEqual(reopened.speed, 1.75)
-        reopened.speed = 2
-        reopened.engine = .system; XCTAssertEqual(reopened.speed, 0.75)
-        let anotherBook = ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker())
-        anotherBook.engine = .kokoro; XCTAssertEqual(anotherBook.speed, 2)
+        XCTAssertEqual(reopened.speed, 0.75)
+        reopened.speed = 1.75
+        XCTAssertEqual(ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker()).speed, 1.75)
     }
-    func testLegacySharedSpeedSeedsBothTypesWithoutOverwritingTheirNewPreferences() {
+    func testRetiredEngineChoiceKeepsAppleSpeedAndRemovesOldPreferences() {
+        for engine in ["kokoro", "system", "unknown"] {
+            let (_, _, _, defaults) = setup()
+            defaults.set(engine, forKey: "audio.engine")
+            defaults.set("zf_003", forKey: "audio.kokoroVoice")
+            defaults.set(1.75, forKey: "audio.speed.kokoro")
+            defaults.set(0.75, forKey: "audio.speed.system")
+            let migrated = ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker())
+            XCTAssertEqual(migrated.speed, 0.75)
+            for key in ["audio.engine", "audio.kokoroVoice", "audio.speed.kokoro"] { XCTAssertNil(defaults.object(forKey: key)) }
+        }
+    }
+    func testLegacySharedSpeedMigratesOnlyWhenAppleSpeedIsMissingOrInvalid() {
         for legacy in [0.5, 1.25, 2.0] {
             let (_, _, _, defaults) = setup()
-            // Simulate an installation from before independent speed preferences.
-            defaults.removeObject(forKey: "audio.speed.system")
-            defaults.removeObject(forKey: "audio.speed.kokoro")
-            defaults.set(legacy, forKey: "audio.speed")
-            defaults.set("system", forKey: "audio.engine")
+            defaults.removeObject(forKey: "audio.speed.system"); defaults.set(legacy, forKey: "audio.speed")
             let migrated = ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker())
             XCTAssertEqual(migrated.speed, legacy)
-            migrated.engine = .kokoro; XCTAssertEqual(migrated.speed, legacy)
             migrated.speed = 1.5
-            migrated.engine = .system; XCTAssertEqual(migrated.speed, legacy)
-            XCTAssertEqual(defaults.double(forKey: "audio.speed"), legacy, "Migration retains the original shared preference")
-            let reopened = ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker())
-            XCTAssertEqual(reopened.speed, legacy)
-            reopened.engine = .kokoro; XCTAssertEqual(reopened.speed, 1.5)
+            XCTAssertEqual(ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker()).speed, 1.5)
         }
-    }
-    func testMissingOrInvalidEngineSpeedUsesASafeMigrationWithoutChangingTheOtherType() {
         for invalid in [0.0, 3.0, Double.infinity, Double.nan] {
             let (_, _, _, defaults) = setup()
-            defaults.set(0.75, forKey: "audio.speed.system")
-            defaults.set(invalid, forKey: "audio.speed.kokoro")
-            defaults.set(1.25, forKey: "audio.speed")
-            let migrated = ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker())
-            XCTAssertEqual(migrated.speed, 1.25)
-            migrated.engine = .system; XCTAssertEqual(migrated.speed, 0.75)
-            defaults.removeObject(forKey: "audio.speed.kokoro")
-            defaults.set(invalid, forKey: "audio.speed")
-            migrated.engine = .kokoro; XCTAssertEqual(migrated.speed, 1)
-            migrated.engine = .system; XCTAssertEqual(migrated.speed, 0.75)
+            defaults.set(invalid, forKey: "audio.speed.system"); defaults.set(invalid, forKey: "audio.speed")
+            XCTAssertEqual(ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker()).speed, 1)
         }
     }
-    func testEngineSpeedSwitchRestartsOnceAtTheCursorAndDoesNotUnpause() async throws {
-        for appleSpeed in [0.75, 1.5] { // Different and equal rates both switch engines once.
-            let (session, speaker, directory, defaults) = setup()
-            session.speed = 1.5; session.engine = .system; session.speed = appleSpeed; session.engine = .kokoro
-            let value = passage(2, text: "Alpha 😀 beta gamma")
-            session.source = { locator in locator == "position:3" ? nil : value }
-            session.start(at: "position:2", offset: 9)
-            try await wait { session.state == .playing }
-            XCTAssertEqual(speaker.spoken.last, "beta gamma"); XCTAssertEqual(speaker.speeds.last, 1.5)
-            let count = speaker.spoken.count
-            session.engine = .system
-            XCTAssertEqual(speaker.spoken.count, count + 1)
-            XCTAssertEqual(speaker.spoken.last, "beta gamma"); XCTAssertEqual(speaker.speeds.last, appleSpeed)
-            speaker.progressed?(NSRange(location: 5, length: 1))
-            session.pause(); session.engine = .kokoro
-            XCTAssertEqual(session.state, .paused); XCTAssertEqual(speaker.spoken.count, count + 1)
-            XCTAssertEqual(session.speed, 1.5)
-            session.resume()
-            XCTAssertEqual(speaker.spoken.last, "gamma"); XCTAssertEqual(speaker.speeds.last, 1.5)
-            session.stop()
-            let reopened = ReadAloudSession(bookmarkURL: directory.appendingPathComponent("bookmark.json"), defaults: defaults, speaker: RecordingSpeaker())
-            XCTAssertEqual(reopened.bookmark?.offset, 14); XCTAssertEqual(reopened.speed, 1.5)
-            reopened.engine = .system; XCTAssertEqual(reopened.speed, appleSpeed)
-        }
+    func testSpeedChangeRestartsOnceAtTheCursorAndDoesNotUnpause() async throws {
+        let (session, speaker, directory, defaults) = setup()
+        let value = passage(2, text: "Alpha 😀 beta gamma")
+        session.source = { locator in locator == "position:3" ? nil : value }
+        session.start(at: "position:2", offset: 9)
+        try await wait { session.state == .playing }
+        let count = speaker.spoken.count
+        session.speed = 0.75
+        XCTAssertEqual(speaker.spoken.count, count + 1)
+        XCTAssertEqual(speaker.spoken.last, "beta gamma"); XCTAssertEqual(speaker.speeds.last, 0.75)
+        speaker.progressed?(NSRange(location: 5, length: 1))
+        session.pause(); session.speed = 1.5
+        XCTAssertEqual(session.state, .paused); XCTAssertEqual(speaker.spoken.count, count + 1)
+        session.resume()
+        XCTAssertEqual(speaker.spoken.last, "gamma"); XCTAssertEqual(speaker.speeds.last, 1.5)
+        session.stop()
+        let reopened = ReadAloudSession(bookmarkURL: directory.appendingPathComponent("bookmark.json"), defaults: defaults, speaker: RecordingSpeaker())
+        XCTAssertEqual(reopened.bookmark?.offset, 14); XCTAssertEqual(reopened.speed, 1.5)
     }
     func testRetainsOnlyCurrentAndOnePrefetchedPassageAndFinishesAtBookEnd() async throws {
         let (session, speaker, directory, _) = setup()
@@ -179,7 +156,7 @@ import PDFKit
         speaker.progressed?(NSRange(location: 9, length: 4))
         session.speed = 1.5
         XCTAssertEqual(speaker.spoken.last, "beta gamma"); XCTAssertEqual(speaker.speeds.last, 1.5)
-        session.pause(); session.kokoroVoice = "zf_003"
+        session.pause(); session.voice = ""
         session.followsText = false
         let count = speaker.spoken.count
         session.resume(); XCTAssertEqual(speaker.spoken.count, count + 1)
@@ -187,7 +164,7 @@ import PDFKit
         let reopenedSpeaker = RecordingSpeaker()
         let reopened = ReadAloudSession(bookmarkURL: directory.appendingPathComponent("bookmark.json"), defaults: defaults, speaker: reopenedSpeaker)
         reopened.source = { _ in value }
-        XCTAssertEqual(reopened.bookmark?.offset, 9); XCTAssertEqual(reopened.speed, 1.5); XCTAssertEqual(reopened.kokoroVoice, "zf_003")
+        XCTAssertEqual(reopened.bookmark?.offset, 9); XCTAssertEqual(reopened.speed, 1.5); XCTAssertEqual(reopened.voice, "")
         XCTAssertFalse(reopened.followsText)
         reopened.resumeSaved(); try await wait { reopened.state == .playing }
         XCTAssertEqual(reopenedSpeaker.spoken.first, "beta gamma"); reopened.stop()
@@ -251,17 +228,16 @@ import PDFKit
         XCTAssertTrue(speaker.paused); XCTAssertEqual(session.bookmark?.locator, "position:0")
         XCTAssertEqual(speaker.spoken.count, 1)
     }
-    func testPlaybackResumeRestoresAudioCategoryAfterDictation() throws {
-        let speaker = RecordingSpeaker()
-        let router = RoutingReadAloudSpeaker(system: speaker, kokoro: KokoroReadAloudSpeaker(store: .shared))
-        defer { router.stop(); ReadAloudAudioSession.deactivate() }
-        try router.speak("A saved passage", language: "en-US", voice: "", speed: 1)
-        router.pause()
+    func testPlaybackResumeRestoresAudioCategoryAfterDictation() async throws {
+        let (session, speaker, _, _) = setup()
+        session.source = { [self] _ in passage(0) }
+        session.start(); try await wait { session.state == .playing }
+        session.pause()
         try AVAudioSession.sharedInstance().setCategory(.record, mode: .measurement)
-        XCTAssertTrue(router.resume())
+        session.resume()
+        XCTAssertEqual(session.state, .playing); XCTAssertFalse(speaker.paused)
         XCTAssertEqual(AVAudioSession.sharedInstance().category, .playback)
         XCTAssertEqual(AVAudioSession.sharedInstance().mode, .spokenAudio)
-        XCTAssertFalse(speaker.paused)
     }
     func testSourceFailureCanBeReplacedWithoutAffectingBookState() async throws {
         let (session, speaker, _, _) = setup()
@@ -333,7 +309,7 @@ import PDFKit
     func testSystemSpeakerReportsEverySentenceStartWithoutWordRanges() async throws {
         let speaker = systemSpeaker(); speaker.reportsWordRanges = false
         let text = "Leaf reads the first sentence. Then it reads a second one, with a clause inside. A third sentence ends the passage."
-        let starts = KokoroSentenceSplitter.split(text).map(\.range.location)
+        let starts = ReadAloudSentenceSplitter.split(text).map(\.range.location)
         XCTAssertEqual(starts.count, 3)
         var reported: [NSRange] = []
         let finished = expectation(description: "finished once after the last chunk")
@@ -364,7 +340,7 @@ import PDFKit
     func testSystemSpeakerOffsetsWordRangesIntoThePassageAcrossChunks() async throws {
         let speaker = systemSpeaker()
         let text = "Leaf reads the first sentence aloud. Then the second sentence follows it."
-        let second = try XCTUnwrap(KokoroSentenceSplitter.split(text).last).range.location
+        let second = try XCTUnwrap(ReadAloudSentenceSplitter.split(text).last).range.location
         var reported: [Int] = []
         let finished = expectation(description: "finished once")
         speaker.finished = { finished.fulfill() }

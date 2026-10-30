@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, naturalVoicePack: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -35,11 +35,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHATGPT_BROWSER"] = chatGPTBrowser ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
         app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
-        if naturalVoicePack {
-            let root = ProcessInfo.processInfo.environment["LEAF_UI_KOKORO_ROOT"] ?? ""
-            XCTAssertFalse(root.isEmpty, "Audible playback checks require the real prepared natural voice pack")
-            app.launchEnvironment["LEAF_UI_KOKORO_ROOT"] = root
-        }
+        if appleSpeech { app.launchEnvironment["LEAF_UI_APPLE_SPEECH"] = "1" }
         app.launch()
         geometryApp = app
         orient(.portrait)
@@ -910,7 +906,7 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor func testListeningFromBottomMenuInBothFlowsPersistsAndFitsLandscape() {
-        let app = launchApp(naturalVoicePack: true)
+        let app = launchApp(appleSpeech: true)
         defer { orient(.portrait) }
         app.buttons["featuredBook"].tap()
         for flow in ["Pages", "Scroll"] {
@@ -1404,7 +1400,7 @@ final class LeafReaderUITests: XCTestCase {
         continueAfterFailure = false
         orient(.portrait)
         defer { orient(.portrait) }
-        let app = launchApp(naturalVoicePack: true); openSelectionFixture(flow, app: app)
+        let app = launchApp(appleSpeech: true); openSelectionFixture(flow, app: app)
         selectFixturePassage(flow, app: app)
         XCTAssertTrue(app.buttons["selection-listen"].waitForExistence(timeout: 6)); app.buttons["selection-listen"].tap()
         let status = app.buttons["listeningSettings"], pause = app.buttons["audioPlayPause"]
@@ -1431,7 +1427,7 @@ final class LeafReaderUITests: XCTestCase {
         app.terminate()
     }
     @MainActor func testListeningFromNativeSelectionInBothFlows() {
-        let app = launchApp(naturalVoicePack: true); app.buttons["featuredBook"].tap()
+        let app = launchApp(appleSpeech: true); app.buttons["featuredBook"].tap()
         for flow in ["Pages", "Scroll"] {
             showReaderControls(app); app.buttons["Appearance"].tap()
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
@@ -1455,327 +1451,100 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
-    @MainActor func testVoiceTypesKeepIndependentSpeedsInPagesScrollAndPDF() {
+
+    @MainActor func testAppleOnlyListeningInPages() { verifyAppleOnlyListening("Pages") }
+    @MainActor func testAppleOnlyListeningInScroll() { verifyAppleOnlyListening("Scroll") }
+    @MainActor func testAppleOnlyListeningInPDF() { verifyAppleOnlyListening("PDF") }
+    @MainActor private func verifyAppleOnlyListening(_ flow: String) {
         continueAfterFailure = false
-        defer { orient(.portrait) }
-        for flow in ["Pages", "Scroll", "PDF"] {
-            let app = launchApp(); openSelectionFixture(flow, app: app)
-            showReaderControls(app); app.buttons["Listen"].tap()
-            let engine = app.segmentedControls["listeningEngine"]
-            let slider = app.sliders["listeningSpeedSlider"], value = app.staticTexts["listeningSpeedValue"]
-            XCTAssertTrue(engine.waitForExistence(timeout: 5))
-            XCTAssertTrue(engine.buttons["Natural voice"].isSelected)
-            XCTAssertEqual(value.label, "1×")
-            slider.adjust(toNormalizedSliderPosition: 2.0 / 3.0)
-            XCTAssertEqual(value.label, "1.5×")
-            engine.buttons["Apple voices"].tap(); XCTAssertEqual(value.label, "1×")
-            slider.adjust(toNormalizedSliderPosition: 1.0 / 6.0)
-            XCTAssertEqual(value.label, "0.75×")
-            capture(flow + " Apple speed independent from Natural", app: app)
-            orient(.landscapeLeft)
-            XCTAssertGreaterThan(app.frame.width, app.frame.height)
-            XCTAssertTrue(engine.isHittable); XCTAssertEqual(value.label, "0.75×")
-            capture(flow + " independent speed settings landscape", app: app)
-            orient(.portrait)
-            engine.buttons["Natural voice"].tap(); XCTAssertEqual(value.label, "1.5×")
-            capture(flow + " Natural speed restored after switching", app: app)
-            app.navigationBars["Listen"].buttons["Done"].tap()
-            showReaderControls(app); app.buttons["closeBook"].tap()
-            app.terminate(); app.launch()
-            openSelectionFixture(flow, app: app)
-            showReaderControls(app); app.buttons["Listen"].tap()
-            XCTAssertTrue(engine.waitForExistence(timeout: 5))
-            XCTAssertTrue(engine.buttons["Natural voice"].isSelected)
-            XCTAssertEqual(value.label, "1.5×", flow + " Natural speed survives closing the book and relaunch")
-            engine.buttons["Apple voices"].tap()
-            XCTAssertEqual(value.label, "0.75×", flow + " Apple speed survives closing the book and relaunch")
-            capture(flow + " both voice speeds survive app relaunch", app: app)
-            app.terminate()
-        }
-    }
-
-    @MainActor func testPlayerSpeedChangesOnlyTheSelectedVoiceTypeInAllReaderFlows() {
-        continueAfterFailure = false
-        defer { orient(.portrait) }
-        for flow in ["Pages", "Scroll", "PDF"] {
-            let app = launchApp(naturalVoicePack: true); openSelectionFixture(flow, app: app)
-            showReaderControls(app); app.buttons["Listen"].tap()
-            let engine = app.segmentedControls["listeningEngine"]
-            let value = app.staticTexts["listeningSpeedValue"]
-            XCTAssertTrue(engine.waitForExistence(timeout: 5))
-            engine.buttons["Apple voices"].tap()
-            app.sliders["listeningSpeedSlider"].adjust(toNormalizedSliderPosition: 1.0 / 6.0)
-            XCTAssertEqual(value.label, "0.75×")
-            engine.buttons["Natural voice"].tap(); XCTAssertEqual(value.label, "1×")
-            XCTAssertTrue(app.buttons["kokoroRemove"].exists)
-            app.buttons["listenFromPage"].tap()
-            let player = app.otherElements["readerAudioPlayer"], rate = app.buttons["playbackSpeed"], pause = app.buttons["audioPlayPause"]
-            func waitForAudio() {
-                expectation(for: NSPredicate(format: "value == %@", "Listening"), evaluatedWith: player)
-                waitForExpectations(timeout: 90)
-            }
-            waitForAudio(); XCTAssertEqual(rate.value as? String, "1×")
-            rate.tap(); app.buttons["1.5×"].tap()
-            waitForAudio(); XCTAssertEqual(rate.value as? String, "1.5×")
-            pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
-            capture(flow + " player updates only Natural speed", app: app)
-            app.buttons["openReaderChat"].tap()
-            let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
-            input.tap(); input.typeText("Keep my voice speed")
-            XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
-            XCTAssertTrue(rate.isHittable); XCTAssertEqual(rate.value as? String, "1.5×")
-            capture(flow + " saved voice speed with chat and keyboard", app: app)
-            app.buttons["closeReaderChat"].tap()
-            app.buttons["listeningSettings"].tap()
-            XCTAssertEqual(value.label, "1.5×")
-            engine.buttons["Apple voices"].tap(); XCTAssertEqual(value.label, "0.75×")
-            XCTAssertTrue(app.buttons["Resume listening"].isEnabled, "Changing voice type while paused must stay paused")
-            engine.buttons["Natural voice"].tap(); XCTAssertEqual(value.label, "1.5×")
-            XCTAssertTrue(app.buttons["Resume listening"].isEnabled)
-            capture(flow + " paused engine switch restores separate rates", app: app)
-            app.buttons["resumeSavedListening"].tap()
-            waitForAudio(); XCTAssertEqual(rate.value as? String, "1.5×")
-            pause.tap()
-            orient(.landscapeLeft)
-            XCTAssertGreaterThan(app.frame.width, app.frame.height)
-            XCTAssertTrue(app.frame.contains(player.frame)); XCTAssertTrue(rate.isHittable)
-            XCTAssertEqual(rate.value as? String, "1.5×")
-            capture(flow + " independent player speed landscape", app: app)
-            orient(.portrait); app.buttons["stopListening"].tap()
-            app.terminate()
-        }
-    }
-
-    @MainActor func testOnlyEnhancedAndPremiumAppleVoiceSettingsInPagesScrollAndPDF() {
-        defer { orient(.portrait) }
-        for flow in ["Pages", "Scroll", "PDF"] {
-            let app = launchApp(); openSelectionFixture(flow, app: app)
-            showReaderControls(app); app.buttons["Listen"].tap()
-            let engine = app.segmentedControls["listeningEngine"]
-            XCTAssertTrue(engine.waitForExistence(timeout: 5))
-            XCTAssertTrue(engine.buttons["Natural voice"].exists)
-            XCTAssertTrue(engine.buttons["Apple voices"].exists)
-            XCTAssertFalse(engine.buttons["iPhone voice"].exists)
-            engine.buttons["Apple voices"].tap()
-            let guidance = app.descendants(matching: .any)["appleVoiceDownloadGuidance"].firstMatch
-            let picker = app.buttons["listeningVoice"].exists ? app.buttons["listeningVoice"] : app.otherElements["listeningVoice"]
-            XCTAssertTrue(guidance.waitForExistence(timeout: 3) || picker.waitForExistence(timeout: 3), "Actual installed-quality list or explicit download guidance must be shown")
-            capture(flow + " Apple high-quality voice choices portrait", app: app)
-            orient(.landscapeLeft)
-            XCTAssertGreaterThan(app.frame.width, app.frame.height)
-            XCTAssertTrue(engine.isHittable)
-            XCTAssertLessThanOrEqual(engine.frame.maxX, app.frame.maxX)
-            XCTAssertGreaterThanOrEqual(engine.frame.minX, app.frame.minX)
-            capture(flow + " Apple high-quality voice settings landscape", app: app)
-            orient(.portrait)
-            XCTAssertTrue(engine.buttons["Apple voices"].isSelected)
-            engine.buttons["Natural voice"].tap()
-            XCTAssertTrue(app.buttons["kokoroDownload"].waitForExistence(timeout: 5), "Natural voices remain available independently of downloaded Apple voices")
-            capture(flow + " Natural voice pack option retained", app: app)
-            app.terminate()
-        }
-    }
-
-    /// Rendered landscape via the public scene-geometry fixture (no physical-rotation claim):
-    /// the new engine rows and the player capsule must stay inside the frame and reachable.
-    @MainActor func testNaturalVoiceDownloadSettingsFitLandscapeViaGeometryFixture() {
-        let app = launchApp()
-        defer { orient(.portrait) }
-        app.buttons["featuredBook"].tap()
-        showReaderControls(app); app.buttons["Listen"].tap()
-        let engine = app.segmentedControls["listeningEngine"]
-        XCTAssertTrue(engine.waitForExistence(timeout: 5))
-        engine.buttons["Natural voice"].tap()
-        XCTAssertTrue(app.buttons["kokoroDownload"].waitForExistence(timeout: 5))
-        orient(.landscapeLeft)
-        var frame = app.frame
-        XCTAssertGreaterThan(frame.width, frame.height, "Landscape geometry must be applied")
-        // The sheet is short in landscape, so the form scrolls; every row must be
-        // fully inside the frame once scrolled to, and nothing may be clipped sideways.
-        let form = app.descendants(matching: .any)["listeningForm"].firstMatch
-        XCTAssertTrue(form.waitForExistence(timeout: 5), "Listening form is reachable in landscape")
-        func reveal(_ element: XCUIElement, _ label: String, up: Bool = true) {
-            // Gesture evidence from the leased runs on this Form in the 874x402
-            // sheet: press(0.1 s)-then-drag moved the content 0 pt, from the gutter
-            // and from a cell alike; swipes on the whole form scroll it to either
-            // end (default and slow velocity; the sheet is short, so an end state
-            // can leave a row partly under the bar); a swipe on the 49x24 "Speed"
-            // label moved it 0 pt. So: coarse form swipes toward the row while it is
-            // absent or outside the frame, then short zero-hold drags on the form
-            // for the final fit. Every gesture is checked for effect and a gesture
-            // that moved nothing is swapped for the other kind; the sequence is
-            // attached to the result. `up` = the row lies further down the form.
-            var useDrag = false, trace = ""
-            for step in 0..<10 {
-                let before = element.exists ? element.frame : .null
-                let scrollDown: Bool
-                if element.exists {
-                    if frame.contains(before) { break }
-                    scrollDown = before.minY >= frame.minY
-                    if before.intersects(frame) { useDrag = true }
-                } else {
-                    scrollDown = up; useDrag = false
-                }
-                if useDrag {
-                    let from = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.6 : 0.4))
-                    let to = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.4 : 0.6))
-                    from.press(forDuration: 0, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0)
-                } else if scrollDown {
-                    form.swipeUp(velocity: .slow)
-                } else {
-                    form.swipeDown(velocity: .slow)
-                }
-                let after = element.exists ? element.frame : .null
-                trace += "\(step): \(useDrag ? "drag" : "swipe") \(scrollDown ? "content up" : "content down") \(before) -> \(after)\n"
-                if element.exists, after == before { useDrag.toggle() }
-            }
-            let gestures = XCTAttachment(string: trace.isEmpty ? "no gesture needed" : trace)
-            gestures.name = label + " scroll gestures"; gestures.lifetime = .keepAlways; add(gestures)
-            XCTAssertTrue(element.exists, label)
-            XCTAssertTrue(frame.contains(element.frame), label + " inside the landscape frame: \(element.frame) in \(frame)")
-            XCTAssertTrue(element.isHittable, label + " hittable in landscape")
-        }
-        XCTAssertTrue(engine.isHittable); XCTAssertTrue(frame.contains(engine.frame), "Engine picker inside the landscape frame")
-        XCTAssertLessThanOrEqual(engine.frame.maxX, frame.maxX); XCTAssertGreaterThanOrEqual(engine.frame.minX, frame.minX)
-        capture("Natural voice settings landscape", app: app)
-        reveal(app.buttons["kokoroDownload"], "Download row")
-        XCTAssertLessThanOrEqual(app.buttons["kokoroDownload"].frame.maxX, frame.maxX)
-        capture("Natural voice settings landscape download row", app: app)
-        reveal(app.switches["followSpokenText"], "Follow toggle")
-        XCTAssertTrue(app.sliders["listeningSpeedSlider"].exists)
-        capture("Natural voice settings landscape scrolled", app: app)
-        reveal(app.buttons["listenFromPage"], "Listen from this page", up: false)
-        orient(.portrait)
-        XCTAssertGreaterThan(app.frame.height, app.frame.width)
-        XCTAssertTrue(app.buttons["kokoroDownload"].exists)
-        capture("Natural voice download settings return to portrait", app: app)
-    }
-
-    @MainActor func testMissingVoiceDownloadsGiveGuidanceAndPreserveTheListeningPosition() {
-        defer { orient(.portrait) }
-        for flow in ["Pages", "Scroll", "PDF"] {
-            let app = launchApp(); openSelectionFixture(flow, app: app)
-            showReaderControls(app); app.buttons["Listen"].tap()
-            let engine = app.segmentedControls["listeningEngine"]
-            XCTAssertTrue(engine.waitForExistence(timeout: 5))
-            XCTAssertTrue(engine.buttons["Natural voice"].isSelected, "New installs default to Natural")
-            XCTAssertTrue(app.buttons["kokoroDownload"].waitForExistence(timeout: 5))
-            XCTAssertFalse(app.buttons["kokoroRemove"].exists)
-            capture(flow + " Natural voice download required", app: app)
-            engine.buttons["Apple voices"].tap()
-            let noAppleVoices = app.descendants(matching: .any)["appleVoiceDownloadGuidance"].firstMatch.waitForExistence(timeout: 3)
-            if noAppleVoices {
-                capture(flow + " No Enhanced or Premium voice installed", app: app)
-                engine.buttons["Natural voice"].tap()
-                app.buttons["listenFromPage"].tap()
-                let player = app.otherElements["readerAudioPlayer"]
-                expectation(for: NSPredicate(format: "value == %@", "Could not start audio"), evaluatedWith: player)
-                waitForExpectations(timeout: 15)
-                XCTAssertFalse(app.buttons["audioPlayPause"].isEnabled)
-                XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No Enhanced or Premium Apple voice")).firstMatch.exists)
-                XCTAssertTrue(app.frame.contains(player.frame), flow + " failed player fits portrait")
-                capture(flow + " No basic voice fallback and no passage skipped", app: app)
-                orient(.landscapeLeft)
-                XCTAssertGreaterThan(app.frame.width, app.frame.height)
-                XCTAssertTrue(app.frame.contains(player.frame), flow + " error player fits landscape")
-                XCTAssertTrue(app.buttons["listeningSettings"].isHittable)
-                XCTAssertTrue(app.buttons["stopListening"].isHittable)
-                capture(flow + " Missing voice error player landscape", app: app)
-                orient(.portrait)
-                app.buttons["listeningSettings"].tap()
-                XCTAssertTrue(app.buttons["resumeSavedListening"].waitForExistence(timeout: 5))
-                capture(flow + " Failed voice start keeps saved listening position", app: app)
-            } else {
-                XCTAssertTrue(app.buttons["listeningVoice"].exists || app.otherElements["listeningVoice"].exists)
-                capture(flow + " Actual downloaded high-quality voice choices", app: app)
-            }
-            app.terminate()
-        }
-    }
-
-    /// Real on-device engine in Pages, Scroll and PDF. Runs only when the test runner
-    /// receives LEAF_UI_KOKORO_ROOT (a prepared read-only pack root); skipped otherwise.
-    @MainActor func testNaturalVoiceReadsInPagesScrollAndPDFWhenThePackIsInstalled() throws {
-        guard let root = ProcessInfo.processInfo.environment["LEAF_UI_KOKORO_ROOT"], !root.isEmpty else {
-            throw XCTSkip("Set TEST_RUNNER_LEAF_UI_KOKORO_ROOT to a prepared voice-pack root to exercise the real engine")
-        }
-        let app = launchApp(naturalVoicePack: true)
-        defer { orient(.portrait) }
-        let player = app.otherElements["readerAudioPlayer"], pause = app.buttons["audioPlayPause"]
-        func waitForVoice(_ label: String) {
-            // The player's value is "Generating voice…" until the first chunk is audible, then "Listening".
-            expectation(for: NSPredicate(format: "value == %@", "Listening"), evaluatedWith: player); waitForExpectations(timeout: 90)
-            XCTAssertEqual(pause.label, "Pause listening", label)
-            XCTAssertTrue(app.staticTexts["spokenPassage"].exists, label)
-        }
-        app.buttons["featuredBook"].tap()
-        for flow in ["Pages", "Scroll"] {
-            showReaderControls(app); app.buttons["Appearance"].tap()
-            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
-            app.segmentedControls["readingFlow"].buttons[flow].tap(); dismissAppearance(app); showReaderControls(app)
-            app.buttons["Listen"].tap()
-            let engine = app.segmentedControls["listeningEngine"]; XCTAssertTrue(engine.waitForExistence(timeout: 5))
-            engine.buttons["Natural voice"].tap()
-            XCTAssertTrue(app.buttons["kokoroRemove"].waitForExistence(timeout: 5), "Prepared pack is recognized as installed")
-            XCTAssertFalse(app.buttons["kokoroDownload"].exists)
-            if flow == "Pages" { capture("Natural voice installed settings", app: app) }
-            app.buttons["listenFromPage"].tap()
-            let generating = player.waitForExistence(timeout: 5) && (player.value as? String)?.hasPrefix("Generating voice") == true
-            if generating { capture(flow + " natural voice generating", app: app) }
-            waitForVoice(flow + " first passage")
-            capture(flow + " natural voice listening", app: app)
-            pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
-            orient(.landscapeLeft)
-            XCTAssertGreaterThan(app.frame.width, app.frame.height)
-            XCTAssertTrue(app.frame.contains(player.frame), flow + " natural player fits landscape")
-            XCTAssertTrue(pause.isHittable); XCTAssertTrue(app.buttons["stopListening"].isHittable)
-            capture(flow + " natural voice player landscape", app: app)
-            orient(.portrait)
-            pause.tap(); XCTAssertEqual(pause.label, "Pause listening")
-            app.buttons["audioNext"].tap()
-            waitForVoice(flow + " next passage")
-            capture(flow + " natural voice next passage", app: app)
-            app.buttons["listeningSettings"].tap()
-            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Last passage used an Enhanced or Premium Apple voice")).firstMatch.exists,
-                           flow + ": the real engine spoke every passage")
-            app.buttons["Stop listening"].tap()
-            XCTAssertFalse(app.buttons["audioPlayPause"].waitForExistence(timeout: 3))
-            // Stop removes the player, but intentionally leaves Listen settings
-            // open. Dismiss that sheet before accessing controls behind it.
-            let done = app.navigationBars["Listen"].buttons["Done"]
-            XCTAssertTrue(done.isHittable); done.tap()
-            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.descendants(matching: .any)["listeningForm"].firstMatch)
-            waitForExpectations(timeout: 5)
-            capture(flow + " stopped listening settings dismissed", app: app)
-            // The saved cursor resumes with the natural voice and the engine choice is retained.
-            showReaderControls(app); app.buttons["Listen"].tap()
-            XCTAssertTrue(app.buttons["resumeSavedListening"].waitForExistence(timeout: 5), flow + ": saved position offered")
-            XCTAssertTrue(app.buttons["kokoroRemove"].exists, flow + ": engine choice retained")
-            app.buttons["resumeSavedListening"].tap()
-            waitForVoice(flow + " resumed saved position")
-            capture(flow + " natural voice resumed saved position", app: app)
-            app.buttons["stopListening"].tap()
-        }
-        showReaderControls(app); app.buttons["closeBook"].tap()
-        let search = app.textFields["librarySearch"]; XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
-        app.buttons["book-Notes from the Coast"].tap()
-        showReaderControls(app); app.buttons["Listen"].tap()
-        XCTAssertTrue(app.buttons["kokoroRemove"].waitForExistence(timeout: 5), "Engine choice persists into the PDF reader")
-        app.buttons["listenFromPage"].tap()
-        waitForVoice("PDF")
-        capture("PDF natural voice listening", app: app)
-        pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+        let app = launchApp(appleSpeech: true); openSelectionFixture(flow, app: app)
+        defer { orient(.portrait); app.terminate() }
+        showReaderControls(app); app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+        app.buttons[(flow == "Pages" ? "Paper" : flow == "Scroll" ? "Night" : "Day") + " theme"].tap()
+        dismissAppearance(app); showReaderControls(app); app.buttons["Listen"].tap()
+        XCTAssertTrue(app.sliders["listeningSpeedSlider"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.segmentedControls["listeningEngine"].exists)
+        XCTAssertFalse(app.buttons["kokoroDownload"].exists); XCTAssertFalse(app.buttons["kokoroRemove"].exists)
+        XCTAssertFalse(app.staticTexts["Natural voice"].exists)
+        app.sliders["listeningSpeedSlider"].adjust(toNormalizedSliderPosition: 0.5)
+        XCTAssertEqual(app.staticTexts["listeningSpeedValue"].label, "1.25×")
+        capture(flow + " Apple-only voice settings portrait", app: app)
         orient(.landscapeLeft)
         XCTAssertGreaterThan(app.frame.width, app.frame.height)
-        XCTAssertTrue(app.frame.contains(player.frame), "PDF natural player fits landscape")
-        XCTAssertTrue(pause.isHittable); XCTAssertTrue(app.buttons["stopListening"].isHittable)
-        capture("PDF natural voice player landscape", app: app)
+        XCTAssertTrue(app.descendants(matching: .any)["listeningForm"].firstMatch.exists)
+        capture(flow + " Apple-only voice settings landscape", app: app)
         orient(.portrait)
+        app.buttons["listenFromPage"].tap()
+        let pause = app.buttons["audioPlayPause"]
+        expectation(for: NSPredicate(format: "label == %@", "Pause listening"), evaluatedWith: pause); waitForExpectations(timeout: 15)
+        pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+        app.buttons["playbackSpeed"].tap(); app.buttons["1.5×"].tap()
+        XCTAssertEqual(pause.label, "Resume listening", "Changing speed must keep paused audio paused")
+        capture(flow + " Apple playback paused speed retained", app: app)
+        let passage = app.staticTexts["spokenPassage"]
+        let originalPassage = passage.label
+        let originalLocation = passage.value as? String ?? ""
+        XCTAssertFalse(originalLocation.isEmpty)
+        app.buttons["audioNext"].tap()
+        XCTAssertEqual(pause.label, "Resume listening")
+        // The sample EPUB repeats paragraphs. Identity is its actual source
+        // locator, not whether the visible text happens to be different.
+        expectation(for: NSPredicate { _, _ in
+            guard let location = passage.value as? String else { return false }
+            return !location.isEmpty && location != originalLocation
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 8)
+        let nextLocation = passage.value as? String ?? ""
+        XCTAssertFalse(passage.label.isEmpty)
+        let previous = app.buttons["audioPrevious"]
+        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: previous); waitForExpectations(timeout: 8)
+        previous.tap(); XCTAssertEqual(pause.label, "Resume listening")
+        expectation(for: NSPredicate(format: "value == %@", originalLocation), evaluatedWith: passage)
+        waitForExpectations(timeout: 8)
+        XCTAssertEqual(passage.label, originalPassage)
+        let locations = XCTAttachment(string: "Original: \(originalLocation)\nNext: \(nextLocation)\nRestored: \(passage.value as? String ?? "")")
+        locations.name = flow + " actual listening passage locations"; locations.lifetime = .keepAlways; add(locations)
         app.buttons["stopListening"].tap()
+        showReaderControls(app); app.buttons["closeBook"].tap()
+        app.buttons["featuredBook"].tap(); showReaderControls(app); app.buttons["Listen"].tap()
+        XCTAssertTrue(app.buttons["resumeSavedListening"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["listeningSpeedValue"].label, "1.5×")
+        XCTAssertFalse(app.segmentedControls["listeningEngine"].exists)
+        capture(flow + " Apple saved listening cursor and speed after reopening", app: app)
+        app.buttons["resumeSavedListening"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Pause listening"), evaluatedWith: pause); waitForExpectations(timeout: 15)
+        pause.tap(); app.buttons["stopListening"].tap()
     }
-
+    @MainActor func testMissingAppleVoiceKeepsCursorInPages() { verifyMissingAppleVoice("Pages") }
+    @MainActor func testMissingAppleVoiceKeepsCursorInScroll() { verifyMissingAppleVoice("Scroll") }
+    @MainActor func testMissingAppleVoiceKeepsCursorInPDF() { verifyMissingAppleVoice("PDF") }
+    @MainActor private func verifyMissingAppleVoice(_ flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(); openSelectionFixture(flow, app: app)
+        defer { orient(.portrait); app.terminate() }
+        showReaderControls(app); app.buttons["Listen"].tap()
+        XCTAssertFalse(app.segmentedControls["listeningEngine"].exists)
+        XCTAssertFalse(app.buttons["kokoroDownload"].exists)
+        let guidance = app.descendants(matching: .any)["appleVoiceDownloadGuidance"].firstMatch
+        if guidance.waitForExistence(timeout: 3) {
+            capture(flow + " Download Enhanced or Premium Apple voice guidance", app: app)
+            app.buttons["listenFromPage"].tap()
+            let player = app.otherElements["readerAudioPlayer"]
+            expectation(for: NSPredicate(format: "value == %@", "Could not start audio"), evaluatedWith: player); waitForExpectations(timeout: 15)
+            XCTAssertFalse(app.buttons["audioPlayPause"].isEnabled)
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No Enhanced or Premium Apple voice")).firstMatch.exists)
+            capture(flow + " Missing Apple voice keeps passage without fallback", app: app)
+            app.buttons["listeningSettings"].tap()
+            XCTAssertTrue(app.buttons["resumeSavedListening"].waitForExistence(timeout: 5))
+            capture(flow + " Missing Apple voice preserves saved cursor", app: app)
+        } else {
+            XCTAssertTrue(app.descendants(matching: .any)["listeningVoice"].firstMatch.exists)
+            capture(flow + " Actual installed high-quality Apple voice choices", app: app)
+        }
+    }
     @MainActor func testPDFListeningFromSelectionAndBottomMenu() {
-        let app = launchApp(naturalVoicePack: true)
+        let app = launchApp(appleSpeech: true)
         let search = app.textFields["librarySearch"]; XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
         app.buttons["book-Notes from the Coast"].tap()
         showReaderControls(app); app.buttons["nextPage"].tap(); showReaderControls(app)
