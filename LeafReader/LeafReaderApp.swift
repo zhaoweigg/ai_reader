@@ -58,6 +58,9 @@ struct LeafReaderApp: App {
         catalogCredentials.service += ".zlibrary"
         _catalog = StateObject(wrappedValue: ZLibraryStore(defaults: defaults, credentials: catalogCredentials, client: catalogClient, discoversFromLibrary: catalogDiscovery))
         readingDefaults = defaults
+        if root == nil, let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            Task.detached(priority: .utility) { try? RetiredVoicePackCleanup.removeDownloadedPack(applicationSupport: support) }
+        }
         let syncState = root.map { $0.appendingPathComponent("SyncState", isDirectory: true) }
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("LeafSync", isDirectory: true)
         _sync = StateObject(wrappedValue: ICloudSync(library: libraryStore, defaults: defaults, stateDirectory: syncState, folderOverride: syncFolder))

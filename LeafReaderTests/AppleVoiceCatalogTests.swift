@@ -43,20 +43,16 @@ final class AppleVoiceCatalogTests: XCTestCase {
         let attachment = XCTAttachment(string: String(describing: details))
         attachment.name = "Installed Enhanced and Premium Apple voices"; attachment.lifetime = .keepAlways; add(attachment)
     }
-    @MainActor func testNewSessionsPreferNaturalAndLegacyCompactChoicesMigrateWithoutLosingEngineChoice() {
+    @MainActor func testRetiredAndCompactChoicesMigrateToAutomaticAppleVoice() {
         let name = "AppleQualityMigration.\(UUID().uuidString)", defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let fresh = ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker())
-        XCTAssertEqual(fresh.engine, .kokoro)
-        defaults.set("system", forKey: "audio.engine")
+        defaults.set("kokoro", forKey: "audio.engine")
         defaults.set("com.apple.voice.compact.zh-CN.Tingting", forKey: "audio.voice")
         let migrated = ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker())
-        XCTAssertEqual(migrated.engine, .system, "An explicit existing engine choice is retained")
         XCTAssertEqual(migrated.voice, "")
-        XCTAssertEqual(defaults.string(forKey: "audio.voice"), "", "A compact identifier cannot return on the next launch")
-        migrated.engine = .kokoro; migrated.kokoroVoice = "zf_003"
-        let reopened = ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker())
-        XCTAssertEqual(reopened.engine, .kokoro); XCTAssertEqual(reopened.kokoroVoice, "zf_003")
+        XCTAssertEqual(defaults.string(forKey: "audio.voice"), "")
+        XCTAssertNil(defaults.string(forKey: "audio.engine"))
+        XCTAssertEqual(ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker()).voice, "")
     }
     @MainActor func testStrictSpeakerFailsBeforeSpeechWhenNoHighQualityVoiceIsInstalled() {
         let speaker = SystemReadAloudSpeaker(requiresHighQuality: true, installedVoices: { [] })
