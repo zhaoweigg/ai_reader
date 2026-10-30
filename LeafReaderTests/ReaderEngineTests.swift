@@ -2848,6 +2848,65 @@ final class ReaderEngineTests: XCTestCase {
         }
         XCTAssertNil(model.error)
     }
+    /// Each bundled Chinese face must load inside the chapter documents and set the
+    /// paragraphs at every size in both flows and orientations while the saved
+    /// passage stays in view.
+    func testBundledChineseTypefacesRenderAtEverySizeInBothFlowsAndOrientations() async throws {
+        let (book, url) = try prepare("ChapterDividerChinese.epub", format: .epub, fixtures: true)
+        let model = try show(book, url: url)
+        try await assertOpened(model, contains: "窗外")
+        let web = try XCTUnwrap(model.webView)
+        var rows: [[String: Any]] = []
+        for viewport in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
+            window?.frame.size = viewport; try await Task.sleep(for: .milliseconds(250))
+            for scrolling in [false, true] {
+                for (variant, face) in ReaderTypeface.bundled.enumerated() {
+                    var prefs = preferences; prefs.scrolling = scrolling; prefs.font = face.rawValue
+                    prefs.theme = [.day, .paper, .night, .sepia][variant]; prefs.horizontalMargin = [12, 20, 36, 20][variant]
+                    let result = try await web.callAsyncJavaScript("""
+                        const view=document.querySelector('foliate-view'),sleep=ms=>new Promise(r=>setTimeout(r,ms)),results=[];
+                        for (const fontSize of sizes) {
+                            const saved=view.lastLocation.cfi;
+                            window.Leaf.applyPreferences({...base,fontSize});
+                            await Promise.all(view.renderer.getContents().map(c=>c.doc.fonts.ready));await sleep(120);
+                            const doc=view.renderer.getContents()[0].doc,p=doc.querySelector('p'),style=doc.defaultView.getComputedStyle(p);
+                            const face=[...doc.fonts].find(f=>f.family.replace(/"/g,'')===base.font);
+                            const glyph=doc.createRange();glyph.setStart(p.firstChild,0);glyph.setEnd(p.firstChild,1);
+                            const rect=glyph.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect();
+                            results.push({fontSize,family:style.fontFamily,status:face?.status??'missing',actual:parseFloat(style.fontSize),
+                                glyphWidth:rect.width,glyphLeft:rect.left+frame.left,glyphRight:rect.right+frame.left,
+                                paragraphWidth:p.getBoundingClientRect().width,viewportWidth:view.clientWidth,
+                                keptPassage:window.Leaf.isLocationVisible(saved),
+                                visibleCharacters:view.lastLocation.range.toString().replace(/\\s/g,'').length});
+                        }
+                        return results;
+                        """, arguments: ["base": prefs.payload, "sizes": Array(12...32)], in: nil, contentWorld: .page)
+                    for row in try XCTUnwrap(result as? [[String: Any]]) {
+                        let size = try XCTUnwrap(row["fontSize"] as? Double)
+                        let label = "\(scrolling ? "Scroll" : "Pages") \(face.title) at \(size) pt in \(Int(viewport.width))×\(Int(viewport.height))"
+                        XCTAssertEqual(row["status"] as? String, "loaded", label)
+                        XCTAssertTrue((row["family"] as? String ?? "").hasPrefix("\"\(face.rawValue)\""), "\(label): \(row["family"] ?? "")")
+                        XCTAssertEqual(try XCTUnwrap(row["actual"] as? Double), size, accuracy: 0.1, label)
+                        // Han glyphs are one em wide in every bundled face.
+                        XCTAssertEqual(try XCTUnwrap(row["glyphWidth"] as? Double), size, accuracy: 1, label)
+                        XCTAssertGreaterThanOrEqual(try XCTUnwrap(row["glyphLeft"] as? Double), -1, label)
+                        XCTAssertLessThanOrEqual(try XCTUnwrap(row["glyphRight"] as? Double), viewport.width + 1, label)
+                        let paragraphWidth = try XCTUnwrap(row["paragraphWidth"] as? Double)
+                        XCTAssertGreaterThan(paragraphWidth, 300, label)
+                        XCTAssertLessThanOrEqual(paragraphWidth, try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * prefs.horizontalMargin + 2, label)
+                        XCTAssertTrue(row["keptPassage"] as? Bool == true, label)
+                        XCTAssertGreaterThan(try XCTUnwrap(row["visibleCharacters"] as? Double), 5, label)
+                        rows.append(row.merging(["face": face.rawValue, "scrolling": scrolling, "viewport": [viewport.width, viewport.height]]) { $1 })
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(rows.count, 2 * 2 * 4 * 21)
+        let data = try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+        attachment.name = "Chinese typefaces at every size"; attachment.lifetime = .keepAlways; add(attachment)
+        XCTAssertNil(model.error)
+    }
     private func pageMetrics(_ model: ReaderModel) async throws -> [String: Double] {
         let result = try await model.webView?.evaluateJavaScript("""
             (() => {

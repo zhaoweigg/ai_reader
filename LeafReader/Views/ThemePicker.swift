@@ -8,9 +8,7 @@ struct ThemePicker: View {
     @Environment(\.dynamicTypeSize) private var dynamicType
 
     private var selected: ReadingTheme { ReadingTheme(rawValue: selection) ?? .day }
-    private var previewFont: Font {
-        typeface == "System" ? .system(size: 11) : .custom(typeface, size: 11)
-    }
+    private var previewFont: Font { ReaderTypeface.named(typeface).font(size: 11) }
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 12), count: dynamicType.isAccessibilitySize ? 2 : 3)
     }
@@ -22,7 +20,7 @@ struct ThemePicker: View {
                     Button { selection = theme.rawValue } label: {
                         VStack(alignment: .leading, spacing: 7) {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("Aa").font(typeface == "System" ? .system(size: 24) : .custom(typeface, size: 24))
+                                Text("Aa").font(ReaderTypeface.named(typeface).font(size: 24))
                                 Text("A little room\nto read.").font(previewFont).lineSpacing(1).lineLimit(2)
                             }
                             .foregroundStyle(theme.foreground)

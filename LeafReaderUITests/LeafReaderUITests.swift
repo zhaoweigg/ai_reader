@@ -367,6 +367,27 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["compactLayout"].isSelected)
     }
 
+    @MainActor func testChineseTypefaceChoiceAppliesAndPersistsAcrossRelaunch() {
+        let app = launchApp()
+        app.swipeUp()
+        app.buttons["book-The Art of Noticing"].tap()
+        openAppearance(app)
+        let wenKai = app.descendants(matching: .any)["typeface-LXGW WenKai Lite"].firstMatch
+        revealAppearanceControl(app, wenKai)
+        wenKai.tap()
+        XCTAssertTrue(wenKai.isSelected)
+        XCTAssertFalse(app.descendants(matching: .any)["typeface-Georgia"].firstMatch.isSelected)
+        capture("Aa Typeface rows", app: app)
+        dismissAppearance(app)
+        capture("WenKai reading page", app: app)
+        app.terminate()
+        app.launch()
+        app.buttons["featuredBook"].tap()
+        openAppearance(app)
+        let restored = app.descendants(matching: .any)["typeface-LXGW WenKai Lite"].firstMatch
+        revealAppearanceControl(app, restored)
+        XCTAssertTrue(restored.isSelected)
+    }
     @MainActor func testContentsRevealsCurrentChapterInPages() { verifyContentsLocation(flow: "Pages") }
     @MainActor func testContentsRevealsCurrentChapterInScroll() { verifyContentsLocation(flow: "Scroll") }
     @MainActor func testContentsRevealsCurrentPageInPDF() { verifyContentsLocation(flow: "PDF") }
