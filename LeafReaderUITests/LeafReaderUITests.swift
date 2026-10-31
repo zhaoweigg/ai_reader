@@ -947,6 +947,46 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertNotEqual(title.label, origin, "Dismissing keeps the current place")
     }
 
+    @MainActor func testReturnAfterProgressJumpInLandscapePages() { verifyReturnAfterJumpInLandscape(flow: "Pages") }
+    @MainActor func testReturnAfterProgressJumpInLandscapeScroll() { verifyReturnAfterJumpInLandscape(flow: "Scroll") }
+    @MainActor func testReturnAfterProgressJumpInLandscapePDF() { verifyReturnAfterJumpInLandscape(flow: "PDF") }
+
+    /// In landscape the pill still sits inside the page, clear of the footer and
+    /// the Ask Leaf button, and returns to the passage; rotating back keeps it.
+    @MainActor private func verifyReturnAfterJumpInLandscape(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(); defer { orient(.portrait) }
+        openSelectionFixture(flow, app: app); waitForBook(app)
+        orient(.landscapeLeft)
+        let title = app.staticTexts["readerChapterTitle"], pill = app.buttons["returnToReading"], launcher = app.buttons["openReaderChat"]
+        showReaderControls(app)
+        let origin = title.label
+        app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1)
+        XCTAssertTrue(pill.waitForExistence(timeout: 5))
+        showReaderControls(app)
+        XCTAssertNotEqual(title.label, origin)
+        XCTAssertTrue(pill.isHittable)
+        XCTAssertTrue(app.frame.contains(pill.frame), "Pill must stay inside the landscape window: \(pill.frame) in \(app.frame)")
+        XCTAssertGreaterThan(app.frame.width, app.frame.height, "Must be landscape")
+        XCTAssertFalse(pill.frame.intersects(launcher.frame), "Pill and Ask Leaf button must not overlap: \(pill.frame) vs \(launcher.frame)")
+        XCTAssertLessThan(pill.frame.maxY, app.sliders["readingProgress"].frame.minY, "Pill must sit above the footer")
+        capture(flow + " landscape return pill with controls", app: app)
+        readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeBook"]); waitForExpectations(timeout: 5)
+        XCTAssertTrue(pill.isHittable)
+        XCTAssertTrue(app.frame.contains(pill.frame))
+        capture(flow + " landscape return pill with controls hidden", app: app)
+        orient(.portrait)
+        XCTAssertTrue(pill.waitForExistence(timeout: 5), "Rotation keeps the return point")
+        orient(.landscapeLeft)
+        XCTAssertTrue(pill.waitForExistence(timeout: 5))
+        pill.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: pill); waitForExpectations(timeout: 5)
+        showReaderControls(app)
+        XCTAssertEqual(title.label, origin, "Returning in landscape must show where reading left off")
+        capture(flow + " landscape back at the reading spot", app: app)
+    }
+
     @MainActor func testPDFNavigationRestoresSavedPage() {
         let app = launchApp()
         let search = app.textFields["librarySearch"]
