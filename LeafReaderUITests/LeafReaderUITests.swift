@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", chatRecovery: Bool = false, recoveryAgent: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -17,6 +17,8 @@ final class LeafReaderUITests: XCTestCase {
             app.launchEnvironment["LEAF_UI_CONTENTS_BOOK"] = try! Data(contentsOf: fixture).base64EncodedString()
         }
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"
+        app.launchEnvironment["LEAF_UI_CHAT_RECOVERY"] = chatRecovery ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_RECOVERY_AGENT"] = recoveryAgent ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
@@ -3947,6 +3949,62 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Retry"].isHittable)
         XCTAssertTrue(app.buttons["sendReaderChat"].exists)
         capture("Compact landscape stopped reply keeps history above Retry notice", app: app)
+    }
+
+    @MainActor func testAutomaticChatRecoveryInPages() { verifyAutomaticChatRecovery(flow: "Pages") }
+    @MainActor func testAutomaticChatRecoveryInScroll() { verifyAutomaticChatRecovery(flow: "Scroll") }
+    @MainActor func testAutomaticChatRecoveryInPDF() { verifyAutomaticChatRecovery(flow: "PDF") }
+
+    @MainActor private func verifyAutomaticChatRecovery(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(chatRecovery: true, recoveryAgent: flow == "Scroll")
+        if flow == "PDF" {
+            let search = app.textFields["librarySearch"]
+            XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
+            app.buttons["book-Notes from the Coast"].tap()
+        } else { app.buttons["featuredBook"].tap() }
+        waitForBook(app)
+        if flow != "PDF" {
+            openAppearance(app)
+            app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+            app.segmentedControls["readingFlow"].buttons[flow].tap()
+            dismissAppearance(app)
+        }
+        let bookFrame = readingSurface(app).frame
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap()
+        // As in focusInput above, native typing brings up the software keyboard
+        // when the simulator still exposes a cached, offscreen keyboard.
+        input.typeText("Recover this question")
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+        app.buttons["sendReaderChat"].tap()
+        let reply = app.textViews.matching(identifier: "chatReply").firstMatch
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "Recovered reply."), evaluatedWith: reply)
+        waitForExpectations(timeout: 15)
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(reply.label.contains("Abandoned"))
+        XCTAssertEqual(app.textViews.matching(identifier: "chatQuestion").count, 1)
+        XCTAssertFalse(app.staticTexts["readerChatError"].exists)
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+        XCTAssertEqual(readingSurface(app).frame, bookFrame)
+        capture(flow + " automatic chat recovery", app: app)
+        app.buttons["closeReaderChat"].tap()
+        app.buttons["openReaderChat"].tap()
+        XCTAssertTrue(reply.waitForExistence(timeout: 5)); XCTAssertTrue(reply.label.contains("Recovered reply."))
+        if flow == "Pages" {
+            input.tap(); input.typeText("Stop during retry")
+            XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+            app.buttons["sendReaderChat"].tap()
+            let retrying = app.textViews.matching(identifier: "chatReply").matching(NSPredicate(format: "label CONTAINS %@", "Retrying (1/2)")).firstMatch
+            XCTAssertTrue(retrying.waitForExistence(timeout: 5))
+            app.buttons["sendReaderChat"].tap()
+            XCTAssertTrue(app.buttons["Retry"].waitForExistence(timeout: 5))
+            XCTAssertEqual(app.buttons["sendReaderChat"].label, "Send message")
+            capture("Pages stopped automatic backoff with manual Retry", app: app)
+            app.buttons["closeReaderChat"].tap()
+        }
     }
 
     @MainActor func testChatStopAndRetryKeepOneQuestion() {

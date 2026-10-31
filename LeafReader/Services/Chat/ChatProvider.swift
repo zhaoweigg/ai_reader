@@ -123,7 +123,7 @@ struct HTTPChatProvider: ChatProvider {
         case .chatGPT: throw ChatGPTError.signInRequired
         }
         body["messages"] = messages
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return request
     }
 
@@ -133,7 +133,7 @@ struct HTTPChatProvider: ChatProvider {
                 do {
                     let request = try makeRequest(conversation)
                     let (response, lines) = try await transport.open(request)
-                    guard (200..<300).contains(response.statusCode) else { throw ChatError.http(response.statusCode) }
+                    guard (200..<300).contains(response.statusCode) else { throw ChatRequestFailure(ChatError.http(response.statusCode), response: response) }
                     guard response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true else {
                         throw ChatError.invalidResponse
                     }

@@ -205,31 +205,41 @@ enum ReadingAgentRunner {
     /// ends in tool calls is withdrawn: it is preamble, not the answer.
     @MainActor
     static func run(provider: any ToolChatProvider, request: ChatRequest, toolbox: ReadingAgentToolbox, seed: [AgentItem] = [],
-                    limits: AgentLimits = AgentLimits(), recorder: AgentTraceRecorder? = nil,
-                    onText: (String) -> Void, onWithdraw: () -> Void) async throws -> Outcome {
+                    limits: AgentLimits = AgentLimits(), recorder: AgentTraceRecorder? = nil, recovery: ChatRetryBudget? = nil,
+                    onRetry: @escaping () -> Void = {}, onText: (String) -> Void, onWithdraw: () -> Void) async throws -> Outcome {
+        let recovery = recovery ?? ChatRetryBudget()
         var items = request.turns.map(AgentItem.turn) + seed
         var used = 0
         let tools = limits.tools
         for round in 0..<limits.maxRounds {
             let allowTools = !tools.isEmpty && used < limits.maxToolCalls && round < limits.maxRounds - 1
-            var calls: [AgentToolCall] = [], text = "", truncated = false, finished = false, received = false
-            var usage: TokenUsage?
-            do {
-                for try await event in provider.streamAgent(system: request.system, items: items, tools: tools, allowTools: allowTools) {
-                    try Task.checkCancellation()
-                    received = true
-                    switch event {
-                    case .text(let delta): text += delta; onText(delta)
-                    case .toolCall(let call): calls.append(call)
-                    case .usage(let value): usage = (usage ?? TokenUsage()) + value
-                    case .finished(let value): truncated = value; finished = true
+            let (calls, text, truncated, usage) = try await recovery.run(round: round + 1, recorder: recorder, onRetry: {
+                onWithdraw(); onRetry()
+            }) { attempt in
+                var calls: [AgentToolCall] = [], text = "", truncated = false, finished = false
+                var usage: TokenUsage?
+                do {
+                    // This transcript is unchanged throughout recovery of this round.
+                    // Discard uncommitted text / calls / usage after any failed attempt.
+                    for try await event in provider.streamAgent(system: request.system, items: items, tools: tools, allowTools: allowTools) {
+                        try Task.checkCancellation()
+                        attempt.received = true
+                        switch event {
+                        case .text(let delta): text += delta; onText(delta)
+                        case .toolCall(let call): calls.append(call)
+                        case .usage(let value): usage = (usage ?? TokenUsage()) + value
+                        case .finished(let value): truncated = value; finished = true
+                        }
+                        if finished { break }
                     }
+                } catch {
+                    if round == 0, !attempt.received, rejectsTools(error) { throw ReadingAgentError.toolsUnsupported }
+                    throw error
                 }
-            } catch {
-                if round == 0, !received, rejectsTools(error) { throw ReadingAgentError.toolsUnsupported }
-                throw error
+                guard finished else { throw ChatError.interrupted }
+                guard !text.isEmpty || !calls.isEmpty else { throw ChatError.emptyResponse }
+                return (calls, text, truncated, usage)
             }
-            guard finished else { throw ChatError.interrupted }
             recorder?.round(round + 1, text: text, calls: calls, usage: usage, final: calls.isEmpty)
             if calls.isEmpty {
                 guard !text.isEmpty else { throw ChatError.emptyResponse }
@@ -238,6 +248,7 @@ enum ReadingAgentRunner {
             if !text.isEmpty { onWithdraw() }
             var results: [AgentToolResult] = []
             for call in calls {
+                try Task.checkCancellation()
                 let output = used < limits.maxToolCalls ? try await toolbox.run(call)
                     : ReadingAgentToolbox.json(["error": "Tool limit reached. Answer with what you have found."])
                 used += 1
@@ -252,6 +263,7 @@ enum ReadingAgentRunner {
     }
 
     static func rejectsTools(_ error: Error) -> Bool {
+        let error = ChatRequestFailure.source(error)
         if case ChatError.http(let status) = error { return status == 400 || status == 422 }
         if case ChatError.provider(let type) = error { return type == "invalid_request_error" }
         // Subscription errors arrive mapped; an unsupported capability or a plain

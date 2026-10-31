@@ -23,7 +23,7 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
         // max_output_tokens, temperature, and persistent conversation IDs are omitted.
         var body: [String: Any] = ["model": model, "instructions": instructions, "store": false, "stream": true, "input": input]
         body.merge(extra) { _, new in new }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return request
     }
     func stream(_ conversation: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
@@ -71,7 +71,7 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                             errorData.append(Data(line.utf8))
                             if errorData.count > 16384 { break }
                         }
-                        throw ChatGPTOAuthClient.error(errorData, status: response.statusCode)
+                        throw ChatRequestFailure(ChatGPTOAuthClient.error(errorData, status: response.statusCode), response: response)
                     }
                     // Some successful Responses replies arrive without Content-Type on iOS.
                     // A missing header must not discard a valid SSE body. We still

@@ -20,6 +20,8 @@ final class ReaderChatSession: ObservableObject {
     private var traceSource = (provider: "", model: "")
     private var agentLimits = AgentLimits()
     private var contextLimits = ReadingContextLimits()
+    var retryPolicy = ChatRetryPolicy()
+    private var activeRecorder: AgentTraceRecorder?
     private var recordTraces = false
     private var historyRequired = false
     private var historyReadable = true
@@ -229,6 +231,10 @@ final class ReaderChatSession: ObservableObject {
     func stop() {
         guard isSending else { return }
         generation = UUID(); task?.cancel(); task = nil; isSending = false
+        if let recorder = activeRecorder {
+            recorder.failed("Response stopped.", outcome: .stopped)
+            traceStore?.add(recorder.finish(outcome: .stopped)); activeRecorder = nil
+        }
         if pendingQuestion != nil { withdrawPending(); flush(); return }
         if let last = messages.indices.last, messages[last].state == .streaming { messages[last].state = .stopped; changed(messages[last]) }
         notice = "Response stopped."
@@ -278,6 +284,8 @@ final class ReaderChatSession: ObservableObject {
             harness: harness, provider: traceSource.provider, model: traceSource.model, bookTitle: asked?.context?.title ?? "",
             chapter: asked?.context?.chapter ?? "", question: asked?.text ?? "",
             selection: asked?.context?.source == "selection" ? asked?.context?.text : nil, limits: harness == .agent && sharePage ? agentLimits : nil)) : nil
+        activeRecorder = recorder
+        let recovery = ChatRetryBudget(policy: retryPolicy)
         do {
             let truncated: Bool
             if harness == .agent, sharePage {
@@ -301,19 +309,21 @@ final class ReaderChatSession: ObservableObject {
                         } }
                         let seed = try await toolbox.seed(selection, followUp: followUp, recorder: recorder)
                         let outcome = try await ReadingAgentRunner.run(provider: tools, request: request, toolbox: toolbox, seed: seed,
-                                                                       limits: agentLimits, recorder: recorder, onText: { [weak self] text in
+                                                                       limits: agentLimits, recorder: recorder, recovery: recovery, onRetry: { [weak self] in
+                            self?.recover(id, token: token, retry: recovery.retries)
+                        }, onText: { [weak self] text in
                             self?.append(text, to: id, token: token)
                         }, onWithdraw: { [weak self] in self?.withdraw(id, token: token) })
                         trace.steps = toolbox.steps; truncated = outcome.truncated
                     } catch ReadingAgentError.toolsUnsupported {
                         trace.steps = []; trace.fellBack = true
-                        truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace, recorder: recorder)
+                        truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace, recorder: recorder, recovery: recovery)
                     }
                 } else {
                     // A provider without tool support, or a book without readable text.
                     trace.fellBack = !(provider is any ToolChatProvider)
                     if !trace.fellBack { trace.steps = [agentBook == nil ? "no book open" : "book text unavailable"] }
-                    truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace, recorder: recorder)
+                    truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace, recorder: recorder, recovery: recovery)
                 }
             } else {
                 if !sharePage { trace.steps = ["passage sharing off"] }
@@ -322,7 +332,7 @@ final class ReaderChatSession: ObservableObject {
                     recorder?.lookup(recall)
                 }
                 truncated = try await stream(ChatRequest.conversation(history, earlierMessages: earlier, limits: contextLimits), provider: provider, into: id, token: token,
-                                             recorder: recorder, detail: Self.traceDetail(asked?.context?.bounded(contextLimits), boundary: nil, limits: nil))
+                                             recorder: recorder, recovery: recovery, detail: Self.traceDetail(asked?.context?.bounded(contextLimits), boundary: nil, limits: nil))
             }
             guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
             messages[index].trace = trace
@@ -343,18 +353,29 @@ final class ReaderChatSession: ObservableObject {
                 traceStore?.add(recorder.finish(outcome: .failed))
             }
         }
-        if generation == token { activity = nil; isSending = false; task = nil; flush(); refreshLatest() }
+        if generation == token { activeRecorder = nil; activity = nil; isSending = false; task = nil; flush(); refreshLatest() }
+    }
+    /// Reuse the frozen request and reply ID. Never re-capture the book or append
+    /// a second question when replacing an interrupted attempt.
+    private func stream(_ request: ChatRequest, provider: any ChatProvider, into id: UUID, token: UUID,
+                        recorder: AgentTraceRecorder? = nil, recovery: ChatRetryBudget, detail: String = "") async throws -> Bool {
+        recorder?.context(system: request.system, turns: request.turns, detail: detail)
+        return try await recovery.run(round: 1, recorder: recorder, onRetry: { [weak self] in
+            self?.recover(id, token: token, retry: recovery.retries)
+        }) { attempt in
+            try await self.streamAttempt(request, provider: provider, into: id, token: token, recorder: recorder, attempt: attempt)
+        }
     }
     /// Streams a plain request into a reply; returns whether it was truncated.
-    private func stream(_ request: ChatRequest, provider: any ChatProvider, into id: UUID, token: UUID,
-                        recorder: AgentTraceRecorder? = nil, detail: String = "") async throws -> Bool {
-        recorder?.context(system: request.system, turns: request.turns, detail: detail)
+    private func streamAttempt(_ request: ChatRequest, provider: any ChatProvider, into id: UUID, token: UUID,
+                               recorder: AgentTraceRecorder?, attempt: ChatRetryBudget.Attempt) async throws -> Bool {
         var answer = ""
         // A traced reply streams through the agent interface without tools, which also reports token usage.
         if let recorder, let tools = provider as? any ToolChatProvider {
             var usage: TokenUsage?
             for try await event in tools.streamAgent(system: request.system, items: request.turns.map(AgentItem.turn), tools: [], allowTools: false) {
                 try Task.checkCancellation()
+                attempt.received = true
                 guard generation == token else { throw CancellationError() }
                 switch event {
                 case .text(let text): answer += text; append(text, to: id, token: token)
@@ -367,6 +388,7 @@ final class ReaderChatSession: ObservableObject {
         }
         for try await event in provider.stream(request) {
             try Task.checkCancellation()
+            attempt.received = true
             guard generation == token else { throw CancellationError() }
             switch event {
             case .text(let text): answer += text; append(text, to: id, token: token)
@@ -397,7 +419,7 @@ final class ReaderChatSession: ObservableObject {
     }
     /// The pre-fetched evidence harness, also the agent's fallback.
     private func streamEvidence(provider: any ChatProvider, history: [ReaderChatMessage], earlier: [ReaderChatMessage], id: UUID, token: UUID, trace: inout ChatTrace,
-                                recorder: AgentTraceRecorder? = nil) async throws -> Bool {
+                                recorder: AgentTraceRecorder? = nil, recovery: ChatRetryBudget) async throws -> Bool {
         var history = history
         if let index = history.lastIndex(where: \.isUser), var context = history[index].context, context.bookRecall == nil, let recall,
            let term = ReadingBookRecall.lookupTerm(question: history[index].text, context: context, previous: Self.previousSubject(Array(history[..<index]))) {
@@ -409,7 +431,12 @@ final class ReaderChatSession: ObservableObject {
         activity = nil
         try Task.checkCancellation()
         return try await stream(ChatRequest.conversation(history, earlierMessages: earlier, limits: contextLimits), provider: provider, into: id, token: token,
-                                recorder: recorder, detail: Self.traceDetail(history.last(where: \.isUser)?.context?.bounded(contextLimits), boundary: nil, limits: nil))
+                                recorder: recorder, recovery: recovery, detail: Self.traceDetail(history.last(where: \.isUser)?.context?.bounded(contextLimits), boundary: nil, limits: nil))
+    }
+    private func recover(_ id: UUID, token: UUID, retry: Int) {
+        guard generation == token else { return }
+        withdraw(id, token: token)
+        activity = "Connection interrupted. Retrying (\(retry)/\(retryPolicy.delays.count))…"
     }
     private func append(_ text: String, to id: UUID, token: UUID) {
         guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
@@ -436,6 +463,7 @@ final class ReaderChatSession: ObservableObject {
         return ReadingAgentToolbox.json(["matches": Array(matches.suffix(4)), "note": "Earlier answers may be wrong; prefer book text."])
     }
     private func errorMessage(_ error: Error) -> String {
+        let error = ChatRequestFailure.source(error)
         if let error = error as? ChatError { return error.localizedDescription }
         if let error = error as? ChatGPTError { return error.localizedDescription }
         if let error = error as? URLError {

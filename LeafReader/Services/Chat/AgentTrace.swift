@@ -58,7 +58,7 @@ struct AgentLimits: Codable, Equatable {
 struct AgentTrace: Codable, Identifiable, Equatable {
     enum Outcome: String, Codable { case complete, truncated, failed, stopped }
     struct Step: Codable, Equatable, Identifiable {
-        enum Kind: String, Codable { case context, seed, round, tool, answer, lookup, error }
+        enum Kind: String, Codable { case context, seed, round, tool, answer, lookup, error, request }
         var id = UUID()
         let kind: Kind
         var title: String
@@ -129,6 +129,15 @@ final class AgentTraceRecorder {
             append(.init(kind: .round, title: "Model round \(number)", detail: calls.map { "\($0.name) \($0.arguments)" }.joined(separator: "\n"),
                          seconds: elapsed(), usage: usage, withdrawn: text))
         }
+    }
+    func request(round: Int, attempt: Int, outcome: String, stage: String, delay: TimeInterval? = nil, error: Error? = nil) {
+        var detail = "\(outcome) · stage \(stage)"
+        if let delay { detail += String(format: " · delay %.2f s", delay) }
+        if let error {
+            detail += " · " + ChatRetryBudget.errorCode(error)
+            if let response = error as? ChatRequestFailure { detail += " · HTTP \(response.status)" }
+        }
+        append(.init(kind: .request, title: "Request round \(round), attempt \(attempt)", detail: detail, seconds: elapsed()))
     }
     func failed(_ message: String, outcome: AgentTrace.Outcome) {
         trace.outcome = outcome; trace.error = message
