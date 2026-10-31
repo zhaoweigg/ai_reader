@@ -3549,6 +3549,65 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testStreamingScrollAtOwnPaceInLibrary() { verifyStreamingScroll(flow: "Library") }
     @MainActor func testStreamingScrollAtOwnPaceUsingLegacyTracking() { verifyStreamingScroll(flow: "Library", legacy: true) }
 
+    @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInPages() { verifySendKeepsQuestionInView(flow: "Pages") }
+    @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInScroll() { verifySendKeepsQuestionInView(flow: "Scroll") }
+    @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInPDF() { verifySendKeepsQuestionInView(flow: "PDF") }
+    @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInLibrary() { verifySendKeepsQuestionInView(flow: "Library") }
+
+    /// After a long reply, a question sent from the keyboard must stay in view
+    /// with its placeholder while the keyboard goes away and the panel grows,
+    /// instead of the history showing a blank stretch until the reply arrives.
+    @MainActor private func verifySendKeepsQuestionInView(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(scrollStream: true)
+        if flow == "Library" { app.buttons["openLibraryChat"].tap() }
+        else { openSelectionFixture(flow, app: app); waitForBook(app); app.buttons["openReaderChat"].tap() }
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Explain at length"); app.buttons["sendReaderChat"].tap()
+        let history = app.scrollViews["chatMessageHistory"], send = app.buttons["sendReaderChat"]
+        let reply = app.descendants(matching: .any).matching(identifier: "chatReply").firstMatch
+        let geometry = app.descendants(matching: .any)["uitestChatHistoryGeometry"].firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 10)); XCTAssertTrue(geometry.waitForExistence(timeout: 5))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "next 3."), evaluatedWith: reply)
+        waitForExpectations(timeout: 15)
+        send.tap() // Stop the stream; the history now holds a reply taller than the panel.
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
+        waitForExpectations(timeout: 5)
+        func metrics() -> [String: Double] {
+            let data = (geometry.value as? String ?? "").data(using: .utf8) ?? Data()
+            return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Double]) ?? [:]
+        }
+        // Ask again from the keyboard, as a reader does.
+        input.tap(); XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.typeText("Second question from the keyboard")
+        let question = app.descendants(matching: .any).matching(identifier: "chatQuestion")
+            .matching(NSPredicate(format: "label == %@", "Second question from the keyboard")).firstMatch
+        send.tap()
+        XCTAssertTrue(question.waitForExistence(timeout: 3), "The question is added to the history as soon as it is sent")
+        // Sample the first seconds after sending: the keyboard dismisses and the
+        // panel grows during this time, and the question must never leave the
+        // viewport nor the viewport run past the end of the history.
+        var samples: [String] = [], failures: [String] = []
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            let frame = history.frame, shown = question.exists ? question.frame : .null
+            let values = metrics()
+            let overrun = (values["offset"] ?? 0) - ((values["contentHeight"] ?? 0) - (values["viewportHeight"] ?? 0))
+            let visible = !shown.isNull && shown.height > 0 && frame.intersects(shown)
+            let sample = String(format: "t=%.2f visible=%@ question=%@ history=%@ overrun=%.1f %@", 3 - deadline.timeIntervalSinceNow,
+                                visible ? "yes" : "no", NSCoder.string(for: shown), NSCoder.string(for: frame), overrun, geometry.value as? String ?? "")
+            samples.append(sample)
+            if !visible || overrun > 2 { failures.append(sample) }
+        }
+        let trace = XCTAttachment(string: samples.joined(separator: "\n")); trace.name = flow + " history after sending from the keyboard"; trace.lifetime = .keepAlways; add(trace)
+        capture(flow + " history right after sending from the keyboard", app: app)
+        XCTAssertTrue(failures.isEmpty, "The new question must stay in view while the keyboard goes away:\n" + failures.prefix(6).joined(separator: "\n"))
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "chatReply").count >= 2, "The reply placeholder follows the question")
+        send.tap() // Stop the second stream.
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
+        waitForExpectations(timeout: 5)
+    }
+
     @MainActor private func verifyStreamingScroll(flow: String, legacy: Bool = false) {
         continueAfterFailure = false
         let app = launchApp(scrollStream: true, legacyScroll: legacy)
