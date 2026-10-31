@@ -925,6 +925,8 @@ final class LeafReaderUITests: XCTestCase {
         app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1)
         XCTAssertTrue(pill.waitForExistence(timeout: 5))
         XCTAssertTrue(pill.label.hasPrefix("Back to "), pill.label)
+        // A PDF page change hides the controls; bring the header back before reading it.
+        showReaderControls(app)
         XCTAssertNotEqual(title.label, origin)
         capture(flow + " return pill after progress jump", app: app)
         // Hide the controls by tapping the page: the pill stays.
@@ -941,6 +943,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(pill.waitForExistence(timeout: 5))
         app.buttons["dismissReturnPoint"].tap()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: pill); waitForExpectations(timeout: 5)
+        showReaderControls(app)
         XCTAssertNotEqual(title.label, origin, "Dismissing keeps the current place")
     }
 

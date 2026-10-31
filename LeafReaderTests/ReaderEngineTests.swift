@@ -2925,7 +2925,10 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertEqual(model.returnPoint?.label, "\(Int(originFraction * 100))%", label)
             model.send("navigate", value: model.chapters[1].href); try await waitUntil { model.currentChapterID == model.chapters[1].id }
             XCTAssertEqual(model.returnPoint?.locator, origin, "\(label): the first spot is kept across further jumps")
-            model.send("next"); try await waitUntil { model.returnPoint?.locator == origin }
+            // Let the page turn settle: a return issued over an in-flight navigation would overlap it.
+            let turned = model.fraction
+            model.send("next"); try await waitUntil { model.fraction != turned }
+            XCTAssertEqual(model.returnPoint?.locator, origin, label)
             model.returnToReadingPoint()
             try await waitUntil { model.returnPoint == nil }
             try await waitUntil { abs(model.fraction - originFraction) < 0.01 }
