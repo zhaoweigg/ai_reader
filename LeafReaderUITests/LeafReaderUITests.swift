@@ -3956,6 +3956,7 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testAutomaticChatRecoveryInPDF() { verifyAutomaticChatRecovery(flow: "PDF") }
 
     @MainActor private func verifyAutomaticChatRecovery(flow: String) {
+        continueAfterFailure = false
         let app = launchApp(chatRecovery: true, recoveryAgent: flow == "Scroll")
         if flow == "PDF" {
             let search = app.textFields["librarySearch"]
@@ -3973,8 +3974,10 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["openReaderChat"].tap()
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap()
-        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+        // As in focusInput above, native typing brings up the software keyboard
+        // when the simulator still exposes a cached, offscreen keyboard.
         input.typeText("Recover this question")
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
         app.buttons["sendReaderChat"].tap()
         let reply = app.textViews.matching(identifier: "chatReply").firstMatch
         expectation(for: NSPredicate(format: "label CONTAINS %@", "Recovered reply."), evaluatedWith: reply)
@@ -3991,8 +3994,9 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["openReaderChat"].tap()
         XCTAssertTrue(reply.waitForExistence(timeout: 5)); XCTAssertTrue(reply.label.contains("Recovered reply."))
         if flow == "Pages" {
-            input.tap(); XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
-            input.typeText("Stop during retry"); app.buttons["sendReaderChat"].tap()
+            input.tap(); input.typeText("Stop during retry")
+            XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5))
+            app.buttons["sendReaderChat"].tap()
             let retrying = app.textViews.matching(identifier: "chatReply").matching(NSPredicate(format: "label CONTAINS %@", "Retrying (1/2)")).firstMatch
             XCTAssertTrue(retrying.waitForExistence(timeout: 5))
             app.buttons["sendReaderChat"].tap()

@@ -98,13 +98,15 @@ final class ChatRetryTests: XCTestCase {
         let transport = RetryTransport()
         transport.payloads = [(0, [:], [], URLError(.networkConnectionLost)),
                               (200, ["Content-Type": "text/event-stream"], ["data: {\"choices\":[{\"delta\":{\"content\":\"Recovered\"}}]}", "", "data: [DONE]", ""], nil)]
-        let provider = HTTPChatProvider(kind: .chatCompletions, profile: ChatProviderKind.chatCompletions.defaultProfile, apiKey: "fixture", transport: transport)
+        var profile = ChatProviderKind.chatCompletions.defaultProfile; profile.model = "fixture-model"
+        let provider = HTTPChatProvider(kind: .chatCompletions, profile: profile, apiKey: "fixture", transport: transport)
         let session = ReaderChatSession(); session.retryPolicy = immediate; session.draft = "Why?"
         let settings = try settings(provider)
         var captures = 0
         session.send(settings: settings) { captures += 1; return self.context }
         try await wait { !session.isSending }
-        XCTAssertEqual(captures, 1); XCTAssertEqual(transport.requests.count, 2)
+        XCTAssertEqual(captures, 1)
+        guard transport.requests.count == 2 else { return XCTFail("Expected two transport attempts; got \(transport.requests.count), error: \(session.error ?? "none")") }
         XCTAssertEqual(transport.requests[0].httpBody, transport.requests[1].httpBody)
         XCTAssertEqual(session.messages.last?.text, "Recovered"); XCTAssertNil(session.error)
     }
