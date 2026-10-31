@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -22,6 +22,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_MARKDOWN"] = markdown ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_STREAM"] = scrollStream ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_SLOW_START"] = slowStart ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_LEGACY"] = legacyScroll ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_PERF"] = scrollPerformance ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_FOLLOW"] = chatFollow ? "1" : "0"
@@ -3548,6 +3549,93 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testStreamingScrollAtOwnPaceInPDF() { verifyStreamingScroll(flow: "PDF") }
     @MainActor func testStreamingScrollAtOwnPaceInLibrary() { verifyStreamingScroll(flow: "Library") }
     @MainActor func testStreamingScrollAtOwnPaceUsingLegacyTracking() { verifyStreamingScroll(flow: "Library", legacy: true) }
+
+    @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInPages() { verifySendKeepsQuestionInView(flow: "Pages") }
+    @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInScroll() { verifySendKeepsQuestionInView(flow: "Scroll") }
+    @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInPDF() { verifySendKeepsQuestionInView(flow: "PDF") }
+    @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInLibrary() { verifySendKeepsQuestionInView(flow: "Library") }
+
+    /// After a long reply, a question sent from the keyboard must stay in view
+    /// with its placeholder while the keyboard goes away and the panel grows,
+    /// instead of the history showing a blank stretch until the reply arrives.
+    @MainActor private func verifySendKeepsQuestionInView(flow: String) {
+        continueAfterFailure = false
+        // The mock waits three seconds before its first token, as a model does.
+        let app = launchApp(scrollStream: true, slowStart: true)
+        if flow == "Library" { app.buttons["openLibraryChat"].tap() }
+        else { openSelectionFixture(flow, app: app); waitForBook(app); app.buttons["openReaderChat"].tap() }
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Explain at length"); app.buttons["sendReaderChat"].tap()
+        let history = app.scrollViews["chatMessageHistory"], send = app.buttons["sendReaderChat"]
+        let replies = app.descendants(matching: .any).matching(identifier: "chatReply")
+        let geometry = app.descendants(matching: .any)["uitestChatHistoryGeometry"].firstMatch
+        XCTAssertTrue(replies.firstMatch.waitForExistence(timeout: 10)); XCTAssertTrue(geometry.waitForExistence(timeout: 5))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "next 3."), evaluatedWith: replies.firstMatch)
+        waitForExpectations(timeout: 20)
+        send.tap() // Stop the stream; the history now holds a reply taller than the panel.
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
+        waitForExpectations(timeout: 5)
+        func metrics() -> [String: Double] {
+            let data = (geometry.value as? String ?? "").data(using: .utf8) ?? Data()
+            return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Double]) ?? [:]
+        }
+        // Ask again from the keyboard, as a reader does. The stopped-reply notice
+        // re-lays the panel out just then, which can drop a first tap's focus.
+        XCTAssertTrue(app.staticTexts["Response stopped."].waitForExistence(timeout: 5))
+        for _ in 0..<3 where !app.buttons["Hide keyboard"].exists {
+            input.tap()
+            _ = app.buttons["Hide keyboard"].waitForExistence(timeout: 3)
+        }
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Hide keyboard"].exists, "Wait for the composing panel before native typing")
+        input.typeText("Second question from the keyboard")
+        expectation(for: NSPredicate(format: "value == %@", "Second question from the keyboard"), evaluatedWith: input)
+        waitForExpectations(timeout: 5)
+        let question = app.descendants(matching: .any).matching(identifier: "chatQuestion")
+            .matching(NSPredicate(format: "label == %@", "Second question from the keyboard")).firstMatch
+        let placeholder = replies.element(boundBy: 1)
+        // The clock starts at the tap: the harness waits for the app to idle before
+        // returning, which spends a good part of the mock's pause.
+        let started = Date()
+        send.tap()
+        // Sample the seconds before the first token: the keyboard dismisses and the
+        // panel grows during this time, and the question and its placeholder must
+        // stay in the viewport, which must not run past the end of the history.
+        var samples: [String] = [], failures: [String] = [], captured = false, waited = 0.0, baseline: Double?
+        while Date().timeIntervalSince(started) < 2.8 {
+            let elapsed = Date().timeIntervalSince(started)
+            // Once the reply's first token lands, the history grows by hundreds of
+            // points and rightly follows the reply; only the wait before that is
+            // sampled. Geometry is read first so a token landing mid-sample cannot
+            // pair a stale "Thinking…" label with the grown reply's frames.
+            let values = metrics()
+            if let baseline, (values["contentHeight"] ?? 0) > baseline + 50 { break }
+            if baseline == nil { baseline = values["contentHeight"] }
+            let pendingText = placeholder.exists ? placeholder.label : ""
+            if pendingText.contains("Paragraph") { break }
+            let frame = history.frame
+            let shown = question.exists ? question.frame : .null, pending = placeholder.exists ? placeholder.frame : .null
+            if !pending.isNull, pending.height > 60 { break }
+            let overrun = (values["offset"] ?? 0) - ((values["contentHeight"] ?? 0) - (values["viewportHeight"] ?? 0))
+            let questionVisible = !shown.isNull && shown.height > 0 && frame.intersects(shown)
+            let placeholderVisible = !pending.isNull && pending.height > 0 && frame.intersects(pending)
+            let sample = String(format: "t=%.2f question=%@ placeholder=%@ (%@) questionFrame=%@ placeholderFrame=%@ history=%@ overrun=%.1f %@", elapsed,
+                                questionVisible ? "visible" : "missing", placeholderVisible ? "visible" : "missing", pendingText, NSCoder.string(for: shown),
+                                NSCoder.string(for: pending), NSCoder.string(for: frame), overrun, geometry.value as? String ?? "")
+            samples.append(sample); waited = elapsed
+            // The first half second is the send itself and the keyboard starting to go.
+            if elapsed > 0.5, !questionVisible || !placeholderVisible || overrun > 2 { failures.append(sample) }
+            if elapsed > 1.2, !captured { captured = true; capture(flow + " history one second after sending from the keyboard", app: app) }
+        }
+        let trace = XCTAttachment(string: samples.joined(separator: "\n")); trace.name = flow + " history after sending from the keyboard"; trace.lifetime = .keepAlways; add(trace)
+        XCTAssertGreaterThan(waited, 1.0, "The samples must cover the keyboard going away before the first token: \(samples.last ?? "none")")
+        XCTAssertTrue(failures.isEmpty, "The question and its placeholder must stay in view while the keyboard goes away:\n" + failures.prefix(8).joined(separator: "\n"))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "Paragraph 10"), evaluatedWith: placeholder)
+        waitForExpectations(timeout: 10)
+        send.tap() // Stop the second stream.
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
+        waitForExpectations(timeout: 5)
+    }
 
     @MainActor private func verifyStreamingScroll(flow: String, legacy: Bool = false) {
         continueAfterFailure = false

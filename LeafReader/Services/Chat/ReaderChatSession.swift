@@ -465,6 +465,9 @@ struct UITestChatProvider: ChatProvider {
                         continuation.yield(.finished(truncated: false)); continuation.finish(); return
                     }
                     if UITesting.flag("LEAF_UI_CHAT_SCROLL_STREAM") {
+                        // A real model takes seconds before its first token; that pause is
+                        // when the question and its placeholder have the history to themselves.
+                        if UITesting.flag("LEAF_UI_CHAT_SLOW_START") { try await Task.sleep(for: .seconds(3)) }
                         continuation.yield(.text((1...10).map { "Paragraph \($0): Read this explanation at your own pace, without jumping to the newest words." }.joined(separator: "\n\n")))
                         continuation.yield(.text("\n\nUpdate 1:"))
                         for index in 1...600 {

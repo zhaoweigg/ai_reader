@@ -717,7 +717,13 @@ struct ReaderChatPanel: View {
                 ScrollViewReader { proxy in
                     GeometryReader { viewport in
                         ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 12) {
+                            // The history is paged (24 messages), so every row is laid out.
+                            // A lazy stack estimated the rows it had not laid out yet: when
+                            // the panel grew after sending from the keyboard it guessed the
+                            // new question and placeholder at the height of the long reply
+                            // above them, followed that phantom bottom, and showed a blank
+                            // panel until the reply's first token re-laid the rows out.
+                            VStack(alignment: .leading, spacing: 12) {
                                 ForEach(session.messages) { message in
                                     HStack {
                                         if message.isUser { Spacer(minLength: 32) }
