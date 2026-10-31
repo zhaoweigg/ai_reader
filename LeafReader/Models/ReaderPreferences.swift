@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Stable raw values keep existing reading preferences compatible with app-wide themes.
 enum ReadingTheme: String, CaseIterable, Identifiable {
-    case day, paper, night, sepia, sage, dusk
+    case day, paper, night, sepia, sage, dusk, black
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
     var detail: String {
@@ -13,9 +13,10 @@ enum ReadingTheme: String, CaseIterable, Identifiable {
         case .sepia: return "Warm brown ink on a mellow page."
         case .sage: return "A quiet green with a gentle contrast."
         case .dusk: return "Cool gray for the end of the day."
+        case .black: return "Pure black, easy on OLED screens."
         }
     }
-    var isDark: Bool { self == .night || self == .dusk }
+    var isDark: Bool { self == .night || self == .dusk || self == .black }
     var colorScheme: ColorScheme { isDark ? .dark : .light }
     var backgroundHex: String {
         switch self {
@@ -25,6 +26,7 @@ enum ReadingTheme: String, CaseIterable, Identifiable {
         case .sepia: return "#EBD9BB"
         case .sage: return "#E5EEE7"
         case .dusk: return "#242633"
+        case .black: return "#000000"
         }
     }
     var foregroundHex: String {
@@ -35,6 +37,7 @@ enum ReadingTheme: String, CaseIterable, Identifiable {
         case .sepia: return "#493522"
         case .sage: return "#283E33"
         case .dusk: return "#E0DFEC"
+        case .black: return "#D6D6D6"
         }
     }
     var canvasHex: String {
@@ -45,6 +48,7 @@ enum ReadingTheme: String, CaseIterable, Identifiable {
         case .sepia: return "#E2CDAA"
         case .sage: return "#D8E4DC"
         case .dusk: return "#1B1D28"
+        case .black: return "#000000"
         }
     }
     var accentHex: String {
@@ -54,6 +58,7 @@ enum ReadingTheme: String, CaseIterable, Identifiable {
         case .sepia: return "#785033"
         case .sage: return "#326C57"
         case .dusk: return "#B2BCEB"
+        case .black: return "#8FCFBC"
         }
     }
     var featuredHex: String {
@@ -64,12 +69,14 @@ enum ReadingTheme: String, CaseIterable, Identifiable {
         case .sepia: return "#59432F"
         case .sage: return "#2D4D3D"
         case .dusk: return "#3B3F60"
+        case .black: return "#1C1C1E"
         }
     }
     var background: Color { Color(hex: backgroundHex) }
     var foreground: Color { Color(hex: foregroundHex) }
     var canvas: Color { Color(hex: canvasHex) }
-    var surface: Color { background }
+    /// Pages and canvas are both pure black, so rows and cards lift slightly instead.
+    var surface: Color { self == .black ? Color(hex: "#141414") : background }
     var accent: Color { Color(hex: accentHex) }
     var onAccent: Color { isDark ? canvas : .white }
     var featured: Color { Color(hex: featuredHex) }
