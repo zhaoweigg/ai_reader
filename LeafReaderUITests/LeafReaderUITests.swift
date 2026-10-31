@@ -3579,9 +3579,15 @@ final class LeafReaderUITests: XCTestCase {
             let data = (geometry.value as? String ?? "").data(using: .utf8) ?? Data()
             return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Double]) ?? [:]
         }
-        // Ask again from the keyboard, as a reader does.
-        input.tap(); XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5), "Wait for the composing panel before native typing")
+        // Ask again from the keyboard, as a reader does. The stopped-reply notice
+        // re-lays the panel out just then, which can drop a first tap's focus.
+        XCTAssertTrue(app.staticTexts["Response stopped."].waitForExistence(timeout: 5))
+        for _ in 0..<3 where !app.buttons["Hide keyboard"].exists {
+            input.tap()
+            _ = app.buttons["Hide keyboard"].waitForExistence(timeout: 3)
+        }
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Hide keyboard"].exists, "Wait for the composing panel before native typing")
         input.typeText("Second question from the keyboard")
         expectation(for: NSPredicate(format: "value == %@", "Second question from the keyboard"), evaluatedWith: input)
         waitForExpectations(timeout: 5)
