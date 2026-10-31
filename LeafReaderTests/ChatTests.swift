@@ -203,7 +203,7 @@ final class ChatTests: XCTestCase {
     func testHTTPAndStreamErrorsNeverExposeRawServerBody() async throws {
         for status in [401, 402, 403, 404, 429, 500, 529, 302] {
             do { _ = try await collect(provider(lines: ["test-only-secret"], status: status)); XCTFail("Expected HTTP error") }
-            catch { XCTAssertFalse(error.localizedDescription.contains("test-only-secret")); XCTAssertTrue(error is ChatError) }
+            catch { XCTAssertFalse(error.localizedDescription.contains("test-only-secret")); XCTAssertTrue(ChatRequestFailure.source(error) is ChatError) }
         }
         let lines = sse(#"{"type":"error","error":{"type":"overloaded_error","message":"test-only-secret"}}"#)
         do { _ = try await collect(provider(lines: lines)); XCTFail("Expected stream error") }
@@ -437,7 +437,7 @@ final class ChatTests: XCTestCase {
     }
     func testCharacterRecallUsesFrozenSelectionAndRetryKeepsOriginalEvidence() async throws {
         let provider = ControlledChatProvider(), (settings, _, _) = settings(provider)
-        let session = ReaderChatSession()
+        let session = ReaderChatSession(); session.retryPolicy.delays = []
         let selected = ReadingChatContext(title: "测试故事", author: "", chapter: "第三章", text: "白虎", source: "selection", locator: "snapshot-location", progress: 0.4)
         session.attachSelection(selected); session.draft = "我忘了这个角色，帮我回忆一下"
         var lookups = 0
@@ -578,7 +578,7 @@ final class ChatTests: XCTestCase {
 
     func testFailureRetainsPartialAndCanRetryWithoutDuplicatingQuestion() async throws {
         let provider = ControlledChatProvider(); let (settings, _, _) = settings(provider)
-        let session = ReaderChatSession(); session.draft = "Explain"
+        let session = ReaderChatSession(); session.retryPolicy.delays = []; session.draft = "Explain"
         session.send(settings: settings) { self.context }
         try await wait { provider.requests.count == 1 }
         provider.continuations[0].yield(.text("Partial")); provider.continuations[0].finish(throwing: URLError(.networkConnectionLost))

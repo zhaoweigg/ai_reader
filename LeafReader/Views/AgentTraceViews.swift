@@ -184,6 +184,7 @@ private struct AgentTraceStepRow: View {
         case .answer: return ("A", .purple)
         case .lookup: return ("L", .teal)
         case .error: return ("!", .orange)
+        case .request: return ("↻", .blue)
         }
     }
     var body: some View {

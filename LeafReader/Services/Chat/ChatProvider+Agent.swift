@@ -40,7 +40,7 @@ extension HTTPChatProvider: ToolChatProvider {
                 do {
                     let request = try makeAgentRequest(system: system, items: items, tools: tools, allowTools: allowTools)
                     let (response, lines) = try await transport.open(request)
-                    guard (200..<300).contains(response.statusCode) else { throw ChatError.http(response.statusCode) }
+                    guard (200..<300).contains(response.statusCode) else { throw ChatRequestFailure(ChatError.http(response.statusCode), response: response) }
                     guard response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true else {
                         throw ChatError.invalidResponse
                     }
