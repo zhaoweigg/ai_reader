@@ -3773,8 +3773,9 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         // The question shows at once; stop once the reply itself is under way
         // (stopping while the page is still being read withdraws the question).
+        // The slow mock streams its first words quickly, so wait for them, not the placeholder.
         XCTAssertTrue(app.textViews.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", "Explain this page")).firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.textViews.matching(identifier: "chatReply").matching(NSPredicate(format: "label == %@", "Thinking…")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews.matching(identifier: "chatReply").matching(NSPredicate(format: "label BEGINSWITH %@", "Test reply")).firstMatch.waitForExistence(timeout: 10))
         action.tap()
         XCTAssertTrue(app.buttons["Retry"].waitForExistence(timeout: 5))
         XCTAssertEqual(action.label, "Send message")
