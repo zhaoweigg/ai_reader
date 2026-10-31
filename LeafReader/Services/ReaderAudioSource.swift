@@ -99,7 +99,7 @@ enum PDFReadAloudSource {
                 let next = end == text.length ? PDFLocator.position(page: index + 1, offset: 0) : PDFLocator.position(page: index, offset: end)
                 if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     return ReadAloudPassage(text: content, locator: PDFLocator.position(page: index, offset: offset), nextLocator: next,
-                        language: "", label: "Page \(index + 1)")
+                        language: "", label: "Page \(index + 1)", chapterOffset: offset, chapterLength: text.length)
                 }
                 offset = end
             }

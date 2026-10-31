@@ -31,12 +31,14 @@ import UIKit
     private func passage(_ index: Int, text: String? = nil) -> ReadAloudPassage {
         ReadAloudPassage(text: text ?? "Passage \(index)", locator: "position:\(index)", nextLocator: "position:\(index + 1)", language: "en-US", label: "Chapter \(index)")
     }
-    private func setup(nowPlaying: RecordingNowPlaying? = nil) -> (ReadAloudSession, RecordingSpeaker, URL, UserDefaults) {
+    private func setup(nowPlaying: RecordingNowPlaying? = nil, clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime })
+        -> (ReadAloudSession, RecordingSpeaker, URL, UserDefaults) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let name = "ReadAloudTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         let speaker = RecordingSpeaker()
-        let session = ReadAloudSession(bookmarkURL: directory.appendingPathComponent("bookmark.json"), defaults: defaults, speaker: speaker, nowPlaying: nowPlaying)
+        let session = ReadAloudSession(bookmarkURL: directory.appendingPathComponent("bookmark.json"), defaults: defaults, speaker: speaker,
+                                       nowPlaying: nowPlaying, clock: clock)
         addTeardownBlock { @MainActor in session.stop(); try? FileManager.default.removeItem(at: directory); defaults.removePersistentDomain(forName: name) }
         return (session, speaker, directory, defaults)
     }
@@ -80,6 +82,61 @@ import UIKit
         let clearedBeforeEnd = player.cleared
         speaker.finished?(); try await wait { session.state == .finished }
         XCTAssertGreaterThan(player.cleared, clearedBeforeEnd)
+    }
+    func testLockScreenTimeBarEstimatesTheChapterAndLearnsThePace() async throws {
+        var now: TimeInterval = 1000
+        let player = RecordingNowPlaying()
+        let (session, speaker, _, defaults) = setup(nowPlaying: player, clock: { now })
+        session.book = ReadAloudBookInfo(title: "The Art of Noticing", author: "Leaf Editions", coverURL: nil)
+        let latin = String(repeating: "Noticing is a practice. ", count: 20), chinese = String(repeating: "注意是一种练习。", count: 50)
+        session.source = { locator in
+            switch locator {
+            case nil, "position:0":
+                return ReadAloudPassage(text: latin, locator: "position:0", nextLocator: "position:1", language: "", label: "Chapter 1", chapterOffset: 1000, chapterLength: 4000)
+            case "position:1":
+                return ReadAloudPassage(text: chinese, locator: "position:1", nextLocator: "position:2", language: "", label: "第二章", chapterOffset: 0, chapterLength: 900)
+            case "position:2":
+                return ReadAloudPassage(text: "No extent", locator: "position:2", nextLocator: "position:3", language: "en", label: "", chapterOffset: nil, chapterLength: nil)
+            default: return nil
+            }
+        }
+        session.start(); try await wait { session.state == .playing }
+        var info = try XCTUnwrap(player.shown.last)
+        XCTAssertEqual(info.subtitle, "Chapter 1 · Leaf Editions", "The Lock Screen's second line names the chapter before the author")
+        XCTAssertEqual(info.duration ?? 0, 4000 / 16, accuracy: 0.01, "Latin text starts from the default pace")
+        XCTAssertEqual(info.elapsed ?? 0, 1000 / 16, accuracy: 0.01)
+        // A stretch of 200 units spoken in 20 seconds teaches a pace of 10 units per second.
+        now += 20; speaker.progressed?(NSRange(location: 200, length: 4))
+        session.pause()
+        XCTAssertEqual(session.pace.unitsPerSecond("latin"), 10, accuracy: 0.01)
+        info = try XCTUnwrap(player.shown.last)
+        XCTAssertFalse(info.isPlaying)
+        XCTAssertEqual(info.duration ?? 0, 400, accuracy: 0.01); XCTAssertEqual(info.elapsed ?? 0, 120, accuracy: 0.01)
+        XCTAssertEqual((defaults.dictionary(forKey: ReadAloudPace.defaultsKey) as? [String: Double])?["latin"] ?? 0, 10, accuracy: 0.01)
+        session.resume()
+        // Doubling the speed halves the chapter's estimated time.
+        session.speed = 2
+        info = try XCTUnwrap(player.shown.last)
+        XCTAssertEqual(info.duration ?? 0, 200, accuracy: 0.01); XCTAssertEqual(info.elapsed ?? 0, 60, accuracy: 0.01)
+        // While speaking, the estimate is refreshed on the Lock Screen now and then.
+        let shownBefore = player.shown.count
+        now += 16; speaker.progressed?(NSRange(location: 30, length: 4))
+        XCTAssertEqual(player.shown.count, shownBefore + 1)
+        XCTAssertEqual(player.shown.last?.elapsed ?? 0, 1230 / 20, accuracy: 0.01)
+        // Chinese text without a language tag starts from the slower default pace...
+        speaker.finished?(); try await wait { session.passage?.locator == "position:1" && session.state == .playing }
+        info = try XCTUnwrap(player.shown.last)
+        XCTAssertEqual(info.subtitle, "第二章 · Leaf Editions")
+        XCTAssertEqual(info.duration ?? 0, 900 / (4.5 * 2), accuracy: 0.01); XCTAssertEqual(info.elapsed, 0)
+        // ...and a passage without a chapter extent leaves the time bar off.
+        speaker.finished?(); try await wait { session.passage?.locator == "position:2" && session.state == .playing }
+        info = try XCTUnwrap(player.shown.last)
+        XCTAssertNil(info.duration); XCTAssertNil(info.elapsed); XCTAssertEqual(info.subtitle, "Leaf Editions")
+        // The learned pace survives reopening; a short stretch taught nothing.
+        XCTAssertEqual(ReadAloudSession(defaults: defaults, speaker: RecordingSpeaker()).pace.unitsPerSecond("latin"), 10, accuracy: 0.01)
+        XCTAssertEqual(ReadAloudPace.kind(of: "Mixed 中文 and English words here", language: ""), "latin")
+        XCTAssertEqual(ReadAloudPace.kind(of: "Anything", language: "zh-CN"), "cjk")
+        XCTAssertEqual(ReadAloudPace.kind(of: "これは日本語の文章です。", language: ""), "cjk")
     }
     func testRemoteCommandsDrivePlaybackLikeThePlayerButtons() async throws {
         let player = RecordingNowPlaying()

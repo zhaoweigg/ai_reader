@@ -17,10 +17,53 @@ struct ReadAloudPassage: Codable, Equatable {
     let language: String
     let label: String
     let segments: [ReadAloudSegment]?
+    /// Where the passage starts in its chapter's readable text and how long that
+    /// text is, in UTF-16 units; the Lock Screen's time bar is estimated from them.
+    let chapterOffset: Int?
+    let chapterLength: Int?
 
-    init(text: String, locator: String, nextLocator: String, language: String, label: String, segments: [ReadAloudSegment] = []) {
+    init(text: String, locator: String, nextLocator: String, language: String, label: String, segments: [ReadAloudSegment] = [],
+         chapterOffset: Int? = nil, chapterLength: Int? = nil) {
         self.text = text; self.locator = locator; self.nextLocator = nextLocator
         self.language = language; self.label = label; self.segments = segments
+        self.chapterOffset = chapterOffset; self.chapterLength = chapterLength
+    }
+}
+
+/// How fast narration moves through text, in UTF-16 units per second at 1×,
+/// learned from actual speech so the Lock Screen's chapter times stay honest.
+/// Chinese, Japanese and Korean read far fewer units per second than Latin text.
+struct ReadAloudPace: Equatable {
+    static let defaultsKey = "audio.pace"
+    static let defaults: [String: Double] = ["cjk": 4.5, "latin": 16]
+    private(set) var rates: [String: Double]
+
+    init(stored: [String: Double]? = nil) {
+        rates = (stored ?? [:]).filter { $0.value.isFinite && $0.value > 0.5 && $0.value < 60 }
+    }
+    static func kind(of text: String, language: String) -> String {
+        let code = language.lowercased()
+        if code.hasPrefix("zh") || code.hasPrefix("ja") || code.hasPrefix("ko") { return "cjk" }
+        if !code.isEmpty { return "latin" }
+        var cjk = 0, letters = 0
+        for scalar in text.unicodeScalars.prefix(300) {
+            if scalar.properties.isAlphabetic {
+                letters += 1
+                switch scalar.value {
+                case 0x2E80...0x9FFF, 0xAC00...0xD7AF, 0xF900...0xFAFF, 0x20000...0x3134F: cjk += 1
+                default: break
+                }
+            }
+        }
+        return letters > 0 && cjk * 10 >= letters * 3 ? "cjk" : "latin"
+    }
+    func unitsPerSecond(_ kind: String) -> Double { rates[kind] ?? Self.defaults[kind] ?? 16 }
+    /// Folds a measured stretch in; a short stretch is noise and leaves the estimate alone.
+    mutating func learn(kind: String, units: Int, seconds: Double, speed: Double) {
+        guard seconds >= 5, units >= 40, speed > 0 else { return }
+        let measured = Double(units) / seconds / speed
+        guard measured.isFinite, measured > 0.5, measured < 60 else { return }
+        rates[kind] = rates[kind].map { $0 * 0.6 + measured * 0.4 } ?? measured
     }
 }
 
@@ -71,6 +114,13 @@ struct ReadAloudNowPlayingInfo: Equatable {
     var isPlaying: Bool
     var canGoNext: Bool
     var canGoBack: Bool
+    /// Estimated seconds into the chapter and the chapter's estimated length; nil
+    /// when the passage carries no chapter extent, which leaves the time bar blank.
+    var elapsed: Double? = nil
+    var duration: Double? = nil
+    /// The second line of the system player: the chapter, then the author. Only
+    /// the title and this line are visible on the Lock Screen.
+    var subtitle: String { [chapter, author].filter { !$0.isEmpty }.joined(separator: " · ") }
 }
 
 enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
@@ -106,10 +156,16 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
         center.playCommand.isEnabled = true; center.pauseCommand.isEnabled = true; center.togglePlayPauseCommand.isEnabled = true
         center.nextTrackCommand.isEnabled = info.canGoNext; center.previousTrackCommand.isEnabled = info.canGoBack
         var payload: [String: Any] = [
-            MPMediaItemPropertyTitle: info.title, MPMediaItemPropertyArtist: info.author, MPMediaItemPropertyAlbumTitle: info.chapter,
+            MPMediaItemPropertyTitle: info.title, MPMediaItemPropertyArtist: info.subtitle, MPMediaItemPropertyAlbumTitle: info.chapter,
             MPNowPlayingInfoPropertyPlaybackRate: info.isPlaying ? 1.0 : 0.0, MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue, MPNowPlayingInfoPropertyIsLiveStream: false
         ]
+        // The system advances the elapsed time itself at the playback rate, so the
+        // bar keeps moving between passages without a timer here.
+        if let duration = info.duration, let elapsed = info.elapsed, duration > 0 {
+            payload[MPMediaItemPropertyPlaybackDuration] = duration
+            payload[MPNowPlayingInfoPropertyElapsedPlaybackTime] = min(elapsed, duration)
+        }
         if let artwork { payload[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: artwork.size) { _ in artwork } }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = payload
     }
@@ -128,6 +184,8 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
             "title": info[MPMediaItemPropertyTitle] as? String ?? "", "artist": info[MPMediaItemPropertyArtist] as? String ?? "",
             "album": info[MPMediaItemPropertyAlbumTitle] as? String ?? "", "rate": info[MPNowPlayingInfoPropertyPlaybackRate] as? Double ?? -1,
             "artwork": info[MPMediaItemPropertyArtwork] != nil, "present": !info.isEmpty,
+            "duration": info[MPMediaItemPropertyPlaybackDuration] as? Double ?? -1,
+            "elapsed": info[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? Double ?? -1,
             "next": center.nextTrackCommand.isEnabled, "previous": center.previousTrackCommand.isEnabled,
             "play": center.playCommand.isEnabled, "pause": center.pauseCommand.isEnabled
         ]
@@ -249,6 +307,12 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
     } }
     private var artwork: UIImage?
     private let nowPlaying: any ReadAloudNowPlayingPresenting
+    private let clock: () -> TimeInterval
+    private(set) var pace: ReadAloudPace
+    /// The spoken offset and time at which the current uninterrupted stretch of
+    /// speech began; its length and duration teach the pace.
+    private var stretch: (offset: Int, start: TimeInterval, speed: Double)?
+    private var lastPublishedAt: TimeInterval = -.infinity
     @Published private(set) var error: String?
     @Published private(set) var bookmark: ReadAloudBookmark?
     @Published private(set) var spokenText = ""
@@ -260,6 +324,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
     @Published var speed: Double { didSet {
         defaults.set(speed, forKey: "audio.speed.system")
         restartVoice()
+        publishNowPlaying()
     } }
     @Published var voice: String { didSet { defaults.set(voice, forKey: "audio.voice"); restartVoice() } }
     var source: ((String?) async throws -> ReadAloudPassage?)?
@@ -305,9 +370,11 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
     }
 
     init(bookmarkURL: URL? = nil, defaults: UserDefaults = .standard, speaker: (any ReadAloudSpeaking)? = nil,
-         nowPlaying: (any ReadAloudNowPlayingPresenting)? = nil) {
+         nowPlaying: (any ReadAloudNowPlayingPresenting)? = nil, clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.bookmarkURL = bookmarkURL; self.defaults = defaults
         self.nowPlaying = nowPlaying ?? SystemNowPlayingPresenter()
+        self.clock = clock
+        pace = ReadAloudPace(stored: defaults.dictionary(forKey: ReadAloudPace.defaultsKey) as? [String: Double])
         var highQuality = true
         #if DEBUG
         // Explicit simulator UI launches can exercise real AVSpeech playback with
@@ -351,6 +418,10 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
             #endif
             if self.isForeground { self.highlight?(passage, spoken, self.followsText) }
             if Date().timeIntervalSince(self.lastSavedAt) > 1 { self.saveBookmark() }
+            // Long stretches teach the pace as they go; the Lock Screen's estimate
+            // is refreshed now and then so a corrected pace reaches it.
+            if let stretch = self.stretch, self.clock() - stretch.start >= 30 { self.learnPace(); self.stretch = (self.offset, self.clock(), self.speed) }
+            if self.clock() - self.lastPublishedAt >= 15 { self.publishNowPlaying() }
         }
         notificationTokens.append(NotificationCenter.default.addObserver(forName: ChatDictationSession.willRecord, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pause() }
@@ -393,7 +464,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
     func resumeSaved() { if let bookmark { start(at: bookmark.locator, offset: bookmark.offset) } }
     func togglePlayback() { isPlaying ? pause() : resume() }
     func pause() {
-        guard isPlaying else { return }; speaker.pause(); state = .paused; saveBookmark()
+        guard isPlaying else { return }; speaker.pause(); learnPace(); state = .paused; saveBookmark()
     }
     func resume() {
         guard state == .paused else {
@@ -406,7 +477,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
             // Dictation may have changed the category and released the session.
             do { try ReadAloudAudioSession.activate() }
             catch { fail(error); saveBookmark(); return }
-            if !speaker.resume() { speakCurrent() }
+            if speaker.resume() { stretch = (offset, clock(), speed) } else { speakCurrent() }
         }
     }
     func next() { guard passage != nil, !isLoading else { return }; advance() }
@@ -422,9 +493,31 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
     /// open; stopping or reaching the end of the book takes it down.
     private func publishNowPlaying() {
         guard isPresented, [.loading, .playing, .paused, .failed].contains(state) else { nowPlaying.clear(); return }
+        lastPublishedAt = clock()
+        let timing = chapterTiming()
         nowPlaying.show(ReadAloudNowPlayingInfo(title: book?.title ?? "Leaf", author: book?.author ?? "", chapter: passage?.label ?? "",
-                                                isPlaying: state == .playing, canGoNext: passage != nil && state != .loading, canGoBack: canGoBack),
+                                                isPlaying: state == .playing, canGoNext: passage != nil && state != .loading, canGoBack: canGoBack,
+                                                elapsed: timing?.elapsed, duration: timing?.duration),
                         artwork: artwork)
+    }
+    /// Seconds into the chapter and the chapter's length at the learned pace and
+    /// the current speed; a passage without a chapter extent has no time bar.
+    func chapterTiming() -> (elapsed: Double, duration: Double)? {
+        guard let passage, let length = passage.chapterLength, length > 0 else { return nil }
+        let rate = pace.unitsPerSecond(ReadAloudPace.kind(of: passage.text, language: passage.language)) * speed
+        let position = max(0, min(length, (passage.chapterOffset ?? 0) + offset))
+        return (Double(position) / rate, Double(length) / rate)
+    }
+    /// Folds the stretch spoken since the last start or resume into the pace.
+    private func learnPace() {
+        defer { stretch = nil }
+        guard let stretch, let passage else { return }
+        var learned = pace
+        learned.learn(kind: ReadAloudPace.kind(of: passage.text, language: passage.language), units: offset - stretch.offset,
+                      seconds: clock() - stretch.start, speed: stretch.speed)
+        guard learned != pace else { return }
+        pace = learned
+        defaults.set(pace.rates, forKey: ReadAloudPace.defaultsKey)
     }
     func stop() {
         saveBookmark(); cancelWork(); state = .idle; isPresented = false
@@ -432,6 +525,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
         ReadAloudAudioSession.deactivate()
     }
     private func cancelWork() {
+        learnPace()
         clearHighlight()
         generation = UUID(); loadTask?.cancel(); loadTask = nil
         isLoading = false
@@ -480,6 +574,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
         utteranceOffset = offset
         do {
             try speaker.speak(text.substring(from: offset), language: passage.language, voice: voice, speed: speed)
+            stretch = (offset, clock(), speed)
             state = .playing
             #if DEBUG
             if !isForeground, UITesting.flag("LEAF_UI_BACKGROUND_AUDIO"), backgroundStarts.count < 4 {
@@ -504,6 +599,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
     }
     private func advance() {
         guard let passage else { return }
+        learnPace()
         clearHighlight()
         let paused = state == .paused
         history.append(passage.locator); if history.count > 50 { history.removeFirst() }
@@ -515,6 +611,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
     private func restartVoice() {
         guard passage != nil else { return }
         let playing = state == .playing
+        learnPace()
         speaker.stop(); if playing { speakCurrent() }
     }
     private func clearHighlight() {
