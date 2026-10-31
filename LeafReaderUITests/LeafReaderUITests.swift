@@ -3598,25 +3598,30 @@ final class LeafReaderUITests: XCTestCase {
         // Sample the seconds before the first token: the keyboard dismisses and the
         // panel grows during this time, and the question and its placeholder must
         // stay in the viewport, which must not run past the end of the history.
-        var samples: [String] = [], failures: [String] = [], captured = false
+        var samples: [String] = [], failures: [String] = [], captured = false, waited = 0.0
         let started = Date()
         while Date().timeIntervalSince(started) < 2.6 {
             let elapsed = Date().timeIntervalSince(started)
+            // Once the reply's first token lands, the placeholder is the reply and
+            // the history rightly follows it; only the wait before that is sampled.
+            let pendingText = placeholder.exists ? placeholder.label : ""
+            if pendingText.contains("Paragraph") { break }
             let frame = history.frame
             let shown = question.exists ? question.frame : .null, pending = placeholder.exists ? placeholder.frame : .null
             let values = metrics()
             let overrun = (values["offset"] ?? 0) - ((values["contentHeight"] ?? 0) - (values["viewportHeight"] ?? 0))
             let questionVisible = !shown.isNull && shown.height > 0 && frame.intersects(shown)
             let placeholderVisible = !pending.isNull && pending.height > 0 && frame.intersects(pending)
-            let sample = String(format: "t=%.2f question=%@ placeholder=%@ questionFrame=%@ placeholderFrame=%@ history=%@ overrun=%.1f %@", elapsed,
-                                questionVisible ? "visible" : "missing", placeholderVisible ? "visible" : "missing", NSCoder.string(for: shown),
+            let sample = String(format: "t=%.2f question=%@ placeholder=%@ (%@) questionFrame=%@ placeholderFrame=%@ history=%@ overrun=%.1f %@", elapsed,
+                                questionVisible ? "visible" : "missing", placeholderVisible ? "visible" : "missing", pendingText, NSCoder.string(for: shown),
                                 NSCoder.string(for: pending), NSCoder.string(for: frame), overrun, geometry.value as? String ?? "")
-            samples.append(sample)
+            samples.append(sample); waited = elapsed
             // The first half second is the send itself and the keyboard starting to go.
             if elapsed > 0.5, !questionVisible || !placeholderVisible || overrun > 2 { failures.append(sample) }
             if elapsed > 1.2, !captured { captured = true; capture(flow + " history one second after sending from the keyboard", app: app) }
         }
         let trace = XCTAttachment(string: samples.joined(separator: "\n")); trace.name = flow + " history after sending from the keyboard"; trace.lifetime = .keepAlways; add(trace)
+        XCTAssertGreaterThan(waited, 1.2, "The samples must cover the keyboard going away before the first token: \(samples.last ?? "none")")
         XCTAssertTrue(failures.isEmpty, "The question and its placeholder must stay in view while the keyboard goes away:\n" + failures.prefix(8).joined(separator: "\n"))
         expectation(for: NSPredicate(format: "label CONTAINS %@", "Paragraph 10"), evaluatedWith: placeholder)
         waitForExpectations(timeout: 10)
