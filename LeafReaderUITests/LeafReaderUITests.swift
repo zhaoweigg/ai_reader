@@ -986,7 +986,7 @@ final class LeafReaderUITests: XCTestCase {
         if flow == "PDF" {
             // Begin at the cover so setup cannot consume the only two remaining
             // short pages before Home. Keep the two-background-passage requirement.
-            app.buttons["previousPage"].tap(); showReaderControls(app)
+            app.buttons["Previous page"].tap(); showReaderControls(app)
         }
         app.buttons["Listen"].tap(); app.buttons["listenFromPage"].tap()
         let player = app.otherElements["readerAudioPlayer"], pause = app.buttons["audioPlayPause"]
