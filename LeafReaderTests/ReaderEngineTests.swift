@@ -938,9 +938,11 @@ final class ReaderEngineTests: XCTestCase {
         let (_, url) = try prepare("Notes from the Coast.pdf", format: .pdf)
         let document = try XCTUnwrap(PDFDocument(url: url))
         let page = try XCTUnwrap(document.page(at: 1)?.string) as NSString
-        let first = try XCTUnwrap(try await PDFReadAloudSource.passage(in: document, at: PDFLocator.position(page: 1, offset: 0)))
+        let opening = try await PDFReadAloudSource.passage(in: document, at: PDFLocator.position(page: 1, offset: 0))
+        let first = try XCTUnwrap(opening)
         XCTAssertEqual(first.label, "Page 2"); XCTAssertEqual(first.chapterOffset, 0); XCTAssertEqual(first.chapterLength, page.length)
-        let second = try XCTUnwrap(try await PDFReadAloudSource.passage(in: document, at: first.nextLocator))
+        let following = try await PDFReadAloudSource.passage(in: document, at: first.nextLocator)
+        let second = try XCTUnwrap(following)
         if second.label == "Page 2" {
             XCTAssertEqual(second.chapterOffset, (first.text as NSString).length, "A later passage of the page continues where the first ended")
             XCTAssertEqual(second.chapterLength, page.length)
