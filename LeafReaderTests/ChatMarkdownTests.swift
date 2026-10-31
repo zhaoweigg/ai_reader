@@ -126,6 +126,31 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertEqual(source, "这是**李香玲**，云瑶新组织里的队友。")
     }
 
+    func testModelStyleBoldMarkersStillRenderAsBold() {
+        func bold(_ rendered: AttributedString) -> [String] {
+            rendered.runs.filter { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true }.map { String(rendered[$0.range].characters) }
+        }
+        // A space before the closer, as in the reported reply.
+        let spaced = ChatMarkdown.render("**“朔望月”在这里是地猴珍藏的一副牌、也是他想与齐夏对赌的游戏名称。 **上一章里，这副牌装在木盒中。")
+        XCTAssertEqual(String(spaced.characters), "“朔望月”在这里是地猴珍藏的一副牌、也是他想与齐夏对赌的游戏名称。 上一章里，这副牌装在木盒中。")
+        XCTAssertEqual(bold(spaced), ["“朔望月”在这里是地猴珍藏的一副牌、也是他想与齐夏对赌的游戏名称。 "])
+        // A closer glued to Chinese punctuation, and a space after the opener.
+        let glued = ChatMarkdown.render("**标题：**内容在这里。\n\n** 词**之后\n\n再来**正常**的。")
+        XCTAssertEqual(String(glued.characters), "标题：内容在这里。\n\n 词之后\n\n再来正常的。")
+        XCTAssertEqual(bold(glued), ["标题：", " 词", "正常"])
+        // Two paragraphs each pair on their own; code keeps its asterisks; a
+        // marker still streaming stays literal, as does a longer run of asterisks.
+        let mixed = ChatMarkdown.render("**第一段：**甲\n\n`a **literal**` 和 **第二段。 **乙\n\n```\n**code**\n```\n\n未完的**粗体 ***三星***")
+        XCTAssertEqual(String(mixed.characters), "第一段：甲\n\na **literal** 和 第二段。 乙\n\n**code**\n\n未完的**粗体 三星")
+        XCTAssertEqual(bold(mixed), ["第一段：", "第二段。 ", "三星"])
+        let selectable = ChatMarkdown.selectableText("**标题：**内容") as NSAttributedString
+        let font = selectable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont
+        XCTAssertEqual(selectable.string, "标题：内容")
+        XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.traitBold) == true)
+        let plain = selectable.attribute(.font, at: 3, effectiveRange: nil) as? UIFont
+        XCTAssertFalse(plain?.fontDescriptor.symbolicTraits.contains(.traitBold) == true)
+    }
+
     func testParagraphsHeadingsAndHardBreaksKeepTheirSeparation() {
         let rendered = ChatMarkdown.render("## 人物\n\n第一段。  \n下一行。\n\n第二段。")
         XCTAssertEqual(String(rendered.characters), "人物\n\n第一段。\n下一行。\n\n第二段。")

@@ -3727,7 +3727,7 @@ final class LeafReaderUITests: XCTestCase {
         let reply = app.textViews.matching(identifier: "chatReply").firstMatch
         expectation(for: NSPredicate(format: "label CONTAINS %@", "尾句。"), evaluatedWith: reply)
         waitForExpectations(timeout: 10)
-        XCTAssertTrue(reply.label.contains("这是李香玲，云瑶的队友。"))
+        XCTAssertTrue(reply.label.contains("这是李香玲，云瑶的队友。要点：模型常把结尾标记贴在标点上。"), "Model-style bold glued to punctuation must still format: \(reply.label)")
         XCTAssertTrue(reply.label.contains("• 第一条")); XCTAssertTrue(reply.label.contains("let value = 1"))
         XCTAssertFalse(reply.label.contains("**")); XCTAssertFalse(reply.label.contains("```")); XCTAssertFalse(reply.label.contains("##"))
         if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
