@@ -2918,14 +2918,24 @@ final class ReaderEngineTests: XCTestCase {
             try await waitUntil({ model.isReady || model.error != nil }, timeout: 60)
             try await assertOpened(model, contains: "attention")
             let label = scrolling ? "Scroll" : "Pages"
+            func expect(_ what: String, _ condition: () -> Bool) async throws {
+                let deadline = Date().addingTimeInterval(20)
+                while !condition(), Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+                XCTAssertTrue(condition(), "\(label): \(what) — fraction=\(model.fraction) locator=\(model.locator) point=\(String(describing: model.returnPoint))")
+            }
+            // Let the first relocate land before driving the reader.
+            try await expect("the book reports its first location") { !model.locator.isEmpty }
+            try await Task.sleep(for: .milliseconds(400))
             XCTAssertNil(model.returnPoint, label)
-            model.send("next"); try await waitUntil { model.fraction > 0 }
+            let start = model.fraction
+            model.send("next"); try await expect("a page turn moves forward") { model.fraction > start }
             XCTAssertNil(model.returnPoint, "\(label): page turns are reading, not jumps")
             let origin = model.locator, originFraction = model.fraction
-            model.send("seek", value: 0.85); try await waitUntil { model.fraction > 0.6 }
+            model.send("seek", value: 0.85); try await expect("the progress jump lands") { model.fraction > 0.6 }
             XCTAssertEqual(model.returnPoint?.locator, origin, label)
             XCTAssertEqual(model.returnPoint?.label, "\(Int(originFraction * 100))%", label)
-            model.send("navigate", value: model.chapters[1].href); try await waitUntil { model.currentChapterID == model.chapters[1].id }
+            model.send("navigate", value: model.chapters[1].href)
+            try await expect("the Contents jump lands") { model.currentChapterID == model.chapters[1].id }
             XCTAssertEqual(model.returnPoint?.locator, origin, "\(label): the first spot is kept across further jumps")
             // Let the jump settle (Scroll keeps loading neighbouring chapters after the
             // relocate); a return issued over an in-flight navigation would overlap it.
@@ -2947,14 +2957,18 @@ final class ReaderEngineTests: XCTestCase {
             let attachment = XCTAttachment(string: "origin=\(origin) fraction=\(originFraction) model.fraction=\(model.fraction) state=\(state)")
             attachment.name = "\(label) return state"; attachment.lifetime = .keepAlways; add(attachment)
             XCTAssertTrue(state.contains("\"visible\":true"), "\(label): returning must show the passage reading left: \(state)")
-            try await waitUntil { abs(model.fraction - originFraction) < 0.02 }
-            model.send("seek", value: 0.5); try await waitUntil { model.returnPoint != nil }
-            // A trailing relocate that still reports the spot must not take the point down.
+            try await expect("the model's progress is back at the spot") { abs(model.fraction - originFraction) < 0.02 }
+            try await Task.sleep(for: .milliseconds(400))
+            // A trailing relocate that still reports the spot must not take a fresh point down.
+            model.send("seek", value: 0.5)
+            XCTAssertEqual(model.returnPoint?.locator, origin, label)
             model.receive(["type": "relocate", "locator": origin, "fraction": originFraction])
             XCTAssertNotNil(model.returnPoint, "\(label): the point stays until the reader has left and come back")
-            try await waitUntil { model.returnPoint?.left == true }
+            try await expect("the second jump marks the point as left") { model.returnPoint?.left == true }
             model.dismissReturnPoint(); XCTAssertNil(model.returnPoint, label)
-            model.send("seek", value: 0.1); try await waitUntil { model.returnPoint != nil }
+            try await Task.sleep(for: .milliseconds(400))
+            model.send("seek", value: 0.1); XCTAssertNotNil(model.returnPoint, label)
+            try await expect("the third jump lands") { model.fraction < 0.3 }
             model.reload(); XCTAssertNil(model.returnPoint, "\(label): a reload drops the point")
         }
     }
