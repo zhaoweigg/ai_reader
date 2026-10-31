@@ -45,8 +45,14 @@ final class ThemeTests: XCTestCase {
     }
 
     func testExistingStoredThemesRemainValidAndAllChoicesHaveDistinctPages() {
-        for name in ["day", "paper", "night"] { XCTAssertNotNil(ReadingTheme(rawValue: name)) }
+        for name in ["day", "paper", "night", "black"] { XCTAssertNotNil(ReadingTheme(rawValue: name)) }
         XCTAssertEqual(Set(ReadingTheme.allCases.map(\.backgroundHex)).count, ReadingTheme.allCases.count)
+        // Black is pure black on the page and the canvas, dark, and keeps rows visible.
+        XCTAssertEqual(ReadingTheme.black.backgroundHex, "#000000")
+        XCTAssertEqual(ReadingTheme.black.canvasHex, "#000000")
+        XCTAssertTrue(ReadingTheme.black.isDark)
+        XCTAssertNotEqual(ReadingTheme.black.surface, ReadingTheme.black.canvas)
+        for theme in ReadingTheme.allCases where theme != .black { XCTAssertEqual(theme.surface, theme.background, theme.title) }
         for theme in ReadingTheme.allCases {
             let prefs = ReaderPreferences(fontSize: 19, lineHeight: 1.65, font: "Georgia", theme: theme, scrolling: false)
             XCTAssertEqual(prefs.payload["colorScheme"] as? String, theme.isDark ? "dark" : "light")

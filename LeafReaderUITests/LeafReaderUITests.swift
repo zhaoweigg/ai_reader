@@ -169,13 +169,13 @@ final class LeafReaderUITests: XCTestCase {
     }
     @MainActor func testAppThemesApplyAcrossLibraryMenusReaderAndRelaunch() {
         let app = launchApp()
-        for theme in ["Day", "Paper", "Night", "Sepia", "Sage", "Dusk"] {
+        for theme in ["Day", "Paper", "Night", "Sepia", "Sage", "Dusk", "Black"] {
             app.tabBars.buttons["Settings"].tap()
             let choice = app.buttons[theme + " theme"]
             XCTAssertTrue(choice.waitForExistence(timeout: 5))
             choice.tap()
             XCTAssertTrue(choice.isSelected)
-            XCTAssertEqual(["Day", "Paper", "Night", "Sepia", "Sage", "Dusk"].filter { app.buttons[$0 + " theme"].isSelected }.count, 1)
+            XCTAssertEqual(["Day", "Paper", "Night", "Sepia", "Sage", "Dusk", "Black"].filter { app.buttons[$0 + " theme"].isSelected }.count, 1)
             capture(theme + " app theme picker", app: app)
             app.tabBars.buttons["Library"].tap()
             XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 5))
@@ -264,13 +264,13 @@ final class LeafReaderUITests: XCTestCase {
         }
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
         let flow = pdf ? "PDF" : scrolling ? "Scroll" : "Pages"
-        for theme in ["Dusk", "Paper", "Night", "Day"] {
+        for theme in ["Dusk", "Paper", "Black", "Night", "Day"] {
             let choice = app.buttons[theme + " theme"]
             revealAppearanceControl(app, choice)
             choice.tap()
             XCTAssertTrue(choice.isSelected)
             capture(flow + " live " + theme + " Appearance labels without scene fixture", app: app)
-            let dark = theme == "Dusk" || theme == "Night"
+            let dark = theme == "Dusk" || theme == "Night" || theme == "Black"
             assertAppearanceLabelInk(app.navigationBars["Appearance"].staticTexts["Appearance"],
                                      lightInk: dark, app: app)
             for tab in ["Font", "Layout"] {
