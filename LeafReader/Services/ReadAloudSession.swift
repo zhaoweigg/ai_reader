@@ -1,6 +1,8 @@
 import AVFoundation
 import Combine
+import MediaPlayer
 import NaturalLanguage
+import UIKit
 
 struct ReadAloudSegment: Codable, Equatable {
     let offset: Int
@@ -51,6 +53,70 @@ enum ReadAloudAudioSession {
     /// Hands audio back to other apps. A failure leaves nothing to recover, so it is ignored.
     static func deactivate() {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+}
+
+/// The book a narration belongs to, as the Lock Screen and Control Center present it.
+struct ReadAloudBookInfo: Equatable {
+    var title: String
+    var author: String
+    var coverURL: URL?
+}
+
+/// What the Lock Screen and Control Center show and which of their buttons work.
+struct ReadAloudNowPlayingInfo: Equatable {
+    var title: String
+    var author: String
+    var chapter: String
+    var isPlaying: Bool
+    var canGoNext: Bool
+    var canGoBack: Bool
+}
+
+enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
+
+@MainActor protocol ReadAloudNowPlayingPresenting: AnyObject {
+    /// Play, pause, next and previous from the Lock Screen, Control Center, headphones or CarPlay.
+    var handler: ((ReadAloudRemoteCommand) -> Void)? { get set }
+    func show(_ info: ReadAloudNowPlayingInfo, artwork: UIImage?)
+    func clear()
+}
+
+/// The system Now Playing surfaces: `MPNowPlayingInfoCenter` fills the Lock Screen and
+/// Control Center player, `MPRemoteCommandCenter` routes their buttons back. Passages
+/// stand in for tracks, so next/previous move by passage and seeking stays off.
+@MainActor final class SystemNowPlayingPresenter: ReadAloudNowPlayingPresenting {
+    var handler: ((ReadAloudRemoteCommand) -> Void)?
+    private var targets: [(MPRemoteCommand, Any)] = []
+    init() {
+        let center = MPRemoteCommandCenter.shared()
+        for (command, action) in [(center.playCommand, ReadAloudRemoteCommand.play), (center.pauseCommand, .pause), (center.togglePlayPauseCommand, .toggle),
+                                  (center.nextTrackCommand, .next), (center.previousTrackCommand, .previous)] {
+            targets.append((command, command.addTarget { [weak self] _ in
+                Task { @MainActor in self?.handler?(action) }
+                return .success
+            }))
+        }
+        for command in [center.skipForwardCommand, center.skipBackwardCommand, center.seekForwardCommand, center.seekBackwardCommand,
+                        center.changePlaybackPositionCommand, center.changePlaybackRateCommand] { command.isEnabled = false }
+    }
+    deinit { for (command, target) in targets { command.removeTarget(target) } }
+    func show(_ info: ReadAloudNowPlayingInfo, artwork: UIImage?) {
+        let center = MPRemoteCommandCenter.shared()
+        center.playCommand.isEnabled = true; center.pauseCommand.isEnabled = true; center.togglePlayPauseCommand.isEnabled = true
+        center.nextTrackCommand.isEnabled = info.canGoNext; center.previousTrackCommand.isEnabled = info.canGoBack
+        var payload: [String: Any] = [
+            MPMediaItemPropertyTitle: info.title, MPMediaItemPropertyArtist: info.author, MPMediaItemPropertyAlbumTitle: info.chapter,
+            MPNowPlayingInfoPropertyPlaybackRate: info.isPlaying ? 1.0 : 0.0, MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue, MPNowPlayingInfoPropertyIsLiveStream: false
+        ]
+        if let artwork { payload[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: artwork.size) { _ in artwork } }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = payload
+    }
+    func clear() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        let center = MPRemoteCommandCenter.shared()
+        center.nextTrackCommand.isEnabled = false; center.previousTrackCommand.isEnabled = false
     }
 }
 
@@ -157,8 +223,16 @@ enum ReadAloudAudioSession {
 /// loading and speech are separate so navigation/reflow cannot alter the cursor.
 @MainActor final class ReadAloudSession: ObservableObject {
     enum State: Equatable { case idle, loading, playing, paused, finished, failed }
-    @Published private(set) var state: State = .idle
-    @Published private(set) var passage: ReadAloudPassage?
+    @Published private(set) var state: State = .idle { didSet { if state != oldValue { publishNowPlaying() } } }
+    @Published private(set) var passage: ReadAloudPassage? { didSet { if passage != oldValue { publishNowPlaying() } } }
+    /// The book being read, for the Lock Screen and Control Center.
+    var book: ReadAloudBookInfo? { didSet {
+        guard book != oldValue else { return }
+        artwork = book?.coverURL.flatMap { UIImage(contentsOfFile: $0.path) }
+        publishNowPlaying()
+    } }
+    private var artwork: UIImage?
+    private let nowPlaying: any ReadAloudNowPlayingPresenting
     @Published private(set) var error: String?
     @Published private(set) var bookmark: ReadAloudBookmark?
     @Published private(set) var spokenText = ""
@@ -214,8 +288,10 @@ enum ReadAloudAudioSession {
         return migrated
     }
 
-    init(bookmarkURL: URL? = nil, defaults: UserDefaults = .standard, speaker: (any ReadAloudSpeaking)? = nil) {
+    init(bookmarkURL: URL? = nil, defaults: UserDefaults = .standard, speaker: (any ReadAloudSpeaking)? = nil,
+         nowPlaying: (any ReadAloudNowPlayingPresenting)? = nil) {
         self.bookmarkURL = bookmarkURL; self.defaults = defaults
+        self.nowPlaying = nowPlaying ?? SystemNowPlayingPresenter()
         var highQuality = true
         #if DEBUG
         // Explicit simulator UI launches can exercise real AVSpeech playback with
@@ -232,6 +308,16 @@ enum ReadAloudAudioSession {
         followsText = defaults.object(forKey: "audio.followsText") == nil || defaults.bool(forKey: "audio.followsText")
         if let bookmarkURL, let data = try? Data(contentsOf: bookmarkURL) {
             bookmark = try? JSONDecoder().decode(ReadAloudBookmark.self, from: data)
+        }
+        self.nowPlaying.handler = { [weak self] command in
+            guard let self else { return }
+            switch command {
+            case .play: resume()
+            case .pause: pause()
+            case .toggle: togglePlayback()
+            case .next: next()
+            case .previous: previous()
+            }
         }
         self.speaker.finished = { [weak self] in self?.advance() }
         self.speaker.progressed = { [weak self] range in
@@ -314,6 +400,15 @@ enum ReadAloudAudioSession {
         let retained = history
         start(at: target); history = retained
         if paused { pause() }
+        publishNowPlaying()
+    }
+    /// The Lock Screen and Control Center mirror the player while a narration is
+    /// open; stopping or reaching the end of the book takes it down.
+    private func publishNowPlaying() {
+        guard isPresented, [.loading, .playing, .paused, .failed].contains(state) else { nowPlaying.clear(); return }
+        nowPlaying.show(ReadAloudNowPlayingInfo(title: book?.title ?? "Leaf", author: book?.author ?? "", chapter: passage?.label ?? "",
+                                                isPlaying: state == .playing, canGoNext: passage != nil && state != .loading, canGoBack: canGoBack),
+                        artwork: artwork)
     }
     func stop() {
         saveBookmark(); cancelWork(); state = .idle; isPresented = false

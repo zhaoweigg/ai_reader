@@ -393,6 +393,35 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(restored.isSelected)
         XCTAssertFalse(typefaceRow(app, "Georgia").isSelected)
     }
+    /// The system player (Control Center here; the Lock Screen uses the same Now
+    /// Playing info) shows the book while narrating and its buttons drive playback.
+    @MainActor func testControlCenterShowsTheBookAndPausesNarration() {
+        continueAfterFailure = false
+        let app = launchApp(appleSpeech: true)
+        app.buttons["featuredBook"].tap(); waitForBook(app); showReaderControls(app)
+        app.buttons["Listen"].tap(); app.buttons["listenFromPage"].tap()
+        let player = app.otherElements["readerAudioPlayer"], pause = app.buttons["audioPlayPause"]
+        expectation(for: NSPredicate(format: "value == %@", "Listening"), evaluatedWith: player)
+        waitForExpectations(timeout: 15)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.01))
+            .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.7)))
+        let title = springboard.staticTexts["The Art of Noticing"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10), springboard.debugDescription)
+        capture("Control Center while listening", app: springboard)
+        let systemPause = springboard.buttons["Pause"]
+        XCTAssertTrue(systemPause.waitForExistence(timeout: 5), springboard.debugDescription)
+        systemPause.tap()
+        XCTAssertTrue(springboard.buttons["Play"].waitForExistence(timeout: 5), "Control Center must reflect the paused narration")
+        capture("Control Center after pausing", app: springboard)
+        // Close Control Center and check the in-app player agrees.
+        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+            .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+        app.activate()
+        XCTAssertTrue(pause.waitForExistence(timeout: 8))
+        XCTAssertEqual(pause.label, "Resume listening", "Pausing from Control Center must pause the narration")
+        app.buttons["stopListening"].tap()
+    }
     @MainActor func testContentsRevealsCurrentChapterInPages() { verifyContentsLocation(flow: "Pages") }
     @MainActor func testContentsRevealsCurrentChapterInScroll() { verifyContentsLocation(flow: "Scroll") }
     @MainActor func testContentsRevealsCurrentPageInPDF() { verifyContentsLocation(flow: "PDF") }

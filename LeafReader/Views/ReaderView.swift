@@ -205,6 +205,7 @@ struct ReaderContent: View {
             audio.reveal = { [weak model] locator in await model?.revealReadAloud(at: locator) }
             audio.highlight = { [weak model] passage, range, follow in model?.highlightReadAloud(passage, range: range, follow: follow) }
             audio.clearSource = { [weak model] in model?.webView?.evaluateJavaScript("window.Leaf?.clearReadAloud()", completionHandler: nil) }
+            audio.book = ReadAloudBookInfo(title: book.title, author: book.author, coverURL: library.coverURL(book))
             library.open(book.id)
         }
         .onDisappear { audio.stop(); chat.close(); library.flush() }
