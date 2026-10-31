@@ -2914,6 +2914,8 @@ final class ReaderEngineTests: XCTestCase {
         for scrolling in [false, true] {
             var prefs = preferences; prefs.scrolling = scrolling
             let model = try show(book, url: url, readerPreferences: prefs)
+            // A freshly booted simulator can take WebKit longer than the usual open wait.
+            try await waitUntil({ model.isReady || model.error != nil }, timeout: 60)
             try await assertOpened(model, contains: "attention")
             let label = scrolling ? "Scroll" : "Pages"
             XCTAssertNil(model.returnPoint, label)
