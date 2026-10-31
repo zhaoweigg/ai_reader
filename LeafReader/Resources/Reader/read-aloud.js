@@ -106,6 +106,15 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
             const range = doc.createRange(); range.setStart(first.node, first.start); range.setEnd(last, lastEnd);
             const next = range.cloneRange(); next.collapse(false);
             const label = view.getProgressOf(index, range).tocItem?.label;
+            // The chapter's readable extent and the passage's place in it feed the
+            // Lock Screen's time bar; blank formatting nodes would only inflate it.
+            let chapterLength = 0, chapterOffset = 0;
+            const counter = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+            for (let text; (text = counter.nextNode());) {
+                if (!/\S/.test(text.data) || !readable(text)) continue;
+                if (text === first.node) chapterOffset = chapterLength + first.start;
+                chapterLength += text.length;
+            }
             const raw = parts.join(''), text = raw.trim(), leading = raw.length - raw.trimStart().length;
             // Spoken offsets include synthetic line breaks and omit trimmed
             // whitespace/rt text. Map bounded text pieces back to original CFIs
@@ -121,7 +130,7 @@ export async function readAloudChunk(view, locator, sanitize = doc => doc) {
             return { text, segments, locator: view.getCFI(index, range), nextLocator: view.getCFI(index, next),
                 language: first.node.parentElement.closest('[lang], [xml\\:lang]')?.getAttribute('lang')
                     || doc.documentElement.lang || (typeof book.metadata?.language === 'string' ? book.metadata.language : ''),
-                label: typeof label === 'string' ? label : '', index };
+                label: typeof label === 'string' ? label : '', index, chapterOffset, chapterLength };
         }
         // Yield between empty/non-text chapters so closing cancels a long scan.
         await new Promise(resolve => setTimeout(resolve, 0));

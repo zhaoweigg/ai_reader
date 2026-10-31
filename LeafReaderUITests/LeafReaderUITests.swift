@@ -416,8 +416,13 @@ final class LeafReaderUITests: XCTestCase {
         }
         // The sample book has no cover file (the Lock Screen shows the app icon), and
         // its short opening passage can finish before this check, enabling Previous.
-        waitForSystem("Now Playing shows the book while narrating") {
-            $0["title"] as? String == "The Art of Noticing" && $0["artist"] as? String == "Leaf Editions" && $0["rate"] as? Double == 1
+        // The visible second line carries the chapter ahead of the author, and the
+        // time bar an estimated position within the chapter.
+        waitForSystem("Now Playing shows the book, chapter and chapter time while narrating") {
+            let artist = $0["artist"] as? String ?? "", chapter = $0["album"] as? String ?? ""
+            return $0["title"] as? String == "The Art of Noticing" && !chapter.isEmpty && artist == "\(chapter) · Leaf Editions"
+                && $0["rate"] as? Double == 1 && ($0["duration"] as? Double ?? -1) > 0
+                && ($0["elapsed"] as? Double ?? -1) >= 0 && ($0["elapsed"] as? Double ?? 1e9) <= ($0["duration"] as? Double ?? 0)
                 && $0["next"] as? Bool == true && $0["pause"] as? Bool == true && $0["play"] as? Bool == true
         }
         let listening = XCTAttachment(string: probe.value as? String ?? "nil"); listening.name = "System player while listening"; listening.lifetime = .keepAlways; add(listening)

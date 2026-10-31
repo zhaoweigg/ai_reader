@@ -905,11 +905,17 @@ final class ReaderEngineTests: XCTestCase {
                     const create=section.createDocument;
                     if(create)section.createDocument=()=>{parsed[index]=(parsed[index]??0)+1;return create();};
                 }
-                let locator='section:0', count=0, longest=0, maxDocuments=0, ended=false;
+                let locator='section:0', count=0, longest=0, maxDocuments=0, ended=false, lastIndex=-1, lastOffset=-1;
                 for (;count<1000;++count) {
                     const chunk=await window.Leaf.readAloudChunk({locator});
                     if (!chunk) {ended=true;break;}
                     if(cursors.has(chunk.locator)) throw new Error('Repeated listening cursor');
+                    // Each passage places itself in its chapter's readable text for the Lock Screen's time bar.
+                    if(!(chunk.chapterLength>0)||!(chunk.chapterOffset>=0)||chunk.chapterOffset+chunk.text.length>chunk.chapterLength+40)
+                        throw new Error('Chapter extent off: '+JSON.stringify([chunk.index,chunk.chapterOffset,chunk.text.length,chunk.chapterLength]));
+                    if(chunk.index===lastIndex){ if(chunk.chapterOffset<=lastOffset) throw new Error('Chapter offset did not advance in section '+chunk.index); }
+                    else if(chunk.chapterOffset!==0) throw new Error('Section '+chunk.index+' starts at offset '+chunk.chapterOffset);
+                    lastIndex=chunk.index; lastOffset=chunk.chapterOffset;
                     cursors.add(chunk.locator);visited.add(chunk.index);longest=Math.max(longest,chunk.text.length);
                     maxDocuments=Math.max(maxDocuments,view.renderer.getContents().length);
                     locator=chunk.nextLocator;
@@ -926,6 +932,23 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertTrue((value["parsed"] as? [Int] ?? []).allSatisfy { $0 <= 1 }, "A chapter must not be reparsed for each spoken paragraph: \(value)")
             let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: value), uniformTypeIdentifier: "public.json")
             attachment.name = "Read aloud lazy traversal scrolling=\(scrolling)"; attachment.lifetime = .keepAlways; add(attachment)
+        }
+    }
+    func testPDFPassagesCarryTheirPageExtentForTheLockScreenTimeBar() async throws {
+        let (_, url) = try prepare("Notes from the Coast.pdf", format: .pdf)
+        let document = try XCTUnwrap(PDFDocument(url: url))
+        let page = try XCTUnwrap(document.page(at: 1)?.string) as NSString
+        let opening = try await PDFReadAloudSource.passage(in: document, at: PDFLocator.position(page: 1, offset: 0))
+        let first = try XCTUnwrap(opening)
+        XCTAssertEqual(first.label, "Page 2"); XCTAssertEqual(first.chapterOffset, 0); XCTAssertEqual(first.chapterLength, page.length)
+        let following = try await PDFReadAloudSource.passage(in: document, at: first.nextLocator)
+        let second = try XCTUnwrap(following)
+        if second.label == "Page 2" {
+            XCTAssertEqual(second.chapterOffset, (first.text as NSString).length, "A later passage of the page continues where the first ended")
+            XCTAssertEqual(second.chapterLength, page.length)
+        } else {
+            XCTAssertEqual(second.chapterOffset, 0, "The next page starts its own extent")
+            XCTAssertEqual(second.chapterLength, (document.page(at: 2)?.string as NSString?)?.length)
         }
     }
     func testReadAloudSessionFollowsAcrossRealChapterBoundariesAndRestoresSavedCursor() async throws {
