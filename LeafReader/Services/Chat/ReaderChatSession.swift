@@ -150,14 +150,26 @@ final class ReaderChatSession: ObservableObject {
         if hasNewerMessages { loadLatest(); guard historyError == nil else { return } }
         start { [weak self] token in
             guard let self else { return }
+            // The question and a reply placeholder show at once. Reading the page and
+            // looking through the book can take seconds; they attach to the question
+            // before the request leaves, and the placeholder names what is happening.
+            let message = ReaderChatMessage(isUser: true, text: question)
+            let nextDraft = self.draft.trimmingCharacters(in: .whitespacesAndNewlines) == question ? "" : self.draft
+            let priorDraft = self.draft
+            self.messages.append(message)
+            let replyID = self.appendReply()
+            self.pendingQuestion = (message.id, replyID, priorDraft)
+            self.setSavedDraft(nextDraft)
             do {
                 var snapshot: ReadingChatContext?
                 if sharePage {
                     if let selected { snapshot = selected }
-                    else { snapshot = try await context()?.bounded() }
+                    else { self.activity = "Reading the page…"; snapshot = try await context()?.bounded() }
                     // The agent searches during its reply; pre-fetching is the other harness.
                     if harness == .evidence, var passage = snapshot, let recall,
-                       let term = ReadingBookRecall.lookupTerm(question: question, context: passage, previous: Self.previousSubject(self.messages)) {
+                       let term = ReadingBookRecall.lookupTerm(question: question, context: passage,
+                                                               previous: Self.previousSubject(self.messages.filter { $0.id != message.id && $0.id != replyID })) {
+                        self.activity = "Looking up “\(term)”…"
                         do { passage.bookRecall = try await recall(term, passage) }
                         catch {
                             try Task.checkCancellation()
@@ -168,22 +180,38 @@ final class ReaderChatSession: ObservableObject {
                     }
                 }
                 try Task.checkCancellation()
-                guard self.generation == token else { return }
-                let message = ReaderChatMessage(isUser: true, text: question, context: snapshot)
-                let nextDraft = self.draft.trimmingCharacters(in: .whitespacesAndNewlines) == question ? "" : self.draft
+                guard self.generation == token, let index = self.messages.firstIndex(where: { $0.id == message.id }) else { return }
+                self.activity = nil
+                self.messages[index].context = snapshot
                 let nextSelection = self.selectedContext == selected ? nil : self.selectedContext
-                guard self.save([message], draft: nextDraft, selection: .set(nextSelection)) else { self.isSending = false; self.task = nil; return }
-                self.messages.append(message)
-                self.setSavedDraft(nextDraft)
+                guard self.save([self.messages[index]], draft: nextDraft, selection: .set(nextSelection)) else {
+                    self.withdrawPending(); self.isSending = false; self.task = nil; return
+                }
+                self.pendingQuestion = nil
                 self.selectedContext = nextSelection; self.selectionDirty = false
                 if !sharePage && selected != nil { self.notice = "Selected text was not sent because passage sharing is off." }
                 if sharePage && (snapshot?.isEmpty ?? true) { self.notice = missingContextNotice }
-                await self.respond(provider: provider, token: token, sharePage: sharePage, harness: harness)
+                await self.respond(provider: provider, token: token, sharePage: sharePage, harness: harness, replyID: replyID)
             } catch {
                 guard self.generation == token else { return }
+                self.withdrawPending()
                 self.error = self.errorMessage(error); self.isSending = false
             }
         }
+    }
+    /// A question whose passage is still being gathered: nothing has left the device.
+    private var pendingQuestion: (question: UUID, reply: UUID, draft: String)?
+    private func appendReply() -> UUID {
+        let id = UUID()
+        messages.append(ReaderChatMessage(id: id, isUser: false, text: "", state: .streaming))
+        return id
+    }
+    /// Drops an unsent question and its placeholder and gives the draft back.
+    private func withdrawPending() {
+        guard let pending = pendingQuestion else { return }
+        pendingQuestion = nil; activity = nil
+        messages.removeAll { $0.id == pending.question || $0.id == pending.reply }
+        setSavedDraft(pending.draft)
     }
 
     func retry(settings: AISettingsStore) {
@@ -201,6 +229,7 @@ final class ReaderChatSession: ObservableObject {
     func stop() {
         guard isSending else { return }
         generation = UUID(); task?.cancel(); task = nil; isSending = false
+        if pendingQuestion != nil { withdrawPending(); flush(); return }
         if let last = messages.indices.last, messages[last].state == .streaming { messages[last].state = .stopped; changed(messages[last]) }
         notice = "Response stopped."
         flush(); refreshLatest()
@@ -223,8 +252,9 @@ final class ReaderChatSession: ObservableObject {
         let token = UUID(); generation = token
         task = Task { await operation(token) }
     }
-    private func respond(provider: any ChatProvider, token: UUID, sharePage: Bool, harness: ReadingChatHarness) async {
-        var history = messages
+    private func respond(provider: any ChatProvider, token: UUID, sharePage: Bool, harness: ReadingChatHarness, replyID: UUID? = nil) async {
+        let id = replyID ?? UUID()
+        var history = messages.filter { $0.id != id }
         var earlier: [ReaderChatMessage] = []
         // The agent searches older discussion with a tool instead.
         if harness == .evidence || !sharePage, let storage = self.history, let oldest, hasEarlierMessages {
@@ -235,8 +265,7 @@ final class ReaderChatSession: ObservableObject {
             for index in history.indices { history[index].context = nil }
             for index in earlier.indices { earlier[index].context = nil }
         }
-        let id = UUID()
-        messages.append(ReaderChatMessage(id: id, isUser: false, text: "", state: .streaming))
+        if replyID == nil { messages.append(ReaderChatMessage(id: id, isUser: false, text: "", state: .streaming)) }
         changed(messages.last!)
         guard flush() else {
             messages[messages.count - 1].state = .failed; changed(messages.last!)

@@ -3771,6 +3771,10 @@ final class LeafReaderUITests: XCTestCase {
         let action = app.buttons["sendReaderChat"]
         expectation(for: NSPredicate(format: "label == %@", "Stop response"), evaluatedWith: action)
         waitForExpectations(timeout: 5)
+        // The question shows at once; stop once the reply itself is under way
+        // (stopping while the page is still being read withdraws the question).
+        XCTAssertTrue(app.textViews.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", "Explain this page")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews.matching(identifier: "chatReply").matching(NSPredicate(format: "label == %@", "Thinking…")).firstMatch.waitForExistence(timeout: 5))
         action.tap()
         XCTAssertTrue(app.buttons["Retry"].waitForExistence(timeout: 5))
         XCTAssertEqual(action.label, "Send message")
