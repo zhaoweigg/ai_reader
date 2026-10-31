@@ -187,14 +187,15 @@ final class LeafReaderUITests: XCTestCase {
         }
         app.terminate(); app.launch()
         app.tabBars.buttons["Settings"].tap()
-        XCTAssertTrue(app.buttons["Dusk theme"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        // Black is the last theme chosen above, so it is what the relaunch must restore.
+        XCTAssertTrue(app.buttons["Black theme"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Black theme"].isSelected)
         app.tabBars.buttons["Library"].tap()
         app.buttons["featuredBook"].tap()
         showReaderControls(app)
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
-        XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
+        XCTAssertTrue(app.buttons["Black theme"].isSelected)
         app.buttons["Sage theme"].tap()
         dismissAppearance(app)
         showReaderControls(app); app.buttons["closeBook"].tap()
