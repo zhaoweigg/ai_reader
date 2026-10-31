@@ -245,10 +245,14 @@ import PDFKit
         XCTAssertEqual(session.bookmark, ReadAloudBookmark(locator: "position:2", offset: 11))
         let url = directory.appendingPathComponent("bookmark.json")
         XCTAssertEqual(try JSONDecoder().decode(ReadAloudBookmark.self, from: Data(contentsOf: url)), session.bookmark)
+        // Simulator persists the cursor but supplies no iPhone protection metadata.
+        // Assert the actual data-protection attribute on physical-device test runs.
+        #if !targetEnvironment(simulator)
         let protection = try FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey]
         XCTAssertEqual((protection as? FileProtectionType)?.rawValue ?? protection as? String,
                        FileProtectionType.completeUntilFirstUserAuthentication.rawValue,
                        "The listening cursor remains writable after locking")
+        #endif
         session.setForeground(true)
         XCTAssertEqual(session.state, .paused, "Unlocking must not undo a user pause")
         XCTAssertEqual(rendered.count, renderCount + 1)
