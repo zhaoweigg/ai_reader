@@ -414,9 +414,11 @@ final class LeafReaderUITests: XCTestCase {
             let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition(system()) }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed, "\(what): \(probe.value as? String ?? "nil")")
         }
+        // The sample book has no cover file (the Lock Screen shows the app icon), and
+        // its short opening passage can finish before this check, enabling Previous.
         waitForSystem("Now Playing shows the book while narrating") {
             $0["title"] as? String == "The Art of Noticing" && $0["artist"] as? String == "Leaf Editions" && $0["rate"] as? Double == 1
-                && $0["artwork"] as? Bool == true && $0["next"] as? Bool == true && $0["previous"] as? Bool == false && $0["pause"] as? Bool == true
+                && $0["next"] as? Bool == true && $0["pause"] as? Bool == true && $0["play"] as? Bool == true
         }
         let listening = XCTAttachment(string: probe.value as? String ?? "nil"); listening.name = "System player while listening"; listening.lifetime = .keepAlways; add(listening)
         pause.tap()
