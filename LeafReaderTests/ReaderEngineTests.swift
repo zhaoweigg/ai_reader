@@ -2930,6 +2930,9 @@ final class ReaderEngineTests: XCTestCase {
             let start = model.fraction
             model.send("next"); try await expect("a page turn moves forward") { model.fraction > start }
             XCTAssertNil(model.returnPoint, "\(label): page turns are reading, not jumps")
+            // Scroll keeps loading its chapter window after a page turn; a seek
+            // issued over that load never relocates, so let it finish first.
+            try await Task.sleep(for: .milliseconds(800))
             let origin = model.locator, originFraction = model.fraction
             model.send("seek", value: 0.85); try await expect("the progress jump lands") { model.fraction > 0.6 }
             XCTAssertEqual(model.returnPoint?.locator, origin, label)
