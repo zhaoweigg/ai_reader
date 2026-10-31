@@ -3594,13 +3594,15 @@ final class LeafReaderUITests: XCTestCase {
         let question = app.descendants(matching: .any).matching(identifier: "chatQuestion")
             .matching(NSPredicate(format: "label == %@", "Second question from the keyboard")).firstMatch
         let placeholder = replies.element(boundBy: 1)
+        // The clock starts at the tap: the harness waits for the app to idle before
+        // returning, which spends a good part of the mock's pause.
+        let started = Date()
         send.tap()
         // Sample the seconds before the first token: the keyboard dismisses and the
         // panel grows during this time, and the question and its placeholder must
         // stay in the viewport, which must not run past the end of the history.
         var samples: [String] = [], failures: [String] = [], captured = false, waited = 0.0, baseline: Double?
-        let started = Date()
-        while Date().timeIntervalSince(started) < 2.6 {
+        while Date().timeIntervalSince(started) < 2.8 {
             let elapsed = Date().timeIntervalSince(started)
             // Once the reply's first token lands, the history grows by hundreds of
             // points and rightly follows the reply; only the wait before that is
