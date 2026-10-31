@@ -231,7 +231,7 @@ struct ReaderContent: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { chatButtonIsMoving = false; chat.flush() }
-            if phase == .background { audio.pause() }
+            audio.setForeground(phase == .active)
         }
         .sheet(item: $panel, onDismiss: { model.hideControls() }) { panel in
             NavigationStack {
