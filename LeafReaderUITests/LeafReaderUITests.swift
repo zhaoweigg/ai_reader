@@ -873,6 +873,22 @@ final class LeafReaderUITests: XCTestCase {
         }
         openContents(pdf ? "Page 2" : "第24章 归途")
         capture(flow + " Contents opens at the current location", app: app)
+        // After scrolling away through a long table of contents, 'Reading here'
+        // in the sheet's bar brings the current chapter back into view. The PDF's
+        // four pages never scroll away, so there it only has to keep the row in view.
+        let reveal = app.buttons["revealCurrentChapter"]
+        XCTAssertTrue(reveal.isHittable, "The current-chapter control lives in the Contents bar")
+        let list = app.collectionViews.firstMatch
+        if !pdf {
+            for _ in 0..<4 where current.exists && current.isHittable { list.swipeUp(velocity: .fast) }
+            XCTAssertFalse(current.exists && current.isHittable, "Swiping must scroll the current chapter out of view")
+            capture(flow + " Contents scrolled away from the current chapter", app: app)
+        }
+        reveal.tap()
+        expectation(for: NSPredicate { _, _ in current.exists && current.isHittable && current.label == (pdf ? "Page 2" : "第24章 归途") }, evaluatedWith: current)
+        waitForExpectations(timeout: 6)
+        XCTAssertEqual(current.value as? String, "Reading here")
+        capture(flow + " Contents back at the current chapter", app: app)
         // Opening/dismissing Contents alone must not jump to the chapter start.
         app.buttons["Done"].tap()
         app.buttons["openReaderChat"].tap()

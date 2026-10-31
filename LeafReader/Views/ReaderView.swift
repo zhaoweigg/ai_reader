@@ -424,6 +424,21 @@ struct ReaderContentsView: View {
                 await Task.yield()
                 if let id = model.currentChapterID { proxy.scrollTo(id, anchor: .center) }
             }
+            .toolbar {
+                // A long table of contents is easy to scroll away from; this brings
+                // the chapter being read back into view without leaving the sheet.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        guard let id = model.currentChapterID else { return }
+                        withAnimation { proxy.scrollTo(id, anchor: .center) }
+                    } label: {
+                        Label("Reading here", systemImage: "book.fill").labelStyle(.titleAndIcon)
+                    }
+                    .disabled(model.currentChapterID == nil)
+                    .accessibilityIdentifier("revealCurrentChapter")
+                    .accessibilityHint("Scrolls the contents to the chapter you are reading")
+                }
+            }
         }
         .overlay {
             if model.chapters.isEmpty {
