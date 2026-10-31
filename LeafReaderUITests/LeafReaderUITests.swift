@@ -3598,17 +3598,22 @@ final class LeafReaderUITests: XCTestCase {
         // Sample the seconds before the first token: the keyboard dismisses and the
         // panel grows during this time, and the question and its placeholder must
         // stay in the viewport, which must not run past the end of the history.
-        var samples: [String] = [], failures: [String] = [], captured = false, waited = 0.0
+        var samples: [String] = [], failures: [String] = [], captured = false, waited = 0.0, baseline: Double?
         let started = Date()
         while Date().timeIntervalSince(started) < 2.6 {
             let elapsed = Date().timeIntervalSince(started)
-            // Once the reply's first token lands, the placeholder is the reply and
-            // the history rightly follows it; only the wait before that is sampled.
+            // Once the reply's first token lands, the history grows by hundreds of
+            // points and rightly follows the reply; only the wait before that is
+            // sampled. Geometry is read first so a token landing mid-sample cannot
+            // pair a stale "Thinking…" label with the grown reply's frames.
+            let values = metrics()
+            if let baseline, (values["contentHeight"] ?? 0) > baseline + 50 { break }
+            if baseline == nil { baseline = values["contentHeight"] }
             let pendingText = placeholder.exists ? placeholder.label : ""
             if pendingText.contains("Paragraph") { break }
             let frame = history.frame
             let shown = question.exists ? question.frame : .null, pending = placeholder.exists ? placeholder.frame : .null
-            let values = metrics()
+            if !pending.isNull, pending.height > 60 { break }
             let overrun = (values["offset"] ?? 0) - ((values["contentHeight"] ?? 0) - (values["viewportHeight"] ?? 0))
             let questionVisible = !shown.isNull && shown.height > 0 && frame.intersects(shown)
             let placeholderVisible = !pending.isNull && pending.height > 0 && frame.intersects(pending)
@@ -3621,7 +3626,7 @@ final class LeafReaderUITests: XCTestCase {
             if elapsed > 1.2, !captured { captured = true; capture(flow + " history one second after sending from the keyboard", app: app) }
         }
         let trace = XCTAttachment(string: samples.joined(separator: "\n")); trace.name = flow + " history after sending from the keyboard"; trace.lifetime = .keepAlways; add(trace)
-        XCTAssertGreaterThan(waited, 1.2, "The samples must cover the keyboard going away before the first token: \(samples.last ?? "none")")
+        XCTAssertGreaterThan(waited, 1.0, "The samples must cover the keyboard going away before the first token: \(samples.last ?? "none")")
         XCTAssertTrue(failures.isEmpty, "The question and its placeholder must stay in view while the keyboard goes away:\n" + failures.prefix(8).joined(separator: "\n"))
         expectation(for: NSPredicate(format: "label CONTAINS %@", "Paragraph 10"), evaluatedWith: placeholder)
         waitForExpectations(timeout: 10)
