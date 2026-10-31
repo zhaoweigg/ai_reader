@@ -37,6 +37,13 @@ struct ReaderAudioPlayer: View {
                 Button { session.stop() } label: { Image(systemName: "xmark").frame(width: 32, height: 44) }
                     .accessibilityLabel("Stop listening").accessibilityIdentifier("stopListening")
             }
+            #if DEBUG
+            if UITesting.flag("LEAF_UI_NOW_PLAYING") {
+                // Re-rendered on every session change, so the value tracks the system player.
+                Text(session.state == .idle ? "" : " ").font(.system(size: 1)).frame(height: 1)
+                    .accessibilityIdentifier("nowPlayingProbe").accessibilityValue(SystemNowPlayingPresenter.probe())
+            }
+            #endif
             if let error = session.error { Text(error).font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading) }
             else if let passage = session.passage {
                 Text(passage.text).font(.caption).lineLimit(1).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("spokenPassage")
@@ -110,7 +117,7 @@ struct ReaderAudioSettings: View {
                 Toggle("Follow the spoken passage", isOn: $session.followsText)
                     .accessibilityIdentifier("followSpokenText")
             } header: { Text("Voice and speed") } footer: {
-                Text("Only downloaded Enhanced and Premium Apple voices are used. Automatic prefers Premium for the text’s language. Add voices in iPhone Accessibility settings. Playback pauses in the background; your listening position is saved.")
+                Text("Only downloaded Enhanced and Premium Apple voices are used. Automatic prefers Premium for the text’s language. Add voices in iPhone Accessibility settings. Listening continues in the background, with play, pause and passage controls on the Lock Screen and in Control Center; your listening position is saved.")
             }.listRowBackground(theme.surface)
             Section {
                 Text("Select any text and choose Listen from here to begin at that word and continue through the book. Listening does not change your highlights or conversation history.").font(.footnote).foregroundStyle(.secondary)

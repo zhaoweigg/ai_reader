@@ -1,6 +1,7 @@
 import XCTest
 import AVFoundation
 import PDFKit
+import UIKit
 @testable import LeafReader
 
 @MainActor final class RecordingSpeaker: ReadAloudSpeaking {
@@ -16,16 +17,26 @@ import PDFKit
     func stop() { paused = false; hasCurrent = false }
 }
 
+/// Stands in for the Lock Screen / Control Center player.
+@MainActor final class RecordingNowPlaying: ReadAloudNowPlayingPresenting {
+    var handler: ((ReadAloudRemoteCommand) -> Void)?
+    var shown: [ReadAloudNowPlayingInfo] = []
+    var artworks: [UIImage?] = []
+    var cleared = 0
+    func show(_ info: ReadAloudNowPlayingInfo, artwork: UIImage?) { shown.append(info); artworks.append(artwork) }
+    func clear() { cleared += 1 }
+}
+
 @MainActor final class ReadAloudTests: XCTestCase {
     private func passage(_ index: Int, text: String? = nil) -> ReadAloudPassage {
         ReadAloudPassage(text: text ?? "Passage \(index)", locator: "position:\(index)", nextLocator: "position:\(index + 1)", language: "en-US", label: "Chapter \(index)")
     }
-    private func setup() -> (ReadAloudSession, RecordingSpeaker, URL, UserDefaults) {
+    private func setup(nowPlaying: RecordingNowPlaying? = nil) -> (ReadAloudSession, RecordingSpeaker, URL, UserDefaults) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let name = "ReadAloudTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         let speaker = RecordingSpeaker()
-        let session = ReadAloudSession(bookmarkURL: directory.appendingPathComponent("bookmark.json"), defaults: defaults, speaker: speaker)
+        let session = ReadAloudSession(bookmarkURL: directory.appendingPathComponent("bookmark.json"), defaults: defaults, speaker: speaker, nowPlaying: nowPlaying)
         addTeardownBlock { @MainActor in session.stop(); try? FileManager.default.removeItem(at: directory); defaults.removePersistentDomain(forName: name) }
         return (session, speaker, directory, defaults)
     }
@@ -33,6 +44,63 @@ import PDFKit
         let deadline = Date().addingTimeInterval(5)
         while !condition(), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(condition())
+    }
+    func testLockScreenPlayerShowsTheBookAndFollowsPlaybackAndPassages() async throws {
+        let player = RecordingNowPlaying()
+        let (session, speaker, directory, _) = setup(nowPlaying: player)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let cover = directory.appendingPathComponent("cover.png")
+        try UIGraphicsImageRenderer(size: CGSize(width: 12, height: 18)).pngData { $0.fill(CGRect(x: 0, y: 0, width: 12, height: 18)) }.write(to: cover)
+        session.book = ReadAloudBookInfo(title: "The Art of Noticing", author: "Leaf Editions", coverURL: cover)
+        XCTAssertEqual(player.shown, [], "Nothing plays yet, so the Lock Screen stays empty")
+        XCTAssertGreaterThan(player.cleared, 0)
+        session.source = { [self] locator in
+            let index = Int(locator?.split(separator: ":").last ?? "0") ?? 0
+            return index < 3 ? passage(index) : nil
+        }
+        session.start(); try await wait { session.state == .playing }
+        var info = try XCTUnwrap(player.shown.last)
+        XCTAssertEqual(info, ReadAloudNowPlayingInfo(title: "The Art of Noticing", author: "Leaf Editions", chapter: "Chapter 0", isPlaying: true, canGoNext: true, canGoBack: false))
+        // The renderer writes at the screen scale, so compare proportions, not points.
+        let artwork = try XCTUnwrap(player.artworks.last ?? nil, "The cover must reach the Lock Screen")
+        XCTAssertEqual(artwork.size.width / artwork.size.height, 12.0 / 18.0, accuracy: 0.01)
+        session.pause()
+        info = try XCTUnwrap(player.shown.last)
+        XCTAssertFalse(info.isPlaying); XCTAssertEqual(info.chapter, "Chapter 0")
+        session.resume(); XCTAssertEqual(player.shown.last?.isPlaying, true)
+        speaker.finished?(); try await wait { session.passage?.locator == "position:1" && session.state == .playing }
+        info = try XCTUnwrap(player.shown.last)
+        XCTAssertEqual(info.chapter, "Chapter 1"); XCTAssertTrue(info.canGoBack); XCTAssertTrue(info.isPlaying)
+        let shownBeforeStop = player.shown.count, clearedBeforeStop = player.cleared
+        session.stop()
+        XCTAssertGreaterThan(player.cleared, clearedBeforeStop, "Stopping takes the player off the Lock Screen")
+        XCTAssertEqual(player.shown.count, shownBeforeStop)
+        // Reaching the end of the book clears it as well.
+        session.start(at: "position:2"); try await wait { session.state == .playing }
+        let clearedBeforeEnd = player.cleared
+        speaker.finished?(); try await wait { session.state == .finished }
+        XCTAssertGreaterThan(player.cleared, clearedBeforeEnd)
+    }
+    func testRemoteCommandsDrivePlaybackLikeThePlayerButtons() async throws {
+        let player = RecordingNowPlaying()
+        let (session, speaker, _, _) = setup(nowPlaying: player)
+        session.source = { [self] locator in
+            let index = Int(locator?.split(separator: ":").last ?? "0") ?? 0
+            return index < 4 ? passage(index) : nil
+        }
+        let send = try XCTUnwrap(player.handler)
+        send(.play); XCTAssertEqual(session.state, .idle, "Play before a narration starts does nothing")
+        session.start(); try await wait { session.state == .playing }
+        send(.pause); XCTAssertEqual(session.state, .paused); XCTAssertTrue(speaker.paused)
+        send(.play); XCTAssertEqual(session.state, .playing); XCTAssertFalse(speaker.paused)
+        send(.toggle); XCTAssertEqual(session.state, .paused)
+        send(.next); try await wait { session.passage?.locator == "position:1" }
+        XCTAssertEqual(session.state, .paused, "Next from the Lock Screen keeps a paused narration paused")
+        send(.toggle); XCTAssertEqual(session.state, .playing)
+        send(.next); try await wait { session.passage?.locator == "position:2" && session.state == .playing }
+        send(.previous); try await wait { session.passage?.locator == "position:1" && session.state == .playing }
+        XCTAssertEqual(player.shown.last?.chapter, "Chapter 1")
+        XCTAssertEqual(player.shown.last?.canGoBack, true)
     }
     func testAppleSpeedPersistsAcrossBooksAndReopening() {
         let (session, _, _, defaults) = setup()
