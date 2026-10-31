@@ -908,6 +908,45 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    @MainActor func testReturnAfterProgressJumpInPages() { verifyReturnAfterJump(flow: "Pages") }
+    @MainActor func testReturnAfterProgressJumpInScroll() { verifyReturnAfterJump(flow: "Scroll") }
+    @MainActor func testReturnAfterProgressJumpInPDF() { verifyReturnAfterJump(flow: "PDF") }
+
+    /// Dragging the progress bar offers a way back; the pill stays with the
+    /// controls hidden, returns to the passage, and can be dismissed.
+    @MainActor private func verifyReturnAfterJump(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp()
+        openSelectionFixture(flow, app: app); waitForBook(app)
+        let title = app.staticTexts["readerChapterTitle"], pill = app.buttons["returnToReading"], close = app.buttons["closeBook"]
+        showReaderControls(app)
+        let origin = title.label
+        XCTAssertFalse(pill.exists, "No jump yet")
+        app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1)
+        XCTAssertTrue(pill.waitForExistence(timeout: 5))
+        XCTAssertTrue(pill.label.hasPrefix("Back to "), pill.label)
+        // A PDF page change hides the controls; bring the header back before reading it.
+        showReaderControls(app)
+        XCTAssertNotEqual(title.label, origin)
+        capture(flow + " return pill after progress jump", app: app)
+        // Hide the controls by tapping the page: the pill stays.
+        readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: close); waitForExpectations(timeout: 5)
+        XCTAssertTrue(pill.isHittable)
+        capture(flow + " return pill with controls hidden", app: app)
+        pill.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: pill); waitForExpectations(timeout: 5)
+        showReaderControls(app)
+        XCTAssertEqual(title.label, origin, "Returning must show where reading left off")
+        capture(flow + " back at the reading spot", app: app)
+        app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1)
+        XCTAssertTrue(pill.waitForExistence(timeout: 5))
+        app.buttons["dismissReturnPoint"].tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: pill); waitForExpectations(timeout: 5)
+        showReaderControls(app)
+        XCTAssertNotEqual(title.label, origin, "Dismissing keeps the current place")
+    }
+
     @MainActor func testPDFNavigationRestoresSavedPage() {
         let app = launchApp()
         let search = app.textFields["librarySearch"]

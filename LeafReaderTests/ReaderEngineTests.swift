@@ -2907,6 +2907,95 @@ final class ReaderEngineTests: XCTestCase {
         attachment.name = "Chinese typefaces at every size"; attachment.lifetime = .keepAlways; add(attachment)
         XCTAssertNil(model.error)
     }
+    /// A jump keeps the spot reading left; page turns do not; the first spot
+    /// survives further jumps; returning shows it again and clears the point.
+    func testJumpsRememberTheReadingSpotUntilYouReturnInBothFlows() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            // A freshly booted simulator can take WebKit longer than the usual open wait.
+            try await waitUntil({ model.isReady || model.error != nil }, timeout: 60)
+            try await assertOpened(model, contains: "attention")
+            let label = scrolling ? "Scroll" : "Pages"
+            func expect(_ what: String, _ condition: () -> Bool) async throws {
+                let deadline = Date().addingTimeInterval(20)
+                while !condition(), Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+                XCTAssertTrue(condition(), "\(label): \(what) — fraction=\(model.fraction) locator=\(model.locator) point=\(String(describing: model.returnPoint))")
+            }
+            // Let the first relocate land before driving the reader.
+            try await expect("the book reports its first location") { !model.locator.isEmpty }
+            try await Task.sleep(for: .milliseconds(400))
+            XCTAssertNil(model.returnPoint, label)
+            let start = model.fraction
+            model.send("next"); try await expect("a page turn moves forward") { model.fraction > start }
+            XCTAssertNil(model.returnPoint, "\(label): page turns are reading, not jumps")
+            // Scroll keeps loading its chapter window after a page turn; a seek
+            // issued over that load never relocates, so let it finish first.
+            try await Task.sleep(for: .milliseconds(800))
+            let origin = model.locator, originFraction = model.fraction
+            model.send("seek", value: 0.85); try await expect("the progress jump lands") { model.fraction > 0.6 }
+            XCTAssertEqual(model.returnPoint?.locator, origin, label)
+            XCTAssertEqual(model.returnPoint?.label, "\(Int(originFraction * 100))%", label)
+            model.send("navigate", value: model.chapters[1].href)
+            try await expect("the Contents jump lands") { model.currentChapterID == model.chapters[1].id }
+            XCTAssertEqual(model.returnPoint?.locator, origin, "\(label): the first spot is kept across further jumps")
+            // Let the jump settle (Scroll keeps loading neighbouring chapters after the
+            // relocate); a return issued over an in-flight navigation would overlap it.
+            try await Task.sleep(for: .milliseconds(800))
+            model.returnToReadingPoint()
+            XCTAssertNil(model.returnPoint, label)
+            let encoded = String(decoding: try JSONEncoder().encode(origin), as: UTF8.self)
+            let probe = """
+                JSON.stringify({visible:window.Leaf.isLocationVisible(\(encoded)), current:window.Leaf.currentLocation(),
+                  contents:document.querySelector('foliate-view').renderer.getContents().map(c=>c.index)})
+                """
+            var state = ""
+            let deadline = Date().addingTimeInterval(20)
+            while Date() < deadline {
+                state = try await model.webView?.evaluateJavaScript(probe) as? String ?? ""
+                if state.contains("\"visible\":true") { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            let attachment = XCTAttachment(string: "origin=\(origin) fraction=\(originFraction) model.fraction=\(model.fraction) state=\(state)")
+            attachment.name = "\(label) return state"; attachment.lifetime = .keepAlways; add(attachment)
+            XCTAssertTrue(state.contains("\"visible\":true"), "\(label): returning must show the passage reading left: \(state)")
+            try await expect("the model's progress is back at the spot") { abs(model.fraction - originFraction) < 0.02 }
+            try await Task.sleep(for: .milliseconds(400))
+            // A trailing relocate that still reports the spot must not take a fresh point down.
+            model.send("seek", value: 0.5)
+            XCTAssertEqual(model.returnPoint?.locator, origin, label)
+            model.receive(["type": "relocate", "locator": origin, "fraction": originFraction])
+            XCTAssertNotNil(model.returnPoint, "\(label): the point stays until the reader has left and come back")
+            try await expect("the second jump marks the point as left") { model.returnPoint?.left == true }
+            model.dismissReturnPoint(); XCTAssertNil(model.returnPoint, label)
+            try await Task.sleep(for: .milliseconds(400))
+            model.send("seek", value: 0.1); XCTAssertNotNil(model.returnPoint, label)
+            try await expect("the third jump lands") { model.fraction < 0.3 }
+            model.reload(); XCTAssertNil(model.returnPoint, "\(label): a reload drops the point")
+        }
+    }
+    func testPDFJumpRemembersThePageUntilYouReturn() throws {
+        let (book, url) = try prepare("Notes from the Coast.pdf", format: .pdf)
+        let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil)
+        self.model = model
+        let view = PDFView(frame: CGRect(x: 0, y: 0, width: 390, height: 700))
+        model.configurePDF(view, url: url)
+        model.send("next"); model.pdfPageChanged()
+        XCTAssertEqual(model.locator, "pdf:1"); XCTAssertNil(model.returnPoint)
+        model.send("seek", value: 1.0); model.pdfPageChanged()
+        XCTAssertEqual(model.locator, "pdf:3")
+        XCTAssertEqual(model.returnPoint, ReaderModel.ReturnPoint(locator: "pdf:1", fraction: 1.0 / 3.0, label: "33%", left: true))
+        model.send("navigate", value: "pdf:0"); model.pdfPageChanged()
+        XCTAssertEqual(model.returnPoint?.locator, "pdf:1")
+        model.returnToReadingPoint(); model.pdfPageChanged()
+        XCTAssertEqual(model.locator, "pdf:1"); XCTAssertNil(model.returnPoint)
+        model.send("seek", value: 1.0); model.pdfPageChanged()
+        XCTAssertNotNil(model.returnPoint)
+        // Reading back to the page by hand clears it too.
+        model.send("previous"); model.pdfPageChanged(); model.send("previous"); model.pdfPageChanged()
+        XCTAssertEqual(model.locator, "pdf:1"); XCTAssertNil(model.returnPoint)
+    }
     private func pageMetrics(_ model: ReaderModel) async throws -> [String: Double] {
         let result = try await model.webView?.evaluateJavaScript("""
             (() => {

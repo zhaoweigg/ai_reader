@@ -138,6 +138,20 @@ struct ReaderContent: View {
                     chatIsPresented = true
                 }
             }
+            if let point = model.returnPoint, model.isReady, model.error == nil, panel == nil, !chatIsPresented {
+                // A floating pill, like the Ask Leaf button: the text keeps its full width.
+                VStack {
+                    Spacer(minLength: 0)
+                    HStack {
+                        ReaderReturnPill(label: point.label, onReturn: model.returnToReadingPoint, onDismiss: model.dismissReturnPoint)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .padding(.leading, 16)
+                .padding(.bottom, (showsControls ? ReaderChatPlacement.bottom : 20) + (audio.isPresented ? 84 : 0))
+                .transition(.opacity)
+                .environment(\.leafTheme, theme)
+            }
         }
         .background {
             GeometryReader { geometry in
@@ -343,6 +357,28 @@ struct ReaderContent: View {
     }
     private func panelButton(_ title: String, _ image: String, _ panel: ReaderPanel) -> some View {
         Button { self.panel = panel } label: { VStack(spacing: 4) { Image(systemName: image).font(.system(size: 18)); Text(title).font(.system(size: 10)) }.frame(minWidth: 48, minHeight: 44) }.accessibilityLabel(title)
+    }
+}
+
+/// Offers the way back after a jump; stays until tapped, dismissed, or reached.
+struct ReaderReturnPill: View {
+    @Environment(\.leafTheme) private var theme
+    let label: String
+    let onReturn: () -> Void
+    let onDismiss: () -> Void
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: onReturn) {
+                Label("Back to \(label)", systemImage: "arrow.uturn.backward").font(.footnote.weight(.semibold))
+                    .padding(.leading, 14).padding(.trailing, 6).frame(minHeight: 40)
+            }.accessibilityLabel("Back to \(label)").accessibilityIdentifier("returnToReading")
+            Button(action: onDismiss) { Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 36, height: 40) }
+                .accessibilityLabel("Dismiss return point").accessibilityIdentifier("dismissReturnPoint")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.foreground)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(theme.foreground.opacity(0.12)))
     }
 }
 
