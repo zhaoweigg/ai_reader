@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -22,6 +22,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_MARKDOWN"] = markdown ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_STREAM"] = scrollStream ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_SLOW_START"] = slowStart ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_LEGACY"] = legacyScroll ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_PERF"] = scrollPerformance ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_FOLLOW"] = chatFollow ? "1" : "0"
@@ -3559,17 +3560,18 @@ final class LeafReaderUITests: XCTestCase {
     /// instead of the history showing a blank stretch until the reply arrives.
     @MainActor private func verifySendKeepsQuestionInView(flow: String) {
         continueAfterFailure = false
-        let app = launchApp(scrollStream: true)
+        // The mock waits three seconds before its first token, as a model does.
+        let app = launchApp(scrollStream: true, slowStart: true)
         if flow == "Library" { app.buttons["openLibraryChat"].tap() }
         else { openSelectionFixture(flow, app: app); waitForBook(app); app.buttons["openReaderChat"].tap() }
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
         input.tap(); input.typeText("Explain at length"); app.buttons["sendReaderChat"].tap()
         let history = app.scrollViews["chatMessageHistory"], send = app.buttons["sendReaderChat"]
-        let reply = app.descendants(matching: .any).matching(identifier: "chatReply").firstMatch
+        let replies = app.descendants(matching: .any).matching(identifier: "chatReply")
         let geometry = app.descendants(matching: .any)["uitestChatHistoryGeometry"].firstMatch
-        XCTAssertTrue(reply.waitForExistence(timeout: 10)); XCTAssertTrue(geometry.waitForExistence(timeout: 5))
-        expectation(for: NSPredicate(format: "label CONTAINS %@", "next 3."), evaluatedWith: reply)
-        waitForExpectations(timeout: 15)
+        XCTAssertTrue(replies.firstMatch.waitForExistence(timeout: 10)); XCTAssertTrue(geometry.waitForExistence(timeout: 5))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "next 3."), evaluatedWith: replies.firstMatch)
+        waitForExpectations(timeout: 20)
         send.tap() // Stop the stream; the history now holds a reply taller than the panel.
         expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
         waitForExpectations(timeout: 5)
@@ -3579,30 +3581,39 @@ final class LeafReaderUITests: XCTestCase {
         }
         // Ask again from the keyboard, as a reader does.
         input.tap(); XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout: 5), "Wait for the composing panel before native typing")
         input.typeText("Second question from the keyboard")
+        expectation(for: NSPredicate(format: "value == %@", "Second question from the keyboard"), evaluatedWith: input)
+        waitForExpectations(timeout: 5)
         let question = app.descendants(matching: .any).matching(identifier: "chatQuestion")
             .matching(NSPredicate(format: "label == %@", "Second question from the keyboard")).firstMatch
+        let placeholder = replies.element(boundBy: 1)
         send.tap()
-        XCTAssertTrue(question.waitForExistence(timeout: 3), "The question is added to the history as soon as it is sent")
-        // Sample the first seconds after sending: the keyboard dismisses and the
-        // panel grows during this time, and the question must never leave the
-        // viewport nor the viewport run past the end of the history.
-        var samples: [String] = [], failures: [String] = []
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline {
-            let frame = history.frame, shown = question.exists ? question.frame : .null
+        // Sample the seconds before the first token: the keyboard dismisses and the
+        // panel grows during this time, and the question and its placeholder must
+        // stay in the viewport, which must not run past the end of the history.
+        var samples: [String] = [], failures: [String] = [], captured = false
+        let started = Date()
+        while Date().timeIntervalSince(started) < 2.6 {
+            let elapsed = Date().timeIntervalSince(started)
+            let frame = history.frame
+            let shown = question.exists ? question.frame : .null, pending = placeholder.exists ? placeholder.frame : .null
             let values = metrics()
             let overrun = (values["offset"] ?? 0) - ((values["contentHeight"] ?? 0) - (values["viewportHeight"] ?? 0))
-            let visible = !shown.isNull && shown.height > 0 && frame.intersects(shown)
-            let sample = String(format: "t=%.2f visible=%@ question=%@ history=%@ overrun=%.1f %@", 3 - deadline.timeIntervalSinceNow,
-                                visible ? "yes" : "no", NSCoder.string(for: shown), NSCoder.string(for: frame), overrun, geometry.value as? String ?? "")
+            let questionVisible = !shown.isNull && shown.height > 0 && frame.intersects(shown)
+            let placeholderVisible = !pending.isNull && pending.height > 0 && frame.intersects(pending)
+            let sample = String(format: "t=%.2f question=%@ placeholder=%@ questionFrame=%@ placeholderFrame=%@ history=%@ overrun=%.1f %@", elapsed,
+                                questionVisible ? "visible" : "missing", placeholderVisible ? "visible" : "missing", NSCoder.string(for: shown),
+                                NSCoder.string(for: pending), NSCoder.string(for: frame), overrun, geometry.value as? String ?? "")
             samples.append(sample)
-            if !visible || overrun > 2 { failures.append(sample) }
+            // The first half second is the send itself and the keyboard starting to go.
+            if elapsed > 0.5, !questionVisible || !placeholderVisible || overrun > 2 { failures.append(sample) }
+            if elapsed > 1.2, !captured { captured = true; capture(flow + " history one second after sending from the keyboard", app: app) }
         }
         let trace = XCTAttachment(string: samples.joined(separator: "\n")); trace.name = flow + " history after sending from the keyboard"; trace.lifetime = .keepAlways; add(trace)
-        capture(flow + " history right after sending from the keyboard", app: app)
-        XCTAssertTrue(failures.isEmpty, "The new question must stay in view while the keyboard goes away:\n" + failures.prefix(6).joined(separator: "\n"))
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "chatReply").count >= 2, "The reply placeholder follows the question")
+        XCTAssertTrue(failures.isEmpty, "The question and its placeholder must stay in view while the keyboard goes away:\n" + failures.prefix(8).joined(separator: "\n"))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "Paragraph 10"), evaluatedWith: placeholder)
+        waitForExpectations(timeout: 10)
         send.tap() // Stop the second stream.
         expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
         waitForExpectations(timeout: 5)
