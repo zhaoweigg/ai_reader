@@ -32,7 +32,8 @@ enum ChatMarkdown {
     }
 
     static func render(_ source: String) -> AttributedString {
-        guard let parsed = try? AttributedString(markdown: source) else { return AttributedString(source) }
+        guard let strict = try? AttributedString(markdown: source) else { return AttributedString(source) }
+        let parsed = tolerateBoldMarkers(strict)
         var result = AttributedString()
         var previousList: Int?
         var previousItem: Int?
@@ -87,6 +88,59 @@ enum ChatMarkdown {
             result += block
             previousList = list
             previousItem = item
+        }
+        return result
+    }
+
+    /// Models often write bold the way people do, not the way CommonMark reads it:
+    /// "**标题：**内容" (closer glued to punctuation), "名称。 **下一句" (space before
+    /// the closer) or "** 词**" (space after the opener). The parser's flanking rules
+    /// reject those pairs and leave the asterisks in the reply. Whatever `**` survived
+    /// parsing outside code is therefore paired up within its paragraph and the text
+    /// between is bolded; an unmatched marker (a reply still streaming) stays literal.
+    static func tolerateBoldMarkers(_ parsed: AttributedString) -> AttributedString {
+        let characters = parsed.characters
+        var pairs: [(open: Int, close: Int)] = []
+        for (intent, block) in parsed.runs[\.presentationIntent] {
+            if intent?.components.contains(where: { if case .codeBlock = $0.kind { return true }; return false }) == true { continue }
+            var markers: [Int] = []
+            for run in parsed[block].runs where run.inlinePresentationIntent?.contains(.code) != true {
+                var index = run.range.lowerBound
+                let offset = characters.distance(from: characters.startIndex, to: index)
+                var position = offset
+                while index < run.range.upperBound {
+                    guard characters[index] == "*" else { index = characters.index(after: index); position += 1; continue }
+                    var end = index, count = 0
+                    while end < run.range.upperBound, characters[end] == "*" { end = characters.index(after: end); count += 1 }
+                    // Exactly two asterisks form a bold marker; longer runs are left alone.
+                    if count == 2 { markers.append(position) }
+                    index = end; position += count
+                }
+            }
+            var pending: Int?
+            for marker in markers {
+                if let open = pending, marker > open + 2 { pairs.append((open, marker)); pending = nil }
+                else { pending = marker }
+            }
+        }
+        guard !pairs.isEmpty else { return parsed }
+        var result = parsed
+        // Later pairs first, so earlier character offsets stay valid after removals.
+        for pair in pairs.reversed() {
+            var text = result.characters
+            let openStart = text.index(text.startIndex, offsetBy: pair.open), openEnd = text.index(openStart, offsetBy: 2)
+            let closeStart = text.index(text.startIndex, offsetBy: pair.close)
+            for run in result[openEnd..<closeStart].runs {
+                var intent = run.inlinePresentationIntent ?? []
+                intent.insert(.stronglyEmphasized)
+                result[run.range].inlinePresentationIntent = intent
+            }
+            text = result.characters
+            let closeLower = text.index(text.startIndex, offsetBy: pair.close)
+            result.removeSubrange(closeLower..<text.index(closeLower, offsetBy: 2))
+            text = result.characters
+            let openLower = text.index(text.startIndex, offsetBy: pair.open)
+            result.removeSubrange(openLower..<text.index(openLower, offsetBy: 2))
         }
         return result
     }
