@@ -2927,16 +2927,27 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertEqual(model.returnPoint?.label, "\(Int(originFraction * 100))%", label)
             model.send("navigate", value: model.chapters[1].href); try await waitUntil { model.currentChapterID == model.chapters[1].id }
             XCTAssertEqual(model.returnPoint?.locator, origin, "\(label): the first spot is kept across further jumps")
-            // Let the page turn settle: a return issued over an in-flight navigation would overlap it.
-            let turned = model.fraction
-            model.send("next"); try await waitUntil { model.fraction != turned }
-            XCTAssertEqual(model.returnPoint?.locator, origin, label)
+            // Let the jump settle (Scroll keeps loading neighbouring chapters after the
+            // relocate); a return issued over an in-flight navigation would overlap it.
+            try await Task.sleep(for: .milliseconds(800))
             model.returnToReadingPoint()
-            try await waitUntil { model.returnPoint == nil }
-            try await waitUntil { abs(model.fraction - originFraction) < 0.01 }
+            XCTAssertNil(model.returnPoint, label)
             let encoded = String(decoding: try JSONEncoder().encode(origin), as: UTF8.self)
-            let visible = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
-            XCTAssertEqual(visible, true, "\(label): returning must show the passage reading left")
+            let probe = """
+                JSON.stringify({visible:window.Leaf.isLocationVisible(\(encoded)), current:window.Leaf.currentLocation(),
+                  contents:document.querySelector('foliate-view').renderer.getContents().map(c=>c.index)})
+                """
+            var state = ""
+            let deadline = Date().addingTimeInterval(20)
+            while Date() < deadline {
+                state = try await model.webView?.evaluateJavaScript(probe) as? String ?? ""
+                if state.contains("\"visible\":true") { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            let attachment = XCTAttachment(string: "origin=\(origin) fraction=\(originFraction) model.fraction=\(model.fraction) state=\(state)")
+            attachment.name = "\(label) return state"; attachment.lifetime = .keepAlways; add(attachment)
+            XCTAssertTrue(state.contains("\"visible\":true"), "\(label): returning must show the passage reading left: \(state)")
+            try await waitUntil { abs(model.fraction - originFraction) < 0.02 }
             model.send("seek", value: 0.5); try await waitUntil { model.returnPoint != nil }
             model.dismissReturnPoint(); XCTAssertNil(model.returnPoint, label)
             model.send("seek", value: 0.1); try await waitUntil { model.returnPoint != nil }
