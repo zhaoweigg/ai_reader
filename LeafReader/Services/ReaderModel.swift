@@ -22,6 +22,12 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var annotationDraft: BookAnnotation?
     @Published var annotationError: String?
     @Published private(set) var liveSelection: ReadingChatContext?
+    /// Where reading was before a jump (progress bar, Contents, Search, a saved
+    /// passage). The first spot is kept across further jumps until the reader
+    /// returns to it, dismisses it, or the book reloads.
+    struct ReturnPoint: Equatable { let locator: String; let fraction: Double; let label: String }
+    @Published private(set) var returnPoint: ReturnPoint?
+    private var returning = false
     private var selectedWebText = ""
     private var selectedWebLocator: String?
     private var selectedWebChapter: String?
@@ -86,7 +92,7 @@ final class ReaderModel: NSObject, ObservableObject {
     func reload() {
         library.flush()
         error = nil; isReady = false; isSearching = false; selectedWebText = ""; liveSelection = nil
-        currentChapterID = nil
+        currentChapterID = nil; returnPoint = nil
         selectedWebLocator = nil; selectedWebChapter = nil
         selectedWebPreceding = nil; selectedWebFollowing = nil; selectedWebProgress = nil
         searchGeneration = UUID().uuidString
@@ -344,7 +350,24 @@ final class ReaderModel: NSObject, ObservableObject {
         library.toggleBookmark(bookID, locator: locator, fraction: fraction,
                                label: chapterTitle.isEmpty ? "Saved at \(positionLabel)" : chapterTitle)
     }
+    /// Goes back to where reading was before the jumps.
+    func returnToReadingPoint() {
+        guard let point = returnPoint else { return }
+        returnPoint = nil
+        returning = true; send("navigate", value: point.locator); returning = false
+    }
+    func dismissReturnPoint() { returnPoint = nil }
+    private func rememberReturnPoint() {
+        guard returnPoint == nil, isReady, !returning else { return }
+        returnPoint = ReturnPoint(locator: locator, fraction: fraction, label: positionLabel)
+    }
+    /// Arriving back at the spot by any route takes the return point down.
+    private func clearReturnPointIfReached() {
+        guard let point = returnPoint else { return }
+        if point.locator == locator || abs(fraction - point.fraction) < 0.0025 { returnPoint = nil }
+    }
     func send(_ action: String, value: Any? = nil) {
+        if ["seek", "navigate"].contains(action) { rememberReturnPoint() }
         if ["next", "previous", "navigate"].contains(action) { hideControls() }
         if let pdfView {
             switch action {
@@ -408,6 +431,7 @@ final class ReaderModel: NSObject, ObservableObject {
             chapterTitle = message["label"] as? String ?? ""
             currentChapterID = message["chapterID"] as? String
             library.setPosition(bookID, locator: locator, fraction: fraction)
+            clearReturnPointIfReached()
         case "metadata":
             let cover = (message["cover"] as? String).flatMap { Data(base64Encoded: $0) }
             library.setMetadata(bookID, title: message["title"] as? String, author: message["author"] as? String, cover: cover)
@@ -512,6 +536,7 @@ final class ReaderModel: NSObject, ObservableObject {
         currentChapterID = PDFLocator.page(index)
         chapterTitle = "Page \(index + 1) of \(doc.pageCount)"
         library.setPosition(bookID, locator: locator, fraction: fraction)
+        clearReturnPointIfReached()
         synchronizeAnnotations()
     }
 }

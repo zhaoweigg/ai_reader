@@ -2907,6 +2907,58 @@ final class ReaderEngineTests: XCTestCase {
         attachment.name = "Chinese typefaces at every size"; attachment.lifetime = .keepAlways; add(attachment)
         XCTAssertNil(model.error)
     }
+    /// A jump keeps the spot reading left; page turns do not; the first spot
+    /// survives further jumps; returning shows it again and clears the point.
+    func testJumpsRememberTheReadingSpotUntilYouReturnInBothFlows() async throws {
+        let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
+        for scrolling in [false, true] {
+            var prefs = preferences; prefs.scrolling = scrolling
+            let model = try show(book, url: url, readerPreferences: prefs)
+            try await assertOpened(model, contains: "attention")
+            let label = scrolling ? "Scroll" : "Pages"
+            XCTAssertNil(model.returnPoint, label)
+            model.send("next"); try await waitUntil { model.fraction > 0 }
+            XCTAssertNil(model.returnPoint, "\(label): page turns are reading, not jumps")
+            let origin = model.locator, originFraction = model.fraction
+            model.send("seek", value: 0.85); try await waitUntil { model.fraction > 0.6 }
+            XCTAssertEqual(model.returnPoint?.locator, origin, label)
+            XCTAssertEqual(model.returnPoint?.label, "\(Int(originFraction * 100))%", label)
+            model.send("navigate", value: model.chapters[1].href); try await waitUntil { model.currentChapterID == model.chapters[1].id }
+            XCTAssertEqual(model.returnPoint?.locator, origin, "\(label): the first spot is kept across further jumps")
+            model.send("next"); try await waitUntil { model.returnPoint?.locator == origin }
+            model.returnToReadingPoint()
+            try await waitUntil { model.returnPoint == nil }
+            try await waitUntil { abs(model.fraction - originFraction) < 0.01 }
+            let encoded = String(decoding: try JSONEncoder().encode(origin), as: UTF8.self)
+            let visible = try await model.webView?.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
+            XCTAssertEqual(visible, true, "\(label): returning must show the passage reading left")
+            model.send("seek", value: 0.5); try await waitUntil { model.returnPoint != nil }
+            model.dismissReturnPoint(); XCTAssertNil(model.returnPoint, label)
+            model.send("seek", value: 0.1); try await waitUntil { model.returnPoint != nil }
+            model.reload(); XCTAssertNil(model.returnPoint, "\(label): a reload drops the point")
+        }
+    }
+    func testPDFJumpRemembersThePageUntilYouReturn() throws {
+        let (book, url) = try prepare("Notes from the Coast.pdf", format: .pdf)
+        let model = ReaderModel(bookID: book.id, library: try XCTUnwrap(store), initialLocator: nil)
+        self.model = model
+        let view = PDFView(frame: CGRect(x: 0, y: 0, width: 390, height: 700))
+        model.configurePDF(view, url: url)
+        model.send("next"); model.pdfPageChanged()
+        XCTAssertEqual(model.locator, "pdf:1"); XCTAssertNil(model.returnPoint)
+        model.send("seek", value: 1.0); model.pdfPageChanged()
+        XCTAssertEqual(model.locator, "pdf:3")
+        XCTAssertEqual(model.returnPoint, ReaderModel.ReturnPoint(locator: "pdf:1", fraction: 1.0 / 3.0, label: "33%"))
+        model.send("navigate", value: "pdf:0"); model.pdfPageChanged()
+        XCTAssertEqual(model.returnPoint?.locator, "pdf:1")
+        model.returnToReadingPoint(); model.pdfPageChanged()
+        XCTAssertEqual(model.locator, "pdf:1"); XCTAssertNil(model.returnPoint)
+        model.send("seek", value: 1.0); model.pdfPageChanged()
+        XCTAssertNotNil(model.returnPoint)
+        // Reading back to the page by hand clears it too.
+        model.send("previous"); model.pdfPageChanged(); model.send("previous"); model.pdfPageChanged()
+        XCTAssertEqual(model.locator, "pdf:1"); XCTAssertNil(model.returnPoint)
+    }
     private func pageMetrics(_ model: ReaderModel) async throws -> [String: Double] {
         let result = try await model.webView?.evaluateJavaScript("""
             (() => {
