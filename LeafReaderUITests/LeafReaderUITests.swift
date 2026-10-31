@@ -451,7 +451,10 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(pause.waitForExistence(timeout: 8))
         if shown { XCTAssertEqual(pause.label, "Resume listening", "Pausing from Control Center must pause the narration") }
         app.buttons["stopListening"].tap()
-        waitForSystem("Stopping clears the system player") { $0["present"] as? Bool == false }
+        // The player (and its probe row) leaves the screen with the narration; the
+        // unit test covers the system player being cleared at the same moment.
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: player)
+        waitForExpectations(timeout: 5)
     }
     @MainActor func testContentsRevealsCurrentChapterInPages() { verifyContentsLocation(flow: "Pages") }
     @MainActor func testContentsRevealsCurrentChapterInScroll() { verifyContentsLocation(flow: "Scroll") }
