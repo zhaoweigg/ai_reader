@@ -453,6 +453,56 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(lookups, 1); XCTAssertEqual(provider.requests[0].turns, provider.requests[1].turns)
         session.stop()
     }
+    /// Holds the page capture open until the test releases it.
+    private final class ContextGate: @unchecked Sendable {
+        var continuation: CheckedContinuation<ReadingChatContext?, Never>?
+        func wait() async -> ReadingChatContext? { await withCheckedContinuation { continuation = $0 } }
+    }
+    func testQuestionAndPlaceholderShowBeforeThePassageIsReady() async throws {
+        let provider = ControlledChatProvider(), (settings, _, _) = settings(provider)
+        let session = ReaderChatSession(), gate = ContextGate()
+        session.draft = "Why?"
+        session.send(settings: settings) { await gate.wait() }
+        try await wait { session.messages.count == 2 }
+        XCTAssertEqual(session.messages[0].text, "Why?"); XCTAssertTrue(session.messages[0].isUser); XCTAssertNil(session.messages[0].context)
+        XCTAssertEqual(session.messages[1].state, .streaming); XCTAssertEqual(session.messages[1].text, "")
+        XCTAssertEqual(session.activity, "Reading the page…"); XCTAssertEqual(session.draft, ""); XCTAssertTrue(session.isSending)
+        XCTAssertTrue(provider.requests.isEmpty, "Nothing leaves before the passage is attached")
+        gate.continuation?.resume(returning: context)
+        try await wait { provider.requests.count == 1 }
+        XCTAssertEqual(session.messages.count, 2)
+        XCTAssertEqual(session.messages[0].context?.text, "The door stayed shut."); XCTAssertNil(session.activity)
+        XCTAssertTrue(provider.requests[0].turns.last?.content.contains("The door stayed shut.") == true)
+        XCTAssertEqual(provider.requests[0].turns.count, 1, "The placeholder is not part of the conversation sent")
+        provider.continuations[0].yield(.text("Because.")); provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
+        try await wait { !session.isSending }
+        XCTAssertEqual(session.messages.map(\.text), ["Why?", "Because."]); XCTAssertEqual(session.messages[1].state, .complete)
+    }
+    func testStoppingWhileThePassageLoadsWithdrawsTheQuestionAndRestoresTheDraft() async throws {
+        let provider = ControlledChatProvider(), (settings, _, _) = settings(provider)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let session = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "book")), gate = ContextGate()
+        session.draft = "Why?"
+        session.send(settings: settings) { await gate.wait() }
+        try await wait { session.messages.count == 2 }
+        session.stop()
+        XCTAssertEqual(session.messages, []); XCTAssertEqual(session.draft, "Why?"); XCTAssertFalse(session.isSending); XCTAssertNil(session.activity)
+        gate.continuation?.resume(returning: context)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(session.messages, [], "A late page capture must not bring the withdrawn question back")
+        XCTAssertTrue(provider.requests.isEmpty)
+        let reopened = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "book"))
+        XCTAssertEqual(reopened.messages, []); XCTAssertEqual(reopened.draft, "Why?")
+        // Sending again works and persists the question with its passage.
+        session.send(settings: settings) { [self] in context }
+        try await wait { provider.requests.count == 1 }
+        provider.continuations[0].yield(.text("Because.")); provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
+        try await wait { !session.isSending }
+        session.flush()
+        let again = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "book"))
+        XCTAssertEqual(again.messages.map(\.text), ["Why?", "Because."]); XCTAssertEqual(again.messages[0].context?.text, "The door stayed shut.")
+    }
     func testSharingOffDoesNotReadBookForCharacterRecall() async throws {
         let provider = ControlledChatProvider(), (settings, _, _) = settings(provider)
         var config = settings.configuration; config.sharePage = false; try settings.save(config, replacementKey: nil)
