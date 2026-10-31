@@ -61,7 +61,9 @@ import UIKit
         session.start(); try await wait { session.state == .playing }
         var info = try XCTUnwrap(player.shown.last)
         XCTAssertEqual(info, ReadAloudNowPlayingInfo(title: "The Art of Noticing", author: "Leaf Editions", chapter: "Chapter 0", isPlaying: true, canGoNext: true, canGoBack: false))
-        XCTAssertEqual(player.artworks.last??.size, CGSize(width: 12, height: 18))
+        // The renderer writes at the screen scale, so compare proportions, not points.
+        let artwork = try XCTUnwrap(player.artworks.last ?? nil, "The cover must reach the Lock Screen")
+        XCTAssertEqual(artwork.size.width / artwork.size.height, 12.0 / 18.0, accuracy: 0.01)
         session.pause()
         info = try XCTUnwrap(player.shown.last)
         XCTAssertFalse(info.isPlaying); XCTAssertEqual(info.chapter, "Chapter 0")

@@ -37,6 +37,13 @@ struct ReaderAudioPlayer: View {
                 Button { session.stop() } label: { Image(systemName: "xmark").frame(width: 32, height: 44) }
                     .accessibilityLabel("Stop listening").accessibilityIdentifier("stopListening")
             }
+            #if DEBUG
+            if UITesting.flag("LEAF_UI_NOW_PLAYING") {
+                // Re-rendered on every session change, so the value tracks the system player.
+                Text(session.state == .idle ? "" : " ").font(.system(size: 1)).frame(height: 1)
+                    .accessibilityIdentifier("nowPlayingProbe").accessibilityValue(SystemNowPlayingPresenter.probe())
+            }
+            #endif
             if let error = session.error { Text(error).font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading) }
             else if let passage = session.passage {
                 Text(passage.text).font(.caption).lineLimit(1).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("spokenPassage")

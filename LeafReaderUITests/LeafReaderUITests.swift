@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -37,6 +37,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
         if appleSpeech { app.launchEnvironment["LEAF_UI_APPLE_SPEECH"] = "1" }
         if backgroundAudio { app.launchEnvironment["LEAF_UI_BACKGROUND_AUDIO"] = "1" }
+        if nowPlayingProbe { app.launchEnvironment["LEAF_UI_NOW_PLAYING"] = "1" }
         app.launch()
         geometryApp = app
         orient(.portrait)
@@ -393,34 +394,62 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(restored.isSelected)
         XCTAssertFalse(typefaceRow(app, "Georgia").isSelected)
     }
-    /// The system player (Control Center here; the Lock Screen uses the same Now
-    /// Playing info) shows the book while narrating and its buttons drive playback.
-    @MainActor func testControlCenterShowsTheBookAndPausesNarration() {
+    /// The system player (Lock Screen, Control Center, headphones) is fed by
+    /// MPNowPlayingInfoCenter and MPRemoteCommandCenter; the simulator's Control
+    /// Center has no media module, so the in-app DEBUG probe reads those centers
+    /// directly while real Apple narration plays. Control Center itself is opened
+    /// best-effort and recorded as evidence either way.
+    @MainActor func testSystemPlayerInfoAndCommandsFollowTheNarration() {
         continueAfterFailure = false
-        let app = launchApp(appleSpeech: true)
+        let app = launchApp(appleSpeech: true, nowPlayingProbe: true)
         app.buttons["featuredBook"].tap(); waitForBook(app); showReaderControls(app)
         app.buttons["Listen"].tap(); app.buttons["listenFromPage"].tap()
-        let player = app.otherElements["readerAudioPlayer"], pause = app.buttons["audioPlayPause"]
+        let player = app.otherElements["readerAudioPlayer"], pause = app.buttons["audioPlayPause"], probe = app.staticTexts["nowPlayingProbe"]
         expectation(for: NSPredicate(format: "value == %@", "Listening"), evaluatedWith: player)
         waitForExpectations(timeout: 15)
+        func system() -> [String: Any] {
+            (try? JSONSerialization.jsonObject(with: Data((probe.value as? String ?? "{}").utf8))) as? [String: Any] ?? [:]
+        }
+        func waitForSystem(_ what: String, _ condition: @escaping ([String: Any]) -> Bool) {
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition(system()) }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed, "\(what): \(probe.value as? String ?? "nil")")
+        }
+        waitForSystem("Now Playing shows the book while narrating") {
+            $0["title"] as? String == "The Art of Noticing" && $0["artist"] as? String == "Leaf Editions" && $0["rate"] as? Double == 1
+                && $0["artwork"] as? Bool == true && $0["next"] as? Bool == true && $0["previous"] as? Bool == false && $0["pause"] as? Bool == true
+        }
+        let listening = XCTAttachment(string: probe.value as? String ?? "nil"); listening.name = "System player while listening"; listening.lifetime = .keepAlways; add(listening)
+        pause.tap()
+        waitForSystem("Pausing drops the playback rate to 0") { $0["rate"] as? Double == 0 && $0["title"] as? String == "The Art of Noticing" }
+        app.buttons["audioNext"].tap()
+        waitForSystem("Next passage enables Previous") { $0["previous"] as? Bool == true && $0["rate"] as? Double == 0 }
+        pause.tap()
+        waitForSystem("Resuming restores the playback rate") { $0["rate"] as? Double == 1 }
+        // Best effort: Control Center. The iOS simulator's Control Center opens but
+        // carries no media module, so a missing title is recorded, not failed.
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.01))
             .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.7)))
+        let opened = springboard.otherElements["cc-root-folder-view"].waitForExistence(timeout: 5)
         let title = springboard.staticTexts["The Art of Noticing"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10), springboard.debugDescription)
+        let shown = title.waitForExistence(timeout: 3)
         capture("Control Center while listening", app: springboard)
-        let systemPause = springboard.buttons["Pause"]
-        XCTAssertTrue(systemPause.waitForExistence(timeout: 5), springboard.debugDescription)
-        systemPause.tap()
-        XCTAssertTrue(springboard.buttons["Play"].waitForExistence(timeout: 5), "Control Center must reflect the paused narration")
-        capture("Control Center after pausing", app: springboard)
-        // Close Control Center and check the in-app player agrees.
-        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
-            .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+        let note = XCTAttachment(string: "controlCenterOpened=\(opened); nowPlayingModuleShowsTitle=\(shown)")
+        note.name = "Control Center evidence (simulator)"; note.lifetime = .keepAlways; add(note)
+        if shown, springboard.buttons["Pause"].exists {
+            springboard.buttons["Pause"].tap()
+            capture("Control Center after pausing", app: springboard)
+        }
+        if opened {
+            springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+                .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+            XCTAssertFalse(springboard.otherElements["cc-root-folder-view"].waitForExistence(timeout: 3), "Control Center must be closed again")
+        }
         app.activate()
         XCTAssertTrue(pause.waitForExistence(timeout: 8))
-        XCTAssertEqual(pause.label, "Resume listening", "Pausing from Control Center must pause the narration")
+        if shown { XCTAssertEqual(pause.label, "Resume listening", "Pausing from Control Center must pause the narration") }
         app.buttons["stopListening"].tap()
+        waitForSystem("Stopping clears the system player") { $0["present"] as? Bool == false }
     }
     @MainActor func testContentsRevealsCurrentChapterInPages() { verifyContentsLocation(flow: "Pages") }
     @MainActor func testContentsRevealsCurrentChapterInScroll() { verifyContentsLocation(flow: "Scroll") }

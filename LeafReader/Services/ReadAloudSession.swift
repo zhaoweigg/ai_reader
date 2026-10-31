@@ -118,6 +118,22 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
         let center = MPRemoteCommandCenter.shared()
         center.nextTrackCommand.isEnabled = false; center.previousTrackCommand.isEnabled = false
     }
+    #if DEBUG
+    /// What the system player currently holds, for UI tests: the simulator's
+    /// Control Center carries no media module, so this is read in-app instead.
+    static func probe() -> String {
+        let info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+        let center = MPRemoteCommandCenter.shared()
+        let value: [String: Any] = [
+            "title": info[MPMediaItemPropertyTitle] as? String ?? "", "artist": info[MPMediaItemPropertyArtist] as? String ?? "",
+            "album": info[MPMediaItemPropertyAlbumTitle] as? String ?? "", "rate": info[MPNowPlayingInfoPropertyPlaybackRate] as? Double ?? -1,
+            "artwork": info[MPMediaItemPropertyArtwork] != nil, "present": !info.isEmpty,
+            "next": center.nextTrackCommand.isEnabled, "previous": center.previousTrackCommand.isEnabled,
+            "play": center.playCommand.isEnabled, "pause": center.pauseCommand.isEnabled
+        ]
+        return (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+    }
+    #endif
 }
 
 @MainActor protocol ReadAloudSpeaking: AnyObject {
