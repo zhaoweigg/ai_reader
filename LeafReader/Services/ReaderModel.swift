@@ -25,7 +25,12 @@ final class ReaderModel: NSObject, ObservableObject {
     /// Where reading was before a jump (progress bar, Contents, Search, a saved
     /// passage). The first spot is kept across further jumps until the reader
     /// returns to it, dismisses it, or the book reloads.
-    struct ReturnPoint: Equatable { let locator: String; let fraction: Double; let label: String }
+    struct ReturnPoint: Equatable {
+        let locator: String; let fraction: Double; let label: String
+        /// Set once the reader has moved away; relocates that still report the
+        /// spot while the jump is landing must not take the point down.
+        var left = false
+    }
     @Published private(set) var returnPoint: ReturnPoint?
     private var returning = false
     private var selectedWebText = ""
@@ -361,10 +366,13 @@ final class ReaderModel: NSObject, ObservableObject {
         guard returnPoint == nil, isReady, !returning else { return }
         returnPoint = ReturnPoint(locator: locator, fraction: fraction, label: positionLabel)
     }
-    /// Arriving back at the spot by any route takes the return point down.
+    /// Arriving back at the spot by any route takes the return point down, once
+    /// the reader has actually left it.
     private func clearReturnPointIfReached() {
         guard let point = returnPoint else { return }
-        if point.locator == locator || abs(fraction - point.fraction) < 0.0025 { returnPoint = nil }
+        let atSpot = point.locator == locator || abs(fraction - point.fraction) < 0.0025
+        if !point.left { if !atSpot { returnPoint?.left = true } }
+        else if atSpot { returnPoint = nil }
     }
     func send(_ action: String, value: Any? = nil) {
         if ["seek", "navigate"].contains(action) { rememberReturnPoint() }

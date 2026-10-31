@@ -2949,6 +2949,10 @@ final class ReaderEngineTests: XCTestCase {
             XCTAssertTrue(state.contains("\"visible\":true"), "\(label): returning must show the passage reading left: \(state)")
             try await waitUntil { abs(model.fraction - originFraction) < 0.02 }
             model.send("seek", value: 0.5); try await waitUntil { model.returnPoint != nil }
+            // A trailing relocate that still reports the spot must not take the point down.
+            model.receive(["type": "relocate", "locator": origin, "fraction": originFraction])
+            XCTAssertNotNil(model.returnPoint, "\(label): the point stays until the reader has left and come back")
+            try await waitUntil { model.returnPoint?.left == true }
             model.dismissReturnPoint(); XCTAssertNil(model.returnPoint, label)
             model.send("seek", value: 0.1); try await waitUntil { model.returnPoint != nil }
             model.reload(); XCTAssertNil(model.returnPoint, "\(label): a reload drops the point")
@@ -2964,7 +2968,7 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertEqual(model.locator, "pdf:1"); XCTAssertNil(model.returnPoint)
         model.send("seek", value: 1.0); model.pdfPageChanged()
         XCTAssertEqual(model.locator, "pdf:3")
-        XCTAssertEqual(model.returnPoint, ReaderModel.ReturnPoint(locator: "pdf:1", fraction: 1.0 / 3.0, label: "33%"))
+        XCTAssertEqual(model.returnPoint, ReaderModel.ReturnPoint(locator: "pdf:1", fraction: 1.0 / 3.0, label: "33%", left: true))
         model.send("navigate", value: "pdf:0"); model.pdfPageChanged()
         XCTAssertEqual(model.returnPoint?.locator, "pdf:1")
         model.returnToReadingPoint(); model.pdfPageChanged()
