@@ -42,7 +42,8 @@ struct ReaderAudioPlayer: View {
                 Text(passage.text).font(.caption).lineLimit(1).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("spokenPassage")
                 #if DEBUG
                     // Equal paragraphs still have distinct source locations.
-                    .accessibilityValue(UITesting.testID == nil ? "" : passage.locator)
+                    .accessibilityValue(UITesting.flag("LEAF_UI_BACKGROUND_AUDIO") ? session.backgroundPlaybackTestEvidence
+                        : UITesting.testID == nil ? "" : passage.locator)
                 #endif
             }
         }

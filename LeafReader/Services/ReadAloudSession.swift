@@ -90,6 +90,7 @@ enum ReadAloudAudioSession {
         stop()
         if synthesizer == nil {
             synthesizer = AVSpeechSynthesizer(); synthesizer?.delegate = self
+            synthesizer?.usesApplicationAudioSession = true
         }
         let recognizer = NLLanguageRecognizer(); recognizer.processString(text)
         var detected = recognizer.dominantLanguage?.rawValue
@@ -164,7 +165,7 @@ enum ReadAloudAudioSession {
     @Published var isPresented = false
     @Published var followsText: Bool { didSet {
         defaults.set(followsText, forKey: "audio.followsText")
-        if let passage, let spokenRange { highlight?(passage, spokenRange, followsText) }
+        if isForeground, let passage, let spokenRange { highlight?(passage, spokenRange, followsText) }
     } }
     @Published var speed: Double { didSet {
         defaults.set(speed, forKey: "audio.speed.system")
@@ -187,8 +188,18 @@ enum ReadAloudAudioSession {
     private var spokenRange: NSRange?
     private var history: [String] = []
     private var isLoading = false
+    private var isForeground = true
     private var lastSavedAt = Date.distantPast
     private var notificationTokens: [NSObjectProtocol] = []
+    #if DEBUG
+    private var backgroundStarts: [TimeInterval] = []
+    private var firstBackgroundProgress: TimeInterval?
+    /// Opt-in fixture evidence, with no book text, locators, or account data.
+    var backgroundPlaybackTestEvidence: String {
+        let proof: [String: Any] = ["starts": backgroundStarts, "firstProgress": firstBackgroundProgress ?? -1]
+        return (try? JSONSerialization.data(withJSONObject: proof)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+    }
+    #endif
     var canGoBack: Bool { !history.isEmpty }
     var isPlaying: Bool { state == .playing || state == .loading }
     var speedLabel: String { String(format: "%g×", speed) }
@@ -231,7 +242,12 @@ enum ReadAloudAudioSession {
             let spoken = NSRange(location: self.offset, length: min(range.length, count - self.offset))
             self.spokenRange = spoken
             self.spokenText = (passage.text as NSString).substring(with: spoken)
-            self.highlight?(passage, spoken, self.followsText)
+            #if DEBUG
+            if !self.isForeground, UITesting.flag("LEAF_UI_BACKGROUND_AUDIO"), self.firstBackgroundProgress == nil {
+                self.firstBackgroundProgress = ProcessInfo.processInfo.systemUptime
+            }
+            #endif
+            if self.isForeground { self.highlight?(passage, spoken, self.followsText) }
             if Date().timeIntervalSince(self.lastSavedAt) > 1 { self.saveBookmark() }
         }
         notificationTokens.append(NotificationCenter.default.addObserver(forName: ChatDictationSession.willRecord, object: nil, queue: .main) { [weak self] _ in
@@ -248,8 +264,27 @@ enum ReadAloudAudioSession {
     }
     deinit { for token in notificationTokens { NotificationCenter.default.removeObserver(token) } }
 
+    /// Locking the phone suspends presentation, not narration. Keep the bounded
+    /// source/prefetch and speech cursor running without navigating hidden pages.
+    func setForeground(_ active: Bool) {
+        guard isForeground != active else { return }
+        isForeground = active
+        if !active {
+            revealTask?.cancel(); revealTask = nil
+            saveBookmark()
+        } else if let passage, let spokenRange {
+            if let highlight { highlight(passage, spokenRange, followsText) }
+            else if followsText { revealCurrent(passage.locator) }
+        } else {
+            highlight?(nil, NSRange(location: 0, length: 0), false)
+        }
+    }
+
     func start(at locator: String? = nil, offset: Int = 0) {
         cancelWork(); history = []; passage = nil; self.offset = max(0, offset)
+        #if DEBUG
+        backgroundStarts = []; firstBackgroundProgress = nil
+        #endif
         error = nil; isPresented = true; state = .loading
         load(at: locator)
     }
@@ -335,16 +370,19 @@ enum ReadAloudAudioSession {
         do {
             try speaker.speak(text.substring(from: offset), language: passage.language, voice: voice, speed: speed)
             state = .playing
+            #if DEBUG
+            if !isForeground, UITesting.flag("LEAF_UI_BACKGROUND_AUDIO"), backgroundStarts.count < 4 {
+                backgroundStarts.append(ProcessInfo.processInfo.systemUptime)
+            }
+            #endif
             // Start/resume at the saved speech offset, not at the beginning of
             // its up-to-800-character passage while waiting for a voice callback.
             let length = CFStringIsSurrogateHighCharacter(text.character(at: offset)) ? 2 : 1
             let range = NSRange(location: offset, length: min(length, text.length - offset))
             spokenRange = range
-            if let highlight { highlight(passage, range, followsText) }
-            else if followsText {
-                revealTask?.cancel()
-                let locator = passage.locator
-                revealTask = Task { [weak self] in guard !Task.isCancelled else { return }; await self?.reveal?(locator) }
+            if isForeground {
+                if let highlight { highlight(passage, range, followsText) }
+                else if followsText { revealCurrent(passage.locator) }
             }
         } catch { fail(error) }
     }
@@ -371,7 +409,11 @@ enum ReadAloudAudioSession {
     private func clearHighlight() {
         spokenRange = nil
         spokenText = ""
-        highlight?(nil, NSRange(location: 0, length: 0), false)
+        if isForeground { highlight?(nil, NSRange(location: 0, length: 0), false) }
+    }
+    private func revealCurrent(_ locator: String) {
+        revealTask?.cancel()
+        revealTask = Task { [weak self] in guard !Task.isCancelled else { return }; await self?.reveal?(locator) }
     }
     private func saveBookmark() {
         guard let passage, state != .finished else { return }
@@ -380,6 +422,6 @@ enum ReadAloudAudioSession {
         lastSavedAt = Date()
         guard let bookmarkURL, let data = try? JSONEncoder().encode(value) else { return }
         try? FileManager.default.createDirectory(at: bookmarkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: bookmarkURL, options: .atomic)
+        try? data.write(to: bookmarkURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 }

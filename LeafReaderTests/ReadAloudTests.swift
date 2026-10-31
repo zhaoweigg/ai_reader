@@ -219,6 +219,65 @@ import PDFKit
             userInfo: [AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue])
         try await wait { session.state == .paused }; XCTAssertEqual(session.bookmark?.locator, "position:0")
     }
+    func testBackgroundKeepsNarratingAcrossPassagesAndRestoresLatestHighlight() async throws {
+        let (session, speaker, directory, _) = setup()
+        var rendered: [(String?, NSRange)] = [], sourceCalls = 0
+        session.highlight = { passage, range, _ in rendered.append((passage?.locator, range)) }
+        session.source = { [self] locator in
+            sourceCalls += 1
+            let index = Int(locator?.split(separator: ":").last ?? "0") ?? 0
+            return index < 4 ? passage(index, text: "Alpha beta gamma") : nil
+        }
+        session.start(); try await wait { session.state == .playing && sourceCalls == 2 }
+        session.setForeground(false)
+        let renderCount = rendered.count
+        speaker.progressed?(NSRange(location: 6, length: 4))
+        XCTAssertEqual(session.state, .playing); XCTAssertFalse(speaker.paused)
+        for index in 1...2 {
+            speaker.finished?()
+            try await wait { session.passage?.locator == "position:\(index)" && session.state == .playing }
+        }
+        speaker.progressed?(NSRange(location: 11, length: 5))
+        session.followsText = false; session.followsText = true
+        XCTAssertEqual(rendered.count, renderCount, "No hidden WebKit/PDF highlight or page navigation")
+        XCTAssertEqual(speaker.spoken.count, 3)
+        session.pause()
+        XCTAssertEqual(session.bookmark, ReadAloudBookmark(locator: "position:2", offset: 11))
+        let url = directory.appendingPathComponent("bookmark.json")
+        XCTAssertEqual(try JSONDecoder().decode(ReadAloudBookmark.self, from: Data(contentsOf: url)), session.bookmark)
+        // Simulator persists the cursor but supplies no iPhone protection metadata.
+        // Assert the actual data-protection attribute on physical-device test runs.
+        #if !targetEnvironment(simulator)
+        let protection = try FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey]
+        XCTAssertEqual((protection as? FileProtectionType)?.rawValue ?? protection as? String,
+                       FileProtectionType.completeUntilFirstUserAuthentication.rawValue,
+                       "The listening cursor remains writable after locking")
+        #endif
+        session.setForeground(true)
+        XCTAssertEqual(session.state, .paused, "Unlocking must not undo a user pause")
+        XCTAssertEqual(rendered.count, renderCount + 1)
+        XCTAssertEqual(rendered.last?.0, "position:2"); XCTAssertEqual(rendered.last?.1, NSRange(location: 11, length: 5))
+        session.setForeground(true); XCTAssertEqual(rendered.count, renderCount + 1)
+    }
+    func testBackgroundLoadingRespectsPauseAndBookEndClearsHighlightOnReturn() async throws {
+        let (session, speaker, _, _) = setup()
+        session.source = { [self] locator in
+            try await Task.sleep(for: .milliseconds(80))
+            return locator == nil ? passage(0) : nil
+        }
+        var cleared = 0
+        session.highlight = { passage, _, _ in if passage == nil { cleared += 1 } }
+        session.start(); session.setForeground(false); session.pause()
+        try await wait { session.passage != nil }
+        XCTAssertEqual(session.state, .paused); XCTAssertTrue(speaker.spoken.isEmpty)
+        session.resume(); XCTAssertEqual(session.state, .playing)
+        let before = cleared
+        speaker.finished?(); try await wait { session.state == .finished }
+        XCTAssertEqual(cleared, before, "An offscreen completion defers presentation")
+        session.setForeground(true)
+        XCTAssertEqual(cleared, before + 1); XCTAssertNil(session.bookmark)
+        XCTAssertEqual(session.state, .finished)
+    }
     func testDictationPausesPlaybackSynchronouslyAndKeepsBookmark() async throws {
         let (session, speaker, _, _) = setup()
         session.source = { [self] _ in passage(0) }

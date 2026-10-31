@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation") -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -36,6 +36,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHATGPT_CONNECTED"] = chatGPTConnected ? "1" : "0"
         app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = geometryFixture ? "1" : "0"
         if appleSpeech { app.launchEnvironment["LEAF_UI_APPLE_SPEECH"] = "1" }
+        if backgroundAudio { app.launchEnvironment["LEAF_UI_BACKGROUND_AUDIO"] = "1" }
         app.launch()
         geometryApp = app
         orient(.portrait)
@@ -960,9 +961,9 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertEqual(input.value as? String, expectedDraft)
             capture(flow + " listening controls while typing to Ask Leaf", app: app)
             pause.tap(); XCUIDevice.shared.press(.home); app.activate()
-            XCTAssertTrue(pause.waitForExistence(timeout: 8)); XCTAssertEqual(pause.label, "Resume listening", "Background playback pauses and retains the cursor")
+            XCTAssertTrue(pause.waitForExistence(timeout: 8)); XCTAssertEqual(pause.label, "Pause listening", "Narration keeps playing in the background")
             XCTAssertEqual(input.value as? String, expectedDraft)
-            capture(flow + " listening paused after background", app: app)
+            capture(flow + " listening continues after background", app: app)
             app.buttons["closeReaderChat"].tap()
             app.buttons["stopListening"].tap()
             XCTAssertFalse(app.buttons["audioPlayPause"].exists)
@@ -973,6 +974,61 @@ final class LeafReaderUITests: XCTestCase {
             app.buttons["resumeSavedListening"].tap()
             XCTAssertTrue(pause.waitForExistence(timeout: 10)); app.buttons["stopListening"].tap()
         }
+    }
+
+    @MainActor func testNarrationContinuesInBackgroundInPages() { verifyBackgroundNarration("Pages") }
+    @MainActor func testNarrationContinuesInBackgroundInScroll() { verifyBackgroundNarration("Scroll") }
+    @MainActor func testNarrationContinuesInBackgroundInPDF() { verifyBackgroundNarration("PDF") }
+    @MainActor private func verifyBackgroundNarration(_ flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(appleSpeech: true, backgroundAudio: true)
+        openSelectionFixture(flow, app: app); showReaderControls(app)
+        if flow == "PDF" {
+            // Begin at the cover so setup cannot consume the only two remaining
+            // short pages before Home. Keep the two-background-passage requirement.
+            app.buttons["Previous page"].tap(); showReaderControls(app)
+        }
+        app.buttons["Listen"].tap(); app.buttons["listenFromPage"].tap()
+        let player = app.otherElements["readerAudioPlayer"], pause = app.buttons["audioPlayPause"]
+        expectation(for: NSPredicate(format: "value == %@", "Listening"), evaluatedWith: player)
+        waitForExpectations(timeout: 15)
+        app.buttons["playbackSpeed"].tap(); app.buttons["2×"].tap()
+        capture(flow + " narration before background", app: app)
+        let backgroundedAt = ProcessInfo.processInfo.systemUptime
+        XCUIDevice.shared.press(.home)
+        // No app queries/activation during this interval: recorded speech events
+        // must predate activation, so a resumed WebView cannot fake continuation.
+        Thread.sleep(forTimeInterval: 40)
+        let activationBeganAt = ProcessInfo.processInfo.systemUptime
+        app.activate()
+        XCTAssertTrue(pause.waitForExistence(timeout: 8))
+        // The four short PDF pages can finish at2× during the40second interval.
+        // Record terminal state before assertions; a real pause still fails.
+        let finishedPDF = flow == "PDF" && player.value as? String == "End of book"
+        if flow == "PDF" {
+            let state = XCTAttachment(string: "status=\(player.value as? String ?? "nil"); enabled=\(pause.isEnabled); proof=\(app.staticTexts["spokenPassage"].value as? String ?? "nil")")
+            state.name = "PDF actual playback state on return"; state.lifetime = .keepAlways; add(state)
+            capture("PDF playback state immediately after background", app: app)
+        }
+        if finishedPDF { XCTAssertFalse(pause.isEnabled, "A naturally completed book cannot resume past its end") }
+        else { XCTAssertEqual(pause.label, "Pause listening", "Going to the background must not pause narration") }
+        let value = app.staticTexts["spokenPassage"].value as? String ?? "{}"
+        let proof = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any] ?? [:]
+        let starts = proof["starts"] as? [Double] ?? []
+        let beforeActivation = starts.filter { $0 > backgroundedAt && $0 < activationBeganAt - 1 }
+        XCTAssertGreaterThanOrEqual(beforeActivation.count, 2, "Continue past the single prefetched passage while still in the background: \(value)")
+        let progress = proof["firstProgress"] as? Double ?? -1
+        XCTAssertGreaterThan(progress, backgroundedAt)
+        XCTAssertLessThan(progress, activationBeganAt - 1, "Real AVSpeech progress must occur before reactivation")
+        let evidence = XCTAttachment(string: "flow=\(flow); homeAt=\(backgroundedAt); activatingAt=\(activationBeganAt); \(value)")
+        evidence.name = flow + " background speech and lazy passage evidence"; evidence.lifetime = .keepAlways; add(evidence)
+        if !finishedPDF {
+            pause.tap(); XCTAssertEqual(pause.label, "Resume listening")
+            XCUIDevice.shared.press(.home); app.activate()
+            XCTAssertEqual(pause.label, "Resume listening", "A user pause stays paused across background/foreground")
+        }
+        capture(flow + (finishedPDF ? " completed narration in background" : " narration returns and user pause retained"), app: app)
+        app.buttons["stopListening"].tap()
     }
 
     @MainActor private func openSelectionFixture(_ flow: String, app: XCUIApplication) {
