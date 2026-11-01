@@ -18,6 +18,8 @@ final class ReaderChatSession: ObservableObject {
     /// Where generated pictures are kept: beside the chat database, or a
     /// temporary folder for a conversation that is not saved.
     let imageDirectory: URL
+    /// Why this reply's request went out without the image tool, if it did.
+    private var imageRefusal: String?
     private var recall: (@MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall?)?
     private var agentBook: (@MainActor (ReadingChatContext) async throws -> ReadingAgentBook?)?
     private var traceStore: AgentTraceStore?
@@ -294,6 +296,7 @@ final class ReaderChatSession: ObservableObject {
             isSending = false; task = nil; return
         }
         var trace = ChatTrace(harness: harness)
+        imageRefusal = nil
         let asked = history.last(where: \.isUser)
         let recorder: AgentTraceRecorder? = recordTraces && traceStore != nil ? AgentTraceRecorder(trace: AgentTrace(
             harness: harness, provider: traceSource.provider, model: traceSource.model, bookTitle: asked?.context?.title ?? "",
@@ -330,7 +333,8 @@ final class ReaderChatSession: ObservableObject {
                             self?.append(text, to: id, token: token)
                         }, onWithdraw: { [weak self] in self?.withdraw(id, token: token) },
                         onImageStarted: { [weak self] in self?.drawing(id, token: token) },
-                        onImage: { [weak self] data in try? self?.attachImage(data, to: id, token: token) })
+                        onImage: { [weak self] data in try? self?.attachImage(data, to: id, token: token) },
+                        onImageRefused: { [weak self] reason in self?.imageToolRefused(reason, token: token) })
                         trace.steps = toolbox.steps; truncated = outcome.truncated
                     } catch ReadingAgentError.toolsUnsupported {
                         trace.steps = []; trace.fellBack = true
@@ -358,6 +362,11 @@ final class ReaderChatSession: ObservableObject {
                 messages[index].state = .stopped
                 notice = "The reply ended before completion. Retry or ask for a shorter answer."
             } else { messages[index].state = .complete }
+            // A picture was asked for but the image tool was refused: say so, rather
+            // than leave the model's “I can't draw” as the only explanation.
+            if !truncated, let refusal = imageRefusal, !messages[index].hasImages, let asked, Self.asksForPicture(asked.text) {
+                notice = "This model or ChatGPT plan didn’t accept drawing (\(refusal)), so Leaf answered in words."
+            }
             changed(messages[index])
         } catch {
             guard generation == token else { return }
@@ -399,6 +408,7 @@ final class ReaderChatSession: ObservableObject {
                 case .usage(let value): usage = (usage ?? TokenUsage()) + value
                 case .imageStarted: drawing(id, token: token)
                 case .image(let data): try attachImage(data, to: id, token: token)
+                case .imageToolRefused(let reason): imageToolRefused(reason, token: token)
                 case .toolCall: break
                 case .finished(let truncated): recorder.round(1, text: answer, calls: [], usage: usage, final: true); return truncated
                 }
@@ -413,10 +423,22 @@ final class ReaderChatSession: ObservableObject {
             case .text(let text): answer += text; append(text, to: id, token: token)
             case .imageStarted: drawing(id, token: token)
             case .image(let data): try attachImage(data, to: id, token: token)
+            case .imageToolRefused(let reason): imageToolRefused(reason, token: token)
             case .finished(let truncated): recorder?.round(1, text: answer, calls: [], usage: nil, final: true); return truncated
             }
         }
         throw ChatError.interrupted
+    }
+    private func imageToolRefused(_ reason: String, token: UUID) {
+        guard generation == token else { return }
+        imageRefusal = reason
+        activeRecorder?.imageToolRefused(reason)
+    }
+    /// Whether a question asks for a picture, in Chinese or English.
+    static func asksForPicture(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return ["图片", "图像", "插图", "插画", "画一", "画个", "画张", "画幅", "配图", "生成一张", "draw", "picture", "image", "illustrat", "sketch", "paint"]
+            .contains { lowered.contains($0) }
     }
     /// Shown in place of “Thinking…” while the model draws.
     private func drawing(_ id: UUID, token: UUID) {
@@ -617,6 +639,7 @@ extension UITestChatProvider: ToolChatProvider {
                             case .text(let text): continuation.yield(.text(text))
                             case .imageStarted: continuation.yield(.imageStarted)
                             case .image(let data): continuation.yield(.image(data))
+                            case .imageToolRefused(let reason): continuation.yield(.imageToolRefused(reason))
                             case .finished(let value):
                                 continuation.yield(.usage(TokenUsage(input: 900, output: 24)))
                                 continuation.yield(.finished(truncated: value))

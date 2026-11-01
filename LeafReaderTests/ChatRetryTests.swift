@@ -45,6 +45,7 @@ private final class RetryProvider: ToolChatProvider {
                 case .text(let text): continuation.yield(.text(text))
                 case .imageStarted: continuation.yield(.imageStarted)
                 case .image(let data): continuation.yield(.image(data))
+                case .imageToolRefused(let reason): continuation.yield(.imageToolRefused(reason))
                 case .finished(let value): continuation.yield(.finished(truncated: value))
                 default: break
                 }
@@ -340,6 +341,28 @@ final class ChatRetryTests: XCTestCase {
         let files = try FileManager.default.contentsOfDirectory(atPath: pictures.path)
         XCTAssertEqual(files, [reply.images![0]], "The abandoned attempt's file is deleted")
         XCTAssertEqual(ChatRequest.conversation(session.messages).turns.last?.content, "[Generated an image for the reader.]")
+    }
+    func testRefusedImageToolIsTracedAndExplainedOnlyWhenAPictureWasAskedFor() async throws {
+        let reason = "HTTP 400 · unsupported_tool"
+        for (question, traced, explained) in [("根据本章内容生成一张图片", true, true), ("画一只在海边的猫", false, true), ("Draw the harbor", false, true), ("这是谁", true, false)] {
+            let provider = RetryProvider()
+            provider.replies = [.init(events: [.imageToolRefused(reason), .text("我现在无法直接生成图片。"), .finished(truncated: false)])]
+            let traces = AgentTraceStore(directory: try folder())
+            let session = ReaderChatSession(); session.retryPolicy = immediate
+            session.draft = question
+            session.send(settings: try settings(provider, traced: traced), traces: traces) { self.context }
+            try await wait { !session.isSending }
+            XCTAssertEqual(session.messages.last?.state, .complete, question); XCTAssertNil(session.error, question)
+            if explained {
+                XCTAssertEqual(session.notice, "This model or ChatGPT plan didn’t accept drawing (\(reason)), so Leaf answered in words.", question)
+            } else { XCTAssertNil(session.notice, "Only a picture request gets the note: \(question)") }
+            if traced {
+                let step = try XCTUnwrap(traces.traces.first?.steps.first { $0.title == "Image tool refused" }, question)
+                XCTAssertEqual(step.detail, reason + " · asked again without it")
+            }
+        }
+        XCTAssertFalse(ReaderChatSession.asksForPicture("What happens next?"))
+        XCTAssertTrue(ReaderChatSession.asksForPicture("Could you sketch the scene?"))
     }
     func testPictureStoreAcceptsOnlyItsOwnNamesAndRealImages() throws {
         let directory = try folder()

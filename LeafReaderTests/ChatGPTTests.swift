@@ -480,8 +480,10 @@ final class ChatGPTTests: XCTestCase {
         let searching = try body(client.makeAgentRequest(system: "S", items: items, tools: AgentTool.all, allowTools: true, accessToken: "t", images: true))
         XCTAssertEqual(types(searching), Array(repeating: "function", count: AgentTool.all.count) + ["image_generation"])
         XCTAssertEqual(searching["tool_choice"] as? String, "auto"); XCTAssertEqual(searching["parallel_tool_calls"] as? Bool, true)
+        XCTAssertEqual(searching["instructions"] as? String, "S\n\n" + ChatGPTSubscriptionProvider.drawingInstruction)
         let closing = try body(client.makeAgentRequest(system: "S", items: items, tools: AgentTool.all, allowTools: false, accessToken: "t", images: true))
         XCTAssertFalse(types(closing).contains("image_generation")); XCTAssertEqual(closing["tool_choice"] as? String, "none")
+        XCTAssertEqual(closing["instructions"] as? String, "S", "No drawing instruction when the tool is not offered")
         let traced = try body(client.makeAgentRequest(system: "S", items: items, tools: [], allowTools: false, accessToken: "t", images: true))
         XCTAssertEqual(types(traced), ["image_generation"]); XCTAssertEqual(traced["tool_choice"] as? String, "auto")
         let without = try body(client.makeAgentRequest(system: "S", items: items, tools: [], allowTools: false, accessToken: "t"))
@@ -530,28 +532,36 @@ final class ChatGPTTests: XCTestCase {
         let model = "plain-model-\(UUID().uuidString)"
         http.handler = { _ in (200, try self.json(["models": [["slug": model, "display_name": "Plain", "visibility": "list"]]])) }
         let key = "test-client|subject-a\n" + model
-        addTeardownBlock { @MainActor in ChatGPTSubscriptionProvider.imageToolRejected.remove(key) }
-        let rejected = (status: 400, lines: [#"{"error":{"code":"invalid_request_error"}}"#])
+        addTeardownBlock { @MainActor in ChatGPTSubscriptionProvider.imageToolRejected.removeValue(forKey: key) }
+        let rejected = (status: 400, lines: [#"{"error":{"code":"unsupported_tool","type":"invalid_request_error","param":"tools[0].type","message":"secret reader text <b>"}}"#])
         let answered = (status: 200, lines: [#"{"type":"response.output_text.delta","delta":"In words."}"#, #"{"type":"response.completed"}"#].flatMap { ["data: " + $0, ""] })
-        let question = ChatRequest(system: "", turns: [ChatTurn(role: "user", content: "Draw")])
+        let question = ChatRequest(system: "Base", turns: [ChatTurn(role: "user", content: "Draw")])
         // A failure that persists without the tool is not blamed on the tool.
         let failing = SequencedResponsesStream([rejected, rejected])
+        var events: [ChatEvent] = []
         do {
-            for try await _ in ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: failing).stream(question) { }
+            for try await event in ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: failing).stream(question) { events.append(event) }
             XCTFail("A persistent rejection must surface")
         } catch { }
         XCTAssertEqual(failing.bodies.count, 2); XCTAssertNotNil(failing.bodies[0]["tools"]); XCTAssertNil(failing.bodies[1]["tools"])
-        XCTAssertFalse(ChatGPTSubscriptionProvider.imageToolRejected.contains(key))
-        // Rejected with the tool, accepted without it: the answer arrives and the tool is set aside.
+        // The drawing instruction goes out only with the tool.
+        XCTAssertEqual(failing.bodies[0]["instructions"] as? String, "Base\n\n" + ChatGPTSubscriptionProvider.drawingInstruction)
+        XCTAssertEqual(failing.bodies[1]["instructions"] as? String, "Base")
+        XCTAssertNil(ChatGPTSubscriptionProvider.imageToolRejected[key]); XCTAssertEqual(events, [])
+        // Rejected with the tool, accepted without it: the answer arrives, the refusal is reported, and the tool is set aside.
+        let reason = "HTTP 400 · unsupported_tool · invalid_request_error · tools[0].type"
         let transport = SequencedResponsesStream([rejected, answered, answered])
-        var text = ""
-        for try await event in ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: transport).stream(question) {
-            if case .text(let delta) = event { text += delta }
-        }
-        XCTAssertEqual(text, "In words."); XCTAssertTrue(ChatGPTSubscriptionProvider.imageToolRejected.contains(key))
-        for try await _ in ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: transport).stream(question) { }
+        events = []
+        for try await event in ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: transport).stream(question) { events.append(event) }
+        XCTAssertEqual(events, [.imageToolRefused(reason), .text("In words."), .finished(truncated: false)])
+        XCTAssertFalse(reason.contains("secret"), "Server message text is never reported")
+        XCTAssertEqual(ChatGPTSubscriptionProvider.imageToolRejected[key], reason)
+        events = []
+        for try await event in ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: transport).stream(question) { events.append(event) }
         XCTAssertEqual(transport.bodies.count, 3)
         XCTAssertNil(transport.bodies[2]["tools"], "Later requests skip the tool instead of being rejected again")
+        XCTAssertEqual(events.first, .imageToolRefused(reason), "…and still say why")
+        XCTAssertEqual(ChatGPTSubscriptionProvider.refusalReason(Data(#"{"error":"bad\nvalue; DROP"}"#.utf8), status: 422), "HTTP 422 · badvalueDROP")
     }
     func testMissingHeaderDoesNotTurnMalformedOrInterruptedResponsesIntoSuccess() async throws {
         let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)

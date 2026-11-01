@@ -347,8 +347,10 @@ struct ChatRequest {
 }
 
 /// `imageStarted` reports that the model began drawing; `image` carries the
-/// encoded picture (JPEG, PNG or WebP) once it is complete.
-enum ChatEvent: Equatable { case text(String), imageStarted, image(Data), finished(truncated: Bool) }
+/// encoded picture (JPEG, PNG or WebP) once it is complete. `imageToolRefused`
+/// says the request went out without the image tool because the model or plan
+/// refused it, with a short reason (HTTP status and error code, never server text).
+enum ChatEvent: Equatable { case text(String), imageStarted, image(Data), imageToolRefused(String), finished(truncated: Bool) }
 
 enum ChatError: LocalizedError {
     case configuration(String), missingKey, http(Int), provider(String), invalidResponse, interrupted, emptyResponse, tooLarge

@@ -55,7 +55,7 @@ extension HTTPChatProvider: ToolChatProvider {
                                 state.textLength += text.count
                                 guard state.textLength <= 64000 else { throw ChatError.tooLarge }
                             case .toolCall: state.calls += 1
-                            case .usage, .imageStarted, .image: break
+                            case .usage, .imageStarted, .image, .imageToolRefused: break
                             case .finished:
                                 guard state.textLength > 0 || state.calls > 0 else { throw ChatError.emptyResponse }
                                 continuation.yield(event); continuation.finish(); return
