@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", chatRecovery: Bool = false, recoveryAgent: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, chatImage: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", chatRecovery: Bool = false, recoveryAgent: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -23,6 +23,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_MARKDOWN"] = markdown ? "1" : "0"
+        app.launchEnvironment["LEAF_UI_CHAT_IMAGE"] = chatImage ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_STREAM"] = scrollStream ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW_START"] = slowStart ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_LEGACY"] = legacyScroll ? "1" : "0"
@@ -3753,6 +3754,90 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertLessThanOrEqual(result["maxBack"] as? Double ?? 99, 1, "Following must never move the history backward: \(result)")
         XCTAssertLessThanOrEqual(result["maxGap"] as? Double ?? 99, 4, "The newest line must stay at the bottom as it streams: \(result)")
         XCTAssertLessThanOrEqual(result["gap"] as? Double ?? 99, 4, "The last line must end visible: \(result)")
+    }
+
+    @MainActor func testGeneratedPictureInPages() { verifyGeneratedPicture(flow: "Pages") }
+    @MainActor func testGeneratedPictureInScroll() { verifyGeneratedPicture(flow: "Scroll") }
+    @MainActor func testGeneratedPictureInPDF() { verifyGeneratedPicture(flow: "PDF") }
+    @MainActor func testGeneratedPictureInLibrary() { verifyGeneratedPicture(flow: "Library") }
+
+    /// Asking for a picture shows “Drawing the picture…”, then the picture with
+    /// its caption and a Share or save button; it survives closing the chat and
+    /// rotating, and the share sheet offers it.
+    @MainActor private func verifyGeneratedPicture(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(chatImage: true)
+        if flow == "Library" { app.buttons["openLibraryChat"].tap() }
+        else {
+            if flow == "PDF" {
+                let search = app.textFields["librarySearch"]
+                XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
+                app.buttons["book-Notes from the Coast"].tap()
+            } else { app.buttons["featuredBook"].tap() }
+            waitForBook(app)
+            if flow != "PDF" {
+                openAppearance(app)
+                app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+                app.segmentedControls["readingFlow"].buttons[flow].tap()
+                app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+                app.buttons[(flow == "Pages" ? "Paper" : "Night") + " theme"].tap()
+                dismissAppearance(app)
+            }
+            app.buttons["openReaderChat"].tap()
+        }
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap(); input.typeText("Draw the harbor at dawn")
+        expectation(for: NSPredicate(format: "value == %@", "Draw the harbor at dawn"), evaluatedWith: input)
+        waitForExpectations(timeout: 5)
+        app.buttons["sendReaderChat"].tap()
+        let reply = app.textViews.matching(identifier: "chatReply").firstMatch
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "Drawing the picture"), evaluatedWith: reply)
+        waitForExpectations(timeout: 8)
+        let picture = app.images["chatReplyImage"], share = app.buttons["shareChatImage"], history = app.scrollViews["chatMessageHistory"]
+        XCTAssertTrue(picture.waitForExistence(timeout: 10), "The picture appears in the reply")
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "harbor at dawn"), evaluatedWith: reply)
+        waitForExpectations(timeout: 8)
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 8)
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+        // Reveal the whole reply: the picture sits above its caption.
+        for _ in 0..<3 where !(picture.isHittable && share.isHittable) { history.swipeDown(velocity: .slow) }
+        XCTAssertTrue(picture.isHittable && share.isHittable, "Picture and its share button can be reached in the history")
+        XCTAssertEqual(picture.frame.width / max(1, picture.frame.height), 640.0 / 400.0, accuracy: 0.06, "The picture keeps its proportions")
+        XCTAssertTrue(history.frame.intersects(picture.frame), "The picture is drawn inside the chat history")
+        XCTAssertLessThanOrEqual(picture.frame.width, history.frame.width + 1, "The picture fits the history's width")
+        capture(flow + " generated picture portrait", app: app)
+        // The share sheet offers the picture (Save Image needs the photo-library add permission).
+        share.tap()
+        let sheet = app.otherElements["ActivityListView"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 8), "Share or save opens the system share sheet")
+        let save = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Save Image")).firstMatch
+        let offered = save.waitForExistence(timeout: 4)
+        let note = XCTAttachment(string: "shareSheet=\(sheet.exists) saveImageOffered=\(offered)"); note.name = flow + " share sheet options"; note.lifetime = .keepAlways; add(note)
+        XCTAssertTrue(offered, "The share sheet offers Save Image for the picture")
+        capture(flow + " picture share sheet", app: app)
+        if app.buttons["Close"].exists { app.buttons["Close"].tap() }
+        else { sheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02)).press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))) }
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: sheet)
+        waitForExpectations(timeout: 6)
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Closing the share sheet keeps Ask Leaf open")
+        // Closing and reopening the chat restores the picture from disk.
+        app.buttons["closeReaderChat"].tap()
+        app.buttons[flow == "Library" ? "openLibraryChat" : "openReaderChat"].tap()
+        XCTAssertTrue(picture.waitForExistence(timeout: 8), "The saved picture comes back with the conversation")
+        orient(.landscapeLeft)
+        for _ in 0..<3 where !picture.isHittable { history.swipeDown(velocity: .slow) }
+        XCTAssertTrue(picture.isHittable, "The picture can be reached in landscape")
+        XCTAssertTrue(history.frame.intersects(picture.frame), "In landscape the picture is drawn inside the chat history")
+        XCTAssertLessThanOrEqual(picture.frame.width, history.frame.width + 1)
+        capture(flow + " generated picture landscape", app: app)
+        orient(.portrait)
+        input.tap(); input.typeText("Make it darker")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        capture(flow + " generated picture while composing", app: app)
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+        app.buttons["closeReaderChat"].tap()
     }
 
     @MainActor func testMarkdownReplyInPages() { verifyMarkdownReply(flow: "Pages") }

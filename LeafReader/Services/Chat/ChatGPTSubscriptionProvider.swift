@@ -5,11 +5,21 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
     let accountID: String
     let model: String
     var transport: any ChatTransport = URLSessionChatTransport()
+    /// Offer OpenAI's hosted image tool, so asking for a picture returns one.
+    var imageGeneration = true
 
-    func makeRequest(_ conversation: ChatRequest, accessToken: String) throws -> URLRequest {
+    /// Medium-quality JPEG keeps one picture to a few hundred kilobytes on the wire.
+    static let imageTool: [String: Any] = ["type": "image_generation", "quality": "medium", "output_format": "jpeg", "output_compression": 85]
+    /// Account and model pairs that refused the image tool during this launch;
+    /// their requests go out without it.
+    @MainActor static var imageToolRejected: Set<String> = []
+    private var imageKey: String { accountID + "\n" + model }
+
+    func makeRequest(_ conversation: ChatRequest, accessToken: String, images: Bool = false) throws -> URLRequest {
         guard !model.isEmpty else { throw ChatGPTError.missingModel }
         guard !conversation.turns.isEmpty else { throw ChatError.configuration("Write a question first.") }
-        return try makeRequest(instructions: conversation.system, input: conversation.turns.map { ["role": $0.role, "content": $0.content] }, accessToken: accessToken)
+        return try makeRequest(instructions: conversation.system, input: conversation.turns.map { ["role": $0.role, "content": $0.content] },
+                               extra: images ? ["tools": [Self.imageTool], "tool_choice": "auto"] : [:], accessToken: accessToken)
     }
     private func makeRequest(instructions: String, input: [[String: Any]], extra: [String: Any] = [:], accessToken: String) throws -> URLRequest {
         guard !model.isEmpty else { throw ChatGPTError.missingModel }
@@ -27,10 +37,8 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
         return request
     }
     func stream(_ conversation: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
-        let events = open({ try makeRequest(conversation, accessToken: $0) }) { data, _ in
-            try Self.decode(data).map { event -> AgentEvent in
-                switch event { case .text(let text): return .text(text); case .finished(let value): return .finished(truncated: value) }
-            }
+        let events = open({ try makeRequest(conversation, accessToken: $0, images: $1) }) { data, _ in
+            try Self.decode(data).map(\.agentEvent)
         }
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -38,6 +46,8 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                     for try await event in events {
                         switch event {
                         case .text(let text): continuation.yield(.text(text))
+                        case .imageStarted: continuation.yield(.imageStarted)
+                        case .image(let data): continuation.yield(.image(data))
                         case .finished(let value): continuation.yield(.finished(truncated: value))
                         case .toolCall, .usage: break
                         }
@@ -49,8 +59,9 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
         }
     }
     /// Registers the request with its account, refreshes the token, and decodes
-    /// SSE. A reply must contain answer text or tool calls and a terminal event.
-    private func open(_ build: @escaping @MainActor (String) throws -> URLRequest,
+    /// SSE. A reply must contain answer text, a picture or tool calls, and a terminal event.
+    /// `build` receives whether to offer the hosted image tool.
+    private func open(_ build: @escaping @MainActor (String, Bool) throws -> URLRequest,
                       decode: @escaping (String, inout Int) throws -> [AgentEvent]) -> AsyncThrowingStream<AgentEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
@@ -63,8 +74,16 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                     try await accounts.validateModel(model, accountID: accountID)
                     let token = try await accounts.accessToken(accountID: accountID)
                     try Task.checkCancellation()
-                    let request = try build(token)
-                    let (response, lines) = try await transport.open(request)
+                    var images = imageGeneration && !Self.imageToolRejected.contains(imageKey)
+                    var (response, lines) = try await transport.open(try build(token, images))
+                    if images, [400, 422].contains(response.statusCode) {
+                        // A model or plan without the hosted image tool rejects the whole
+                        // request. Ask once more without it; only if that is accepted is
+                        // the tool set aside for this account and model until relaunch.
+                        images = false
+                        (response, lines) = try await transport.open(try build(token, images))
+                        if (200..<300).contains(response.statusCode) { Self.imageToolRejected.insert(imageKey) }
+                    }
                     guard (200..<300).contains(response.statusCode) else {
                         var errorData = Data()
                         for try await line in lines {
@@ -82,7 +101,7 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                         guard mediaType == "text/event-stream" else { throw ChatGPTError.invalidResponse }
                     }
                     var decoder = ServerSentEventDecoder()
-                    var textLength = 0, calls = 0
+                    var textLength = 0, calls = 0, pictures = 0
                     for try await line in lines {
                         try Task.checkCancellation()
                         guard let data = try decoder.consume(line) else { continue }
@@ -91,9 +110,10 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                             case .text(let text):
                                 textLength += text.count
                                 guard textLength <= 64000 else { throw ChatError.tooLarge }
-                            case .toolCall, .usage: break
+                            case .image: pictures += 1
+                            case .toolCall, .usage, .imageStarted: break
                             case .finished:
-                                guard textLength > 0 || calls > 0 else { throw ChatError.emptyResponse }
+                                guard textLength > 0 || calls > 0 || pictures > 0 else { throw ChatError.emptyResponse }
                                 continuation.yield(event); continuation.finish(); return
                             }
                             continuation.yield(event)
@@ -111,6 +131,14 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
         case "response.output_text.delta", "response.refusal.delta":
             guard let delta = object["delta"] as? String else { throw ChatGPTError.invalidResponse }
             return [.text(delta)]
+        case "response.image_generation_call.in_progress", "response.image_generation_call.generating": return [.imageStarted]
+        case "response.output_item.done":
+            // A finished picture arrives whole, base64 encoded. A failed or empty call
+            // adds nothing; the model's own text then explains.
+            guard let item = object["item"] as? [String: Any], item["type"] as? String == "image_generation_call",
+                  let result = item["result"] as? String, !result.isEmpty,
+                  let data = Data(base64Encoded: result, options: .ignoreUnknownCharacters) else { return [] }
+            return [.image(data)]
         case "response.completed": return [.finished(truncated: false)]
         case "response.incomplete": return [.finished(truncated: true)]
         case "response.failed":
@@ -135,14 +163,18 @@ extension ChatGPTSubscriptionProvider: ToolChatProvider {
             }
         }
     }
-    func makeAgentRequest(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool, accessToken: String) throws -> URLRequest {
-        try makeRequest(instructions: system, input: Self.input(items), extra: tools.isEmpty ? [:] : [
-            "tools": tools.map { ["type": "function", "name": $0.name, "description": $0.description, "parameters": $0.parameters] },
-            "tool_choice": allowTools ? "auto" : "none", "parallel_tool_calls": true
-        ], accessToken: accessToken)
+    func makeAgentRequest(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool, accessToken: String, images: Bool = false) throws -> URLRequest {
+        var offered: [[String: Any]] = tools.map { ["type": "function", "name": $0.name, "description": $0.description, "parameters": $0.parameters] }
+        // Pictures are offered whenever the model may still act: every agent round
+        // that allows tools, and a plain traced reply. The closing round answers in words.
+        let drawing = images && (allowTools || tools.isEmpty)
+        if drawing { offered.append(Self.imageTool) }
+        var extra: [String: Any] = offered.isEmpty ? [:] : ["tools": offered, "tool_choice": allowTools || drawing ? "auto" : "none"]
+        if !tools.isEmpty { extra["parallel_tool_calls"] = true }
+        return try makeRequest(instructions: system, input: Self.input(items), extra: extra, accessToken: accessToken)
     }
     func streamAgent(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool) -> AsyncThrowingStream<AgentEvent, Error> {
-        open({ try makeAgentRequest(system: system, items: items, tools: tools, allowTools: allowTools, accessToken: $0) }) { data, calls in
+        open({ try makeAgentRequest(system: system, items: items, tools: tools, allowTools: allowTools, accessToken: $0, images: $1) }) { data, calls in
             let events = try Self.decodeAgent(data)
             calls += events.filter { if case .toolCall = $0 { return true }; return false }.count
             return events
@@ -163,8 +195,6 @@ extension ChatGPTSubscriptionProvider: ToolChatProvider {
             let arguments = item["arguments"] as? String ?? "{}"
             return [.toolCall(AgentToolCall(id: id, name: name, arguments: arguments.isEmpty ? "{}" : arguments))]
         }
-        return try decode(data).map { event -> AgentEvent in
-            switch event { case .text(let text): return .text(text); case .finished(let value): return .finished(truncated: value) }
-        }
+        return try decode(data).map(\.agentEvent)
     }
 }

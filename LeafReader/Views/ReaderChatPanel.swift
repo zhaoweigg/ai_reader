@@ -727,7 +727,7 @@ struct ReaderChatPanel: View {
                                 ForEach(session.messages) { message in
                                     HStack {
                                         if message.isUser { Spacer(minLength: 32) }
-                                        ReaderChatMessageBubble(message: message, accent: accent,
+                                        ReaderChatMessageBubble(message: message, accent: accent, imageURL: session.imageURL,
                                                                 activity: message.id == session.messages.last?.id ? session.activity : nil) { selected in
                                             if selected { selectedMessage = message.id }
                                             else if selectedMessage == message.id { selectedMessage = nil }
@@ -957,9 +957,50 @@ struct ReaderChatPanel: View {
     }
 }
 
+/// A picture the model drew, with the system share sheet for saving or sending it.
+private struct ChatGeneratedImage: View {
+    let url: URL?
+    let accent: Color
+    @State private var picture: UIImage?
+    @State private var missing = false
+
+    var body: some View {
+        Group {
+            if let picture {
+                VStack(alignment: .leading, spacing: 4) {
+                    Image(uiImage: picture).resizable().scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: 320, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .accessibilityLabel("Generated picture").accessibilityAddTraits(.isImage)
+                        .accessibilityIdentifier("chatReplyImage")
+                    ShareLink(item: Image(uiImage: picture), preview: SharePreview("Picture from Leaf", image: Image(uiImage: picture))) {
+                        Label("Share or save", systemImage: "square.and.arrow.up").font(.caption.weight(.medium))
+                    }
+                    .tint(accent).frame(minHeight: 44)
+                    .accessibilityIdentifier("shareChatImage")
+                }
+            } else if missing {
+                // Synced history carries the reply but not the picture file.
+                Label("This picture is not on this device.", systemImage: "photo")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("missingChatImage")
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(accent.opacity(0.08))
+                    .frame(maxWidth: .infinity).frame(height: 160)
+            }
+        }
+        .task(id: url) {
+            guard let url else { missing = true; return }
+            let loaded = await Task.detached(priority: .userInitiated) { UIImage(contentsOfFile: url.path)?.preparingForDisplay() }.value
+            if let loaded { picture = loaded } else { missing = true }
+        }
+    }
+}
+
 private struct ReaderChatMessageBubble: View {
     let message: ReaderChatMessage
     let accent: Color
+    var imageURL: (String) -> URL? = { _ in nil }
     var activity: String? = nil
     var onSelectionChange: (Bool) -> Void = { _ in }
     @State private var quoteExpanded = false
@@ -988,10 +1029,16 @@ private struct ReaderChatMessageBubble: View {
                 .accessibilityValue(context.text)
                 .accessibilityIdentifier("toggleChatQuote")
             }
-            SelectableChatText(text: displayText, markdown: !message.isUser,
-                               identifier: message.isUser ? "chatQuestion" : "chatReply",
-                               tint: accent,
-                               onSelectionChange: onSelectionChange)
+            ForEach(message.images ?? [], id: \.self) { name in
+                ChatGeneratedImage(url: imageURL(name), accent: accent)
+            }
+            // A finished reply that is only a picture needs no caption.
+            if !(message.text.isEmpty && message.hasImages && message.state != .streaming) {
+                SelectableChatText(text: displayText, markdown: !message.isUser,
+                                   identifier: message.isUser ? "chatQuestion" : "chatReply",
+                                   tint: accent,
+                                   onSelectionChange: onSelectionChange)
+            }
             // Which reading-context design produced this reply, for comparison.
             if !message.isUser, message.state != .streaming, let trace = message.trace {
                 Label(trace.caption, systemImage: trace.harness == .agent ? "magnifyingglass" : "text.book.closed")

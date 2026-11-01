@@ -22,7 +22,18 @@ enum AgentItem: Equatable {
     case toolResults([AgentToolResult])
 }
 
-enum AgentEvent: Equatable { case text(String), toolCall(AgentToolCall), usage(TokenUsage), finished(truncated: Bool) }
+enum AgentEvent: Equatable { case text(String), toolCall(AgentToolCall), usage(TokenUsage), imageStarted, image(Data), finished(truncated: Bool) }
+
+extension ChatEvent {
+    var agentEvent: AgentEvent {
+        switch self {
+        case .text(let text): return .text(text)
+        case .imageStarted: return .imageStarted
+        case .image(let data): return .image(data)
+        case .finished(let value): return .finished(truncated: value)
+        }
+    }
+}
 
 protocol ToolChatProvider: ChatProvider {
     func streamAgent(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool) -> AsyncThrowingStream<AgentEvent, Error>
@@ -206,17 +217,18 @@ enum ReadingAgentRunner {
     @MainActor
     static func run(provider: any ToolChatProvider, request: ChatRequest, toolbox: ReadingAgentToolbox, seed: [AgentItem] = [],
                     limits: AgentLimits = AgentLimits(), recorder: AgentTraceRecorder? = nil, recovery: ChatRetryBudget? = nil,
-                    onRetry: @escaping () -> Void = {}, onText: (String) -> Void, onWithdraw: () -> Void) async throws -> Outcome {
+                    onRetry: @escaping () -> Void = {}, onText: (String) -> Void, onWithdraw: () -> Void,
+                    onImageStarted: () -> Void = {}, onImage: (Data) -> Void = { _ in }) async throws -> Outcome {
         let recovery = recovery ?? ChatRetryBudget()
         var items = request.turns.map(AgentItem.turn) + seed
         var used = 0
         let tools = limits.tools
         for round in 0..<limits.maxRounds {
             let allowTools = !tools.isEmpty && used < limits.maxToolCalls && round < limits.maxRounds - 1
-            let (calls, text, truncated, usage) = try await recovery.run(round: round + 1, recorder: recorder, onRetry: {
+            let (calls, text, images, truncated, usage) = try await recovery.run(round: round + 1, recorder: recorder, onRetry: {
                 onWithdraw(); onRetry()
             }) { attempt in
-                var calls: [AgentToolCall] = [], text = "", truncated = false, finished = false
+                var calls: [AgentToolCall] = [], text = "", images = 0, truncated = false, finished = false
                 var usage: TokenUsage?
                 do {
                     // This transcript is unchanged throughout recovery of this round.
@@ -228,6 +240,8 @@ enum ReadingAgentRunner {
                         case .text(let delta): text += delta; onText(delta)
                         case .toolCall(let call): calls.append(call)
                         case .usage(let value): usage = (usage ?? TokenUsage()) + value
+                        case .imageStarted: onImageStarted()
+                        case .image(let data): images += 1; onImage(data)
                         case .finished(let value): truncated = value; finished = true
                         }
                         if finished { break }
@@ -237,12 +251,13 @@ enum ReadingAgentRunner {
                     throw error
                 }
                 guard finished else { throw ChatError.interrupted }
-                guard !text.isEmpty || !calls.isEmpty else { throw ChatError.emptyResponse }
-                return (calls, text, truncated, usage)
+                guard !text.isEmpty || !calls.isEmpty || images > 0 else { throw ChatError.emptyResponse }
+                return (calls, text, images, truncated, usage)
             }
             recorder?.round(round + 1, text: text, calls: calls, usage: usage, final: calls.isEmpty)
             if calls.isEmpty {
-                guard !text.isEmpty else { throw ChatError.emptyResponse }
+                // A picture on its own is a complete answer.
+                guard !text.isEmpty || images > 0 else { throw ChatError.emptyResponse }
                 return Outcome(truncated: truncated)
             }
             if !text.isEmpty { onWithdraw() }

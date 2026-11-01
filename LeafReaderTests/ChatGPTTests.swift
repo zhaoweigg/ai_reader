@@ -49,6 +49,38 @@ private final class HeaderlessResponsesURLProtocol: URLProtocol {
     override func stopLoading() { }
 }
 
+/// Serves one Responses stream whose picture event is far larger than the old
+/// 256 KB event limit, in network-sized chunks.
+private final class LargePictureResponsesURLProtocol: URLProtocol {
+    static var body = Data()
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/2",
+            headerFields: ["Content-Type": "text/event-stream"])!, cacheStoragePolicy: .notAllowed)
+        var offset = 0
+        while offset < Self.body.count {
+            let end = min(Self.body.count, offset + 65536)
+            client?.urlProtocol(self, didLoad: Self.body.subdata(in: offset..<end)); offset = end
+        }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { }
+}
+
+/// Answers each request with the next canned reply and keeps every request body.
+private final class SequencedResponsesStream: ChatTransport {
+    var replies: [(status: Int, lines: [String])]
+    var bodies: [[String: Any]] = []
+    init(_ replies: [(status: Int, lines: [String])]) { self.replies = replies }
+    func open(_ request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<String, Error>) {
+        bodies.append((try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:])
+        let reply = replies.removeFirst()
+        return (HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"])!,
+                AsyncThrowingStream { continuation in reply.lines.forEach { continuation.yield($0) }; continuation.finish() })
+    }
+}
+
 @MainActor private final class ChatGPTTestBrowser: ChatGPTAuthorizing {
     var started = false
     var cancelCount = 0
@@ -430,6 +462,96 @@ final class ChatGPTTests: XCTestCase {
         var events: [ChatEvent] = []
         for try await event in provider.stream(ChatRequest(system: "", turns: [ChatTurn(role: "user", content: "Hello")])) { events.append(event) }
         XCTAssertEqual(events, [.text("你好"), .finished(truncated: false)])
+    }
+    func testSubscriptionOffersTheImageToolWhereverTheModelMayStillAct() throws {
+        let (store, _) = store()
+        let client = ChatGPTSubscriptionProvider(accounts: store, accountID: "test", model: "available-model")
+        func body(_ request: URLRequest) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+        }
+        func types(_ body: [String: Any]) -> [String] { (body["tools"] as? [[String: Any]] ?? []).compactMap { $0["type"] as? String } }
+        let ask = ChatRequest(system: "S", turns: [ChatTurn(role: "user", content: "Draw the harbor")])
+        let plain = try body(client.makeRequest(ask, accessToken: "test-only-token", images: true))
+        XCTAssertEqual(types(plain), ["image_generation"]); XCTAssertEqual(plain["tool_choice"] as? String, "auto")
+        XCTAssertNil(plain["parallel_tool_calls"])
+        let tool = try XCTUnwrap((plain["tools"] as? [[String: Any]])?.first)
+        XCTAssertEqual(tool["output_format"] as? String, "jpeg"); XCTAssertEqual(tool["quality"] as? String, "medium")
+        let items = [AgentItem.turn(ChatTurn(role: "user", content: "Draw the harbor"))]
+        let searching = try body(client.makeAgentRequest(system: "S", items: items, tools: AgentTool.all, allowTools: true, accessToken: "t", images: true))
+        XCTAssertEqual(types(searching), Array(repeating: "function", count: AgentTool.all.count) + ["image_generation"])
+        XCTAssertEqual(searching["tool_choice"] as? String, "auto"); XCTAssertEqual(searching["parallel_tool_calls"] as? Bool, true)
+        let closing = try body(client.makeAgentRequest(system: "S", items: items, tools: AgentTool.all, allowTools: false, accessToken: "t", images: true))
+        XCTAssertFalse(types(closing).contains("image_generation")); XCTAssertEqual(closing["tool_choice"] as? String, "none")
+        let traced = try body(client.makeAgentRequest(system: "S", items: items, tools: [], allowTools: false, accessToken: "t", images: true))
+        XCTAssertEqual(types(traced), ["image_generation"]); XCTAssertEqual(traced["tool_choice"] as? String, "auto")
+        let without = try body(client.makeAgentRequest(system: "S", items: items, tools: [], allowTools: false, accessToken: "t"))
+        XCTAssertNil(without["tools"]); XCTAssertNil(without["tool_choice"])
+        // Events: drawing starts, the picture arrives whole; a failed call adds nothing.
+        let drawn = Data((0..<3000).map { UInt8(truncatingIfNeeded: $0 &* 37) })
+        XCTAssertEqual(try ChatGPTSubscriptionProvider.decode(#"{"type":"response.image_generation_call.in_progress","item_id":"ig_1"}"#), [.imageStarted])
+        XCTAssertEqual(try ChatGPTSubscriptionProvider.decode(#"{"type":"response.image_generation_call.generating","item_id":"ig_1"}"#), [.imageStarted])
+        XCTAssertEqual(try ChatGPTSubscriptionProvider.decode(#"{"type":"response.output_item.done","item":{"type":"image_generation_call","id":"ig_1","status":"completed","result":"\#(drawn.base64EncodedString())"}}"#), [.image(drawn)])
+        XCTAssertEqual(try ChatGPTSubscriptionProvider.decode(#"{"type":"response.output_item.done","item":{"type":"image_generation_call","id":"ig_2","status":"failed","result":null}}"#), [])
+        XCTAssertEqual(try ChatGPTSubscriptionProvider.decode(#"{"type":"response.output_item.done","item":{"type":"message","id":"m_1"}}"#), [])
+        XCTAssertEqual(try ChatGPTSubscriptionProvider.decodeAgent(#"{"type":"response.output_item.done","item":{"type":"image_generation_call","result":"\#(drawn.base64EncodedString())"}}"#), [.image(drawn)])
+    }
+    func testMultiMegabytePictureStreamsThroughTheRealTransportAndCanBeTheWholeReply() async throws {
+        let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)
+        try store.accept(account())
+        http.handler = { _ in (200, try self.json(["models": [["slug": "test-model", "display_name": "Test", "visibility": "list"]]])) }
+        // 1.5 MB of picture: about 2 MB of base64 in one event, then again in the final response object.
+        let drawn = Data((0..<1_500_000).map { UInt8(truncatingIfNeeded: $0 &* 131 &+ $0 >> 7) })
+        let encoded = drawn.base64EncodedString()
+        func event(_ json: String) -> String { "data: " + json + "\n\n" }
+        LargePictureResponsesURLProtocol.body = Data((
+            event(#"{"type":"response.image_generation_call.in_progress","item_id":"ig_1"}"#) +
+            event(#"{"type":"response.output_item.done","item":{"type":"image_generation_call","id":"ig_1","status":"completed","result":"\#(encoded)"}}"#) +
+            event(#"{"type":"response.output_text.delta","delta":"Here it is."}"#) +
+            event(#"{"type":"response.completed","response":{"output":[{"type":"image_generation_call","result":"\#(encoded)"}]}}"#)).utf8)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LargePictureResponsesURLProtocol.self]
+        let provider = ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: "test-model",
+            transport: URLSessionChatTransport(configuration: configuration))
+        var events: [ChatEvent] = []
+        for try await event in provider.stream(ChatRequest(system: "", turns: [ChatTurn(role: "user", content: "Draw")])) { events.append(event) }
+        XCTAssertEqual(events, [.imageStarted, .image(drawn), .text("Here it is."), .finished(truncated: false)])
+        // A picture with no words is still a complete answer.
+        let alone = ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: "test-model",
+            transport: ChatGPTTestStream(status: 200, lines: [
+                #"{"type":"response.output_item.done","item":{"type":"image_generation_call","result":"\#(Data([1, 2, 3]).base64EncodedString())"}}"#,
+                #"{"type":"response.completed"}"#].flatMap { ["data: " + $0, ""] }))
+        events = []
+        for try await event in alone.stream(ChatRequest(system: "", turns: [ChatTurn(role: "user", content: "Draw")])) { events.append(event) }
+        XCTAssertEqual(events, [.image(Data([1, 2, 3])), .finished(truncated: false)])
+    }
+    func testModelWithoutTheImageToolIsAskedAgainWithoutItAndRemembered() async throws {
+        let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)
+        try store.accept(account())
+        let model = "plain-model-\(UUID().uuidString)"
+        http.handler = { _ in (200, try self.json(["models": [["slug": model, "display_name": "Plain", "visibility": "list"]]])) }
+        let key = "test-client|subject-a\n" + model
+        addTeardownBlock { @MainActor in ChatGPTSubscriptionProvider.imageToolRejected.remove(key) }
+        let rejected = (status: 400, lines: [#"{"error":{"code":"invalid_request_error"}}"#])
+        let answered = (status: 200, lines: [#"{"type":"response.output_text.delta","delta":"In words."}"#, #"{"type":"response.completed"}"#].flatMap { ["data: " + $0, ""] })
+        let question = ChatRequest(system: "", turns: [ChatTurn(role: "user", content: "Draw")])
+        // A failure that persists without the tool is not blamed on the tool.
+        let failing = SequencedResponsesStream([rejected, rejected])
+        do {
+            for try await _ in ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: failing).stream(question) { }
+            XCTFail("A persistent rejection must surface")
+        } catch { }
+        XCTAssertEqual(failing.bodies.count, 2); XCTAssertNotNil(failing.bodies[0]["tools"]); XCTAssertNil(failing.bodies[1]["tools"])
+        XCTAssertFalse(ChatGPTSubscriptionProvider.imageToolRejected.contains(key))
+        // Rejected with the tool, accepted without it: the answer arrives and the tool is set aside.
+        let transport = SequencedResponsesStream([rejected, answered, answered])
+        var text = ""
+        for try await event in ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: transport).stream(question) {
+            if case .text(let delta) = event { text += delta }
+        }
+        XCTAssertEqual(text, "In words."); XCTAssertTrue(ChatGPTSubscriptionProvider.imageToolRejected.contains(key))
+        for try await _ in ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: transport).stream(question) { }
+        XCTAssertEqual(transport.bodies.count, 3)
+        XCTAssertNil(transport.bodies[2]["tools"], "Later requests skip the tool instead of being rejected again")
     }
     func testMissingHeaderDoesNotTurnMalformedOrInterruptedResponsesIntoSuccess() async throws {
         let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)

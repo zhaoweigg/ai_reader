@@ -55,7 +55,7 @@ extension HTTPChatProvider: ToolChatProvider {
                                 state.textLength += text.count
                                 guard state.textLength <= 64000 else { throw ChatError.tooLarge }
                             case .toolCall: state.calls += 1
-                            case .usage: break
+                            case .usage, .imageStarted, .image: break
                             case .finished:
                                 guard state.textLength > 0 || state.calls > 0 else { throw ChatError.emptyResponse }
                                 continuation.yield(event); continuation.finish(); return
@@ -129,12 +129,7 @@ extension HTTPChatProvider: ToolChatProvider {
         }
         // Text, errors, finish reasons and message_delta use the plain chat decoder.
         var truncated = state.truncated
-        var events = try decode(data, truncated: &truncated).map { event -> AgentEvent in
-            switch event {
-            case .text(let text): return .text(text)
-            case .finished(let value): return .finished(truncated: value)
-            }
-        }
+        var events = try decode(data, truncated: &truncated).map(\.agentEvent)
         state.truncated = truncated
         // Completions end tool calls with a finish reason before [DONE].
         if kind == .chatCompletions, (object["choices"] as? [[String: Any]])?.first?["finish_reason"] as? String == "tool_calls" {
