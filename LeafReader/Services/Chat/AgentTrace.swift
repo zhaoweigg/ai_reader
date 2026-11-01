@@ -139,6 +139,11 @@ final class AgentTraceRecorder {
         }
         append(.init(kind: .request, title: "Request round \(round), attempt \(attempt)", detail: detail, seconds: elapsed()))
     }
+    /// The request went out without the image tool because the model or plan refused it.
+    func imageToolRefused(_ reason: String) {
+        guard !trace.steps.contains(where: { $0.title == "Image tool refused" }) else { return }
+        append(.init(kind: .request, title: "Image tool refused", detail: reason + " · asked again without it", seconds: 0))
+    }
     func failed(_ message: String, outcome: AgentTrace.Outcome) {
         trace.outcome = outcome; trace.error = message
         append(.init(kind: .error, title: outcome == .stopped ? "Stopped" : "Failed", detail: message, seconds: elapsed()))

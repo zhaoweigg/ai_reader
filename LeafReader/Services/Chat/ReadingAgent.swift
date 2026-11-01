@@ -22,7 +22,7 @@ enum AgentItem: Equatable {
     case toolResults([AgentToolResult])
 }
 
-enum AgentEvent: Equatable { case text(String), toolCall(AgentToolCall), usage(TokenUsage), imageStarted, image(Data), finished(truncated: Bool) }
+enum AgentEvent: Equatable { case text(String), toolCall(AgentToolCall), usage(TokenUsage), imageStarted, image(Data), imageToolRefused(String), finished(truncated: Bool) }
 
 extension ChatEvent {
     var agentEvent: AgentEvent {
@@ -30,6 +30,7 @@ extension ChatEvent {
         case .text(let text): return .text(text)
         case .imageStarted: return .imageStarted
         case .image(let data): return .image(data)
+        case .imageToolRefused(let reason): return .imageToolRefused(reason)
         case .finished(let value): return .finished(truncated: value)
         }
     }
@@ -218,7 +219,8 @@ enum ReadingAgentRunner {
     static func run(provider: any ToolChatProvider, request: ChatRequest, toolbox: ReadingAgentToolbox, seed: [AgentItem] = [],
                     limits: AgentLimits = AgentLimits(), recorder: AgentTraceRecorder? = nil, recovery: ChatRetryBudget? = nil,
                     onRetry: @escaping () -> Void = {}, onText: (String) -> Void, onWithdraw: () -> Void,
-                    onImageStarted: () -> Void = {}, onImage: (Data) -> Void = { _ in }) async throws -> Outcome {
+                    onImageStarted: () -> Void = {}, onImage: (Data) -> Void = { _ in },
+                    onImageRefused: (String) -> Void = { _ in }) async throws -> Outcome {
         let recovery = recovery ?? ChatRetryBudget()
         var items = request.turns.map(AgentItem.turn) + seed
         var used = 0
@@ -242,6 +244,7 @@ enum ReadingAgentRunner {
                         case .usage(let value): usage = (usage ?? TokenUsage()) + value
                         case .imageStarted: onImageStarted()
                         case .image(let data): images += 1; onImage(data)
+                        case .imageToolRefused(let reason): onImageRefused(reason)
                         case .finished(let value): truncated = value; finished = true
                         }
                         if finished { break }
