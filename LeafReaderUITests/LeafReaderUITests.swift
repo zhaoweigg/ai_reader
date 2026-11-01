@@ -3802,9 +3802,16 @@ final class LeafReaderUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
         waitForExpectations(timeout: 8)
         if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
-        // Reveal the whole reply: the picture sits above its caption.
-        for _ in 0..<3 where !(picture.isHittable && share.isHittable) { history.swipeDown(velocity: .slow) }
-        XCTAssertTrue(picture.isHittable && share.isHittable, "Picture and its share button can be reached in the history")
+        // A reader makes room for a picture by pulling the panel up; a short
+        // library panel shows barely a hundred points of history.
+        let handle = app.descendants(matching: .any)["readerChatDragHandle"].firstMatch
+        handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)), withVelocity: .slow, thenHoldForDuration: 0.1)
+        // Reveal the picture, then its button, which sits between it and the caption.
+        for _ in 0..<4 where !picture.isHittable { history.swipeDown(velocity: .slow) }
+        XCTAssertTrue(picture.isHittable, "The picture can be reached in the history")
+        for _ in 0..<4 where !share.isHittable { history.swipeUp(velocity: .slow) }
+        XCTAssertTrue(share.isHittable, "Its Share or save button can be reached")
         XCTAssertEqual(picture.frame.width / max(1, picture.frame.height), 640.0 / 400.0, accuracy: 0.06, "The picture keeps its proportions")
         XCTAssertTrue(history.frame.intersects(picture.frame), "The picture is drawn inside the chat history")
         XCTAssertLessThanOrEqual(picture.frame.width, history.frame.width + 1, "The picture fits the history's width")
@@ -3818,10 +3825,12 @@ final class LeafReaderUITests: XCTestCase {
         let note = XCTAttachment(string: "shareSheet=\(sheet.exists) saveImageOffered=\(offered)"); note.name = flow + " share sheet options"; note.lifetime = .keepAlways; add(note)
         XCTAssertTrue(offered, "The share sheet offers Save Image for the picture")
         capture(flow + " picture share sheet", app: app)
-        if app.buttons["Close"].exists { app.buttons["Close"].tap() }
-        else { sheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02)).press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))) }
-        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: sheet)
-        waitForExpectations(timeout: 6)
+        // The share sheet has no Close button on iPhone; a tap above it dismisses it.
+        for _ in 0..<2 where sheet.exists {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+            _ = sheet.waitForNonExistence(timeout: 4)
+        }
+        XCTAssertFalse(sheet.exists, "Tapping outside closes the share sheet")
         XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Closing the share sheet keeps Ask Leaf open")
         // Closing and reopening the chat restores the picture from disk.
         app.buttons["closeReaderChat"].tap()
