@@ -566,7 +566,7 @@ struct UITestChatProvider: ChatProvider {
                         // The hosted image tool's order: drawing starts, the picture
                         // arrives whole, then the model's words.
                         continuation.yield(.imageStarted)
-                        try await Task.sleep(for: .milliseconds(1200))
+                        try await Task.sleep(for: .milliseconds(3000))
                         continuation.yield(.image(Self.samplePicture))
                         continuation.yield(.text("Here is the harbor "))
                         try await Task.sleep(for: .milliseconds(150))

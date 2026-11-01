@@ -3792,8 +3792,9 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         app.buttons["sendReaderChat"].tap()
         let reply = app.textViews.matching(identifier: "chatReply").firstMatch
-        expectation(for: NSPredicate(format: "label CONTAINS %@", "Drawing the picture"), evaluatedWith: reply)
-        waitForExpectations(timeout: 8)
+        let drawing = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Drawing the picture")).firstMatch
+        XCTAssertTrue(drawing.waitForExistence(timeout: 8), "The reply says the picture is being drawn")
+        capture(flow + " drawing the picture", app: app)
         let picture = app.images["chatReplyImage"], share = app.buttons["shareChatImage"], history = app.scrollViews["chatMessageHistory"]
         XCTAssertTrue(picture.waitForExistence(timeout: 10), "The picture appears in the reply")
         expectation(for: NSPredicate(format: "label CONTAINS %@", "harbor at dawn"), evaluatedWith: reply)
