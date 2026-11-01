@@ -176,7 +176,10 @@ final class ChatTests: XCTestCase {
         XCTAssertNil(try decoder.consume("data: {\r"))
         XCTAssertNil(try decoder.consume("data: \"value\":\"中文\"}\r"))
         XCTAssertEqual(try decoder.consume("\r"), "{\n\"value\":\"中文\"}")
-        XCTAssertThrowsError(try decoder.consume("data: " + String(repeating: "a", count: 262145)))
+        // One event may hold a whole generated picture, but not more than the limit.
+        XCTAssertNil(try decoder.consume("data: " + String(repeating: "a", count: 262145)))
+        XCTAssertNotNil(try decoder.consume(""))
+        XCTAssertThrowsError(try decoder.consume("data: " + String(repeating: "a", count: ChatStreamLimits.eventBytes + 1)))
     }
 
     func testAnthropicStreamIgnoresThinkingAndHandlesUnicodeAndTokenLimit() async throws {

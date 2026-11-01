@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 @MainActor
 final class ReaderChatSession: ObservableObject {
@@ -14,6 +15,9 @@ final class ReaderChatSession: ObservableObject {
     /// What the book search agent is doing, shown in place of “Thinking…”.
     @Published private(set) var activity: String?
     private let history: (any ChatHistoryStorage)?
+    /// Where generated pictures are kept: beside the chat database, or a
+    /// temporary folder for a conversation that is not saved.
+    let imageDirectory: URL
     private var recall: (@MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall?)?
     private var agentBook: (@MainActor (ReadingChatContext) async throws -> ReadingAgentBook?)?
     private var traceStore: AgentTraceStore?
@@ -37,8 +41,9 @@ final class ReaderChatSession: ObservableObject {
     var canRetry: Bool { !isSending && !hasNewerMessages && messages.last?.isUser == false && messages.last?.state != .complete }
     var canSaveHistory: Bool { history != nil && historyReadable }
 
-    init(history: (any ChatHistoryStorage)? = nil) {
+    init(history: (any ChatHistoryStorage)? = nil, imageDirectory: URL? = nil) {
         self.history = history; historyRequired = history != nil
+        self.imageDirectory = imageDirectory ?? FileManager.default.temporaryDirectory.appendingPathComponent("LeafChatImages", isDirectory: true)
         if let history {
             do { draft = try history.loadDraft(); selectedContext = try history.loadSelectedContext(); apply(try history.page(before: nil, after: nil, limit: 24)); restoredNotice() }
             catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription }
@@ -47,7 +52,8 @@ final class ReaderChatSession: ObservableObject {
     convenience init(directory: URL?, conversation: String) {
         do {
             guard let directory else { throw ChatHistoryError.unavailable }
-            self.init(history: try ChatHistoryStore(directory: directory, conversation: conversation))
+            self.init(history: try ChatHistoryStore(directory: directory, conversation: conversation),
+                      imageDirectory: directory.appendingPathComponent("Images", isDirectory: true))
         } catch {
             self.init(); historyRequired = true; historyReadable = false; historyError = ChatHistoryError.unavailable.localizedDescription
         }
@@ -245,7 +251,16 @@ final class ReaderChatSession: ObservableObject {
         stop(); checkpoint?.cancel(); checkpoint = nil
         guard history != nil || !historyRequired else { return }
         do {
+            // Every saved reply in this conversation, not just the loaded page.
+            var pictures = messages.flatMap { $0.images ?? [] }
+            var cursor: Int64?
+            while let history, let page = try? history.page(before: cursor, after: nil, limit: 48) {
+                pictures += page.messages.flatMap { $0.images ?? [] }
+                guard page.hasEarlier, let oldest = page.oldest, oldest != cursor else { break }
+                cursor = oldest
+            }
             try history?.clear()
+            ChatImageStore.remove(pictures, in: imageDirectory)
             pendingMessageIDs = []; setSavedDraft(""); selectedContext = nil; selectionDirty = false
             messages = []; error = nil; notice = nil; historyReadable = true; historyError = nil
             oldest = nil; newest = nil; hasEarlierMessages = false; hasNewerMessages = false
@@ -313,7 +328,9 @@ final class ReaderChatSession: ObservableObject {
                             self?.recover(id, token: token, retry: recovery.retries)
                         }, onText: { [weak self] text in
                             self?.append(text, to: id, token: token)
-                        }, onWithdraw: { [weak self] in self?.withdraw(id, token: token) })
+                        }, onWithdraw: { [weak self] in self?.withdraw(id, token: token) },
+                        onImageStarted: { [weak self] in self?.drawing(id, token: token) },
+                        onImage: { [weak self] data in try? self?.attachImage(data, to: id, token: token) })
                         trace.steps = toolbox.steps; truncated = outcome.truncated
                     } catch ReadingAgentError.toolsUnsupported {
                         trace.steps = []; trace.fellBack = true
@@ -380,6 +397,8 @@ final class ReaderChatSession: ObservableObject {
                 switch event {
                 case .text(let text): answer += text; append(text, to: id, token: token)
                 case .usage(let value): usage = (usage ?? TokenUsage()) + value
+                case .imageStarted: drawing(id, token: token)
+                case .image(let data): try attachImage(data, to: id, token: token)
                 case .toolCall: break
                 case .finished(let truncated): recorder.round(1, text: answer, calls: [], usage: usage, final: true); return truncated
                 }
@@ -392,11 +411,26 @@ final class ReaderChatSession: ObservableObject {
             guard generation == token else { throw CancellationError() }
             switch event {
             case .text(let text): answer += text; append(text, to: id, token: token)
+            case .imageStarted: drawing(id, token: token)
+            case .image(let data): try attachImage(data, to: id, token: token)
             case .finished(let truncated): recorder?.round(1, text: answer, calls: [], usage: nil, final: true); return truncated
             }
         }
         throw ChatError.interrupted
     }
+    /// Shown in place of “Thinking…” while the model draws.
+    private func drawing(_ id: UUID, token: UUID) {
+        guard generation == token, let message = messages.first(where: { $0.id == id }), message.text.isEmpty else { return }
+        activity = "Drawing the picture…"
+    }
+    private func attachImage(_ data: Data, to id: UUID, token: UUID) throws {
+        guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        let name = try ChatImageStore.save(data, in: imageDirectory)
+        activity = nil
+        messages[index].images = (messages[index].images ?? []) + [name]; changed(messages[index])
+    }
+    /// The file for one of a reply's pictures, if it is on this device.
+    func imageURL(_ name: String) -> URL? { ChatImageStore.url(name, in: imageDirectory) }
     private func adopt(_ configuration: ChatConfiguration) {
         agentLimits = configuration.agentLimits; contextLimits = configuration.contextLimits; recordTraces = configuration.recordTraces
         traceSource = (configuration.provider.title, configuration.profile.model)
@@ -436,6 +470,11 @@ final class ReaderChatSession: ObservableObject {
     private func recover(_ id: UUID, token: UUID, retry: Int) {
         guard generation == token else { return }
         withdraw(id, token: token)
+        // The interrupted attempt is asked again in full, so its pictures are redrawn.
+        if let index = messages.firstIndex(where: { $0.id == id }), let pictures = messages[index].images {
+            ChatImageStore.remove(pictures, in: imageDirectory)
+            messages[index].images = nil; changed(messages[index])
+        }
         activity = "Connection interrupted. Retrying (\(retry)/\(retryPolicy.delays.count))…"
     }
     private func append(_ text: String, to id: UUID, token: UUID) {
@@ -482,6 +521,12 @@ final class ReaderChatSession: ObservableObject {
 // Explicit UI-test injection only; shipping builds never substitute sample replies.
 struct UITestChatProvider: ChatProvider {
     var slow = false
+    /// A landscape test picture: sky, sea and a sun, as JPEG like the hosted tool returns.
+    static let samplePicture: Data = UIGraphicsImageRenderer(size: CGSize(width: 640, height: 400)).jpegData(withCompressionQuality: 0.85) { context in
+        UIColor(red: 0.93, green: 0.76, blue: 0.55, alpha: 1).setFill(); context.fill(CGRect(x: 0, y: 0, width: 640, height: 240))
+        UIColor(red: 0.18, green: 0.36, blue: 0.47, alpha: 1).setFill(); context.fill(CGRect(x: 0, y: 240, width: 640, height: 160))
+        UIColor(red: 0.98, green: 0.55, blue: 0.27, alpha: 1).setFill(); context.cgContext.fillEllipse(in: CGRect(x: 270, y: 170, width: 100, height: 100))
+    }
     func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -515,6 +560,17 @@ struct UITestChatProvider: ChatProvider {
                             index = next
                             try await Task.sleep(for: .milliseconds(60))
                         }
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
+                    if UITesting.flag("LEAF_UI_CHAT_IMAGE") {
+                        // The hosted image tool's order: drawing starts, the picture
+                        // arrives whole, then the model's words.
+                        continuation.yield(.imageStarted)
+                        try await Task.sleep(for: .milliseconds(3000))
+                        continuation.yield(.image(Self.samplePicture))
+                        continuation.yield(.text("Here is the harbor "))
+                        try await Task.sleep(for: .milliseconds(150))
+                        continuation.yield(.text("at dawn, as the chapter describes it."))
                         continuation.yield(.finished(truncated: false)); continuation.finish(); return
                     }
                     if UITesting.flag("LEAF_UI_CHAT_MARKDOWN") {
@@ -559,6 +615,8 @@ extension UITestChatProvider: ToolChatProvider {
                         for try await event in stream(ChatRequest(system: system, turns: turns)) {
                             switch event {
                             case .text(let text): continuation.yield(.text(text))
+                            case .imageStarted: continuation.yield(.imageStarted)
+                            case .image(let data): continuation.yield(.image(data))
                             case .finished(let value):
                                 continuation.yield(.usage(TokenUsage(input: 900, output: 24)))
                                 continuation.yield(.finished(truncated: value))

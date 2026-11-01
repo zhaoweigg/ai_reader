@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import UIKit
 
 struct ChatHistoryPage {
     var messages: [ReaderChatMessage] = []
@@ -23,6 +24,43 @@ protocol ChatHistoryStorage {
 
 extension ChatHistoryStorage {
     func save(_ messages: [ReaderChatMessage], draft: String?) throws { try save(messages, draft: draft, selection: .unchanged) }
+}
+
+/// Pictures generated in chat, one file each beside the chat database. Messages
+/// keep only the file name, so the database stays small and old histories decode.
+enum ChatImageStore {
+    static let maxBytes = 16 << 20
+
+    /// Writes a decodable JPEG, PNG or WebP picture and returns its file name.
+    static func save(_ data: Data, in directory: URL) throws -> String {
+        guard data.count <= maxBytes, let ext = fileExtension(data), UIImage(data: data) != nil else { throw ChatError.invalidResponse }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        let name = UUID().uuidString + "." + ext
+        try data.write(to: directory.appendingPathComponent(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        return name
+    }
+    /// The file for a stored name. Names arrive from synced history too, so only
+    /// names this store could have written resolve; anything else is ignored.
+    static func url(_ name: String, in directory: URL) -> URL? {
+        guard isStoredName(name) else { return nil }
+        return directory.appendingPathComponent(name)
+    }
+    static func remove(_ names: [String], in directory: URL) {
+        for name in names { if let url = url(name, in: directory) { try? FileManager.default.removeItem(at: url) } }
+    }
+    static func isStoredName(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2, ["jpg", "png", "webp"].contains(parts[1]) else { return false }
+        return UUID(uuidString: String(parts[0])) != nil && String(parts[0]) == UUID(uuidString: String(parts[0]))?.uuidString
+    }
+    static func fileExtension(_ data: Data) -> String? {
+        let bytes = [UInt8](data.prefix(12))
+        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) { return "jpg" }
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "png" }
+        if bytes.count == 12, bytes.starts(with: Array("RIFF".utf8)), Array(bytes[8..<12]) == Array("WEBP".utf8) { return "webp" }
+        return nil
+    }
 }
 
 enum ChatHistoryError: LocalizedError {

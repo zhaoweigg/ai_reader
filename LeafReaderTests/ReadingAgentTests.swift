@@ -387,8 +387,11 @@ final class ReadingAgentTests: XCTestCase {
                      traces: store) { nil }
         try await wait { !session.isSending && store.traces.count == 1 }
         let trace = try XCTUnwrap(store.traces.first)
-        XCTAssertEqual(trace.steps.map(\.kind), [.context, .seed, .round, .tool, .answer])
-        XCTAssertEqual(trace.steps[2].withdrawn, "Let me check.")
+        // Each request attempt is recorded too (start and outcome) since automatic retry.
+        let steps = trace.steps.filter { $0.kind != .request }
+        XCTAssertEqual(steps.map(\.kind), [.context, .seed, .round, .tool, .answer])
+        XCTAssertEqual(trace.steps.filter { $0.kind == .request }.count, 4, "Two request records for each of the two rounds")
+        XCTAssertEqual(steps[2].withdrawn, "Let me check.")
         XCTAssertEqual(trace.usage, TokenUsage(input: 2500, output: 28, cachedInput: 900))
         XCTAssertEqual(trace.selection, "白虎"); XCTAssertEqual(trace.bookTitle, "测试"); XCTAssertEqual(trace.limits, AgentLimits())
         XCTAssertTrue(trace.steps[0].payload.contains("SYSTEM\n"))

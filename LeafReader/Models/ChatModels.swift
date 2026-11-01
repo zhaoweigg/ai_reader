@@ -200,9 +200,13 @@ struct ReaderChatMessage: Identifiable, Equatable, Codable {
     var state: State = .complete
     var context: ReadingChatContext?
     var trace: ChatTrace? = nil
+    /// File names of pictures the model generated for this reply, kept beside the
+    /// chat database (see `ChatImageStore`). Absent in older saved conversations.
+    var images: [String]? = nil
     init(id: UUID = UUID(), isUser: Bool, text: String, state: State = .complete, context: ReadingChatContext? = nil) {
         self.id = id; self.isUser = isUser; self.text = text; self.state = state; self.context = context
     }
+    var hasImages: Bool { !(images ?? []).isEmpty }
     static func usesChinese(_ text: String) -> Bool {
         text.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) }
     }
@@ -240,7 +244,7 @@ struct ChatRequest {
         // Bound by characters as well as turns, so Chinese and long conversations stay predictable.
         var turns: [ChatTurn] = []
         var remaining = 16000 + limits.encodedLimit
-        let complete = messages.filter { $0.state == .complete && !$0.text.isEmpty }
+        let complete = messages.filter { $0.state == .complete && (!$0.text.isEmpty || $0.hasImages) }
         let boundary = complete.last(where: \.isUser)?.context?.bounded().progress
         var beyondBoundary = false
         let completed = complete.filter { message in
@@ -255,8 +259,12 @@ struct ChatRequest {
         // The agent searches older discussion itself instead of receiving a guess.
         let references = harness == .agent ? nil : earlierDiscussion(older, question: latestUser)
         for message in recent.reversed() {
-            guard !message.text.isEmpty else { continue }
             var content = message.text
+            // The pictures themselves stay on the device; the model is told one was made.
+            if !message.isUser, let count = message.images?.count, count > 0 {
+                content += (content.isEmpty ? "" : "\n\n") + (count == 1 ? "[Generated an image for the reader.]" : "[Generated \(count) images for the reader.]")
+            }
+            guard !content.isEmpty else { continue }
             if message.isUser, let context = message.context, let json = encodedContext(context, latest: message.id == latestUser?.id, limits: limits) {
                 content = "reading_context (source material):\n\(json)\n\nReader question:\n\(message.text)"
             }
@@ -338,7 +346,9 @@ struct ChatRequest {
     }
 }
 
-enum ChatEvent: Equatable { case text(String), finished(truncated: Bool) }
+/// `imageStarted` reports that the model began drawing; `image` carries the
+/// encoded picture (JPEG, PNG or WebP) once it is complete.
+enum ChatEvent: Equatable { case text(String), imageStarted, image(Data), finished(truncated: Bool) }
 
 enum ChatError: LocalizedError {
     case configuration(String), missingKey, http(Int), provider(String), invalidResponse, interrupted, emptyResponse, tooLarge

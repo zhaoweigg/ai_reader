@@ -17,6 +17,13 @@ final class ChatRedirectDelegate: NSObject, URLSessionTaskDelegate {
     }
 }
 
+enum ChatStreamLimits {
+    /// One server-sent event. A generated picture arrives as a single base64 event
+    /// (and again inside the final response object), so this allows several
+    /// megabytes; answer text keeps its own 64,000-character limit.
+    static let eventBytes = 16 << 20
+}
+
 struct URLSessionChatTransport: ChatTransport {
     var configuration: URLSessionConfiguration = .ephemeral
     func open(_ request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<String, Error>) {
@@ -43,7 +50,7 @@ struct URLSessionChatTransport: ChatTransport {
                                 line.removeAll(keepingCapacity: true)
                             } else {
                                 line.append(byte)
-                                guard line.count <= 262144 else { throw ChatError.tooLarge }
+                                guard line.count <= ChatStreamLimits.eventBytes else { throw ChatError.tooLarge }
                             }
                         }
                         if !line.isEmpty { continuation.yield(String(decoding: line, as: UTF8.self)) }
@@ -72,7 +79,7 @@ struct ServerSentEventDecoder {
         var value = String(line.dropFirst(5))
         if value.hasPrefix(" ") { value.removeFirst() }
         size += value.utf8.count
-        guard size <= 262144 else { throw ChatError.tooLarge }
+        guard size <= ChatStreamLimits.eventBytes else { throw ChatError.tooLarge }
         data.append(value)
         return nil
     }

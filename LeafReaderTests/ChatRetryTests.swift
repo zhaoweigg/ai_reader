@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import LeafReader
 
 private final class RetryCredentials: ChatCredentialStore {
@@ -42,6 +43,8 @@ private final class RetryProvider: ToolChatProvider {
             for event in reply.events {
                 switch event {
                 case .text(let text): continuation.yield(.text(text))
+                case .imageStarted: continuation.yield(.imageStarted)
+                case .image(let data): continuation.yield(.image(data))
                 case .finished(let value): continuation.yield(.finished(truncated: value))
                 default: break
                 }
@@ -279,5 +282,78 @@ final class ChatRetryTests: XCTestCase {
             XCTFail("Expected exhaustion")
         } catch { XCTAssertTrue(error is ChatError) }
         XCTAssertEqual(provider.requests.count, 4); XCTAssertEqual(toolbox.steps.count, 1)
+    }
+
+    // MARK: Generated pictures
+
+    private func picture(_ shade: CGFloat = 0.4) -> Data {
+        UIGraphicsImageRenderer(size: CGSize(width: 64, height: 40)).jpegData(withCompressionQuality: 0.9) { context in
+            UIColor(white: shade, alpha: 1).setFill(); context.fill(CGRect(x: 0, y: 0, width: 64, height: 40))
+        }
+    }
+    func testGeneratedPictureIsSavedWithTheReplyRestoredAndClearedWithTheConversation() async throws {
+        for traced in [false, true] {
+            let drawn = picture()
+            let provider = RetryProvider()
+            provider.replies = [.init(events: [.imageStarted, .image(drawn), .text("Here is the harbor."), .finished(truncated: false)])]
+            let directory = try folder(), pictures = directory.appendingPathComponent("Images")
+            let session = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "pictures"), imageDirectory: pictures)
+            session.retryPolicy = immediate
+            session.draft = "Draw the harbor"
+            session.send(settings: try settings(provider, traced: traced)) { self.context }
+            try await wait { !session.isSending }
+            let reply = try XCTUnwrap(session.messages.last)
+            XCTAssertNil(session.error, "traced=\(traced)"); XCTAssertEqual(reply.state, .complete)
+            XCTAssertEqual(reply.text, "Here is the harbor."); XCTAssertEqual(reply.images?.count, 1)
+            XCTAssertNil(session.activity, "The drawing notice gives way once the picture arrives")
+            let file = try XCTUnwrap(session.imageURL(try XCTUnwrap(reply.images?.first)))
+            XCTAssertEqual(try Data(contentsOf: file), drawn)
+            XCTAssertEqual(file.deletingLastPathComponent().standardizedFileURL, pictures.standardizedFileURL)
+            // Reopening the book restores the picture with its reply.
+            let reopened = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "pictures"), imageDirectory: pictures)
+            XCTAssertEqual(reopened.messages.last?.images, reply.images)
+            // The next question tells the model a picture was made, without sending it.
+            let next = ChatRequest.conversation(reopened.messages + [ReaderChatMessage(isUser: true, text: "Make it darker")])
+            let answer = try XCTUnwrap(next.turns.last(where: { $0.role == "assistant" }))
+            XCTAssertEqual(answer.content, "Here is the harbor.\n\n[Generated an image for the reader.]")
+            XCTAssertFalse(next.turns.contains { $0.content.contains(file.lastPathComponent) })
+            // Clearing the conversation removes the picture files too.
+            reopened.clear()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        }
+    }
+    func testAPictureAloneIsACompleteReplyAndAnInterruptedOneIsRedrawn() async throws {
+        let first = picture(0.2), second = picture(0.8)
+        let provider = RetryProvider()
+        provider.replies = [.init(events: [.imageStarted, .image(first)], error: ChatError.interrupted),
+                            .init(events: [.imageStarted, .image(second), .finished(truncated: false)])]
+        let directory = try folder(), pictures = directory.appendingPathComponent("Images")
+        let session = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "alone"), imageDirectory: pictures)
+        session.retryPolicy = immediate
+        session.draft = "Just the picture"
+        session.send(settings: try settings(provider)) { self.context }
+        try await wait { !session.isSending }
+        let reply = try XCTUnwrap(session.messages.last)
+        XCTAssertNil(session.error); XCTAssertEqual(reply.state, .complete); XCTAssertEqual(reply.text, "")
+        XCTAssertEqual(reply.images?.count, 1, "The interrupted attempt's picture is replaced, not kept beside the new one")
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(session.imageURL(reply.images![0]))), second)
+        let files = try FileManager.default.contentsOfDirectory(atPath: pictures.path)
+        XCTAssertEqual(files, [reply.images![0]], "The abandoned attempt's file is deleted")
+        XCTAssertEqual(ChatRequest.conversation(session.messages).turns.last?.content, "[Generated an image for the reader.]")
+    }
+    func testPictureStoreAcceptsOnlyItsOwnNamesAndRealImages() throws {
+        let directory = try folder()
+        XCTAssertThrowsError(try ChatImageStore.save(Data("not a picture".utf8), in: directory))
+        XCTAssertThrowsError(try ChatImageStore.save(Data([0xFF, 0xD8, 0xFF, 0x00]), in: directory), "A JPEG header alone is not a picture")
+        let name = try ChatImageStore.save(picture(), in: directory)
+        XCTAssertTrue(name.hasSuffix(".jpg")); XCTAssertNotNil(ChatImageStore.url(name, in: directory))
+        // Names also arrive from synced history; nothing else may resolve to a file.
+        for hostile in ["../conversations.sqlite", "\(UUID().uuidString).jpg/../x", "\(UUID().uuidString.lowercased()).jpg", "\(UUID().uuidString).sqlite", "picture.jpg", ""] {
+            XCTAssertNil(ChatImageStore.url(hostile, in: directory), hostile)
+        }
+        ChatImageStore.remove(["../conversations.sqlite", name], in: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path))
+        XCTAssertFalse((Bundle.main.object(forInfoDictionaryKey: "NSPhotoLibraryAddUsageDescription") as? String ?? "").isEmpty,
+                       "Saving a picture from the share sheet needs the photo-library add permission text")
     }
 }
