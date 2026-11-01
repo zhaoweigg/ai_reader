@@ -613,7 +613,7 @@ struct ReaderChatPanel: View {
         }
     }
     private func content(compact: Bool) -> some View {
-        VStack(spacing: compact ? 2 : 8) {
+        VStack(spacing: composerGap(compact)) {
             VStack(spacing: 0) {
                 Capsule().fill(.secondary.opacity(0.35)).frame(width: 36, height: 4)
                     .frame(maxWidth: .infinity).frame(height: 12)
@@ -817,16 +817,20 @@ struct ReaderChatPanel: View {
                         }
                     }
                 }
+                // The status line sits right above the composer, so a tap on it
+                // (outside Retry) is a tap meant for the text field.
                 if let error = session.error {
                     HStack(spacing: 8) {
                         Text(error).font(.caption).foregroundStyle(.red).lineLimit(3).accessibilityIdentifier("readerChatError")
                         if session.canRetry { Button("Retry") { session.retry(settings: settings) }.font(.caption.bold()) }
                     }
+                    .frame(maxWidth: .infinity).contentShape(Rectangle()).onTapGesture(perform: focusComposer)
                 } else if let notice = session.notice {
                     HStack(spacing: 8) {
-                        Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(2).accessibilityIdentifier("readerChatNotice")
                         if session.canRetry { Button("Retry") { session.retry(settings: settings) }.font(.caption.bold()) }
                     }
+                    .frame(maxWidth: .infinity).contentShape(Rectangle()).onTapGesture(perform: focusComposer)
                 }
             }
 
@@ -880,7 +884,19 @@ struct ReaderChatPanel: View {
                 .accessibilityLabel(session.isSending ? "Stop response" : "Send message").accessibilityIdentifier("sendReaderChat")
             }
             .padding(compact ? 0 : 4)
-            .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 28))
+            .background {
+                // The field's padding isn't part of the TextField, so taps on the
+                // rest of the pill (and the gap just above it) would do nothing.
+                // These sit behind the field and buttons, which keep their own taps.
+                RoundedRectangle(cornerRadius: 28).fill(.background.opacity(0.45))
+                    .onTapGesture(perform: focusComposer)
+            }
+            .background(alignment: .top) {
+                Color.clear.frame(height: composerGap(compact)).contentShape(Rectangle())
+                    .offset(y: -composerGap(compact))
+                    .onTapGesture(perform: focusComposer)
+                    .accessibilityHidden(true)
+            }
             .overlay(RoundedRectangle(cornerRadius: 28).stroke(.secondary.opacity(0.3), lineWidth: 0.75))
         }
         .padding(.horizontal, 16).padding(.top, compact ? 0 : 4).padding(.bottom, compact ? 2 : 8)
@@ -942,6 +958,15 @@ struct ReaderChatPanel: View {
         DragGesture(minimumDistance: 15).onEnded { gesture in
             if gesture.translation.height > 40, abs(gesture.translation.width) < gesture.translation.height { close() }
         }
+    }
+
+    /// Space between the panel's sections, including the gap above the composer.
+    private func composerGap(_ compact: Bool) -> CGFloat { compact ? 2 : 8 }
+
+    /// Shows the keyboard for a tap near the text field, unless dictation owns the draft.
+    private func focusComposer() {
+        guard !dictation.isActive else { return }
+        inputFocused = true
     }
 
     private func close() {

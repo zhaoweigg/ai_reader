@@ -2120,6 +2120,51 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testChatEdgeResizesInScroll() { verifyChatResize(flow: "Scroll") }
     @MainActor func testChatEdgeResizesInPDF() { verifyChatResize(flow: "PDF") }
 
+    @MainActor func testTapsAroundChatComposerShowKeyboardInPages() { verifyComposerTapTargets(flow: "Pages") }
+    @MainActor func testTapsAroundChatComposerShowKeyboardInScroll() { verifyComposerTapTargets(flow: "Scroll") }
+
+    /// The status line above the composer, the gap under it and the pill's padding
+    /// all bring up the keyboard, not just the text itself.
+    @MainActor private func verifyComposerTapTargets(flow: String) {
+        continueAfterFailure = false
+        orient(.portrait)
+        let app = launchApp(mockChat: false)
+        openSelectionFixture(flow, app: app); waitForBook(app)
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap(); input.typeText("Explain this passage")
+        // Without an API key, sending leaves an error line right above the composer and hides the keyboard.
+        app.buttons["sendReaderChat"].tap()
+        let error = app.staticTexts["readerChatError"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+        func waitForKeyboard(_ shown: Bool, _ message: String) {
+            expectation(for: NSPredicate(format: "exists == %@", NSNumber(value: shown)), evaluatedWith: app.keyboards.firstMatch)
+            waitForExpectations(timeout: 5)
+            XCTAssertEqual(app.keyboards.firstMatch.exists, shown, message)
+        }
+        func hideKeyboard() {
+            if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+            waitForKeyboard(false, "Keyboard should be hidden before the next tap")
+        }
+        hideKeyboard()
+        let top = input.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+        // Field padding inside the pill (12 pt above the text field).
+        top.withOffset(CGVector(dx: 0, dy: -6)).tap()
+        waitForKeyboard(true, "Tapping the composer's padding shows the keyboard")
+        XCTAssertEqual(input.value as? String, "Explain this passage")
+        hideKeyboard()
+        // The gap between the status line and the pill (pill padding 16 pt + 8 pt gap).
+        top.withOffset(CGVector(dx: 0, dy: -20)).tap()
+        waitForKeyboard(true, "Tapping just above the composer shows the keyboard")
+        hideKeyboard()
+        error.tap()
+        waitForKeyboard(true, "Tapping the status line shows the keyboard")
+        capture(flow + " keyboard from tap near composer", app: app)
+        app.buttons["closeReaderChat"].tap()
+        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+    }
+
     @MainActor func testDictationAddsAnEditableDraftInPages() { verifyDictation(flow: "Pages") }
     @MainActor func testDictationAddsAnEditableDraftInScroll() { verifyDictation(flow: "Scroll") }
     @MainActor func testDictationAddsAnEditableDraftInPDF() { verifyDictation(flow: "PDF") }
