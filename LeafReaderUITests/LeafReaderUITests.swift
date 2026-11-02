@@ -326,6 +326,18 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["book-The Art of Noticing"].exists)
     }
 
+    @MainActor private func setReadingBold(_ enabled: Bool, app: XCUIApplication) {
+        let toggle = app.switches["boldReadingText"], expected = enabled ? "1" : "0"
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        if toggle.value as? String != expected {
+            // A labelled SwiftUI switch can expose the full Form row as its AX
+            // frame. Target the native switch thumb instead of the row's center.
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        }
+        expectation(for: NSPredicate(format: "value == %@", expected), evaluatedWith: toggle)
+        waitForExpectations(timeout: 5)
+    }
+
     @MainActor func testBoldTextChatAndPersistenceInPages() { verifyChatResize(flow: "Pages", bold: true) }
     @MainActor func testBoldTextChatAndPersistenceInScroll() { verifyChatResize(flow: "Scroll", bold: true) }
     @MainActor func testBoldTextLauncherInPages() { verifyMovableButton(in: "Pages", bold: true) }
@@ -339,14 +351,14 @@ final class LeafReaderUITests: XCTestCase {
         let text = paragraph.label, frame = paragraph.frame
         openAppearance(app)
         let toggle = app.switches["boldReadingText"]
-        XCTAssertEqual(toggle.value as? String, "0"); toggle.tap(); XCTAssertEqual(toggle.value as? String, "1")
+        XCTAssertEqual(toggle.value as? String, "0"); setReadingBold(true, app: app)
         dismissAppearance(app)
         XCTAssertEqual(paragraph.label, text); XCTAssertEqual(paragraph.frame, frame, "PDF text keeps its original layout")
         capture("PDF preserves original text with Bold enabled", app: app)
         showReaderControls(app); app.buttons["closeBook"].tap()
         app.terminate(); app.launch(); openSelectionFixture("PDF", app: app); waitForBook(app)
         openAppearance(app); XCTAssertEqual(toggle.value as? String, "1")
-        toggle.tap(); XCTAssertEqual(toggle.value as? String, "0")
+        setReadingBold(false, app: app)
         dismissAppearance(app)
     }
 
@@ -2756,10 +2768,9 @@ final class LeafReaderUITests: XCTestCase {
         if bold {
             openAppearance(app)
             let toggle = app.switches["boldReadingText"]
-            XCTAssertEqual(toggle.value as? String, "0"); toggle.tap()
-            XCTAssertEqual(toggle.value as? String, "1")
+            XCTAssertEqual(toggle.value as? String, "0"); setReadingBold(true, app: app)
             capture(flow + " Bold text option", app: app)
-            dismissAppearance(app)
+            dismissAppearance(app); showReaderControls(app)
         }
         if flow == "PDF" { app.buttons["nextPage"].tap() }
         else {
@@ -3130,7 +3141,7 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["featuredBook"].tap()
         showReaderControls(app)
         app.buttons["Appearance"].tap()
-        if bold { app.switches["boldReadingText"].tap(); XCTAssertEqual(app.switches["boldReadingText"].value as? String, "1") }
+        if bold { setReadingBold(true, app: app) }
         app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
         app.segmentedControls["readingFlow"].buttons[flow].tap()
         dismissAppearance(app)
@@ -3323,7 +3334,7 @@ final class LeafReaderUITests: XCTestCase {
         for flow in ["Pages", "Scroll"] {
             showReaderControls(app)
             app.buttons["Appearance"].tap()
-            if bold, app.switches["boldReadingText"].value as? String == "0" { app.switches["boldReadingText"].tap() }
+            if bold { setReadingBold(true, app: app) }
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons[flow].tap()
             dismissAppearance(app)

@@ -2865,7 +2865,7 @@ final class ReaderEngineTests: XCTestCase {
                     XCTAssertTrue((row["synthesis"] as? String ?? "").contains("weight"), label)
                     XCTAssertEqual(try XCTUnwrap(row["actual"] as? Double), try XCTUnwrap(row["size"] as? Double), accuracy: 0.1, label)
                     XCTAssertEqual(try XCTUnwrap(row["glyphWidth"] as? Double), try XCTUnwrap(row["size"] as? Double), accuracy: 1, label)
-                    XCTAssertEqual(try XCTUnwrap(row["paragraphWidth"] as? Double), try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * (row["margin"] as? Double ?? 0), accuracy: 2, label)
+                    XCTAssertEqual(try XCTUnwrap(row["paragraphWidth"] as? Double), min(680, try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * (row["margin"] as? Double ?? 0)), accuracy: 2, label)
                     XCTAssertTrue(row["visible"] as? Bool == true, label); XCTAssertTrue(row["sameText"] as? Bool == true, label)
                     XCTAssertTrue(row["fontLoaded"] as? Bool == true, label)
                     XCTAssertLessThanOrEqual(row["loaded"] as? Int ?? 99, scrolling ? 3 : 1, label)
