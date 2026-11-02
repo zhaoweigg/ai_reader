@@ -155,12 +155,13 @@ struct ReaderPreferences: Equatable {
     var horizontalMargin: Double = 20
     var verticalMargin: Double = 12
     var paragraphSpacing: Double = 0.65
+    var boldText = false
     var typeface: ReaderTypeface { ReaderTypeface.named(font) }
     var payload: [String: Any] {
         var value: [String: Any] = ["fontSize": fontSize, "lineHeight": lineHeight, "font": font, "fontGeneric": typeface.generic,
          "background": theme.backgroundHex, "foreground": theme.foregroundHex, "scrolling": scrolling,
          "colorScheme": theme.isDark ? "dark" : "light", "accent": theme.accentHex,
-         "horizontalMargin": horizontalMargin, "verticalMargin": verticalMargin, "paragraphSpacing": paragraphSpacing]
+         "horizontalMargin": horizontalMargin, "verticalMargin": verticalMargin, "paragraphSpacing": paragraphSpacing, "boldText": boldText]
         if let file = typeface.file { value["fontFile"] = file }
         return value
     }

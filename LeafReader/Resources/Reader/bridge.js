@@ -276,6 +276,7 @@ function applyPreferences(value) {
             color:${value.foreground} !important; text-align:start; hyphens:auto; overflow-wrap:break-word; }
         p { margin-block:0 ${paragraph}em !important; }
         h1,h2,h3 { font-family:${font} !important; line-height:1.2; color:${value.foreground} !important; }
+        ${value.boldText === true ? 'body, body * { font-weight:700 !important; font-synthesis:weight style !important; }' : ''}
         pre { white-space:pre-wrap; font-size:0.85em; }
         a { color:${value.accent ?? (value.background === '#17232E' ? '#93CABB' : '#24776A')} !important; }
         img,svg { max-width:100%; }`);

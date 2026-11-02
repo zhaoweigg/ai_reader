@@ -140,15 +140,19 @@ final class ICloudSyncTests: XCTestCase {
     func testTheNewerSettingWinsAndLayoutStaysLocal() async throws {
         let phone = try device(), tablet = try device()
         phone.defaults.set("night", forKey: "reader.theme")
+        phone.defaults.set(true, forKey: "reader.boldText")
         phone.defaults.set(120.0, forKey: "reader.chatButtonX")
         await phone.sync.syncNow(); await tablet.sync.syncNow()
         XCTAssertEqual(tablet.defaults.string(forKey: "reader.theme"), "night")
+        XCTAssertTrue(tablet.defaults.bool(forKey: "reader.boldText"))
         XCTAssertNil(tablet.defaults.object(forKey: "reader.chatButtonX"), "The floating button's position stays on each device")
 
         try await Task.sleep(for: .milliseconds(20))
         tablet.defaults.set(24.0, forKey: "reader.fontSize")
+        tablet.defaults.set(false, forKey: "reader.boldText")
         await tablet.sync.syncNow(); await phone.sync.syncNow()
         XCTAssertEqual(phone.defaults.double(forKey: "reader.fontSize"), 24)
+        XCTAssertFalse(phone.defaults.bool(forKey: "reader.boldText"))
         XCTAssertEqual(phone.defaults.string(forKey: "reader.theme"), "night", "An unchanged setting is not overwritten")
     }
 }

@@ -1230,9 +1230,15 @@ final class ReaderEngineTests: XCTestCase {
         XCTAssertGreaterThan(reopened.fraction, 0.4)
     }
     func testBothFlowsPreserveChapterBoundariesBookEndsAndReopenedPassage() async throws {
+        try await verifyChapterBoundariesAndRestoration(bold: false)
+    }
+    func testBoldTextPreservesChapterBoundariesBookEndsAndReopenedPassageInBothFlows() async throws {
+        try await verifyChapterBoundariesAndRestoration(bold: true)
+    }
+    private func verifyChapterBoundariesAndRestoration(bold: Bool) async throws {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         for scrolling in [false, true] {
-            var prefs = preferences; prefs.scrolling = scrolling
+            var prefs = preferences; prefs.scrolling = scrolling; prefs.boldText = bold
             let model = try show(book, url: url, readerPreferences: prefs)
             try await assertOpened(model, contains: "attention")
             model.setReadingClearance(280)
@@ -2801,6 +2807,82 @@ final class ReaderEngineTests: XCTestCase {
                 XCTAssertEqual(try XCTUnwrap(row["actualSize"] as? Double), try XCTUnwrap(row["fontSize"] as? Double), accuracy: 0.1, label)
             }
         }
+    }
+
+    func testBoldTextAtEverySizeAndTypefaceInPages() async throws { try await verifyBoldTypography(scrolling: false) }
+    func testBoldTextAtEverySizeAndTypefaceInScroll() async throws { try await verifyBoldTypography(scrolling: true) }
+
+    private func verifyBoldTypography(scrolling: Bool) async throws {
+        let (book, url) = try prepare("ChapterDividerChinese.epub", format: .epub, fixtures: true)
+        var base = preferences; base.scrolling = scrolling
+        let model = try show(book, url: url, readerPreferences: base)
+        try await assertOpened(model, contains: "窗外")
+        let web = try XCTUnwrap(model.webView)
+        var rows: [[String: Any]] = []
+        for viewport in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
+            window?.frame.size = viewport; try await Task.sleep(for: .milliseconds(250))
+            for (index, face) in ReaderTypeface.allCases.enumerated() {
+                base.font = face.rawValue
+                let result = try await web.callAsyncJavaScript("""
+                    const view=document.querySelector('foliate-view'),sleep=ms=>new Promise(r=>setTimeout(r,ms)),rows=[];
+                    for (let size=12;size<=32;size++) {
+                        const variant=(size+index)%3,margin=[12,20,36][variant],theme=themes[variant];
+                        const settings={...base,...theme,fontSize:size,horizontalMargin:margin,boldText:false};
+                        window.Leaf.applyPreferences(settings);
+                        await Promise.all(view.renderer.getContents().map(c=>c.doc.fonts.ready));await sleep(100);
+                        const doc=view.renderer.getContents()[0].doc,p=doc.querySelector('p');
+                        p.style.fontWeight='400';
+                        const probe=doc.createElement('span');probe.textContent='阅读';probe.style.cssText='position:fixed;left:-1000px;font-weight:400';
+                        const strong=doc.createElement('strong');strong.textContent='Bold';probe.append(strong);doc.body.append(probe);
+                        const before=doc.body.textContent,saved=view.lastLocation.cfi;
+                        const normal=doc.defaultView.getComputedStyle(probe).fontWeight;
+                        window.Leaf.applyPreferences({...settings,boldText:true});
+                        await Promise.all(view.renderer.getContents().map(c=>c.doc.fonts.ready));await sleep(100);
+                        const style=doc.defaultView.getComputedStyle(p),child=doc.defaultView.getComputedStyle(probe);
+                        const glyph=doc.createRange();glyph.setStart(p.firstChild,0);glyph.setEnd(p.firstChild,1);
+                        const rect=glyph.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect();
+                        rows.push({size,font:base.font,margin,normal,weight:style.fontWeight,childWeight:child.fontWeight,synthesis:child.fontSynthesis,
+                            actual:parseFloat(style.fontSize),glyphWidth:rect.width,left:rect.left+frame.left,right:rect.right+frame.left,
+                            paragraphWidth:p.getBoundingClientRect().width,viewportWidth:view.clientWidth,
+                            visible:window.Leaf.isLocationVisible(saved),sameText:before===doc.body.textContent,
+                            loaded:view.renderer.getContents().length,
+                            fontLoaded:!base.fontFile||[...doc.fonts].some(f=>f.family.replace(/"/g,'')===base.font&&f.status==='loaded')});
+                        window.Leaf.applyPreferences({...settings,boldText:false});await sleep(80);
+                        rows[rows.length-1].restoredWeight=doc.defaultView.getComputedStyle(probe).fontWeight;
+                        rows[rows.length-1].authoredBold=doc.defaultView.getComputedStyle(strong).fontWeight;
+                        probe.remove();
+                    }
+                    window.Leaf.applyPreferences({...base,boldText:true,fontSize:19});await sleep(120);
+                    return rows;
+                    """, arguments: ["base": base.payload, "index": index,
+                        "themes": [ReadingTheme.day, .paper, .night].map { theme -> [String: Any] in var prefs = base; prefs.theme = theme; return prefs.payload }], in: nil, contentWorld: .page)
+                for row in try XCTUnwrap(result as? [[String: Any]]) {
+                    let label = "\(scrolling ? "Scroll" : "Pages") \(face.title) \(viewport) \(row)"
+                    XCTAssertEqual(row["normal"] as? String, "400", label)
+                    XCTAssertEqual(row["weight"] as? String, "700", label); XCTAssertEqual(row["childWeight"] as? String, "700", label)
+                    XCTAssertEqual(row["restoredWeight"] as? String, "400", label)
+                    XCTAssertGreaterThanOrEqual(Double(row["authoredBold"] as? String ?? "0") ?? 0, 700, label)
+                    XCTAssertTrue((row["synthesis"] as? String ?? "").contains("weight"), label)
+                    XCTAssertEqual(try XCTUnwrap(row["actual"] as? Double), try XCTUnwrap(row["size"] as? Double), accuracy: 0.1, label)
+                    XCTAssertEqual(try XCTUnwrap(row["glyphWidth"] as? Double), try XCTUnwrap(row["size"] as? Double), accuracy: 1, label)
+                    XCTAssertEqual(try XCTUnwrap(row["paragraphWidth"] as? Double), try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * (row["margin"] as? Double ?? 0), accuracy: 2, label)
+                    XCTAssertTrue(row["visible"] as? Bool == true, label); XCTAssertTrue(row["sameText"] as? Bool == true, label)
+                    XCTAssertTrue(row["fontLoaded"] as? Bool == true, label)
+                    XCTAssertLessThanOrEqual(row["loaded"] as? Int ?? 99, scrolling ? 3 : 1, label)
+                    rows.append(row)
+                }
+                if face == .georgia || face == .wenKai {
+                    let snapshot: UIImage? = await withCheckedContinuation { continuation in
+                        web.takeSnapshot(with: nil) { image, error in XCTAssertNil(error); continuation.resume(returning: image) }
+                    }
+                    let attachment = XCTAttachment(image: try XCTUnwrap(snapshot)); attachment.name = "Bold \(scrolling ? "Scroll" : "Pages") \(face.title) \(Int(viewport.width)) wide"; attachment.lifetime = .keepAlways; add(attachment)
+                }
+            }
+        }
+        XCTAssertEqual(rows.count, 2 * ReaderTypeface.allCases.count * 21)
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows, options: [.sortedKeys]), uniformTypeIdentifier: "public.json")
+        attachment.name = "Bold typography matrix \(scrolling ? "Scroll" : "Pages")"; attachment.lifetime = .keepAlways; add(attachment)
+        XCTAssertNil(model.error)
     }
 
     func testEveryTextSizeAcrossScrollAndPageLayout() async throws {
