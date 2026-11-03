@@ -336,7 +336,9 @@ struct ZLibraryClient: ZLibraryServing {
     /// A description's text without its HTML markup, bounded for the chat.
     static func plainText(_ value: Any?) -> String? {
         guard let raw = value as? String else { return nil }
-        var text = raw.replacingOccurrences(of: #"<br\s*/?>|</p>|</div>|</li>"#, with: "\n", options: [.regularExpression, .caseInsensitive])
+        // Paragraph ends become blank lines; line breaks and list items stay single lines.
+        var text = raw.replacingOccurrences(of: #"</p>|</div>"#, with: "\n\n", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"<br\s*/?>|</li>"#, with: "\n", options: [.regularExpression, .caseInsensitive])
             .replacingOccurrences(of: #"<[^>]*>"#, with: "", options: .regularExpression)
         for (entity, character) in [("&nbsp;", " "), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&")] {
             text = text.replacingOccurrences(of: entity, with: character)

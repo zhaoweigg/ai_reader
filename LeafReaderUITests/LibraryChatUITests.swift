@@ -238,7 +238,9 @@ final class LibraryChatUITests: XCTestCase {
         capture("Library chat shared transparency settings")
         app.buttons["Close"].tap(); app.buttons["closeReaderChat"].tap()
         app.tabBars.buttons["Bookmarks"].tap()
-        XCTAssertFalse(app.buttons["openLibraryChat"].exists)
+        // Bookmarks has its own Ask Leaf button; the Library tab's chat closed with its tab.
+        XCTAssertTrue(app.buttons["openLibraryChat"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists)
         app.tabBars.buttons["Library"].tap()
         XCTAssertTrue(app.buttons["openLibraryChat"].exists)
         let search = app.textFields["librarySearch"]
