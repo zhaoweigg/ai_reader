@@ -49,7 +49,8 @@ final class ReaderChatSession: ObservableObject {
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var backgroundedDuringReply = false
     private var resumeOnForeground = false
-    private weak var replySettings: AISettingsStore?
+    /// Held strongly: the continue must still have the settings the question was asked with.
+    private var replySettings: AISettingsStore?
     var appInBackground: () -> Bool = { UIApplication.shared.applicationState == .background }
     static let resumedNotice = "Leaf left the screen during this reply, so it was asked again."
     var canSaveHistory: Bool { history != nil && historyReadable }
