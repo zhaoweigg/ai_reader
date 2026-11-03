@@ -1,7 +1,7 @@
 import XCTest
 
 final class LibraryChatUITests: XCTestCase {
-    @MainActor private func launch(empty: Bool = false, mock: Bool = true) -> XCUIApplication {
+    @MainActor private func launch(empty: Bool = false, mock: Bool = true, environment: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -10,6 +10,7 @@ final class LibraryChatUITests: XCTestCase {
         // Rotation goes through the public scene-geometry fixture: simulated
         // device motion alone does not reliably reach UIKit on every simulator.
         app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] = "1"
+        app.launchEnvironment.merge(environment) { _, new in new }
         app.launch()
         XCTAssertTrue(app.buttons["openLibraryChat"].waitForExistence(timeout: 10))
         expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
@@ -237,7 +238,9 @@ final class LibraryChatUITests: XCTestCase {
         capture("Library chat shared transparency settings")
         app.buttons["Close"].tap(); app.buttons["closeReaderChat"].tap()
         app.tabBars.buttons["Bookmarks"].tap()
-        XCTAssertFalse(app.buttons["openLibraryChat"].exists)
+        // Bookmarks has its own Ask Leaf button; the Library tab's chat closed with its tab.
+        XCTAssertTrue(app.buttons["openLibraryChat"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists)
         app.tabBars.buttons["Library"].tap()
         XCTAssertTrue(app.buttons["openLibraryChat"].exists)
         let search = app.textFields["librarySearch"]
@@ -306,5 +309,51 @@ final class LibraryChatUITests: XCTestCase {
         XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Shrinking the grabber must not dismiss chat")
         XCTAssertLessThan(panel.frame.height, initial + 10)
         capture("Library minimum chat size")
+    }
+
+    /// The scripted agent reads the screen with get_current_view, then lists its top three.
+    @MainActor private func ask(_ text: String, expecting reply: String, app: XCUIApplication) {
+        input(app).tap(); input(app).typeText(text); app.buttons["sendReaderChat"].tap()
+        let answer = app.textViews.matching(NSPredicate(format: "identifier == 'chatReply' AND label BEGINSWITH %@", reply)).firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 15), "Expected a reply starting “\(reply)”")
+        expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
+        waitForExpectations(timeout: 5)
+    }
+    @MainActor func testDiscoverAndBookmarksChatsReadTheirScreensWhenTheyAnswer() {
+        let app = launch(environment: ["LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_GRID": "1", "LEAF_UI_CHAT_AGENT": "1", "LEAF_UI_SAVED_FIXTURE": "1"])
+        registerSceneGeometryCleanup(app: app)
+        app.tabBars.buttons["Discover"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
+        let launcher = app.buttons["openLibraryChat"]
+        XCTAssertTrue(launcher.waitForExistence(timeout: 5))
+        XCTAssertLessThan(launcher.frame.maxY, app.tabBars.firstMatch.frame.minY)
+        launcher.tap()
+        XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "General chat")
+        ask("Summarize the top 5 books", expecting: "Screen reply: Most popular · 1. The Art of Noticing; 2. Notes from the Coast; 3. 墓碑", app: app)
+        hideKeyboard(app)
+        capture("Discover chat answers from the on-screen list")
+
+        // The screen behind the open panel still works, and the next reply reads the list as it is now.
+        app.segmentedControls["zlibraryFeedPicker"].buttons["Recommended"].tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Changing the feed keeps Ask Leaf open")
+        ask("And this list?", expecting: "Screen reply: Recommended", app: app)
+        hideKeyboard(app)
+        setReaderOrientation(.landscapeLeft, app: app)
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Rotation keeps Ask Leaf open")
+        capture("Discover chat in landscape")
+        setReaderOrientation(.portrait, app: app)
+        expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        app.buttons["closeReaderChat"].tap()
+
+        app.tabBars.buttons["Bookmarks"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Fixture bookmark")).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(launcher.waitForExistence(timeout: 5)); launcher.tap()
+        XCTAssertTrue(app.textViews["Summarize the top 5 books"].exists, "Every tab continues the one General chat")
+        ask("What did I bookmark?", expecting: "Screen reply: Bookmarks · 1. ", app: app)
+        hideKeyboard(app)
+        capture("Bookmarks chat answers from the saved places")
     }
 }

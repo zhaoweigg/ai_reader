@@ -71,6 +71,29 @@ struct AgentTool {
                   description: "Search this book's earlier chat messages with the reader, including ones older than the recent turns you can see.",
                   parameters: ["type": "object", "additionalProperties": false, "required": ["terms"], "properties": ["terms": terms]])
     ]
+    /// Tools that read the app screen a chat was opened from, outside any book.
+    static let view: [AgentTool] = [
+        AgentTool(name: "get_current_view",
+                  description: "Read what the reader's screen shows right now: which list it is and its items in on-screen order, ranked from 1 at the top. Call it whenever the question refers to anything on screen, such as \"the top 5\", \"these\" or \"the third one\", even if you read it earlier: the screen may have changed.",
+                  parameters: ["type": "object", "additionalProperties": false, "properties": [
+                    "max_items": ["type": "integer", "minimum": 1, "maximum": ChatScreen.itemLimit, "description": "Number of items to return from the top (default 30)."]]]),
+        AgentTool(name: "get_item_details",
+                  description: "More about one item on the current screen, by its rank from get_current_view: a catalog book's details and description when the catalog has one, or a saved passage's full text and note.",
+                  parameters: ["type": "object", "additionalProperties": false, "required": ["rank"], "properties": [
+                    "rank": ["type": "integer", "minimum": 1, "maximum": 500]]])
+    ]
+}
+
+/// One of the app's screens, read when a view tool runs so a reply always
+/// describes the screen as it is now, not as it was when the question was sent.
+struct ChatScreen {
+    static let itemLimit = 100
+    /// The screen's name as the reader sees it, such as “Discover”.
+    let name: String
+    /// The screen's list, top first; passages and notes only when passage sharing is on.
+    let view: @MainActor (_ limit: Int, _ sharePassages: Bool) -> [String: Any]
+    /// Details for one ranked item, or nil when that rank is not on screen.
+    let details: @MainActor (_ rank: Int, _ sharePassages: Bool) async throws -> [String: Any]?
 }
 
 /// The book a toolbox reads and the reader's position in it.
@@ -81,15 +104,24 @@ struct ReadingAgentBook {
 
 @MainActor
 final class ReadingAgentToolbox {
-    let book: ReadingAgentBook
+    let book: ReadingAgentBook?
+    let screen: ChatScreen?
+    /// Whether passages and notes from the screen may leave the device.
+    var sharePassages = true
     private let conversation: ([String]) -> String
     var activity: ((String) -> Void)?
     private(set) var steps: [String] = []
     var limits = AgentLimits()
     var indexDeadline: TimeInterval { TimeInterval(limits.preparationSeconds) }
 
-    init(book: ReadingAgentBook, conversation: @escaping ([String]) -> String) {
-        self.book = book; self.conversation = conversation
+    init(book: ReadingAgentBook?, screen: ChatScreen? = nil, conversation: @escaping ([String]) -> String) {
+        self.book = book; self.screen = screen; self.conversation = conversation
+    }
+    /// The tools this chat can use: the book's when one is open, the screen's when
+    /// the chat was opened from one, and earlier discussion always.
+    var tools: [AgentTool] {
+        let reading = book == nil ? AgentTool.all.filter { $0.name == "search_conversation" } : AgentTool.all
+        return (reading + (screen == nil ? [] : AgentTool.view)).filter { !limits.disabledTools.contains($0.name) }
     }
 
     /// Runs one call and returns JSON for the model. Bad arguments become an
@@ -98,6 +130,8 @@ final class ReadingAgentToolbox {
         let arguments = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any] ?? [:]
         if limits.disabledTools.contains(call.name) { return Self.json(["error": "\(call.name) is turned off in AI settings."]) }
         switch call.name {
+        case "get_current_view": return currentView(arguments)
+        case "get_item_details": return try await itemDetails(arguments)
         case "search_book": return try await search(arguments)
         case "read_passage": return try await read(arguments)
         case "list_chapters": return try await chapters(arguments)
@@ -121,7 +155,7 @@ final class ReadingAgentToolbox {
     /// Leaf's own first search, for a highlighted name or a follow-up's subject,
     /// presented to the model as an earlier tool call it can build on.
     func seed(_ selection: String?, followUp: String?, recorder: AgentTraceRecorder? = nil) async throws -> [AgentItem] {
-        guard limits.seedSearch, !limits.disabledTools.contains("search_book"),
+        guard book != nil, limits.seedSearch, !limits.disabledTools.contains("search_book"),
               let term = selection.flatMap(Self.nameLike) ?? followUp.flatMap(Self.nameLike) else { return [] }
         let call = AgentToolCall(id: "call_leaf_seed", name: "search_book", arguments: Self.json(["terms": [term]]))
         let output = String(try await run(call).prefix(limits.toolResultLimit))
@@ -146,17 +180,44 @@ final class ReadingAgentToolbox {
         let number = (value as? NSNumber)?.intValue ?? (value as? String).flatMap(Int.init) ?? fallback
         return min(range.upperBound, max(range.lowerBound, number))
     }
-    private func prepare() async throws -> BookTextIndex.Coverage {
+    private func currentView(_ arguments: [String: Any]) -> String {
+        guard let screen else { return Self.json(["error": "This chat was not opened from a screen with a list."]) }
+        activity?("Looking at \(screen.name)…")
+        let limit = Self.integer(arguments["max_items"], default: 30, in: 1...ChatScreen.itemLimit)
+        let view = screen.view(limit, sharePassages)
+        steps.append("read the \(screen.name) screen (\((view["items"] as? [Any])?.count ?? 0))")
+        return Self.json(view)
+    }
+    private func itemDetails(_ arguments: [String: Any]) async throws -> String {
+        guard let screen else { return Self.json(["error": "This chat was not opened from a screen with a list."]) }
+        guard arguments["rank"] != nil else { return Self.json(["error": "Provide rank from get_current_view."]) }
+        let rank = Self.integer(arguments["rank"], default: 1, in: 1...Int(Int32.max))
+        activity?("Looking at item \(rank) on \(screen.name)…")
+        do {
+            guard let details = try await screen.details(rank, sharePassages) else {
+                return Self.json(["error": "Nothing is at rank \(rank) on the screen now. Call get_current_view for the current list."])
+            }
+            steps.append("details for #\(rank)")
+            return Self.json(details)
+        } catch {
+            // A list that changed under the call is reported, not a stopped reply.
+            try Task.checkCancellation()
+            steps.append("details for #\(rank) unavailable")
+            return Self.json(["rank": rank, "error": "Details could not be loaded (\(String(error.localizedDescription.prefix(200)))). Answer from the listing in get_current_view."])
+        }
+    }
+    private func prepare(_ book: ReadingAgentBook) async throws -> BookTextIndex.Coverage {
         try await book.index.prepare(through: book.boundary, deadline: Date().addingTimeInterval(indexDeadline)) { [weak self] done, total in
             if total > 24 { self?.activity?("Reading the book… \(done)/\(total)") }
         }
     }
     private func search(_ arguments: [String: Any]) async throws -> String {
+        guard let book else { return Self.noBook }
         let terms = Self.terms(arguments)
         guard !terms.isEmpty else { return Self.json(["error": "Provide at least one term in terms."]) }
         let quoted = terms.map { "“\($0)”" }.joined(separator: ", ")
         activity?("Searching the book for \(quoted)…")
-        let coverage = try await prepare()
+        let coverage = try await prepare(book)
         let limit = Self.integer(arguments["max_results"], default: limits.resultsPerSearch, in: AgentLimits.resultRange)
         let (hits, counts) = book.index.search(terms, within: book.boundary, limit: limit)
         steps.append("searched \(quoted) (\(hits.count))")
@@ -172,6 +233,7 @@ final class ReadingAgentToolbox {
         return Self.json(body)
     }
     private func read(_ arguments: [String: Any]) async throws -> String {
+        guard let book else { return Self.noBook }
         guard arguments["section"] != nil else { return Self.json(["error": "Provide section."]) }
         let section = Self.integer(arguments["section"], default: 0, in: 0...Int(Int32.max))
         guard section <= book.boundary.section else {
@@ -189,8 +251,9 @@ final class ReadingAgentToolbox {
                           "end": passage.end, "has_more_before_reader_position": passage.more, "text": passage.text])
     }
     private func chapters(_ arguments: [String: Any]) async throws -> String {
+        guard let book else { return Self.noBook }
         activity?("Listing chapters…")
-        let coverage = try await prepare()
+        let coverage = try await prepare(book)
         let start = Self.integer(arguments["start"], default: 0, in: 0...Int(Int32.max))
         let count = Self.integer(arguments["count"], default: 40, in: 1...100)
         var items: [[String: Any]] = [], previous = ""
@@ -203,6 +266,7 @@ final class ReadingAgentToolbox {
         steps.append("listed chapters")
         return Self.json(["chapters": items, "reader_section": book.boundary.section, "sections_prepared": coverage.indexed])
     }
+    private static let noBook = json(["error": "No book is open in this chat."])
     nonisolated static func json(_ value: Any) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
               let text = String(data: data, encoding: .utf8) else { return "{\"error\":\"Result could not be encoded.\"}" }
@@ -224,7 +288,7 @@ enum ReadingAgentRunner {
         let recovery = recovery ?? ChatRetryBudget()
         var items = request.turns.map(AgentItem.turn) + seed
         var used = 0
-        let tools = limits.tools
+        let tools = toolbox.tools
         for round in 0..<limits.maxRounds {
             let allowTools = !tools.isEmpty && used < limits.maxToolCalls && round < limits.maxRounds - 1
             let (calls, text, images, truncated, usage) = try await recovery.run(round: round + 1, recorder: recorder, onRetry: {

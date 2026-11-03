@@ -22,6 +22,8 @@ final class ReaderChatSession: ObservableObject {
     private var imageRefusal: String?
     private var recall: (@MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall?)?
     private var agentBook: (@MainActor (ReadingChatContext) async throws -> ReadingAgentBook?)?
+    /// The app screen this chat was opened from, which the agent reads with view tools.
+    private var screen: ChatScreen?
     private var traceStore: AgentTraceStore?
     private var traceSource = (provider: "", model: "")
     private var agentLimits = AgentLimits()
@@ -143,7 +145,7 @@ final class ReaderChatSession: ObservableObject {
         flush()
     }
 
-    func send(settings: AISettingsStore, missingContextNotice: String? = "No readable page text was found. This question is sent without a passage; you can paste one yourself.", recall: (@MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall?)? = nil, agentBook: (@MainActor (ReadingChatContext) async throws -> ReadingAgentBook?)? = nil, traces: AgentTraceStore? = nil, context: @escaping @MainActor () async throws -> ReadingChatContext?) {
+    func send(settings: AISettingsStore, missingContextNotice: String? = "No readable page text was found. This question is sent without a passage; you can paste one yourself.", recall: (@MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall?)? = nil, agentBook: (@MainActor (ReadingChatContext) async throws -> ReadingAgentBook?)? = nil, screen: ChatScreen? = nil, traces: AgentTraceStore? = nil, context: @escaping @MainActor () async throws -> ReadingChatContext?) {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isSending, !question.isEmpty else { return }
         guard flush() else { return }
@@ -154,7 +156,7 @@ final class ReaderChatSession: ObservableObject {
         let sharePage = settings.configuration.sharePage
         let harness = settings.configuration.harness
         // Retries reuse the book access of the reader that sent the question.
-        self.recall = recall; self.agentBook = agentBook; traceStore = traces
+        self.recall = recall; self.agentBook = agentBook; self.screen = screen; traceStore = traces
         adopt(settings.configuration)
         let selected = selectedContext
         if hasNewerMessages { loadLatest(); guard historyError == nil else { return } }
@@ -301,23 +303,26 @@ final class ReaderChatSession: ObservableObject {
         let recorder: AgentTraceRecorder? = recordTraces && traceStore != nil ? AgentTraceRecorder(trace: AgentTrace(
             harness: harness, provider: traceSource.provider, model: traceSource.model, bookTitle: asked?.context?.title ?? "",
             chapter: asked?.context?.chapter ?? "", question: asked?.text ?? "",
-            selection: asked?.context?.source == "selection" ? asked?.context?.text : nil, limits: harness == .agent && sharePage ? agentLimits : nil)) : nil
+            selection: asked?.context?.source == "selection" ? asked?.context?.text : nil, limits: harness == .agent && (sharePage || screen != nil) ? agentLimits : nil)) : nil
         activeRecorder = recorder
         let recovery = ChatRetryBudget(policy: retryPolicy)
         do {
             let truncated: Bool
-            if harness == .agent, sharePage {
+            if harness == .agent, sharePage || screen != nil {
                 // Book text leaves the device only through tool results, which passage sharing governs.
+                // A screen's catalog listing is not book text; its passages and notes follow the same switch.
                 var book: ReadingAgentBook?
-                if let context = history.last(where: \.isUser)?.context, let agentBook { book = try? await agentBook(context) }
+                if sharePage, let context = history.last(where: \.isUser)?.context, let agentBook { book = try? await agentBook(context) }
                 try Task.checkCancellation()
-                if let tools = provider as? any ToolChatProvider, let book {
-                    let toolbox = ReadingAgentToolbox(book: book) { [weak self] terms in self?.conversationMatches(terms) ?? "{\"matches\":[]}" }
-                    toolbox.limits = agentLimits
+                if let tools = provider as? any ToolChatProvider, book != nil || screen != nil {
+                    let toolbox = ReadingAgentToolbox(book: book, screen: book == nil ? screen : nil) { [weak self] terms in self?.conversationMatches(terms) ?? "{\"matches\":[]}" }
+                    toolbox.limits = agentLimits; toolbox.sharePassages = sharePage
                     toolbox.activity = { [weak self] text in if self?.generation == token { self?.activity = text } }
                     do {
-                        let request = ChatRequest.conversation(history, harness: .agent, limits: contextLimits)
-                        recorder?.context(system: request.system, turns: request.turns, detail: Self.traceDetail(asked?.context?.bounded(contextLimits), boundary: book.boundary, limits: agentLimits))
+                        let request = ChatRequest.conversation(history, harness: .agent, screen: book == nil ? screen?.name : nil, limits: contextLimits)
+                        let detail = book.map { Self.traceDetail(asked?.context?.bounded(contextLimits), boundary: $0.boundary, limits: agentLimits) }
+                            ?? "\(screen?.name ?? "") screen · limits \(agentLimits.maxToolCalls) calls / \(agentLimits.maxRounds) rounds"
+                        recorder?.context(system: request.system, turns: request.turns, detail: detail)
                         // A highlighted name is searched before the model answers, so a
                         // “who is this” reply always starts from the book, not the chat.
                         let question = history.last(where: \.isUser)
@@ -338,14 +343,17 @@ final class ReaderChatSession: ObservableObject {
                         trace.steps = toolbox.steps; truncated = outcome.truncated
                     } catch ReadingAgentError.toolsUnsupported {
                         trace.steps = []; trace.fellBack = true
-                        truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace, recorder: recorder, recovery: recovery)
+                        truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace, recorder: recorder, recovery: recovery, sharePage: sharePage)
                     }
                 } else {
                     // A provider without tool support, or a book without readable text.
                     trace.fellBack = !(provider is any ToolChatProvider)
                     if !trace.fellBack { trace.steps = [agentBook == nil ? "no book open" : "book text unavailable"] }
-                    truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace, recorder: recorder, recovery: recovery)
+                    truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace, recorder: recorder, recovery: recovery, sharePage: sharePage)
                 }
+            } else if screen != nil {
+                // Without tools the screen's list travels with the question instead.
+                truncated = try await streamEvidence(provider: provider, history: history, earlier: earlier, id: id, token: token, trace: &trace, recorder: recorder, recovery: recovery, sharePage: sharePage)
             } else {
                 if !sharePage { trace.steps = ["passage sharing off"] }
                 else if let recall = history.last(where: \.isUser)?.context?.bookRecall {
@@ -473,9 +481,26 @@ final class ReaderChatSession: ObservableObject {
         if let term = context.bookRecall?.term, !term.isEmpty { return term }
         return context.source == "selection" ? ReadingAgentToolbox.nameLike(context.text) : nil
     }
+    /// A screen's list for a request without tools: the top items, kept within a few thousand characters.
+    static func screenText(_ screen: ChatScreen, sharePassages: Bool) -> (json: String, items: Int) {
+        var limit = 30
+        while true {
+            let view = screen.view(limit, sharePassages)
+            let json = ReadingAgentToolbox.json(view)
+            let items = (view["items"] as? [Any])?.count ?? 0
+            if json.count <= 12_000 || limit <= 5 { return (String(json.prefix(12_000)), items) }
+            limit /= 2
+        }
+    }
     /// The pre-fetched evidence harness, also the agent's fallback.
     private func streamEvidence(provider: any ChatProvider, history: [ReaderChatMessage], earlier: [ReaderChatMessage], id: UUID, token: UUID, trace: inout ChatTrace,
-                                recorder: AgentTraceRecorder? = nil, recovery: ChatRetryBudget) async throws -> Bool {
+                                recorder: AgentTraceRecorder? = nil, recovery: ChatRetryBudget, sharePage: Bool = true) async throws -> Bool {
+        if let screen {
+            let view = Self.screenText(screen, sharePassages: sharePage)
+            trace.steps.append("sent the \(screen.name) screen as text (\(view.items))")
+            return try await stream(ChatRequest.conversation(history, earlierMessages: earlier, screen: screen.name, screenView: view.json, limits: contextLimits),
+                                    provider: provider, into: id, token: token, recorder: recorder, recovery: recovery, detail: "\(screen.name) screen as text")
+        }
         var history = history
         if let index = history.lastIndex(where: \.isUser), var context = history[index].context, context.bookRecall == nil, let recall,
            let term = ReadingBookRecall.lookupTerm(question: history[index].text, context: context, previous: Self.previousSubject(Array(history[..<index]))) {
@@ -650,6 +675,16 @@ extension UITestChatProvider: ToolChatProvider {
                     try await Task.sleep(for: .milliseconds(150))
                     continuation.yield(.usage(TokenUsage(input: 1200 + items.count * 300, output: 30, cachedInput: 800)))
                     let results = items.compactMap { item -> [AgentToolResult]? in if case .toolResults(let value) = item { return value }; return nil }.last
+                    if tools.contains(where: { $0.name == "get_current_view" }) {
+                        if let output = results?.first(where: { $0.name == "get_current_view" })?.output {
+                            let object = (try? JSONSerialization.jsonObject(with: Data(output.utf8))) as? [String: Any] ?? [:]
+                            let rows = (object["items"] as? [[String: Any]] ?? []).prefix(3).map { "\($0["rank"] ?? "?"). \($0["title"] ?? $0["book"] ?? "?")" }
+                            continuation.yield(.text("Screen reply: \(object["list"] ?? "?") · \(rows.joined(separator: "; "))"))
+                        } else {
+                            continuation.yield(.toolCall(AgentToolCall(id: "call_view", name: "get_current_view", arguments: ReadingAgentToolbox.json(["max_items": 5]))))
+                        }
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
                     guard let output = results?.first?.output else {
                         let question = items.compactMap { item -> String? in if case .turn(let turn) = item, turn.role == "user" { return turn.content }; return nil }.last ?? ""
                         let asked = question.components(separatedBy: "Reader question:\n").last ?? question

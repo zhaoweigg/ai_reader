@@ -478,11 +478,14 @@ final class ZLibraryStore: ObservableObject {
     #if DEBUG
     @Published private(set) var loadTrace: [String] = []
     #endif
-    func details(_ book: ZLibraryBook) async throws -> ZLibraryBook {
-        if let cached = (books + shelf).first(where: { $0.id == book.id }), !cached.fileExtension.isEmpty { return cached }
+    /// One edition's details; `description` also fetches a listed book for its description.
+    func details(_ book: ZLibraryBook, description: Bool = false) async throws -> ZLibraryBook {
+        if let cached = (books + shelf).first(where: { $0.id == book.id }), !cached.fileExtension.isEmpty, !description || cached.summary != nil { return cached }
         let token = generation, source = origin
         do {
-            let resolved = try await client.details(book, origin: source, session: session)
+            var resolved = try await client.details(book, origin: source, session: session)
+            // Fetched without one: the catalog has no description, so it is not asked again.
+            if description, resolved.summary == nil { resolved.summary = "" }
             try Task.checkCancellation()
             guard token == generation else { throw CancellationError() }
             if let index = books.firstIndex(where: { $0.id == book.id }) { books[index] = resolved }

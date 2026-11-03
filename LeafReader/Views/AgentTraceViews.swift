@@ -16,7 +16,7 @@ struct AgentLimitsSection: View {
             Toggle("Search highlighted name first", isOn: $configuration.agentLimits.seedSearch).accessibilityIdentifier("agentSeedSearch")
         } header: { Text("Agent limits") }
         Section {
-            ForEach(AgentTool.all.map(\.name), id: \.self) { name in
+            ForEach((AgentTool.all + AgentTool.view).map(\.name), id: \.self) { name in
                 Toggle(name, isOn: Binding(get: { !configuration.agentLimits.disabledTools.contains(name) }, set: { on in
                     if on { configuration.agentLimits.disabledTools.remove(name) } else { configuration.agentLimits.disabledTools.insert(name) }
                 })).font(.system(.body, design: .monospaced)).accessibilityIdentifier("agentTool-\(name)")

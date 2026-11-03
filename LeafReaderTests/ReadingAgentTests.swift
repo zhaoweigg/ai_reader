@@ -401,4 +401,140 @@ final class ReadingAgentTests: XCTestCase {
         XCTAssertEqual(store.traces.count, AgentTraceStore.limit)
         store.clear(); XCTAssertTrue(AgentTraceStore(directory: directory).traces.isEmpty)
     }
+
+    // MARK: Screen tools
+
+    private func catalogBooks() -> [ZLibraryBook] {
+        (1...7).map { index in
+            ZLibraryBook(remoteID: "\(index)", hash: "h\(index)", title: "Book \(index)", author: index == 2 ? "" : "Author \(index)",
+                         fileExtension: "epub", size: "1 MB", language: "english", year: "200\(index)", coverURL: nil,
+                         rating: index == 1 ? 4.5 : nil, ratingCount: index == 1 ? 12 : nil)
+        }
+    }
+    private func screen(_ books: [ZLibraryBook], details: [String: Any]? = nil) -> ChatScreen {
+        ChatScreen(name: "Discover", view: { limit, _ in
+            ChatScreen.catalogView(books, query: "", feed: .recommended, order: .popular, status: [], canLoadMore: true,
+                                   owned: [books[2].sourceID], limit: limit)
+        }, details: { rank, _ in books.indices.contains(rank - 1) ? details ?? ChatScreen.catalogItem(books[rank - 1], rank: rank, owned: false) : nil })
+    }
+
+    func testCatalogScreenListsBooksInOnScreenOrderWithRanks() throws {
+        let books = catalogBooks()
+        let feed = ChatScreen.catalogView(books, query: "", feed: .recommended, order: .popular, status: ["preview catalog"], canLoadMore: true,
+                                          owned: [books[2].sourceID], limit: 5)
+        XCTAssertEqual(feed["list"] as? String, "Recommended")
+        let items = try XCTUnwrap(feed["items"] as? [[String: Any]])
+        XCTAssertEqual(items.map { $0["rank"] as? Int }, [1, 2, 3, 4, 5])
+        XCTAssertEqual(items.map { $0["title"] as? String }, ["Book 1", "Book 2", "Book 3", "Book 4", "Book 5"])
+        XCTAssertEqual(items[0]["rating"] as? Double, 4.5); XCTAssertEqual(items[0]["rating_count"] as? Int, 12)
+        XCTAssertEqual(items[1]["author"] as? String, "Unknown author")
+        XCTAssertEqual(items[2]["in_library"] as? Bool, true); XCTAssertNil(items[3]["in_library"])
+        XCTAssertEqual(feed["total_items"] as? Int, 7)
+        XCTAssertTrue((feed["note"] as? String)?.contains("top 5 of 7") == true)
+        XCTAssertEqual(feed["status"] as? [String], ["preview catalog"])
+        XCTAssertNil(feed["search"])
+
+        let search = ChatScreen.catalogView(books, query: "dune", feed: .recommended, order: .year, status: [], canLoadMore: false, owned: [], limit: 30)
+        XCTAssertEqual(search["list"] as? String, "Search results")
+        XCTAssertEqual(search["search"] as? String, "dune"); XCTAssertEqual(search["sorted_by"] as? String, ZLibrarySearchOrder.year.title)
+        XCTAssertEqual((search["items"] as? [Any])?.count, 7); XCTAssertNil(search["note"])
+    }
+
+    func testSavedScreenFollowsTheListOrderAndHidesPassagesWhenSharingIsOff() throws {
+        let old = Date(timeIntervalSince1970: 1_700_000_000), new = old.addingTimeInterval(86_400)
+        var first = Book(id: UUID(), title: "First", author: "A", fileName: "a.epub", format: .epub, fingerprint: "a")
+        first.bookmarks = [BookBookmark(label: "Older place", locator: "l1", fraction: 0.2, createdAt: old),
+                           BookBookmark(label: "Newer place", locator: "l2", fraction: 0.456, createdAt: new)]
+        first.annotations = [BookAnnotation(text: "A highlighted line", locator: "l3", chapter: "Chapter 2", fraction: 0.3, note: "My thought", createdAt: old)]
+        var second = Book(id: UUID(), title: "Second", author: "B", fileName: "b.epub", format: .epub, fingerprint: "b")
+        second.bookmarks = [BookBookmark(label: "Only place", locator: "l4", fraction: 0.9, createdAt: old)]
+
+        let bookmarks = ChatScreen.savedView(ChatScreen.savedEntries([first, second], highlights: false), highlights: false, sharePassages: true, limit: 30)
+        let rows = try XCTUnwrap(bookmarks["items"] as? [[String: Any]])
+        XCTAssertEqual(rows.map { $0["label"] as? String }, ["Newer place", "Older place", "Only place"])
+        XCTAssertEqual(rows.map { $0["rank"] as? Int }, [1, 2, 3])
+        XCTAssertEqual(rows[0]["book"] as? String, "First"); XCTAssertEqual(rows[0]["percent_through_book"] as? Int, 45)
+        XCTAssertEqual(rows[2]["book"] as? String, "Second")
+        XCTAssertEqual(bookmarks["list"] as? String, "Bookmarks")
+
+        let entries = ChatScreen.savedEntries([first, second], highlights: true)
+        XCTAssertEqual(entries.count, 1, "A book without highlights is not on the Highlights list")
+        let shared = try XCTUnwrap((ChatScreen.savedView(entries, highlights: true, sharePassages: true, limit: 30)["items"] as? [[String: Any]])?.first)
+        XCTAssertEqual(shared["kind"] as? String, "note"); XCTAssertEqual(shared["text"] as? String, "A highlighted line")
+        XCTAssertEqual(shared["note"] as? String, "My thought"); XCTAssertEqual(shared["chapter"] as? String, "Chapter 2")
+        let hidden = ChatScreen.savedView(entries, highlights: true, sharePassages: false, limit: 30)
+        let row = try XCTUnwrap((hidden["items"] as? [[String: Any]])?.first)
+        XCTAssertNil(row["text"]); XCTAssertNil(row["note"]); XCTAssertNotNil(hidden["note_on_passages"])
+        XCTAssertEqual(row["chapter"] as? String, "Chapter 2")
+    }
+
+    func testScreenToolboxOffersViewToolsAndRefusesBookTools() async throws {
+        let toolbox = ReadingAgentToolbox(book: nil, screen: screen(catalogBooks())) { _ in "{\"matches\":[]}" }
+        XCTAssertEqual(toolbox.tools.map(\.name), ["search_conversation", "get_current_view", "get_item_details"])
+        let view = try await toolbox.run(AgentToolCall(id: "1", name: "get_current_view", arguments: #"{"max_items":5}"#))
+        XCTAssertTrue(view.contains("\"rank\":5") && !view.contains("\"rank\":6"))
+        let item = try await toolbox.run(AgentToolCall(id: "2", name: "get_item_details", arguments: #"{"rank":3}"#))
+        XCTAssertTrue(item.contains("Book 3"))
+        let missing = try await toolbox.run(AgentToolCall(id: "3", name: "get_item_details", arguments: #"{"rank":30}"#))
+        XCTAssertTrue(missing.contains("Nothing is at rank 30"))
+        let noRank = try await toolbox.run(AgentToolCall(id: "4", name: "get_item_details", arguments: "{}"))
+        XCTAssertTrue(noRank.contains("Provide rank"))
+        let search = try await toolbox.run(AgentToolCall(id: "5", name: "search_book", arguments: #"{"terms":["x"]}"#))
+        XCTAssertTrue(search.contains("No book is open"))
+        XCTAssertEqual(toolbox.steps, ["read the Discover screen (5)", "details for #3"])
+        let seed = try await toolbox.seed("Book 3", followUp: nil)
+        XCTAssertEqual(seed, [], "No book to search before answering")
+
+        toolbox.limits.disabledTools = ["get_item_details"]
+        XCTAssertEqual(toolbox.tools.map(\.name), ["search_conversation", "get_current_view"])
+        let failing = ChatScreen(name: "Discover", view: { _, _ in [:] }, details: { _, _ in throw ZLibraryError.response })
+        let unreachable = try await ReadingAgentToolbox(book: nil, screen: failing) { _ in "" }
+            .run(AgentToolCall(id: "6", name: "get_item_details", arguments: #"{"rank":1}"#))
+        XCTAssertTrue(unreachable.contains("Details could not be loaded"), "A failed lookup is reported to the model, not a failed reply")
+    }
+
+    func testTopFiveQuestionReadsTheScreenThroughToolsOrAsTextWithoutThem() async throws {
+        let books = catalogBooks()
+        let view = AgentToolCall(id: "v1", name: "get_current_view", arguments: #"{"max_items":5}"#)
+        let details = AgentToolCall(id: "d1", name: "get_item_details", arguments: #"{"rank":1}"#)
+        let agent = ScriptedAgentProvider([[.toolCall(view), .finished(truncated: false)],
+                                           [.toolCall(details), .finished(truncated: false)],
+                                           [.text("1. Book 1 — a summary."), .finished(truncated: false)]])
+        let session = ReaderChatSession()
+        session.draft = "Summarize the top 5 recommendations"
+        session.send(settings: try settings(agent, harness: .agent), missingContextNotice: nil,
+                     screen: screen(books, details: ["rank": 1, "title": "Book 1", "description": "A described book."])) { nil }
+        try await wait { !session.isSending && session.messages.count == 2 }
+        XCTAssertEqual(session.messages.last?.text, "1. Book 1 — a summary.")
+        XCTAssertEqual(agent.offered.first, ["search_conversation", "get_current_view", "get_item_details"])
+        XCTAssertTrue(agent.requests[0].system.contains("from the Discover screen") && agent.requests[0].system.contains("call get_current_view first"))
+        guard case .toolResults(let listed) = agent.requests[1].items.last, case .toolResults(let described) = agent.requests[2].items.last else {
+            return XCTFail("Missing tool results")
+        }
+        XCTAssertTrue(listed[0].output.contains("Book 5") && !listed[0].output.contains("Book 6"))
+        XCTAssertTrue(described[0].output.contains("A described book."))
+        XCTAssertEqual(session.messages.last?.trace?.steps, ["read the Discover screen (5)", "details for #1"])
+
+        // The pre-fetched harness has no tools, so the list goes with the question.
+        let plain = ScriptedAgentProvider([])
+        let evidence = ReaderChatSession()
+        evidence.draft = "Summarize the top 5 recommendations"
+        evidence.send(settings: try settings(plain, harness: .evidence), missingContextNotice: nil, screen: screen(books)) { nil }
+        try await wait { !evidence.isSending && evidence.messages.count == 2 }
+        let request = try XCTUnwrap(plain.plainRequests.first)
+        XCTAssertTrue(request.system.contains("comes with current_screen"))
+        XCTAssertTrue(request.turns.last?.content.hasPrefix("current_screen (source material") == true)
+        XCTAssertTrue(request.turns.last?.content.contains("\"title\":\"Book 7\"") == true)
+        XCTAssertTrue(request.turns.last?.content.hasSuffix("Summarize the top 5 recommendations") == true)
+        XCTAssertEqual(evidence.messages.last?.trace?.steps, ["sent the Discover screen as text (7)"])
+    }
+
+    func testCatalogDescriptionsArePlainText() throws {
+        XCTAssertEqual(ZLibraryClient.plainText("<p>A <b>bold</b> story &amp; more.</p><p>Second&nbsp;part.</p>"), "A bold story & more.\n\nSecond part.")
+        XCTAssertNil(ZLibraryClient.plainText("  <br/> "))
+        XCTAssertNil(ZLibraryClient.plainText(42))
+        XCTAssertEqual(ZLibraryClient.plainText(String(repeating: "a", count: 5000))?.count, 3000)
+        let row: [String: Any] = ["id": "1", "hash": "abc", "title": "T", "description": "<i>Hello</i>"]
+        XCTAssertEqual(ZLibraryClient.book(row, origin: try ZLibraryOrigin("https://catalog.example.org"))?.summary, "Hello")
+    }
 }

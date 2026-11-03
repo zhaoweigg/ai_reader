@@ -30,7 +30,7 @@ struct LeafReaderApp: App {
             }
             if UITesting.flag("LEAF_UI_CHAT_RECOVERY") { chatProvider = UITestRecoveryChatProvider() }
             defaults = UITesting.defaults
-            if UITesting.flag("LEAF_UI_CHAT_RECOVERY_AGENT") {
+            if UITesting.flag("LEAF_UI_CHAT_RECOVERY_AGENT") || UITesting.flag("LEAF_UI_CHAT_AGENT") {
                 var configuration = ChatConfiguration(); configuration.harness = .agent
                 defaults.set(try? JSONEncoder().encode(configuration), forKey: "ai.configuration")
             }
@@ -57,6 +57,12 @@ struct LeafReaderApp: App {
         #endif
         let libraryStore = LibraryStore(root: root, seedSamples: seedSamples)
         _library = StateObject(wrappedValue: libraryStore)
+        #if DEBUG
+        // A saved place for the Bookmarks tab's chat, without opening a book first.
+        if UITesting.flag("LEAF_UI_SAVED_FIXTURE"), let book = libraryStore.books.first(where: { $0.format != .pdf }), book.bookmarks.isEmpty {
+            libraryStore.toggleBookmark(book.id, locator: "leaf-ui-saved-fixture", fraction: 0.42, label: "Fixture bookmark")
+        }
+        #endif
         _agentTraces = StateObject(wrappedValue: AgentTraceStore(directory: libraryStore.disk?.root.appendingPathComponent("AgentTraces", isDirectory: true)))
         _aiSettings = StateObject(wrappedValue: AISettingsStore(defaults: defaults, credentials: chatCredentials, providerOverride: chatProvider, chatGPTOverride: chatGPT))
         var catalogCredentials = chatCredentials
@@ -107,6 +113,7 @@ struct AppView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = AppTab.library
     @State private var discoverStack = UUID()
+    @StateObject private var discoverChat = TabChat()
     @State private var importing = false
     @State private var destination: ReadingDestination?
     @State private var pendingURLs: [URL] = []
@@ -121,6 +128,8 @@ struct AppView: View {
                 // Returning to the library also leaves the details of an added book.
                 ZLibraryView(close: { tab = .library; discoverStack = UUID() })
             }.id(discoverStack)
+                .modifier(TabChatHost(chat: discoverChat, finishMovingIdentifier: "finishMovingDiscoverChatButton",
+                                      screen: { ChatScreen.discover(catalog, library: library) }))
                 .tabItem { Label("Discover", systemImage: "safari") }.tag(AppTab.discover)
             BookmarksView(onOpen: { id, locator in open(id, locator: locator) })
                 .tabItem { Label("Bookmarks", systemImage: "bookmark") }.tag(AppTab.bookmarks)
