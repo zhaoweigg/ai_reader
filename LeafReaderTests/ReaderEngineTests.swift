@@ -2344,6 +2344,9 @@ final class ReaderEngineTests: XCTestCase {
             let points = ring.points
             XCTAssertEqual(points.count, count)
             for point in points { XCTAssertTrue(safe.contains(point), "\(center): \(point)") }
+            // The track's rounded ends stay on screen too.
+            let track = CGRect(origin: .zero, size: size).insetBy(dx: ReaderChatPlacement.ThemeRing.track / 2, dy: ReaderChatPlacement.ThemeRing.track / 2)
+            for point in [points.first!, points.last!] { XCTAssertTrue(track.contains(point), "\(center): \(point)") }
             for (a, b) in zip(points, points.dropFirst()) {
                 XCTAssertGreaterThanOrEqual(hypot(a.x - b.x, a.y - b.y), 44, "Each choice keeps a 44 pt target")
             }

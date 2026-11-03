@@ -3225,6 +3225,43 @@ final class LeafReaderUITests: XCTestCase {
         waitForExpectations(timeout: 3)
         capture(flow + " Paper in landscape", app: app)
     }
+    /// PDF uses the same launcher over its own page view: quick themes apply and a tap away
+    /// closes them without changing the page.
+    @MainActor func testTwinButtonQuickThemesInPDF() {
+        orient(.portrait)
+        defer { orient(.portrait) }
+        let app = launchApp()
+        let search = app.textFields["librarySearch"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Coast")
+        app.buttons["book-Notes from the Coast"].tap()
+        waitForBook(app)
+        let surface = readingSurface(app)
+        let launcher = app.buttons["openReaderChat"], themes = app.buttons["openReaderThemes"]
+        XCTAssertTrue(themes.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(themes.frame.midX, launcher.frame.midX + 20)
+        XCTAssertLessThan(themes.frame.midY, launcher.frame.midY - 20)
+        themes.tap()
+        let night = app.buttons["quickTheme-night"]
+        XCTAssertTrue(night.waitForExistence(timeout: 3))
+        for name in ["day", "paper", "night", "sepia", "sage", "dusk", "black"] {
+            let choice = app.buttons["quickTheme-" + name]
+            XCTAssertTrue(choice.isHittable, name)
+            XCTAssertTrue(surface.frame.contains(CGPoint(x: choice.frame.midX, y: choice.frame.midY)), name)
+        }
+        capture("PDF quick themes open", app: app)
+        night.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: night)
+        waitForExpectations(timeout: 3)
+        XCTAssertEqual(themes.value as? String, "Night")
+        capture("PDF Night from quick themes", app: app)
+        themes.tap()
+        XCTAssertTrue(night.waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.3)).tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: night)
+        waitForExpectations(timeout: 3)
+        XCTAssertFalse(app.buttons["closeBook"].exists, "A tap away does not reveal the PDF controls")
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists)
+    }
     @MainActor func testLongPressMoveAndTapAwayInPages() { verifyMovableButton(in: "Pages") }
     @MainActor func testLongPressMoveAndTapAwayInScroll() { verifyMovableButton(in: "Scroll") }
 

@@ -369,6 +369,7 @@ enum ReaderChatPlacement {
     struct ThemeRing: Equatable {
         static let radius: CGFloat = 104
         static let swatch: CGFloat = 36
+        static let track: CGFloat = swatch + 10
         let center: CGPoint
         let angles: [Double]
         var points: [CGPoint] {
@@ -380,7 +381,8 @@ enum ReaderChatPlacement {
         let span = 150 * Double.pi / 180
         let angles = (0..<max(count, 1)).map { toward - span / 2 + span * Double($0) / Double(max(count - 1, 1)) }
         let unshifted = ThemeRing(center: center, angles: angles).points
-        let margin = ThemeRing.swatch / 2 + 8
+        // Room for the track around each choice, so the arc never runs off the screen edge.
+        let margin = ThemeRing.track / 2 + 6
         let safe = CGRect(origin: .zero, size: size).insetBy(dx: min(margin, size.width / 2), dy: min(margin, size.height / 2))
         let minX = unshifted.map(\.x).min() ?? center.x, maxX = unshifted.map(\.x).max() ?? center.x
         let minY = unshifted.map(\.y).min() ?? center.y, maxY = unshifted.map(\.y).max() ?? center.y
@@ -482,11 +484,11 @@ private struct ReaderChatThemeRing: View {
         ZStack {
             Path { path in
                 guard let first = ring.angles.first, let last = ring.angles.last else { return }
-                let overhang = 0.22
+                // Round caps end the track just past the first and last choice.
                 path.addRelativeArc(center: ring.center, radius: ReaderChatPlacement.ThemeRing.radius,
-                                    startAngle: .radians(first - overhang), delta: .radians(last - first + overhang * 2))
+                                    startAngle: .radians(first), delta: .radians(last - first))
             }
-            .stroke(theme.surface.opacity(0.94), style: StrokeStyle(lineWidth: swatch + 14, lineCap: .round))
+            .stroke(theme.surface.opacity(0.94), style: StrokeStyle(lineWidth: ReaderChatPlacement.ThemeRing.track, lineCap: .round))
             .shadow(color: .black.opacity(0.18), radius: 10, y: 5)
             .allowsHitTesting(false)
             ForEach(Array(ReadingTheme.allCases.enumerated()), id: \.element) { index, option in
