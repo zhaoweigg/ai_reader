@@ -46,8 +46,8 @@ final class ReaderEngineTests: XCTestCase {
         while !condition() && Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertTrue(condition(), "Timed out waiting for reader. Error: \(model?.error ?? "none")")
     }
-    private func assertOpened(_ model: ReaderModel, contains text: String) async throws {
-        try await waitUntil { model.isReady || model.error != nil }
+    private func assertOpened(_ model: ReaderModel, contains text: String, timeout: TimeInterval = 20) async throws {
+        try await waitUntil({ model.isReady || model.error != nil }, timeout: timeout)
         XCTAssertNil(model.error)
         XCTAssertTrue(model.isReady)
         let rendered = try await model.webView?.evaluateJavaScript("window.Leaf.visibleText()") as? String
@@ -2816,7 +2816,9 @@ final class ReaderEngineTests: XCTestCase {
         let (book, url) = try prepare("ChapterDividerChinese.epub", format: .epub, fixtures: true)
         var base = preferences; base.scrolling = scrolling
         let model = try show(book, url: url, readerPreferences: base)
-        try await assertOpened(model, contains: "窗外")
+        // Match native book-opening checks: cold WebKit services can outlast
+        //20s under parallel simulator load; this waits on readiness, not a fixed sleep.
+        try await assertOpened(model, contains: "窗外", timeout: 60)
         let web = try XCTUnwrap(model.webView)
         var rows: [[String: Any]] = []
         for viewport in [CGSize(width: 390, height: 720), CGSize(width: 720, height: 390)] {
