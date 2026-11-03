@@ -6,7 +6,7 @@ final class ReaderChatSession: ObservableObject {
     @Published private(set) var messages: [ReaderChatMessage] = []
     @Published var draft = "" { didSet { if !restoring { draftDirty = true; scheduleCheckpoint() } } }
     @Published private(set) var selectedContext: ReadingChatContext?
-    @Published private(set) var isSending = false
+    @Published private(set) var isSending = false { didSet { if isSending != oldValue { isSending ? holdInBackground() : releaseBackground() } } }
     @Published private(set) var error: String?
     @Published private(set) var notice: String?
     @Published private(set) var historyError: String?
@@ -43,11 +43,29 @@ final class ReaderChatSession: ObservableObject {
     private var generation = UUID()
     private var task: Task<Void, Never>?
     var canRetry: Bool { !isSending && !hasNewerMessages && messages.last?.isUser == false && messages.last?.state != .complete }
+    /// iOS suspends Leaf seconds after it leaves the screen and cuts its connections. A reply keeps
+    /// running for the short extra time iOS grants, and one cut off there continues on return.
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var backgroundedDuringReply = false
+    private var resumeOnForeground = false
+    private weak var replySettings: AISettingsStore?
+    var appInBackground: () -> Bool = { UIApplication.shared.applicationState == .background }
+    static let resumedNotice = "Leaf left the screen during this reply, so it was asked again."
     var canSaveHistory: Bool { history != nil && historyReadable }
 
     init(history: (any ChatHistoryStorage)? = nil, imageDirectory: URL? = nil) {
         self.history = history; historyRequired = history != nil
         self.imageDirectory = imageDirectory ?? FileManager.default.temporaryDirectory.appendingPathComponent("LeafChatImages", isDirectory: true)
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appDidEnterBackground() }
+            },
+            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appWillEnterForeground() }
+            }
+        ]
         if let history {
             do { draft = try history.loadDraft(); selectedContext = try history.loadSelectedContext(); apply(try history.page(before: nil, after: nil, limit: 24)); restoredNotice() }
             catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription }
@@ -155,6 +173,7 @@ final class ReaderChatSession: ObservableObject {
         catch { self.error = error.localizedDescription; return }
         let sharePage = settings.configuration.sharePage
         let harness = settings.configuration.harness
+        replySettings = settings
         // Retries reuse the book access of the reader that sent the question.
         self.recall = recall; self.agentBook = agentBook; self.screen = screen; traceStore = traces
         adopt(settings.configuration)
@@ -230,6 +249,7 @@ final class ReaderChatSession: ObservableObject {
         guard canRetry, flush() else { return }
         do {
             let provider = try settings.provider()
+            replySettings = settings
             if let id = messages.last?.id { try history?.remove(id) }
             messages.removeLast() // Retain the original question and passage snapshot.
             let configuration = settings.configuration
@@ -250,7 +270,32 @@ final class ReaderChatSession: ObservableObject {
         notice = "Response stopped."
         flush(); refreshLatest()
     }
-    func close() { stop(); flush() }
+    func close() { resumeOnForeground = false; stop(); flush() }
+
+    func appDidEnterBackground() {
+        if isSending { backgroundedDuringReply = true }
+    }
+    func appWillEnterForeground() {
+        guard resumeOnForeground else { return }
+        resumeOnForeground = false
+        resumeInterruptedReply()
+    }
+    private func holdInBackground() {
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Ask Leaf reply") { [weak self] in
+            MainActor.assumeIsolated { self?.releaseBackground() }
+        }
+    }
+    private func releaseBackground() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask); backgroundTask = .invalid
+    }
+    /// Asks the interrupted question again, as Retry does, once Leaf is back on screen.
+    private func resumeInterruptedReply() {
+        guard let settings = replySettings, canRetry, error == nil else { return }
+        retry(settings: settings)
+        if isSending { notice = Self.resumedNotice }
+    }
     func clear() {
         stop(); checkpoint?.cancel(); checkpoint = nil
         guard history != nil || !historyRequired else { return }
@@ -270,10 +315,14 @@ final class ReaderChatSession: ObservableObject {
             oldest = nil; newest = nil; hasEarlierMessages = false; hasNewerMessages = false
         } catch { historyError = "The saved conversation could not be cleared. Your history has been kept. Try again." }
     }
-    deinit { task?.cancel(); checkpoint?.cancel() }
+    deinit {
+        task?.cancel(); checkpoint?.cancel()
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        if backgroundTask != .invalid { let task = backgroundTask; Task { @MainActor in UIApplication.shared.endBackgroundTask(task) } }
+    }
 
     private func start(_ operation: @escaping @MainActor (UUID) async -> Void) {
-        error = nil; notice = nil; isSending = true
+        error = nil; notice = nil; backgroundedDuringReply = appInBackground(); resumeOnForeground = false; isSending = true
         let token = UUID(); generation = token
         task = Task { await operation(token) }
     }
@@ -380,6 +429,19 @@ final class ReaderChatSession: ObservableObject {
             guard generation == token else { return }
             if let index = messages.firstIndex(where: { $0.id == id }) {
                 messages[index].state = .failed; messages[index].trace = trace; changed(messages[index])
+            }
+            if backgroundedDuringReply, ChatRetryBudget.backgroundInterruption(error) {
+                // Not the reader's or the provider's fault: continue on return instead of showing an error.
+                recorder?.failed("Interrupted while Leaf was in the background.", outcome: .failed)
+                if let recorder { traceStore?.add(recorder.finish(outcome: .failed)) }
+                if appInBackground() {
+                    resumeOnForeground = true
+                    notice = "Leaf left the screen during this reply. It continues when you come back."
+                } else {
+                    Task { @MainActor [weak self] in self?.resumeInterruptedReply() }
+                }
+                activeRecorder = nil; activity = nil; isSending = false; task = nil; flush(); refreshLatest()
+                return
             }
             self.error = errorMessage(error)
             if let recorder {
@@ -560,6 +622,7 @@ final class ReaderChatSession: ObservableObject {
             default: return "Could not connect to the provider. Check the endpoint and your connection."
             }
         }
+        if ChatRetryBudget.socketDropped(error) { return "The connection was lost. Check your internet connection and retry." }
         return "Could not prepare the reading passage. Try again."
     }
 }
