@@ -326,6 +326,42 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["book-The Art of Noticing"].exists)
     }
 
+    @MainActor private func setReadingBold(_ enabled: Bool, app: XCUIApplication) {
+        let toggle = app.switches["boldReadingText"], expected = enabled ? "1" : "0"
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        if toggle.value as? String != expected {
+            // A labelled SwiftUI switch can expose the full Form row as its AX
+            // frame. Target the native switch thumb instead of the row's center.
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        }
+        expectation(for: NSPredicate(format: "value == %@", expected), evaluatedWith: toggle)
+        waitForExpectations(timeout: 5)
+    }
+
+    @MainActor func testBoldTextChatAndPersistenceInPages() { verifyChatResize(flow: "Pages", bold: true) }
+    @MainActor func testBoldTextChatAndPersistenceInScroll() { verifyChatResize(flow: "Scroll", bold: true) }
+    @MainActor func testBoldTextLauncherInPages() { verifyMovableButton(in: "Pages", bold: true) }
+    @MainActor func testBoldTextLauncherInScroll() { verifyMovableButton(in: "Scroll", bold: true) }
+
+    @MainActor func testBoldPreferenceKeepsPDFOriginalTextAndPersists() {
+        continueAfterFailure = false
+        let app = launchApp(); openSelectionFixture("PDF", app: app); waitForBook(app)
+        let paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Before the town")).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 8))
+        let text = paragraph.label, frame = paragraph.frame
+        openAppearance(app)
+        let toggle = app.switches["boldReadingText"]
+        XCTAssertEqual(toggle.value as? String, "0"); setReadingBold(true, app: app)
+        dismissAppearance(app)
+        XCTAssertEqual(paragraph.label, text); XCTAssertEqual(paragraph.frame, frame, "PDF text keeps its original layout")
+        capture("PDF preserves original text with Bold enabled", app: app)
+        showReaderControls(app); app.buttons["closeBook"].tap()
+        app.terminate(); app.launch(); openSelectionFixture("PDF", app: app); waitForBook(app)
+        openAppearance(app); XCTAssertEqual(toggle.value as? String, "1")
+        setReadingBold(false, app: app)
+        dismissAppearance(app)
+    }
+
     @MainActor func testPageLayoutSettingsPersistAcrossRelaunch() {
         let app = launchApp()
         app.swipeUp()
@@ -2710,7 +2746,8 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
-    @MainActor private func verifyChatResize(flow: String) {
+    @MainActor private func verifyChatResize(flow: String, bold: Bool = false) {
+        continueAfterFailure = false
         orient(.portrait)
         let app = launchApp()
         defer { orient(.portrait) }
@@ -2729,6 +2766,13 @@ final class LeafReaderUITests: XCTestCase {
             waitForExpectations(timeout:5)
         }
         openBook(); showReaderControls(app)
+        if bold {
+            openAppearance(app)
+            let toggle = app.switches["boldReadingText"]
+            XCTAssertEqual(toggle.value as? String, "0"); setReadingBold(true, app: app)
+            capture(flow + " Bold text option", app: app)
+            dismissAppearance(app); showReaderControls(app)
+        }
         if flow == "PDF" { app.buttons["nextPage"].tap() }
         else {
             app.buttons["Appearance"].tap()
@@ -2781,11 +2825,23 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["openReaderChat"].tap()
         XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        func waitForComposing() {
+            expectation(for: NSPredicate { _, _ in
+                let keyboard = app.keyboards.firstMatch
+                return app.buttons["Hide keyboard"].exists && keyboard.exists
+                    && keyboard.frame.intersection(app.frame).height > 100
+                    && panel.frame.maxY <= keyboard.frame.minY + 2
+            }, evaluatedWith: app)
+            waitForExpectations(timeout: 5)
+        }
         input.tap(); input.typeText("Keep my resize draft")
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        waitForComposing()
+        // First shrink to the composing minimum, then expand. The maximum can
+        // be only a few points above the default on a tall software keyboard.
+        resize(200)
         let compactHeight = panel.frame.height
         resize(-160)
-        XCTAssertGreaterThan(panel.frame.height, compactHeight + 70)
+        XCTAssertGreaterThan(panel.frame.height, compactHeight + 8)
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
         XCTAssertEqual(input.value as? String, "Keep my resize draft")
         XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists, "Expanded typing can show the conversation")
@@ -2807,8 +2863,9 @@ final class LeafReaderUITests: XCTestCase {
         focusProof.name = flow + " restored composer focus geometry"; focusProof.lifetime = .keepAlways; add(focusProof)
         capture(flow + " restored input before keyboard reopen", app: app)
         focusTarget.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout:5))
+        // A real key refreshes UIKit's cached offscreen keyboard after hiding it.
+        input.typeText("x"); input.typeText(XCUIKeyboardKey.delete.rawValue)
+        waitForComposing()
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
         hideKeyboardAndWait()
         orient(.landscapeLeft)
@@ -2820,8 +2877,8 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists)
         assertCompactChatHeader(app)
         capture(flow + " landscape expanded chat history", app: app)
-        input.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.tap(); input.typeText("x"); input.typeText(XCUIKeyboardKey.delete.rawValue)
+        waitForComposing()
         resize(-50)
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
         XCTAssertTrue(input.isHittable)
@@ -2840,6 +2897,11 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(app.buttons["toggleChatQuote"].value as? String, selected)
         assertCompactChatHeader(app)
         capture(flow + " resized chat restored after relaunch", app: app)
+        if bold {
+            app.buttons["closeReaderChat"].tap(); openAppearance(app)
+            XCTAssertEqual(app.switches["boldReadingText"].value as? String, "1", "Bold text survives closing and relaunching")
+            dismissAppearance(app)
+        }
     }
 
     @MainActor private func verifySentQuote(flow: String) {
@@ -3086,13 +3148,14 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testLongPressMoveAndTapAwayInPages() { verifyMovableButton(in: "Pages") }
     @MainActor func testLongPressMoveAndTapAwayInScroll() { verifyMovableButton(in: "Scroll") }
 
-    @MainActor private func verifyMovableButton(in flow: String) {
+    @MainActor private func verifyMovableButton(in flow: String, bold: Bool = false) {
         orient(.portrait)
         defer { orient(.portrait) }
         let app = launchApp()
         app.buttons["featuredBook"].tap()
         showReaderControls(app)
         app.buttons["Appearance"].tap()
+        if bold { setReadingBold(true, app: app) }
         app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
         app.segmentedControls["readingFlow"].buttons[flow].tap()
         dismissAppearance(app)
@@ -3272,7 +3335,9 @@ final class LeafReaderUITests: XCTestCase {
         capture("Scroll returns to previous chapter", app: app)
     }
 
-    @MainActor func testChatDismissesOnlyWithCloseOrTopBarSwipeInBothFlows() {
+    @MainActor func testChatDismissesOnlyWithCloseOrTopBarSwipeInBothFlows() { verifyChatDismissal(bold: false) }
+    @MainActor func testBoldTextChatDismissalInBothFlows() { verifyChatDismissal(bold: true) }
+    @MainActor private func verifyChatDismissal(bold: Bool) {
         orient(.portrait)
         let app = launchApp()
         defer { orient(.portrait) }
@@ -3283,6 +3348,7 @@ final class LeafReaderUITests: XCTestCase {
         for flow in ["Pages", "Scroll"] {
             showReaderControls(app)
             app.buttons["Appearance"].tap()
+            if bold { setReadingBold(true, app: app) }
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons[flow].tap()
             dismissAppearance(app)

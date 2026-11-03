@@ -26,6 +26,7 @@ struct ReaderContent: View {
     @AppStorage("reader.fontSize") private var fontSize = 19.0
     @AppStorage("reader.lineHeight") private var lineHeight = 1.65
     @AppStorage("reader.font") private var font = "Georgia"
+    @AppStorage("reader.boldText") private var boldText = false
     @AppStorage("reader.theme") private var themeName = ReadingTheme.day.rawValue
     @AppStorage("reader.scrolling") private var scrolling = false
     @AppStorage("reader.horizontalMargin") private var horizontalMargin = 20.0
@@ -50,7 +51,7 @@ struct ReaderContent: View {
     private var theme: ReadingTheme { ReadingTheme(rawValue: themeName) ?? .day }
     private var preferences: ReaderPreferences {
         ReaderPreferences(fontSize: fontSize, lineHeight: lineHeight, font: font, theme: theme, scrolling: scrolling,
-                          horizontalMargin: horizontalMargin, verticalMargin: verticalMargin, paragraphSpacing: paragraphSpacing)
+                          horizontalMargin: horizontalMargin, verticalMargin: verticalMargin, paragraphSpacing: paragraphSpacing, boldText: boldText)
     }
 
     init(book: Book, url: URL, library: LibraryStore, initialLocator: String?) {

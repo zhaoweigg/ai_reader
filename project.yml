@@ -29,8 +29,8 @@ targets:
       path: LeafReader/Info.plist
       properties:
         CFBundleDisplayName: Leaf
-        CFBundleShortVersionString: "1.30.3"
-        CFBundleVersion: "123"
+        CFBundleShortVersionString: "1.32.0"
+        CFBundleVersion: "126"
         UIBackgroundModes: [audio]
         UIAppFonts:
           - Reader/fonts/LXGWWenKaiLite-Regular.ttf

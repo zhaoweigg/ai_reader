@@ -3,6 +3,14 @@ import SwiftUI
 @testable import LeafReader
 
 final class ReaderChatButtonAppearanceTests: XCTestCase {
+    func testBoldTextDefaultsOffAndIsIncludedInPreferences() {
+        var regular = ReaderPreferences(fontSize: 19, lineHeight: 1.65, font: "Georgia", theme: .day, scrolling: false)
+        XCTAssertEqual(regular.payload["boldText"] as? Bool, false)
+        let original = regular; regular.boldText = true
+        XCTAssertNotEqual(regular, original)
+        XCTAssertEqual(regular.payload["boldText"] as? Bool, true)
+        XCTAssertTrue(SyncedSettings.keys.contains("reader.boldText"))
+    }
     func testDefaultRetainsTheExistingTranslucentAppearance() {
         let appearance = ReaderChatButtonAppearance(transparency:0.88)
         XCTAssertEqual(appearance.fillOpacity,0.12,accuracy:0.0001)

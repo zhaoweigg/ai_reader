@@ -42,6 +42,7 @@ struct ReaderAppearanceControls: View {
     @AppStorage("reader.fontSize") private var fontSize = 19.0
     @AppStorage("reader.lineHeight") private var lineHeight = 1.65
     @AppStorage("reader.font") private var font = "Georgia"
+    @AppStorage("reader.boldText") private var boldText = false
     @AppStorage("reader.scrolling") private var scrolling = false
     @AppStorage("reader.horizontalMargin") private var horizontalMargin = 20.0
     @AppStorage("reader.verticalMargin") private var verticalMargin = 12.0
@@ -94,6 +95,13 @@ struct ReaderAppearanceControls: View {
                         .disabled(fontSize >= 32).accessibilityLabel("Larger text").accessibilityIdentifier("increaseTextSize")
                 }.buttonStyle(.borderless)
             }
+        }
+        Section {
+            Toggle(isOn: $boldText) {
+                Label { Text("Bold text") } icon: { Image(systemName: "bold").font(.body.weight(.bold)) }
+            }.accessibilityIdentifier("boldReadingText")
+        } footer: {
+            Text("For books with adjustable text. PDFs and comics keep their original appearance.")
         }
         Section("Typeface") {
             // Each row is set in its own face so the choice can be seen before it is made.

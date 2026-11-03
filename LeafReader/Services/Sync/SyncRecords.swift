@@ -128,7 +128,7 @@ struct SyncedSettings: Codable, Equatable {
     /// Device layout (button and panel positions), identities, caches and
     /// anything holding a secret stay local.
     static let keys: Set<String> = [
-        "reader.theme", "reader.font", "reader.fontSize", "reader.lineHeight", "reader.scrolling",
+        "reader.theme", "reader.font", "reader.boldText", "reader.fontSize", "reader.lineHeight", "reader.scrolling",
         "reader.horizontalMargin", "reader.verticalMargin", "reader.paragraphSpacing",
         "reader.chatButtonTransparency", "chat.dictationLanguage",
         "audio.voice", "audio.followsText", "audio.speed",
