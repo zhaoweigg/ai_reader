@@ -114,12 +114,28 @@ final class ChatRetryBudget {
             return [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost,
                     .cannotFindHost, .dnsLookupFailed, .resourceUnavailable].contains(source.code)
         }
+        return socketDropped(source)
+    }
+    /// The socket errors iOS gives a connection that was cut while the app was suspended
+    /// (connection aborted or reset, not connected, timed out).
+    static func socketDropped(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == NSPOSIXErrorDomain && [53, 54, 57, 60].contains(error.code)
+    }
+    /// Whether a failure can be explained by Leaf leaving the screen mid-reply: any network
+    /// or stream failure, but never a stop, a refusal or a permanent provider answer.
+    static func backgroundInterruption(_ error: Error) -> Bool {
+        guard !cancelled(error) else { return false }
+        let source = ChatRequestFailure.source(error)
+        if transient(error) || source is URLError || socketDropped(source) { return true }
+        if case ChatError.interrupted = source { return true }
         return false
     }
     private static func transient(status: Int) -> Bool { [408, 409, 429].contains(status) || (500...599).contains(status) }
     static func errorCode(_ error: Error) -> String {
         let source = ChatRequestFailure.source(error)
         if let source = source as? URLError { return "NSURLErrorDomain:\(source.code.rawValue)" }
+        if socketDropped(source) { return "NSPOSIXErrorDomain:\((source as NSError).code)" }
         if source is CancellationError { return "cancelled" }
         if let source = source as? ChatGPTError { return "ChatGPT:\(source)" }
         if let source = source as? ChatError {

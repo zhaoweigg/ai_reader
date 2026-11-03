@@ -98,6 +98,93 @@ final class ChatRetryTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }; return url
     }
 
+    // MARK: Leaving the screen mid-reply
+
+    private let socketAbort = NSError(domain: NSPOSIXErrorDomain, code: 53, userInfo: [NSLocalizedDescriptionKey: "Software caused connection abort"])
+
+    func testSocketAbortFromASuspendedConnectionIsRetried() async throws {
+        XCTAssertTrue(ChatRetryBudget.transient(socketAbort))
+        XCTAssertTrue(ChatRetryBudget.transient(NSError(domain: NSPOSIXErrorDomain, code: 57)))
+        XCTAssertFalse(ChatRetryBudget.transient(NSError(domain: NSPOSIXErrorDomain, code: 2)))
+        XCTAssertEqual(ChatRetryBudget.errorCode(socketAbort), "NSPOSIXErrorDomain:53")
+        let provider = RetryProvider()
+        provider.replies = [.init(error: socketAbort), .init(events: [.text("Recovered"), .finished(truncated: false)])]
+        let session = ReaderChatSession(); session.retryPolicy = immediate; session.draft = "Why?"
+        session.send(settings: try settings(provider)) { self.context }
+        try await wait { !session.isSending }
+        XCTAssertEqual(session.messages.last?.text, "Recovered"); XCTAssertNil(session.error)
+    }
+
+    func testReplyCutOffInTheBackgroundContinuesOnReturnWithoutAnError() async throws {
+        let provider = RetryProvider()
+        // The first attempt and both retries fail while Leaf is suspended.
+        provider.replies = [.init(events: [.text("Partial")], error: socketAbort), .init(error: URLError(.timedOut)),
+                            .init(error: URLError(.networkConnectionLost)), .init(events: [.text("Whole answer"), .finished(truncated: false)])]
+        let session = ReaderChatSession(); session.retryPolicy = immediate; session.draft = "Why?"
+        var background = false
+        session.appInBackground = { background }
+        session.send(settings: try settings(provider)) { self.context }
+        background = true; session.appDidEnterBackground()
+        try await wait { !session.isSending }
+        XCTAssertNil(session.error, "No error for a reply cut off by leaving the screen")
+        XCTAssertTrue(session.notice?.contains("continues when you come back") == true)
+        XCTAssertEqual(session.messages.last?.state, .failed)
+        XCTAssertEqual(provider.plainRequests.count, 3)
+
+        background = false; session.appWillEnterForeground()
+        try await wait { session.messages.last?.text == "Whole answer" && !session.isSending }
+        XCTAssertEqual(provider.plainRequests.count, 4)
+        XCTAssertEqual(provider.plainRequests.last?.turns.last?.content, provider.plainRequests.first?.turns.last?.content, "The same question is asked again")
+        XCTAssertEqual(session.messages.count, 2, "The cut-off reply is replaced, not kept beside the new one")
+        XCTAssertEqual(session.notice, ReaderChatSession.resumedNotice); XCTAssertNil(session.error)
+    }
+
+    func testFailureNoticedAfterReturningContinuesAtOnce() async throws {
+        let provider = RetryProvider()
+        provider.replies = [.init(error: socketAbort), .init(error: socketAbort), .init(error: socketAbort),
+                            .init(events: [.text("Continued"), .finished(truncated: false)])]
+        let session = ReaderChatSession(); session.retryPolicy = immediate; session.draft = "Why?"
+        session.appInBackground = { false }
+        session.send(settings: try settings(provider)) { self.context }
+        session.appDidEnterBackground()
+        try await wait { session.messages.last?.text == "Continued" && !session.isSending }
+        XCTAssertNil(session.error); XCTAssertEqual(provider.plainRequests.count, 4)
+    }
+
+    func testOtherFailuresStillShowAndClosingCancelsAPendingContinue() async throws {
+        // A refusal is not caused by leaving the screen.
+        let refused = RetryProvider(); refused.replies = [.init(error: ChatError.http(401))]
+        let session = ReaderChatSession(); session.retryPolicy = immediate; session.draft = "Why?"
+        var background = false
+        session.appInBackground = { background }
+        session.send(settings: try settings(refused)) { self.context }
+        background = true; session.appDidEnterBackground()
+        try await wait { !session.isSending }
+        XCTAssertNotNil(session.error)
+        background = false; session.appWillEnterForeground()
+        XCTAssertEqual(refused.plainRequests.count, 1)
+
+        // Without leaving the screen, an exhausted network failure is reported as before.
+        let offline = RetryProvider(); offline.replies = Array(repeating: .init(error: socketAbort), count: 3)
+        let staying = ReaderChatSession(); staying.retryPolicy = immediate; staying.draft = "Why?"
+        staying.appInBackground = { false }
+        staying.send(settings: try settings(offline)) { self.context }
+        try await wait { !staying.isSending }
+        XCTAssertEqual(staying.error, "The connection was lost. Check your internet connection and retry.")
+
+        // Closing the chat while waiting to continue drops the continue.
+        let dropped = RetryProvider(); dropped.replies = Array(repeating: .init(error: socketAbort), count: 3)
+        let closing = ReaderChatSession(); closing.retryPolicy = immediate; closing.draft = "Why?"
+        var away = false
+        closing.appInBackground = { away }
+        closing.send(settings: try settings(dropped)) { self.context }
+        away = true; closing.appDidEnterBackground()
+        try await wait { !closing.isSending }
+        closing.close()
+        away = false; closing.appWillEnterForeground()
+        XCTAssertFalse(closing.isSending); XCTAssertEqual(dropped.plainRequests.count, 3)
+    }
+
     func testInitialTransportDropRecoversWithIdenticalRequest() async throws {
         let transport = RetryTransport()
         transport.payloads = [(0, [:], [], URLError(.networkConnectionLost)),
