@@ -121,6 +121,8 @@ struct ZLibraryBook: Identifiable, Equatable, Codable {
     var rating: Double? = nil
     var ratingCount: Int? = nil
     var qualityScore: Double? = nil
+    /// The catalog's description as plain text; empty once fetched when the catalog has none.
+    var summary: String? = nil
     var fileSummary: String { [fileExtension.uppercased(), size.isEmpty ? "Size unavailable" : size].filter { !$0.isEmpty }.joined(separator: " · ") }
     var editionSummary: String { [language, year].filter { !$0.isEmpty }.joined(separator: " · ") }
     var ratingSummary: String {
@@ -328,7 +330,21 @@ struct ZLibraryClient: ZLibraryServing {
                             fileExtension: string(row["extension"]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), size: fileSize(row), language: string(row["language"]),
                             year: string(row["year"]), coverURL: cover.isEmpty ? nil : try? ZLibraryOrigin.fileURL(cover, relativeTo: origin),
                             rating: score(row["rating"]) ?? score(row["interestScore"]),
-                            ratingCount: positiveInteger(row["ratingCount"]), qualityScore: score(row["qualityScore"]))
+                            ratingCount: positiveInteger(row["ratingCount"]), qualityScore: score(row["qualityScore"]),
+                            summary: plainText(row["description"]))
+    }
+    /// A description's text without its HTML markup, bounded for the chat.
+    static func plainText(_ value: Any?) -> String? {
+        guard let raw = value as? String else { return nil }
+        var text = raw.replacingOccurrences(of: #"<br\s*/?>|</p>|</div>|</li>"#, with: "\n", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"<[^>]*>"#, with: "", options: .regularExpression)
+        for (entity, character) in [("&nbsp;", " "), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&")] {
+            text = text.replacingOccurrences(of: entity, with: character)
+        }
+        text = text.replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\n\s*(\n\s*)+"#, with: "\n\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : String(text.prefix(3000))
     }
     // EAPI clients use interestScore for the book rating, separately from qualityScore.
     // Preserve the provider's score without inventing a five-star scale or review count.
@@ -383,6 +399,7 @@ struct ZLibraryClient: ZLibraryServing {
         resolved.rating = resolved.rating ?? book.rating
         resolved.ratingCount = resolved.ratingCount ?? book.ratingCount
         resolved.qualityScore = resolved.qualityScore ?? book.qualityScore
+        resolved.summary = resolved.summary ?? book.summary
         return resolved
     }
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL {

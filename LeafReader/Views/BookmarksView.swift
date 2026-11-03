@@ -7,6 +7,7 @@ struct BookmarksView: View {
     @State private var highlights = false
     @State private var editing: SavedAnnotationReference?
     @State private var error: String?
+    @StateObject private var chat = TabChat()
     private struct SavedAnnotationReference: Identifiable {
         let bookID: UUID
         let annotation: BookAnnotation
@@ -28,7 +29,7 @@ struct BookmarksView: View {
                             Section(book.title) {
                                 if highlights {
                                     ForEach(book.annotations.sorted { $0.createdAt > $1.createdAt }) { annotation in
-                                        AnnotationRow(annotation: annotation, onNavigate: { onOpen(book.id, annotation.locator) },
+                                        AnnotationRow(annotation: annotation, onNavigate: { open(book.id, annotation.locator) },
                                             onEdit: { editing = SavedAnnotationReference(bookID: book.id, annotation: annotation) })
                                             .swipeActions {
                                                 Button("Delete", role: .destructive) {
@@ -38,7 +39,7 @@ struct BookmarksView: View {
                                     }
                                 } else {
                                 ForEach(book.bookmarks.sorted { $0.createdAt > $1.createdAt }) { bookmark in
-                                    Button { onOpen(book.id, bookmark.locator) } label: {
+                                    Button { open(book.id, bookmark.locator) } label: {
                                         HStack(spacing: 14) {
                                             Image(systemName: "bookmark.fill").foregroundStyle(theme.accent)
                                             VStack(alignment: .leading, spacing: 5) {
@@ -69,5 +70,9 @@ struct BookmarksView: View {
                     Button("OK") { error = nil }
                 } message: { Text(error ?? "") }
         }
+        .modifier(TabChatHost(chat: chat, finishMovingIdentifier: "finishMovingBookmarksChatButton",
+                              screen: { ChatScreen.bookmarks(library, highlights: { highlights }) }))
     }
+    /// A book's chat opens in the reader, so this tab's session closes first.
+    private func open(_ id: UUID, _ locator: String) { chat.close(); onOpen(id, locator) }
 }

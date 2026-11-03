@@ -603,7 +603,7 @@ struct ReaderChatPanel: View {
         case .reader: return settings.configuration.sharePage ? "Sends the current passage with your question." : "Passage sharing is off."
         case .libraryBook:
             return settings.configuration.sharePage ? "Continues this book’s saved chat. Library shares only its title and author; open the book to quote a new passage." : "Continues this book’s saved chat. Passage sharing is off."
-        case .general: return "This conversation is separate from your book chats. No books are attached automatically."
+        case .general: return "Separate from your book chats. Leaf can read this screen’s list when you ask about it."
         }
     }
 

@@ -19,12 +19,7 @@ struct LibraryView: View {
     @State private var sort: LibrarySort = .recent
     @State private var format: BookFormat?
     @State private var deleting: Book?
-    @State private var chat: ReaderChatSession?
-    @State private var chatBook: Book?
-    @State private var chatButtonIsMoving = false
-    @State private var choosingConversation = false
-    @State private var viewportHeight: CGFloat = 0
-    @State private var conversation = "general"
+    @StateObject private var chat = TabChat()
     @State private var catalogBook: ZLibraryBook?
     @State private var catalogMatches: [ZLibraryBook] = []
 
@@ -202,53 +197,14 @@ struct LibraryView: View {
                 ? "This removes the book, its bookmarks and highlights from Leaf on all your devices and from iCloud Drive. Your original file stays in Files."
                 : "This removes the book and its bookmarks from Leaf. Your original file stays in Files.") }
         }
-        .background {
-            GeometryReader { geometry in
-                Color.clear.onAppear { viewportHeight = geometry.size.height }
-                    .onChange(of: geometry.size) { _, size in viewportHeight = size.height }
-            }
-        }
-        .ignoresSafeArea(.keyboard)
-        .overlay {
-            if chat == nil {
-                if chatButtonIsMoving {
-                    Color.clear.contentShape(Rectangle())
-                        .onTapGesture { chatButtonIsMoving = false }
-                        .accessibilityLabel("Finish moving Ask Leaf").accessibilityAddTraits(.isButton)
-                        .accessibilityIdentifier("finishMovingLibraryChatButton")
-                        .accessibilityAction { chatButtonIsMoving = false }
-                }
-                ReaderChatLauncher(isMoving: $chatButtonIsMoving, location: .library) {
-                    openChat(nil)
-                }
-            } else if let chat {
-                LibraryChatOverlay(session: chat, book: chatBook, fullHeight: viewportHeight,
-                    onClose: closeChat, onChoose: { choosingConversation = true })
-            }
-        }
-        .sheet(isPresented: $choosingConversation) {
-            LibraryChatConversationPicker(books: library.books.sorted { ($0.lastOpenedAt ?? .distantPast) > ($1.lastOpenedAt ?? .distantPast) },
-                selected: conversation, onChoose: openChat)
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active { chatButtonIsMoving = false; chat?.flush() }
-        }
-        .onChange(of: library.books.map(\.fingerprint)) { _, fingerprints in
-            if let chatBook, !fingerprints.contains(chatBook.fingerprint) { openChat(nil) }
-        }
-        .onDisappear { closeChat(); chatButtonIsMoving = false }
+        .modifier(TabChatHost(chat: chat, finishMovingIdentifier: "finishMovingLibraryChatButton", screen: {
+            ChatScreen.library({ visible }, list: {
+                [filter.rawValue, format?.label, query.isEmpty ? nil : "matching “\(query)”", "sorted by \(sort.rawValue.lowercased())"]
+                    .compactMap { $0 }.joined(separator: " · ")
+            })
+        }, onOpen: { searchFocused = false }))
     }
-    private func openChat(_ book: Book?) {
-        // Close the previous owner before creating a second session for its database.
-        guard chat?.flush() != false else { return }
-        searchFocused = false
-        chat?.close()
-        chatBook = book; conversation = book?.fingerprint ?? "general"
-        chat = ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true),
-            conversation: book?.fingerprint ?? "leaf.library.general.v1")
-    }
-    private func closeChat() { chat?.close(); chat = nil; chatBook = nil }
-    private func openBook(_ id: UUID) { closeChat(); onOpen(id) }
+    private func openBook(_ id: UUID) { chat.close(); onOpen(id) }
     private var cloudOnly: Int { library.books.filter { !library.isDownloaded($0) }.count }
     /// Books synced from iCloud Drive whose files are not on this device yet.
     @ViewBuilder private func cloudBadge(_ book: Book) -> some View {
