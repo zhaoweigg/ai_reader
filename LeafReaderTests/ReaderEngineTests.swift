@@ -2831,6 +2831,10 @@ final class ReaderEngineTests: XCTestCase {
                         const variant=(size+index)%3,margin=[12,20,36][variant],theme=themes[variant];
                         const settings={...base,...theme,fontSize:size,horizontalMargin:margin,boldText:false};
                         window.Leaf.applyPreferences(settings);
+                        // Pages replaces its chapter stylesheet on every setting.
+                        // Start this face's load before reading fonts.ready: the
+                        // previous resolved promise can precede style resolution.
+                        if (!base.scrolling && base.fontFile) await Promise.all(view.renderer.getContents().map(c=>c.doc.fonts.load(`${size}px "${base.font}"`,'阅读')));
                         await Promise.all(view.renderer.getContents().map(c=>c.doc.fonts.ready));await sleep(100);
                         const doc=view.renderer.getContents()[0].doc,p=doc.querySelector('p');
                         p.style.fontWeight='400';
@@ -2839,6 +2843,7 @@ final class ReaderEngineTests: XCTestCase {
                         const before=doc.body.textContent,saved=view.lastLocation.cfi;
                         const normal=doc.defaultView.getComputedStyle(probe).fontWeight,normalWidth=p.getBoundingClientRect().width;
                         window.Leaf.applyPreferences({...settings,boldText:true});
+                        if (!base.scrolling && base.fontFile) await Promise.all(view.renderer.getContents().map(c=>c.doc.fonts.load(`${size}px "${base.font}"`,'阅读')));
                         await Promise.all(view.renderer.getContents().map(c=>c.doc.fonts.ready));await sleep(100);
                         const style=doc.defaultView.getComputedStyle(p),child=doc.defaultView.getComputedStyle(probe);
                         const glyph=doc.createRange();glyph.setStart(p.firstChild,0);glyph.setEnd(p.firstChild,1);
@@ -2875,7 +2880,9 @@ final class ReaderEngineTests: XCTestCase {
                         // normal column width, rather than reserving a text gutter.
                         XCTAssertEqual(width, try XCTUnwrap(row["normalWidth"] as? Double), accuracy: 2, label)
                         XCTAssertGreaterThan(width, 280, label)
-                        XCTAssertLessThanOrEqual(width, min(680, try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * (row["margin"] as? Double ?? 0)) + 2, label)
+                        // Pages divides the spread into columns; unlike Scroll,
+                        // max-inline-size chooses the count, not a hard width cap.
+                        XCTAssertLessThanOrEqual(width, try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * (row["margin"] as? Double ?? 0) + 2, label)
                     }
                     XCTAssertTrue(row["visible"] as? Bool == true, label); XCTAssertTrue(row["sameText"] as? Bool == true, label)
                     XCTAssertTrue(row["fontLoaded"] as? Bool == true, label)
