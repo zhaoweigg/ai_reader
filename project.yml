@@ -38,6 +38,7 @@ targets:
           - Reader/fonts/LXGWNeoZhiSong.ttf
           - Reader/fonts/LXGWNeoXiHei.ttf
         NSMicrophoneUsageDescription: Use the microphone to dictate an editable question in Ask Leaf. Recording stops when you stop dictation or leave the chat.
+        NSPhotoLibraryAddUsageDescription: Save pictures that Ask Leaf draws for you to your photo library when you choose Save Image.
         NSSpeechRecognitionUsageDescription: Turn your voice into text for Ask Leaf. Speech may be processed by Apple when on-device recognition is unavailable.
         UILaunchScreen: {}
         NSAppTransportSecurity:
