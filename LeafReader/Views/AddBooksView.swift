@@ -240,21 +240,25 @@ struct ZLibraryBookView: View {
             }.padding().frame(maxWidth:.infinity).background(.regularMaterial)
         }
         .sheet(isPresented:$connection) { ZLibraryConnectionView() }
-        .onAppear { catalog.resetImportResult() }
+        .onAppear { catalog.resetImportResult(); catalog.beginViewing(edition) }
+        .onChange(of: resolved) { _, value in if let value { catalog.beginViewing(value) } }
         .task(id: "\(catalog.connected):\(detailsAttempt)") { await loadDetails() }
-        .onDisappear { if catalog.downloadingID == book.id { catalog.cancelDownload() } }
+        .onDisappear { catalog.endViewing(book); if catalog.downloadingID == book.id { catalog.cancelDownload() } }
     }
     private func loadDetails() async {
-        guard edition.fileExtension.isEmpty else { return }
+        // The same request also carries the description Ask Leaf uses for “this book”.
+        guard edition.fileExtension.isEmpty || edition.summary == nil else { return }
+        let listed = !edition.fileExtension.isEmpty
         let request = UUID(); detailsRequest = request; loadingDetails = true; detailsError = nil
         defer { if request == detailsRequest { loadingDetails = false } }
         do {
-            let details = try await catalog.details(book)
+            let details = try await catalog.details(book, description: true)
             try Task.checkCancellation()
             guard request == detailsRequest else { return }
             resolved = details
         } catch {
-            if request == detailsRequest && !Task.isCancelled && !ZLibraryStore.isCancellation(error) { detailsError = error.localizedDescription }
+            // A listed edition is already usable; only a missing format is worth an error here.
+            if !listed, request == detailsRequest && !Task.isCancelled && !ZLibraryStore.isCancellation(error) { detailsError = error.localizedDescription }
         }
     }
 }

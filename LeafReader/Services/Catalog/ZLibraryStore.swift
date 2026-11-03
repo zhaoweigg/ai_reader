@@ -479,6 +479,13 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var loadTrace: [String] = []
     #endif
     /// One edition's details; `description` also fetches a listed book for its description.
+    /// The book whose details page is showing, for Ask Leaf; read when a tool runs, so not published.
+    private(set) var viewingBook: ZLibraryBook?
+    func beginViewing(_ book: ZLibraryBook) { viewingBook = book }
+    /// A page that disappears after the next one appeared must not clear the newer one.
+    func endViewing(_ book: ZLibraryBook) { if viewingBook?.id == book.id { viewingBook = nil } }
+    /// The newest known copy of a listed or viewed edition, with any details fetched since.
+    func latest(_ book: ZLibraryBook) -> ZLibraryBook { (books + shelf).first { $0.id == book.id && !$0.fileExtension.isEmpty } ?? book }
     func details(_ book: ZLibraryBook, description: Bool = false) async throws -> ZLibraryBook {
         if let cached = (books + shelf).first(where: { $0.id == book.id }), !cached.fileExtension.isEmpty, !description || cached.summary != nil { return cached }
         let token = generation, source = origin
@@ -486,6 +493,10 @@ final class ZLibraryStore: ObservableObject {
             var resolved = try await client.details(book, origin: source, session: session)
             // Fetched without one: the catalog has no description, so it is not asked again.
             if description, resolved.summary == nil { resolved.summary = "" }
+            // A listed edition keeps what its list shows; a description fetch only adds the description.
+            if description, var listed = (books + shelf).first(where: { $0.id == book.id }), !listed.fileExtension.isEmpty {
+                listed.summary = resolved.summary; resolved = listed
+            }
             try Task.checkCancellation()
             guard token == generation else { throw CancellationError() }
             if let index = books.firstIndex(where: { $0.id == book.id }) { books[index] = resolved }
@@ -558,7 +569,8 @@ struct UITestZLibraryClient: ZLibraryServing {
         return ZLibraryBook(remoteID: book.remoteID, hash: book.hash, title: book.title, author: book.author,
                             fileExtension: UITesting.environment("LEAF_UI_ZLIB_DETAILS") == "unsupported" ? "djvu" : "epub",
                             size: "1 MB", language: "English", year: "2026", coverURL: book.coverURL,
-                            rating: book.rating, ratingCount: book.ratingCount, qualityScore: book.qualityScore)
+                            rating: book.rating, ratingCount: book.ratingCount, qualityScore: book.qualityScore,
+                            summary: "A fixture description of \(book.title).")
     }
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile { ZLibraryProfile(name:"Preview account",remaining:5) }
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook] {

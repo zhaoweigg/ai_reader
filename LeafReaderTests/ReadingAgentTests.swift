@@ -440,6 +440,30 @@ final class ReadingAgentTests: XCTestCase {
         XCTAssertEqual((search["items"] as? [Any])?.count, 7); XCTAssertNil(search["note"])
     }
 
+    func testOpenBookDetailsAreWhatThisBookMeans() throws {
+        var books = catalogBooks()
+        books[1].summary = "A described second book."
+        let listed = ChatScreen.catalogView(books, query: "", feed: .popular, order: .popular, status: [], canLoadMore: false,
+                                            owned: [books[1].sourceID], limit: 5, open: books[1])
+        let open = try XCTUnwrap(listed["open_book"] as? [String: Any])
+        XCTAssertEqual(open["title"] as? String, "Book 2"); XCTAssertEqual(open["rank"] as? Int, 2)
+        XCTAssertEqual(open["description"] as? String, "A described second book.")
+        XCTAssertEqual(open["in_library"] as? Bool, true)
+        XCTAssertTrue((listed["open_book_note"] as? String)?.contains("this book") == true)
+        XCTAssertEqual((listed["items"] as? [Any])?.count, 5, "The list behind the page is still readable")
+
+        var elsewhere = ZLibraryBook(remoteID: "99", hash: "h99", title: "Unlisted", author: "A", fileExtension: "epub", size: "", language: "", year: "", coverURL: nil)
+        var view = ChatScreen.catalogView(books, query: "", feed: .popular, order: .popular, status: [], canLoadMore: false, owned: [], limit: 5, open: elsewhere)
+        var unlisted = try XCTUnwrap(view["open_book"] as? [String: Any])
+        XCTAssertNil(unlisted["rank"]); XCTAssertTrue((unlisted["description_note"] as? String)?.contains("loading") == true)
+        elsewhere.summary = ""
+        view = ChatScreen.catalogView(books, query: "", feed: .popular, order: .popular, status: [], canLoadMore: false, owned: [], limit: 5, open: elsewhere)
+        unlisted = try XCTUnwrap(view["open_book"] as? [String: Any])
+        XCTAssertEqual(unlisted["description_note"] as? String, "The catalog has no description for this book.")
+        XCTAssertNil(ChatScreen.catalogView(books, query: "", feed: .popular, order: .popular, status: [], canLoadMore: false, owned: [], limit: 5)["open_book"])
+        XCTAssertTrue(ChatRequest.screenPrompt("Discover", tools: true).contains("open_book"))
+    }
+
     func testSavedScreenFollowsTheListOrderAndHidesPassagesWhenSharingIsOff() throws {
         let old = Date(timeIntervalSince1970: 1_700_000_000), new = old.addingTimeInterval(86_400)
         var first = Book(id: UUID(), title: "First", author: "A", fileName: "a.epub", format: .epub, fingerprint: "a")
