@@ -167,7 +167,8 @@ extension ChatScreen {
         ChatScreen(name: "Discover", view: { limit, _ in
             catalogView(catalog.books, query: catalog.activeQuery, feed: catalog.feed, order: catalog.searchOrder,
                         status: catalogStatus(catalog), canLoadMore: catalog.canLoadMore,
-                        owned: Set(library.books.compactMap(\.catalogSource)), limit: limit)
+                        owned: Set(library.books.compactMap(\.catalogSource)), limit: limit,
+                        open: catalog.viewingBook.map(catalog.latest))
         }, details: { rank, _ in
             guard catalog.books.indices.contains(rank - 1) else { return nil }
             let book = try await catalog.details(catalog.books[rank - 1], description: true)
@@ -178,10 +179,21 @@ extension ChatScreen {
         })
     }
     static func catalogView(_ books: [ZLibraryBook], query: String, feed: ZLibraryFeed, order: ZLibrarySearchOrder, status: [String],
-                            canLoadMore: Bool, owned: Set<String>, limit: Int) -> [String: Any] {
+                            canLoadMore: Bool, owned: Set<String>, limit: Int, open: ZLibraryBook? = nil) -> [String: Any] {
         var extra: [String: Any] = ["more_available": canLoadMore, "layout": "grid of 3 columns; ranks run row by row from the top left"]
         if !query.isEmpty { extra["search"] = query; extra["sorted_by"] = order.title }
         if !status.isEmpty { extra["status"] = status }
+        if let open {
+            // The details page covers the grid: “this book” means this one.
+            let rank = (books.firstIndex { $0.id == open.id }).map { $0 + 1 }
+            var item = catalogItem(open, rank: rank ?? 0, owned: owned.contains(open.sourceID))
+            if rank == nil { item.removeValue(forKey: "rank") }
+            if let summary = open.summary, !summary.isEmpty { item["description"] = summary }
+            else if open.summary == nil { item["description_note"] = "Still loading; call get_item_details with its rank for the description." }
+            else { item["description_note"] = "The catalog has no description for this book." }
+            extra["open_book"] = item
+            extra["open_book_note"] = "The reader is on this book's details page, which covers the list. Questions about \"this book\" mean open_book; items is the list behind it."
+        }
         let items = books.prefix(limit).enumerated().map { index, book in catalogItem(book, rank: index + 1, owned: owned.contains(book.sourceID)) }
         return listing("Discover", list: query.isEmpty ? feed.title : "Search results", items: items, total: books.count, extra: extra)
     }

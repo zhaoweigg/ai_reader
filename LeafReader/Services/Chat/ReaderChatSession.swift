@@ -678,8 +678,12 @@ extension UITestChatProvider: ToolChatProvider {
                     if tools.contains(where: { $0.name == "get_current_view" }) {
                         if let output = results?.first(where: { $0.name == "get_current_view" })?.output {
                             let object = (try? JSONSerialization.jsonObject(with: Data(output.utf8))) as? [String: Any] ?? [:]
-                            let rows = (object["items"] as? [[String: Any]] ?? []).prefix(3).map { "\($0["rank"] ?? "?"). \($0["title"] ?? $0["book"] ?? "?")" }
-                            continuation.yield(.text("Screen reply: \(object["list"] ?? "?") · \(rows.joined(separator: "; "))"))
+                            if let open = object["open_book"] as? [String: Any] {
+                                continuation.yield(.text("Screen reply: open book \(open["title"] ?? "?") · \(open["description"] ?? open["description_note"] ?? "?")"))
+                            } else {
+                                let rows = (object["items"] as? [[String: Any]] ?? []).prefix(3).map { "\($0["rank"] ?? "?"). \($0["title"] ?? $0["book"] ?? "?")" }
+                                continuation.yield(.text("Screen reply: \(object["list"] ?? "?") · \(rows.joined(separator: "; "))"))
+                            }
                         } else {
                             continuation.yield(.toolCall(AgentToolCall(id: "call_view", name: "get_current_view", arguments: ReadingAgentToolbox.json(["max_items": 5]))))
                         }

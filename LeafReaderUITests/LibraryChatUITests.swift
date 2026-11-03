@@ -319,6 +319,26 @@ final class LibraryChatUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: app.buttons["sendReaderChat"])
         waitForExpectations(timeout: 5)
     }
+    @MainActor func testDiscoverChatReadsTheOpenBookDetailsPage() {
+        let app = launch(environment: ["LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_GRID": "1", "LEAF_UI_CHAT_AGENT": "1"])
+        app.tabBars.buttons["Discover"].tap()
+        let book = app.buttons["catalogBook-sample"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10)); book.tap()
+        XCTAssertTrue(app.navigationBars["Book details"].waitForExistence(timeout: 5))
+        let launcher = app.buttons["openLibraryChat"]
+        XCTAssertTrue(launcher.waitForExistence(timeout: 5)); launcher.tap()
+        ask("这本讲什么", expecting: "Screen reply: open book The Art of Noticing · A fixture description of The Art of Noticing.", app: app)
+        hideKeyboard(app)
+        capture("Discover chat answers about the open book")
+        // Back on the grid, the same chat reads the list again.
+        app.navigationBars["Book details"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Going back keeps Ask Leaf open")
+        ask("And now?", expecting: "Screen reply: Most popular · 1. The Art of Noticing", app: app)
+        hideKeyboard(app)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "1.8 MB")).firstMatch.exists, "The grid keeps the listed edition's size")
+        capture("Discover chat back on the grid")
+    }
     @MainActor func testDiscoverAndBookmarksChatsReadTheirScreensWhenTheyAnswer() {
         let app = launch(environment: ["LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_GRID": "1", "LEAF_UI_CHAT_AGENT": "1", "LEAF_UI_SAVED_FIXTURE": "1"])
         registerSceneGeometryCleanup(app: app)
