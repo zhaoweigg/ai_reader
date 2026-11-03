@@ -3145,6 +3145,86 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
 
+    @MainActor func testTwinButtonQuickThemesAndEdgeSideInPages() { verifyTwinButton(in: "Pages") }
+    @MainActor func testTwinButtonQuickThemesAndEdgeSideInScroll() { verifyTwinButton(in: "Scroll") }
+    /// The small palette button rides above the big one on the edge side, glides across when the
+    /// big one changes halves, and opens quick themes that apply at once and close on a tap away.
+    @MainActor private func verifyTwinButton(in flow: String) {
+        orient(.portrait)
+        defer { orient(.portrait) }
+        let app = launchApp()
+        app.buttons["featuredBook"].tap()
+        showReaderControls(app)
+        app.buttons["Appearance"].tap()
+        app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+        app.segmentedControls["readingFlow"].buttons[flow].tap()
+        dismissAppearance(app)
+        showReaderControls(app)
+        let surface = readingSurface(app)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let launcher = app.buttons["openReaderChat"], themes = app.buttons["openReaderThemes"]
+        XCTAssertTrue(themes.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(themes.frame.midX, launcher.frame.midX + 20, "On the right half the small button sits top right")
+        XCTAssertLessThan(themes.frame.midY, launcher.frame.midY - 20)
+        let initialTheme = themes.value as? String
+        themes.tap()
+        let names = ["day", "paper", "night", "sepia", "sage", "dusk", "black"]
+        let night = app.buttons["quickTheme-night"]
+        XCTAssertTrue(night.waitForExistence(timeout: 3))
+        for name in names {
+            let choice = app.buttons["quickTheme-" + name]
+            XCTAssertTrue(choice.isHittable, name)
+            XCTAssertTrue(surface.frame.contains(CGPoint(x: choice.frame.midX, y: choice.frame.midY)), name)
+        }
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists, "The small button never opens chat")
+        capture(flow + " quick themes open", app: app)
+        night.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: night)
+        waitForExpectations(timeout: 3)
+        XCTAssertEqual(themes.value as? String, "Night")
+        XCTAssertNotEqual(initialTheme, "Night")
+        capture(flow + " Night from quick themes", app: app)
+        // A tap away closes the choices without turning the page or showing controls.
+        let chapter = app.staticTexts["readerChapterTitle"].exists ? app.staticTexts["readerChapterTitle"].label : nil
+        themes.tap()
+        XCTAssertTrue(night.waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.3)).tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: night)
+        waitForExpectations(timeout: 3)
+        XCTAssertFalse(app.buttons["closeBook"].exists)
+        XCTAssertEqual(app.staticTexts["readerChapterTitle"].exists ? app.staticTexts["readerChapterTitle"].label : nil, chapter)
+        // Moved to the left half, the small button glides over the top to the top left.
+        launcher.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.65, thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)))
+        XCTAssertEqual(launcher.value as? String, "Move mode")
+        expectation(for: NSPredicate { _, _ in themes.frame.midX < launcher.frame.midX - 20 }, evaluatedWith: themes)
+        waitForExpectations(timeout: 3)
+        XCTAssertLessThan(themes.frame.midY, launcher.frame.midY - 20)
+        XCTAssertGreaterThan(themes.frame.midX, surface.frame.minX)
+        capture(flow + " small button on the left", app: app)
+        launcher.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.05, thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.35)))
+        expectation(for: NSPredicate { _, _ in themes.frame.midX > launcher.frame.midX + 20 }, evaluatedWith: themes)
+        waitForExpectations(timeout: 3)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.06, dy: 0.6)).tap()
+        XCTAssertEqual(launcher.value as? String, "Stationary")
+        XCTAssertLessThan(themes.frame.maxX, surface.frame.maxX + 1)
+        orient(.landscapeLeft)
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        let landscape = readingSurface(app).frame
+        XCTAssertTrue(landscape.contains(CGPoint(x: themes.frame.midX, y: themes.frame.midY)))
+        XCTAssertGreaterThan(themes.frame.midX, launcher.frame.midX + 20)
+        themes.tap()
+        XCTAssertTrue(night.waitForExistence(timeout: 3))
+        for name in names {
+            let choice = app.buttons["quickTheme-" + name]
+            XCTAssertTrue(landscape.contains(CGPoint(x: choice.frame.midX, y: choice.frame.midY)), name)
+        }
+        capture(flow + " quick themes in landscape", app: app)
+        app.buttons["quickTheme-paper"].tap()
+        expectation(for: NSPredicate(format: "value == %@", "Paper"), evaluatedWith: themes)
+        waitForExpectations(timeout: 3)
+        capture(flow + " Paper in landscape", app: app)
+    }
     @MainActor func testLongPressMoveAndTapAwayInPages() { verifyMovableButton(in: "Pages") }
     @MainActor func testLongPressMoveAndTapAwayInScroll() { verifyMovableButton(in: "Scroll") }
 
