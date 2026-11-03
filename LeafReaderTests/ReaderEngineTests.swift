@@ -2835,7 +2835,7 @@ final class ReaderEngineTests: XCTestCase {
                         const probe=doc.createElement('span');probe.textContent='阅读';probe.style.cssText='position:fixed;left:-1000px;font-weight:400';
                         const strong=doc.createElement('strong');strong.textContent='Bold';probe.append(strong);doc.body.append(probe);
                         const before=doc.body.textContent,saved=view.lastLocation.cfi;
-                        const normal=doc.defaultView.getComputedStyle(probe).fontWeight;
+                        const normal=doc.defaultView.getComputedStyle(probe).fontWeight,normalWidth=p.getBoundingClientRect().width;
                         window.Leaf.applyPreferences({...settings,boldText:true});
                         await Promise.all(view.renderer.getContents().map(c=>c.doc.fonts.ready));await sleep(100);
                         const style=doc.defaultView.getComputedStyle(p),child=doc.defaultView.getComputedStyle(probe);
@@ -2843,7 +2843,7 @@ final class ReaderEngineTests: XCTestCase {
                         const rect=glyph.getBoundingClientRect(),frame=doc.defaultView.frameElement.getBoundingClientRect();
                         rows.push({size,font:base.font,margin,normal,weight:style.fontWeight,childWeight:child.fontWeight,synthesis:child.fontSynthesis,
                             actual:parseFloat(style.fontSize),glyphWidth:rect.width,left:rect.left+frame.left,right:rect.right+frame.left,
-                            paragraphWidth:p.getBoundingClientRect().width,viewportWidth:view.clientWidth,
+                            paragraphWidth:p.getBoundingClientRect().width,normalWidth,viewportWidth:view.clientWidth,
                             visible:window.Leaf.isLocationVisible(saved),sameText:before===doc.body.textContent,
                             loaded:view.renderer.getContents().length,
                             fontLoaded:!base.fontFile||[...doc.fonts].some(f=>f.family.replace(/"/g,'')===base.font&&f.status==='loaded')});
@@ -2865,7 +2865,16 @@ final class ReaderEngineTests: XCTestCase {
                     XCTAssertTrue((row["synthesis"] as? String ?? "").contains("weight"), label)
                     XCTAssertEqual(try XCTUnwrap(row["actual"] as? Double), try XCTUnwrap(row["size"] as? Double), accuracy: 0.1, label)
                     XCTAssertEqual(try XCTUnwrap(row["glyphWidth"] as? Double), try XCTUnwrap(row["size"] as? Double), accuracy: 1, label)
-                    XCTAssertEqual(try XCTUnwrap(row["paragraphWidth"] as? Double), min(680, try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * (row["margin"] as? Double ?? 0)), accuracy: 2, label)
+                    let width = try XCTUnwrap(row["paragraphWidth"] as? Double)
+                    if scrolling {
+                        XCTAssertEqual(width, min(680, try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * (row["margin"] as? Double ?? 0)), accuracy: 2, label)
+                    } else {
+                        // Landscape Pages may use two columns. Bold must keep the
+                        // normal column width, rather than reserving a text gutter.
+                        XCTAssertEqual(width, try XCTUnwrap(row["normalWidth"] as? Double), accuracy: 2, label)
+                        XCTAssertGreaterThan(width, 280, label)
+                        XCTAssertLessThanOrEqual(width, min(680, try XCTUnwrap(row["viewportWidth"] as? Double) - 2 * (row["margin"] as? Double ?? 0)) + 2, label)
+                    }
                     XCTAssertTrue(row["visible"] as? Bool == true, label); XCTAssertTrue(row["sameText"] as? Bool == true, label)
                     XCTAssertTrue(row["fontLoaded"] as? Bool == true, label)
                     XCTAssertLessThanOrEqual(row["loaded"] as? Int ?? 99, scrolling ? 3 : 1, label)

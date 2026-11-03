@@ -2747,6 +2747,7 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor private func verifyChatResize(flow: String, bold: Bool = false) {
+        continueAfterFailure = false
         orient(.portrait)
         let app = launchApp()
         defer { orient(.portrait) }
@@ -2824,11 +2825,23 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["openReaderChat"].tap()
         XCTAssertEqual(panel.frame.height, readingHeight, accuracy: 3)
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        func waitForComposing() {
+            expectation(for: NSPredicate { _, _ in
+                let keyboard = app.keyboards.firstMatch
+                return app.buttons["Hide keyboard"].exists && keyboard.exists
+                    && keyboard.frame.intersection(app.frame).height > 100
+                    && panel.frame.maxY <= keyboard.frame.minY + 2
+            }, evaluatedWith: app)
+            waitForExpectations(timeout: 5)
+        }
         input.tap(); input.typeText("Keep my resize draft")
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        waitForComposing()
+        // First shrink to the composing minimum, then expand. The maximum can
+        // be only a few points above the default on a tall software keyboard.
+        resize(200)
         let compactHeight = panel.frame.height
         resize(-160)
-        XCTAssertGreaterThan(panel.frame.height, compactHeight + 70)
+        XCTAssertGreaterThan(panel.frame.height, compactHeight + 8)
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
         XCTAssertEqual(input.value as? String, "Keep my resize draft")
         XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists, "Expanded typing can show the conversation")
@@ -2850,8 +2863,9 @@ final class LeafReaderUITests: XCTestCase {
         focusProof.name = flow + " restored composer focus geometry"; focusProof.lifetime = .keepAlways; add(focusProof)
         capture(flow + " restored input before keyboard reopen", app: app)
         focusTarget.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Hide keyboard"].waitForExistence(timeout:5))
+        // A real key refreshes UIKit's cached offscreen keyboard after hiding it.
+        input.typeText("x"); input.typeText(XCUIKeyboardKey.delete.rawValue)
+        waitForComposing()
         XCTAssertEqual(panel.frame.height, typingHeight, accuracy: 3)
         hideKeyboardAndWait()
         orient(.landscapeLeft)
@@ -2863,8 +2877,8 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.scrollViews["chatMessageHistory"].exists)
         assertCompactChatHeader(app)
         capture(flow + " landscape expanded chat history", app: app)
-        input.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.tap(); input.typeText("x"); input.typeText(XCUIKeyboardKey.delete.rawValue)
+        waitForComposing()
         resize(-50)
         XCTAssertLessThanOrEqual(panel.frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
         XCTAssertTrue(input.isHittable)
