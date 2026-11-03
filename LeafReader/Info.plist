@@ -57,6 +57,8 @@
 	</dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Use the microphone to dictate an editable question in Ask Leaf. Recording stops when you stop dictation or leave the chat.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save pictures that Ask Leaf draws for you to your photo library when you choose Save Image.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Turn your voice into text for Ask Leaf. Speech may be processed by Apple when on-device recognition is unavailable.</string>
 	<key>UIAppFonts</key>
