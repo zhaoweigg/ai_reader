@@ -2276,7 +2276,9 @@ final class ReaderEngineTests: XCTestCase {
     func testFloatingButtonPositionClampsAndSurvivesRotation() {
         let portrait = CGSize(width: 402, height: 800), landscape = CGSize(width: 800, height: 340)
         let initial = ReaderChatPlacement.center(x: -1, y: -1, in: portrait)
-        XCTAssertEqual(initial, CGPoint(x: 358, y: 662))
+        // The small theme button above it needs room at the edge, so the default sits a little inward.
+        XCTAssertEqual(initial.x, 402 - ReaderChatPlacement.satelliteReach - 6, accuracy: 0.01)
+        XCTAssertEqual(initial.y, 662)
         for point in [CGPoint(x: -500, y: -200), CGPoint(x: 3000, y: 900), CGPoint(x: 88, y: 275)] {
             let normalized = ReaderChatPlacement.normalized(point, in: portrait)
             XCTAssertTrue((0...1).contains(normalized.x)); XCTAssertTrue((0...1).contains(normalized.y))
@@ -2288,6 +2290,73 @@ final class ReaderEngineTests: XCTestCase {
         }
         XCTAssertEqual(ReaderChatPlacement.center(x: .nan, y: .infinity, in: portrait), initial)
         XCTAssertEqual(ReaderChatPlacement.clamp(.zero, in: CGSize(width: 30, height: 20)), CGPoint(x: 15, y: 10))
+    }
+    func testSmallThemeButtonSitsOnTheEdgeSideAndStaysOnScreen() {
+        let size = CGSize(width: 402, height: 800)
+        // Right half: top right; left half: top left. Near the middle it keeps its side until clearly past.
+        XCTAssertTrue(ReaderChatPlacement.satelliteOnRight(CGPoint(x: 300, y: 400), in: size, wasRight: false))
+        XCTAssertFalse(ReaderChatPlacement.satelliteOnRight(CGPoint(x: 100, y: 400), in: size, wasRight: true))
+        XCTAssertTrue(ReaderChatPlacement.satelliteOnRight(CGPoint(x: 195, y: 400), in: size, wasRight: true))
+        XCTAssertFalse(ReaderChatPlacement.satelliteOnRight(CGPoint(x: 207, y: 400), in: size, wasRight: false))
+        let right = ReaderChatPlacement.satelliteOffset(angle: ReaderChatPlacement.satelliteAngle(right: true))
+        let left = ReaderChatPlacement.satelliteOffset(angle: ReaderChatPlacement.satelliteAngle(right: false))
+        XCTAssertGreaterThan(right.width, 0); XCTAssertLessThan(left.width, 0)
+        XCTAssertLessThan(right.height, 0); XCTAssertEqual(right.height, left.height, accuracy: 0.001)
+        // Halfway through the glide it passes straight over the top, never through the big circle.
+        let top = ReaderChatPlacement.satelliteOffset(angle: 0)
+        XCTAssertEqual(top.width, 0, accuracy: 0.001)
+        XCTAssertGreaterThan(-top.height, ReaderChatPlacement.diameter / 2)
+        // Dragged into any corner, the small circle stays fully on screen on its side.
+        for target in [CGPoint(x: -100, y: -100), CGPoint(x: 900, y: -100), CGPoint(x: -100, y: 900), CGPoint(x: 900, y: 900)] {
+            let center = ReaderChatPlacement.clamp(target, in: size)
+            let onRight = ReaderChatPlacement.satelliteOnRight(center, in: size, wasRight: center.x > size.width / 2)
+            let offset = ReaderChatPlacement.satelliteOffset(angle: ReaderChatPlacement.satelliteAngle(right: onRight))
+            let small = CGRect(x: center.x + offset.width - 13, y: center.y + offset.height - 13, width: 26, height: 26)
+            XCTAssertTrue(CGRect(origin: .zero, size: size).insetBy(dx: 4, dy: 4).contains(small), "\(target) -> \(small)")
+            XCTAssertEqual(onRight, target.x > 0)
+        }
+    }
+    func testTwinOutlineIsOneDropAroundBothCircles() {
+        let center = CGPoint(x: 100, y: 100)
+        let angles: [Double] = [ReaderChatPlacement.satelliteAngle, 0, -ReaderChatPlacement.satelliteAngle]
+        for angle in angles {
+            let path = ReaderChatPlacement.twinOutline(center: center, angle: angle)
+            let offset = ReaderChatPlacement.satelliteOffset(angle: angle)
+            let small = CGPoint(x: center.x + offset.width, y: center.y + offset.height)
+            XCTAssertTrue(path.contains(center)); XCTAssertTrue(path.contains(small))
+            // The waist between them is filled, and the far side of the big circle is not cut away.
+            XCTAssertTrue(path.contains(CGPoint(x: (center.x + small.x) / 2, y: (center.y + small.y) / 2)))
+            XCTAssertTrue(path.contains(CGPoint(x: center.x - offset.width * 0.6, y: center.y - offset.height * 0.6)))
+            let box = path.boundingRect
+            XCTAssertLessThanOrEqual(box.minY, small.y - 12.5)
+            XCTAssertGreaterThanOrEqual(box.maxY, center.y + 25.5)
+            XCTAssertLessThanOrEqual(box.maxY, center.y + 26.5, "No loop outside the big circle")
+        }
+    }
+    func testThemeRingOpensTowardTheMiddleAndKeepsEveryChoiceTappable() {
+        let size = CGSize(width: 402, height: 800), count = ReadingTheme.allCases.count
+        let corners = [ReaderChatPlacement.center(x: -1, y: -1, in: size), ReaderChatPlacement.clamp(.zero, in: size),
+                       ReaderChatPlacement.clamp(CGPoint(x: 0, y: 900), in: size), ReaderChatPlacement.clamp(CGPoint(x: 900, y: 0), in: size),
+                       CGPoint(x: 201, y: 400)]
+        let safe = CGRect(origin: .zero, size: size).insetBy(dx: ReaderChatPlacement.ThemeRing.swatch / 2 + 7.9, dy: ReaderChatPlacement.ThemeRing.swatch / 2 + 7.9)
+        for center in corners {
+            let ring = ReaderChatPlacement.themeRing(count: count, around: center, in: size)
+            let points = ring.points
+            XCTAssertEqual(points.count, count)
+            for point in points { XCTAssertTrue(safe.contains(point), "\(center): \(point)") }
+            // The track's rounded ends stay on screen too.
+            let track = CGRect(origin: .zero, size: size).insetBy(dx: ReaderChatPlacement.ThemeRing.track / 2, dy: ReaderChatPlacement.ThemeRing.track / 2)
+            for point in [points.first!, points.last!] { XCTAssertTrue(track.contains(point), "\(center): \(point)") }
+            for (a, b) in zip(points, points.dropFirst()) {
+                XCTAssertGreaterThanOrEqual(hypot(a.x - b.x, a.y - b.y), 44, "Each choice keeps a 44 pt target")
+            }
+            // The arc's middle points toward the screen's middle.
+            let middle = points[count / 2]
+            XCTAssertEqual(middle.x < ring.center.x, center.x > size.width / 2)
+            XCTAssertEqual(middle.y < ring.center.y, center.y > size.height / 2)
+        }
+        // Away from the edges the arc stays centered on the button.
+        XCTAssertEqual(ReaderChatPlacement.themeRing(count: count, around: CGPoint(x: 201, y: 400), in: size).center, CGPoint(x: 201, y: 400))
     }
     func testScrollPreservesTheVisibleAnchorAcrossMarginsAndRepeatedScrolls() async throws {
         let (book, url) = try prepare("Density.html", format: .html, fixtures: true)

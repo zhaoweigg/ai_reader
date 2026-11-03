@@ -356,4 +356,23 @@ final class LibraryChatUITests: XCTestCase {
         hideKeyboard(app)
         capture("Bookmarks chat answers from the saved places")
     }
+
+    @MainActor func testLibrarySmallButtonSwitchesThemeWithoutOpeningChat() {
+        let app = launch()
+        let launcher = app.buttons["openLibraryChat"], themes = app.buttons["openLibraryThemes"]
+        XCTAssertTrue(themes.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(themes.frame.midX, launcher.frame.midX + 20)
+        XCTAssertLessThan(themes.frame.maxY, app.tabBars.firstMatch.frame.minY)
+        themes.tap()
+        let sepia = app.buttons["quickTheme-sepia"]
+        XCTAssertTrue(sepia.waitForExistence(timeout: 3))
+        capture("Library quick themes open")
+        sepia.tap()
+        expectation(for: NSPredicate(format: "value == %@", "Sepia"), evaluatedWith: themes)
+        waitForExpectations(timeout: 3)
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists)
+        capture("Library in Sepia from quick themes")
+        launcher.tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5), "The big button still opens Ask Leaf")
+    }
 }
