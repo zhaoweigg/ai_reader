@@ -154,6 +154,8 @@ import AVFoundation
         session.pausePlayback(); let paused = session.playbackTime
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(session.playbackTime, paused, accuracy: 0.02)
+        session.togglePlayback(url: url)
+        try await eventually { session.isPlaying && session.playbackTime > paused + 0.08 }
         session.close(); XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
     func testRecordingLimitAndCompetingAudioStopCaptureWithoutDroppingTheDraft() async throws {

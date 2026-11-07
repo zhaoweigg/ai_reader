@@ -69,6 +69,7 @@ import UIKit
     private let recorder: any VoiceNoteRecording
     private let limit: TimeInterval
     private var player: AVAudioPlayer?
+    private var playbackURL: URL?
     private var ownsPlaybackSession = false
     private var pendingURL: URL?
     private var token = UUID()
@@ -152,11 +153,14 @@ import UIKit
             let audio = AVAudioSession.sharedInstance()
             try audio.setCategory(.playback, mode: .spokenAudio); try audio.setActive(true); ownsPlaybackSession = true
             if player?.url != url {
+                let resumeAt = playbackURL == url ? playbackTime : 0
                 player = try AVAudioPlayer(contentsOf: url)
+                if let player { player.currentTime = min(resumeAt, player.duration) }
                 #if DEBUG
                 if UITesting.isActive || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { player?.volume = 0 }
                 #endif
             }
+            playbackURL = url
             guard let player, player.duration.isFinite, player.duration > 0,
                   player.duration <= VoiceNote.maximumDuration + 0.1 else { throw VoiceNoteError.invalidRecording }
             if player.currentTime >= player.duration - 0.02 { player.currentTime = 0 }
@@ -166,10 +170,13 @@ import UIKit
     }
     func pausePlayback() {
         player?.pause(); playbackTime = player?.currentTime ?? playbackTime
+        // Saved rows can remain alive offscreen. Keep only the cursor while
+        // paused, so listening to several notes never retains several players.
+        player = nil
         isPlaying = false; ticker?.cancel(); releasePlayback()
     }
     private func stopPlayback() {
-        pausePlayback(); player?.stop(); player = nil; playbackTime = 0; playbackDuration = 0
+        pausePlayback(); playbackURL = nil; playbackTime = 0; playbackDuration = 0
     }
     private func releasePlayback() {
         if ownsPlaybackSession {
