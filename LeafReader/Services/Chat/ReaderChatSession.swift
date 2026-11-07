@@ -42,6 +42,15 @@ final class ReaderChatSession: ObservableObject {
     private var checkpoint: Task<Void, Never>?
     private var generation = UUID()
     private var task: Task<Void, Never>?
+    /// Streamed text reaches the history in batches: a reply arrives a few characters at
+    /// a time, and re-laying the history out for each piece made scrolling it stutter.
+    private var pendingText: (id: UUID, token: UUID, text: String)?
+    private var pendingTextFlush: Task<Void, Never>?
+    /// Set by the chat panel while the reader's finger or momentum moves the history, so
+    /// new text waits instead of competing with the scroll for frames.
+    var holdsStreamedText = false { didSet { if oldValue && !holdsStreamedText { flushPendingText() } } }
+    static let streamBatchDelay: Duration = .milliseconds(80)
+    static let streamHoldDelay: Duration = .milliseconds(1200)
     var canRetry: Bool { !isSending && !hasNewerMessages && messages.last?.isUser == false && messages.last?.state != .complete }
     /// iOS suspends Leaf seconds after it leaves the screen and cuts its connections. A reply keeps
     /// running for the short extra time iOS grants, and one cut off there continues on return.
@@ -106,6 +115,7 @@ final class ReaderChatSession: ObservableObject {
         catch { historyError = ChatHistoryError.write.localizedDescription; return false }
     }
     @discardableResult func flush() -> Bool {
+        flushPendingText()
         checkpoint?.cancel(); checkpoint = nil
         guard historyReadable, history != nil || !historyRequired else { return false }
         guard !pendingMessageIDs.isEmpty || draftDirty || selectionDirty else {
@@ -261,6 +271,7 @@ final class ReaderChatSession: ObservableObject {
 
     func stop() {
         guard isSending else { return }
+        flushPendingText()
         generation = UUID(); task?.cancel(); task = nil; isSending = false
         if let recorder = activeRecorder {
             recorder.failed("Response stopped.", outcome: .stopped)
@@ -317,7 +328,7 @@ final class ReaderChatSession: ObservableObject {
         } catch { historyError = "The saved conversation could not be cleared. Your history has been kept. Try again." }
     }
     deinit {
-        task?.cancel(); checkpoint?.cancel()
+        task?.cancel(); checkpoint?.cancel(); pendingTextFlush?.cancel()
         lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
         if backgroundTask != .invalid { let task = backgroundTask; Task { @MainActor in UIApplication.shared.endBackgroundTask(task) } }
     }
@@ -413,6 +424,7 @@ final class ReaderChatSession: ObservableObject {
                 truncated = try await stream(ChatRequest.conversation(history, earlierMessages: earlier, limits: contextLimits), provider: provider, into: id, token: token,
                                              recorder: recorder, recovery: recovery, detail: Self.traceDetail(asked?.context?.bounded(contextLimits), boundary: nil, limits: nil))
             }
+            flushPendingText()
             guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
             messages[index].trace = trace
             if let recorder { traceStore?.add(recorder.finish(outcome: truncated ? .truncated : .complete)) }
@@ -428,6 +440,7 @@ final class ReaderChatSession: ObservableObject {
             changed(messages[index])
         } catch {
             guard generation == token else { return }
+            flushPendingText()
             if let index = messages.firstIndex(where: { $0.id == id }) {
                 messages[index].state = .failed; messages[index].trace = trace; changed(messages[index])
             }
@@ -513,12 +526,14 @@ final class ReaderChatSession: ObservableObject {
     }
     /// Shown in place of “Thinking…” while the model draws.
     private func drawing(_ id: UUID, token: UUID) {
+        flushPendingText()
         guard generation == token, let message = messages.first(where: { $0.id == id }), message.text.isEmpty else { return }
         activity = "Drawing the picture…"
     }
     private func attachImage(_ data: Data, to id: UUID, token: UUID) throws {
         guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
         let name = try ChatImageStore.save(data, in: imageDirectory)
+        flushPendingText()
         activity = nil
         messages[index].images = (messages[index].images ?? []) + [name]; changed(messages[index])
     }
@@ -590,10 +605,40 @@ final class ReaderChatSession: ObservableObject {
     private func append(_ text: String, to id: UUID, token: UUID) {
         guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
         activity = nil
-        messages[index].text += text; changed(messages[index])
+        // The first words replace “Thinking…” at once; what follows is batched.
+        if messages[index].text.isEmpty, pendingText == nil {
+            messages[index].text += text; changed(messages[index]); return
+        }
+        if pendingText?.id == id { pendingText?.text += text } else { flushPendingText(); pendingText = (id, token, text) }
+        scheduleTextFlush()
+    }
+    private func scheduleTextFlush() {
+        guard pendingTextFlush == nil else { return }
+        pendingTextFlush = Task { [weak self] in
+            var delay = self?.holdsStreamedText == true ? Self.streamHoldDelay : Self.streamBatchDelay
+            while true {
+                try? await Task.sleep(for: delay)
+                guard let self, !Task.isCancelled else { return }
+                // A scroll that began during the wait keeps the text back a while longer.
+                guard self.holdsStreamedText, delay == Self.streamBatchDelay else { break }
+                delay = Self.streamHoldDelay
+            }
+            self?.pendingTextFlush = nil
+            self?.flushPendingText()
+        }
+    }
+    /// Puts text waiting in a batch into its reply. Every other change to a streaming
+    /// reply goes through here first, so nothing lands out of order or gets lost.
+    private func flushPendingText() {
+        pendingTextFlush?.cancel(); pendingTextFlush = nil
+        guard let pending = pendingText else { return }
+        pendingText = nil
+        guard generation == pending.token, let index = messages.firstIndex(where: { $0.id == pending.id }) else { return }
+        messages[index].text += pending.text; changed(messages[index])
     }
     private func withdraw(_ id: UUID, token: UUID) {
         guard generation == token, let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        pendingTextFlush?.cancel(); pendingTextFlush = nil; pendingText = nil
         messages[index].text = ""; changed(messages[index])
     }
     /// Earlier exchanges in this book's conversation that mention any term, for the agent.

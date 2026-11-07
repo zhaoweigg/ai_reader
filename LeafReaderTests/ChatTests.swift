@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import LeafReader
 
 private final class MemoryChatCredentials: ChatCredentialStore {
@@ -558,6 +559,55 @@ final class ChatTests: XCTestCase {
         XCTAssertFalse(followup.contains { $0.content.contains("The door stayed shut.") })
         provider.continuations[1].yield(.text("A followup")); provider.continuations[1].yield(.finished(truncated: false)); provider.continuations[1].finish()
         try await wait { !session.isSending }
+    }
+
+    func testStreamedTextReachesTheHistoryInBatchesAndWaitsWhileScrolling() async throws {
+        let provider = ControlledChatProvider(); let (settings, _, _) = settings(provider)
+        let session = ReaderChatSession(); session.draft = "Explain at length"
+        var publishes = 0
+        let watching = session.$messages.dropFirst().sink { _ in publishes += 1 }
+        defer { watching.cancel() }
+        session.send(settings: settings) { self.context }
+        try await wait { provider.requests.count == 1 }
+        let before = publishes
+        provider.continuations[0].yield(.text("First"))
+        try await wait { session.messages.last?.text == "First" }
+        XCTAssertEqual(publishes, before + 1, "The first words show at once")
+        for index in 1...40 { provider.continuations[0].yield(.text(" w\(index)")) }
+        try await wait { session.messages.last?.text.hasSuffix(" w40") == true }
+        XCTAssertLessThanOrEqual(publishes - before, 4, "Forty pieces arriving together reach the history as a batch, not one by one")
+        XCTAssertEqual(session.messages.last?.text, "First" + (1...40).map { " w\($0)" }.joined())
+
+        // While the reader scrolls the history, new text waits; releasing shows it all.
+        session.holdsStreamedText = true
+        let settled = session.messages.last?.text ?? ""
+        provider.continuations[0].yield(.text(" held"))
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(session.messages.last?.text, settled, "Nothing lands while the history is being scrolled")
+        session.holdsStreamedText = false
+        XCTAssertEqual(session.messages.last?.text, settled + " held", "Releasing the history shows what arrived meanwhile")
+
+        // Finishing never loses text still waiting in a batch.
+        provider.continuations[0].yield(.text(" end"))
+        provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
+        try await wait { !session.isSending }
+        XCTAssertEqual(session.messages.last?.text, settled + " held end"); XCTAssertEqual(session.messages.last?.state, .complete)
+    }
+
+    func testStoppingAppliesBatchedTextBeforeMarkingTheReplyStopped() async throws {
+        let provider = ControlledChatProvider(); let (settings, _, _) = settings(provider)
+        let session = ReaderChatSession(); session.draft = "Explain"
+        session.send(settings: settings) { self.context }
+        try await wait { provider.requests.count == 1 }
+        provider.continuations[0].yield(.text("Partial"))
+        try await wait { session.messages.last?.text == "Partial" }
+        provider.continuations[0].yield(.text(" more"))
+        try await Task.sleep(for: .milliseconds(30)) // Received, still in its batch.
+        session.stop()
+        XCTAssertEqual(session.messages.last?.text, "Partial more"); XCTAssertEqual(session.messages.last?.state, .stopped)
+        provider.continuations[0].yield(.text(" late")); provider.continuations[0].finish()
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(session.messages.last?.text, "Partial more", "Nothing after Stop lands")
     }
 
     func testStopIgnoresLateEventsAndRetryKeepsOriginalPassage() async throws {
