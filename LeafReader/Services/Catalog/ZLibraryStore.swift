@@ -1,6 +1,31 @@
 import Foundation
 import WebKit
 
+/// Two metadata transfers at a time, with cancellable FIFO waiting. A quick
+/// scroll must not leave every off-screen edition waiting to hit the website.
+@MainActor private final class ZLibraryDetailSlots {
+    private var active = 0
+    private var waiting: [(UUID, CheckedContinuation<Void, Error>)] = []
+    func acquire() async throws {
+        try Task.checkCancellation()
+        if active < 2 { active += 1; return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await withCheckedThrowingContinuation { waiting.append((id, $0)) }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, let index = waiting.firstIndex(where: { $0.0 == id }) else { return }
+                waiting.remove(at: index).1.resume(throwing: CancellationError())
+            }
+        }
+    }
+    func release() {
+        if waiting.isEmpty { active -= 1 }
+        else { waiting.removeFirst().1.resume() }
+    }
+}
+
 @MainActor
 final class ZLibraryStore: ObservableObject {
     @Published private(set) var origin: ZLibraryOrigin
@@ -74,6 +99,17 @@ final class ZLibraryStore: ObservableObject {
     private var catalogRequest = UUID()
     private var searchPage = 0
     private var retryNextPage = false
+    @Published private(set) var detailRefresh = 0
+    @Published private var detailFailures: Set<String> = []
+    private let detailSlots = ZLibraryDetailSlots()
+    private struct DetailRequest {
+        let id: UUID
+        let task: Task<ZLibraryBook, Error>
+        var readers: Set<UUID>
+    }
+    private var detailRequests: [String: DetailRequest] = [:]
+    private var detailCache: [String: ZLibraryBook] = [:]
+    private var detailOrder: [String] = []
     // Bounded, in-memory navigation state, isolated to the verified account/origin.
     // Both feeds plus the three most recently visited searches (at most 1,300 rows).
     private struct CatalogKey: Hashable {
@@ -150,6 +186,8 @@ final class ZLibraryStore: ObservableObject {
     /// the previous account or origin.
     private func resetCatalog() {
         generation = UUID(); clearSnapshots(); downloadTask?.cancel(); downloadTask = nil
+        for request in detailRequests.values { request.task.cancel() }
+        detailRequests.removeAll(); detailCache.removeAll(); detailOrder.removeAll(); detailFailures.removeAll()
         cancelCatalogLoad(); searchPage = 0; canLoadMore = false; searchLimitReached = false
         books = []; error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
         recommendationConnectionRequired = false
@@ -311,7 +349,8 @@ final class ZLibraryStore: ObservableObject {
                     } else { books = try await self.client.popular(origin: source, session: saved) }
                 }
                 try Task.checkCancellation(); guard token == self.generation else { return }
-                self.shelfGeneration = token; self.shelfFeed = feed; self.shelf = Array(books.prefix(12))
+                self.shelfGeneration = token; self.shelfFeed = feed
+                self.shelf = books.prefix(12).map { book in self.detailCache[book.id].map { book.fillingMissingDetails(from: $0) } ?? book }
                 let cache = ShelfCache(origin: source.url.absoluteString, account: saved?.userID, feed: feed.rawValue, books: self.shelf)
                 self.defaults.set(try? JSONEncoder().encode(cache), forKey: "zlibrary.shelf")
             } catch {
@@ -338,7 +377,10 @@ final class ZLibraryStore: ObservableObject {
             return token == generation ? page.books : []
         } catch { return [] }
     }
-    func reload() async { await loadCatalog(query: activeQuery, refresh: true) }
+    func reload() async {
+        detailFailures.removeAll(); detailRefresh += 1
+        await loadCatalog(query: activeQuery, refresh: true)
+    }
     func retry() async {
         if retryNextPage { await loadMore() } else { await reload() }
     }
@@ -420,8 +462,9 @@ final class ZLibraryStore: ObservableObject {
             try Task.checkCancellation(); guard token == generation && request == catalogRequest else { return }
             traceCatalogLoad("received rows=\(result.count)", request: request)
             let existing = append ? Set(books.map(\.id)) : []
-            let added = result.filter { !existing.contains($0.id) }
-            books = append ? books + added : result
+            let resolved = result.map { book in detailCache[book.id].map { book.fillingMissingDetails(from: $0) } ?? book }
+            let added = resolved.filter { !existing.contains($0.id) }
+            books = append ? books + added : resolved
             searchPage = query.isEmpty ? 0 : page
             searchLimitReached = !query.isEmpty && more && page >= ZLibrarySearchPage.maximumPages
             canLoadMore = !query.isEmpty && more && !added.isEmpty && !searchLimitReached
@@ -477,6 +520,7 @@ final class ZLibraryStore: ObservableObject {
     }
     #if DEBUG
     @Published private(set) var loadTrace: [String] = []
+    var cachedDetailCount: Int { detailCache.count }
     #endif
     /// One edition's details; `description` also fetches a listed book for its description.
     /// The book whose details page is showing, for Ask Leaf; read when a tool runs, so not published.
@@ -486,26 +530,96 @@ final class ZLibraryStore: ObservableObject {
     func endViewing(_ book: ZLibraryBook) { if viewingBook?.id == book.id { viewingBook = nil } }
     /// The newest known copy of a listed or viewed edition, with any details fetched since.
     func latest(_ book: ZLibraryBook) -> ZLibraryBook { (books + shelf).first { $0.id == book.id && !$0.fileExtension.isEmpty } ?? book }
+    /// Unknown list fields are pending, rather than proof the provider has no metadata.
+    func cardDetailsPending(_ book: ZLibraryBook) -> Bool {
+        detailCache[book.id] == nil && !detailFailures.contains(book.id)
+            && (book.fileExtension.isEmpty || book.size.isEmpty || book.language.isEmpty || book.year.isEmpty || book.rating == nil)
+    }
+    func cardDetailsFailed(_ book: ZLibraryBook) -> Bool { detailFailures.contains(book.id) }
+    /// A cell owns its subscription. Recycling it cancels queued work; another
+    /// visible cell or the details page can keep the same request alive.
+    func loadCardDetails(_ book: ZLibraryBook) async {
+        guard !Task.isCancelled else { return }
+        if let cached = detailCache[book.id] { updateDetails(latest(book).fillingMissingDetails(from: cached)); return }
+        guard cardDetailsPending(book) else { return }
+        let token = generation
+        do {
+            var resolved = try await fetchDetails(book)
+            try Task.checkCancellation()
+            guard token == generation else { return }
+            resolved.summary = resolved.summary ?? ""
+            // Another completion may already have evicted this edition. Do not
+            // put it back outside the bounded cache's insertion/eviction path.
+            if detailCache[book.id] != nil { detailCache[book.id] = resolved }
+            updateDetails(latest(book).fillingMissingDetails(from: resolved))
+        } catch {
+            if token == generation && !Task.isCancelled && !Self.isCancellation(error) {
+                detailFailures.insert(book.id)
+            }
+        }
+    }
+    private func fetchDetails(_ book: ZLibraryBook) async throws -> ZLibraryBook {
+        try Task.checkCancellation()
+        if let cached = detailCache[book.id] { return cached }
+        let reader = UUID()
+        if detailRequests[book.id] == nil {
+            let id = UUID(), token = generation, source = origin, saved = session, service = client
+            let task = Task { [self] () throws -> ZLibraryBook in
+                defer { if detailRequests[book.id]?.id == id { detailRequests[book.id] = nil } }
+                try await detailSlots.acquire()
+                defer { detailSlots.release() }
+                try Task.checkCancellation()
+                guard token == generation else { throw CancellationError() }
+                let resolved = try await service.details(book, origin: source, session: saved)
+                try Task.checkCancellation()
+                guard token == generation else { throw CancellationError() }
+                detailCache[book.id] = resolved
+                detailFailures.remove(book.id)
+                detailOrder.removeAll { $0 == book.id }; detailOrder.append(book.id)
+                while detailOrder.count > 200 { detailCache[detailOrder.removeFirst()] = nil }
+                return resolved
+            }
+            detailRequests[book.id] = DetailRequest(id: id, task: task, readers: [])
+        }
+        detailRequests[book.id]?.readers.insert(reader)
+        guard let request = detailRequests[book.id] else { throw CancellationError() }
+        return try await withTaskCancellationHandler {
+            let resolved = try await request.task.value
+            try Task.checkCancellation()
+            return resolved
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelDetails(reader, book: book.id, request: request.id) }
+        }
+    }
+    private func cancelDetails(_ reader: UUID, book: String, request id: UUID) {
+        guard var request = detailRequests[book], request.id == id else { return }
+        request.readers.remove(reader)
+        if request.readers.isEmpty { detailRequests[book] = nil; request.task.cancel() }
+        else { detailRequests[book] = request }
+    }
+    private func updateDetails(_ resolved: ZLibraryBook) {
+        if let index = books.firstIndex(where: { $0.id == resolved.id }) { books[index] = resolved }
+        if let index = shelf.firstIndex(where: { $0.id == resolved.id }) { shelf[index] = resolved }
+        for (key, snapshot) in snapshots {
+            guard let index = snapshot.books.firstIndex(where: { $0.id == resolved.id }) else { continue }
+            var rows = snapshot.books; rows[index] = resolved
+            snapshots[key] = CatalogSnapshot(books: rows, page: snapshot.page, canLoadMore: snapshot.canLoadMore, limitReached: snapshot.limitReached)
+        }
+    }
     func details(_ book: ZLibraryBook, description: Bool = false) async throws -> ZLibraryBook {
         if let cached = (books + shelf).first(where: { $0.id == book.id }), !cached.fileExtension.isEmpty, !description || cached.summary != nil { return cached }
-        let token = generation, source = origin
+        let token = generation
         do {
-            var resolved = try await client.details(book, origin: source, session: session)
+            var resolved = try await fetchDetails(book)
             // Fetched without one: the catalog has no description, so it is not asked again.
             if description, resolved.summary == nil { resolved.summary = "" }
-            // A listed edition keeps what its list shows; a description fetch only adds the description.
-            if description, var listed = (books + shelf).first(where: { $0.id == book.id }), !listed.fileExtension.isEmpty {
-                listed.summary = resolved.summary; resolved = listed
+            // Keep known listing fields while enriching its description and missing metadata.
+            if description, let listed = (books + shelf).first(where: { $0.id == book.id }), !listed.fileExtension.isEmpty {
+                resolved = listed.fillingMissingDetails(from: resolved)
             }
             try Task.checkCancellation()
             guard token == generation else { throw CancellationError() }
-            if let index = books.firstIndex(where: { $0.id == book.id }) { books[index] = resolved }
-            if let index = shelf.firstIndex(where: { $0.id == book.id }) { shelf[index] = resolved }
-            for (key, snapshot) in snapshots {
-                guard let index = snapshot.books.firstIndex(where: { $0.id == book.id }) else { continue }
-                var rows = snapshot.books; rows[index] = resolved
-                snapshots[key] = CatalogSnapshot(books: rows, page: snapshot.page, canLoadMore: snapshot.canLoadMore, limitReached: snapshot.limitReached)
-            }
+            updateDetails(resolved)
             return resolved
         } catch {
             guard token == generation else { throw CancellationError() }
@@ -561,6 +675,7 @@ struct UITestZLibraryClient: ZLibraryServing {
             throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "GET /eapi/user/book/recommended · browser redirect · website verification required")
         }
         let books = [ZLibraryBook(remoteID:"recommended",hash:"ddeeff",title:"A Field Guide to Slow Days",author:"Leaf Editions",fileExtension:"txt",size:"18 KB",language:"English",year:"2026",coverURL:nil,rating:4.7,ratingCount:18)]
+        if UITesting.flag("LEAF_UI_ZLIB_ASYNC_DETAILS") { return sampleBooks() }
         return UITesting.flag("LEAF_UI_ZLIB_GRID") ? books + sampleBooks() : books
     }
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
@@ -580,7 +695,8 @@ struct UITestZLibraryClient: ZLibraryServing {
         return ZLibraryBook(remoteID: book.remoteID, hash: book.hash, title: book.title, author: book.author,
                             fileExtension: UITesting.environment("LEAF_UI_ZLIB_DETAILS") == "unsupported" ? "djvu" : "epub",
                             size: "1 MB", language: "English", year: "2026", coverURL: book.coverURL,
-                            rating: book.rating, ratingCount: book.ratingCount, qualityScore: book.qualityScore,
+                            rating: UITesting.flag("LEAF_UI_ZLIB_ASYNC_DETAILS") ? 4.8 : book.rating,
+                            ratingCount: UITesting.flag("LEAF_UI_ZLIB_ASYNC_DETAILS") ? 42 : book.ratingCount, qualityScore: book.qualityScore,
                             summary: summary)
     }
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile { ZLibraryProfile(name:"Preview account",remaining:5) }
@@ -604,6 +720,10 @@ struct UITestZLibraryClient: ZLibraryServing {
         _ = try await ZLibraryClient(transport: UITestPopularRedirectTransport()).object(path, origin: try ZLibraryOrigin("https://catalog.example"), session: session, form: path == "book/search" ? ["message": "fixture"] : nil)
     }
     private func sampleBooks() -> [ZLibraryBook] {
+        if UITesting.flag("LEAF_UI_ZLIB_ASYNC_DETAILS") {
+            return (1...15).map { ZLibraryBook(remoteID: "async\($0)", hash: "abc\($0)", title: "Background book \($0)",
+                author: "Leaf Editions", fileExtension: "", size: "", language: "", year: "", coverURL: nil) }
+        }
         if UITesting.flag("LEAF_UI_ZLIB_THUMBNAILS") {
             return (0..<72).map { index in ZLibraryBook(remoteID: "cover\(index)", hash: "cover\(index)",
                 title: "Catalog cover \(index + 1)", author: "Leaf Editions", fileExtension: "epub", size: "1 MB", language: "English", year: "2026",

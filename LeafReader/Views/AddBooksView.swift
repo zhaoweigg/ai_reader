@@ -117,9 +117,11 @@ struct ZLibraryView: View {
                                 ZLibraryCover(book:book)
                                 Text(book.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2).frame(maxWidth:.infinity,alignment:.leading)
                                 Text(book.author.isEmpty ? "Unknown author" : book.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                Text(book.fileSummary).font(.caption.weight(.medium)).foregroundStyle(.primary)
+                                Text(catalog.cardDetailsPending(book) && (book.fileExtension.isEmpty || book.size.isEmpty)
+                                     ? (book.fileExtension.isEmpty ? "Loading details…" : "\(book.fileExtension.uppercased()) · Loading size…")
+                                     : catalog.cardDetailsFailed(book) && book.fileExtension.isEmpty ? "Details unavailable" : book.fileSummary).font(.caption.weight(.medium)).foregroundStyle(.primary)
                                 if !book.editionSummary.isEmpty { Text(book.editionSummary).font(.caption2).foregroundStyle(.secondary) }
-                                Label(book.ratingSummary,systemImage:book.rating == nil ? "star" : "star.fill")
+                                Label(book.rating == nil && catalog.cardDetailsPending(book) ? "Loading rating…" : book.rating == nil && catalog.cardDetailsFailed(book) ? "Rating unavailable" : book.ratingSummary,systemImage:book.rating == nil ? "star" : "star.fill")
                                     .font(.caption2).foregroundStyle(book.rating == nil ? Color.secondary : theme.accent)
                                     .fixedSize(horizontal:false,vertical:true)
                                 if library.books.contains(where: { $0.catalogSource == book.sourceID }) {
@@ -127,6 +129,7 @@ struct ZLibraryView: View {
                                 }
                             }.contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityIdentifier("catalogBook-\(book.remoteID)")
+                            .task(id: "\(book.id):\(catalog.detailRefresh)") { await catalog.loadCardDetails(book) }
                     }
                 }
                 if catalog.loading && !catalog.books.isEmpty { ProgressView(catalog.showingSavedResults ? "Refreshing books…" : "Loading more books…").frame(maxWidth: .infinity) }

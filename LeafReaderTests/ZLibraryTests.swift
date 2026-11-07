@@ -400,6 +400,124 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertEqual(first,book);XCTAssertEqual(second,book);XCTAssertEqual(store.books,[book])
         XCTAssertEqual(client.detailCalls,1)
     }
+    func testVisibleCardsHydrateWithoutOpeningAndReuseDetailsAcrossFeedRefreshAndSearch() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let sparse = ZLibraryBook(remoteID: book.remoteID, hash: book.hash, title: book.title, author: "", fileExtension: "", size: "", language: "", year: "", coverURL: nil)
+        var rich = book; rich.rating = 4.8; rich.ratingCount = 42; rich.summary = "A description."
+        let resolved = rich
+        client.popularBooks = [sparse]; client.detailHandler = { _ in resolved }
+        client.searchHandler = { _, _ in ZLibrarySearchPage(books: [sparse], hasMore: false) }
+        await store.loadPopular()
+        XCTAssertEqual(client.detailCalls, 0, "Fetching the feed must not hydrate every off-screen book")
+        XCTAssertTrue(store.cardDetailsPending(sparse))
+        await store.loadCardDetails(sparse)
+        XCTAssertEqual(store.books, [resolved]); XCTAssertFalse(store.cardDetailsPending(resolved))
+        let selected = try await store.details(sparse, description: true)
+        XCTAssertEqual(selected, resolved)
+        await store.reload(); XCTAssertEqual(store.books, [resolved])
+        await store.search("title"); XCTAssertEqual(store.books, [resolved])
+        await store.loadCardDetails(store.books[0]); XCTAssertEqual(client.detailCalls, 1)
+    }
+    func testBackgroundDetailsFillGapsWithoutChangingKnownEditionFields() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let listed = ZLibraryBook(remoteID: book.remoteID, hash: book.hash, title: "Listed title", author: "Listed author", fileExtension: "pdf", size: "2 MB", language: "Chinese", year: "2000", coverURL: nil)
+        var rich = book; rich.rating = 4.8; rich.ratingCount = 42
+        client.popularBooks = [listed]; client.detailHandler = { _ in rich }
+        await store.loadPopular(); await store.loadCardDetails(listed)
+        let updated = try XCTUnwrap(store.books.first)
+        XCTAssertEqual(updated.title, listed.title); XCTAssertEqual(updated.author, listed.author)
+        XCTAssertEqual(updated.fileExtension, "pdf"); XCTAssertEqual(updated.size, "2 MB")
+        XCTAssertEqual(updated.language, "Chinese"); XCTAssertEqual(updated.year, "2000")
+        XCTAssertEqual(updated.rating, 4.8); XCTAssertEqual(updated.ratingCount, 42)
+        await store.reload(); XCTAssertEqual(store.books.first, updated)
+    }
+    func testVisibleAndSelectedBookShareOneRequestAndCancellingCellKeepsSelectionAlive() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let listed = book
+        var pending: CheckedContinuation<ZLibraryBook, Error>?
+        client.detailHandler = { _ in try await withCheckedThrowingContinuation { pending = $0 } }
+        client.popularBooks = [listed]; await store.loadPopular()
+        let card = Task { await store.loadCardDetails(listed) }
+        try await wait { pending != nil }
+        let page = Task { try await store.details(listed, description: true) }
+        // Give the selected-page subscription time to join the already running fetch.
+        for _ in 0..<10 { await Task.yield() }
+        card.cancel(); pending?.resume(returning: listed)
+        let result = try await page.value; await card.value
+        XCTAssertEqual(result.fileExtension, listed.fileExtension)
+        XCTAssertEqual(result.summary, ""); XCTAssertEqual(client.detailCalls, 1)
+        XCTAssertFalse(store.cardDetailsFailed(listed))
+    }
+    func testMetadataQueueLimitsTransfersAndDropsCancelledOffscreenCards() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let rows = (0..<6).map { ZLibraryBook(remoteID: "\($0)", hash: "abc", title: "Book \($0)", author: "", fileExtension: "", size: "", language: "", year: "", coverURL: nil) }
+        var pending: [String: CheckedContinuation<ZLibraryBook, Error>] = [:]
+        var requested: [String] = [], active = 0, peak = 0
+        client.detailHandler = { book in
+            active += 1; peak = max(peak, active); requested.append(book.id)
+            defer { active -= 1 }
+            return try await withCheckedThrowingContinuation { pending[book.id] = $0 }
+        }
+        client.popularBooks = rows; await store.loadPopular()
+        let tasks = rows.map { row in Task { await store.loadCardDetails(row) } }
+        try await wait { client.detailCalls == 2 }
+        XCTAssertEqual(active, 2)
+        for task in tasks { task.cancel() }
+        // The fake transport ignores cancellation, so complete only the two calls it received.
+        for (id, continuation) in pending { continuation.resume(returning: rows.first { $0.id == id }!) }
+        for task in tasks { await task.value }
+        XCTAssertEqual(client.detailCalls, 2); XCTAssertEqual(peak, 2)
+        XCTAssertEqual(requested.count, 2); XCTAssertTrue(store.books.allSatisfy { $0.fileExtension.isEmpty })
+        client.detailHandler = { [self] _ in book }
+        await store.loadCardDetails(rows[0])
+        XCTAssertEqual(client.detailCalls, 3, "Cancelled work must release its transfer slot")
+    }
+    func testMissingRatingsAreFetchedOnceAndFailuresWaitForExplicitRefresh() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let listed = book
+        client.popularBooks = [listed]; client.detailHandler = { _ in throw ZLibraryError.unreachable }
+        await store.loadPopular(); await store.loadCardDetails(listed); await store.loadCardDetails(listed)
+        XCTAssertEqual(client.detailCalls, 1); XCTAssertTrue(store.cardDetailsFailed(listed))
+        XCTAssertFalse(store.cardDetailsPending(listed)); XCTAssertNil(store.error)
+        client.detailHandler = { _ in listed }
+        let selected = try await store.details(listed, description: true)
+        XCTAssertEqual(selected.summary, ""); XCTAssertFalse(store.cardDetailsFailed(listed))
+        await store.reload(); await store.loadCardDetails(listed)
+        XCTAssertEqual(client.detailCalls, 2); XCTAssertFalse(store.cardDetailsFailed(listed))
+        XCTAssertNil(store.books.first?.rating)
+        await store.loadCardDetails(store.books[0]); XCTAssertEqual(client.detailCalls, 2)
+        XCTAssertFalse(store.cardDetailsPending(store.books[0]), "An absent rating after a successful request is final")
+    }
+    func testLateCardSubscribersCannotGrowMetadataCachePastItsCapacity() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let rows = (1...240).map { ZLibraryBook(remoteID: "\($0)", hash: "abc", title: "Book \($0)", author: "", fileExtension: "", size: "", language: "", year: "", coverURL: nil) }
+        client.popularBooks = rows
+        client.detailHandler = { row in
+            ZLibraryBook(remoteID: row.remoteID, hash: row.hash, title: row.title, author: "Author", fileExtension: "epub", size: "1 MB", language: "English", year: "2026", coverURL: nil)
+        }
+        await store.loadPopular()
+        await withTaskGroup(of: Void.self) { group in
+            for row in rows { group.addTask { await store.loadCardDetails(row) } }
+        }
+        XCTAssertEqual(client.detailCalls, 240)
+        XCTAssertLessThanOrEqual(store.cachedDetailCount, 200)
+        XCTAssertEqual(store.books.count, 240, "Evicting expendable metadata must not remove listed books")
+        XCTAssertTrue(store.books.allSatisfy { $0.fileExtension == "epub" })
+    }
+    func testAccountChangeCancelsBackgroundDetailsAndDoesNotReusePreviousAccountsCache() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let listed = book
+        var pending: CheckedContinuation<ZLibraryBook, Error>?
+        client.detailHandler = { _ in try await withCheckedThrowingContinuation { pending = $0 } }
+        client.popularBooks = [listed]; await store.loadPopular()
+        let card = Task { await store.loadCardDetails(listed) }
+        try await wait { pending != nil }
+        try await store.disconnect(); pending?.resume(returning: listed); await card.value
+        XCTAssertTrue(store.books.isEmpty); XCTAssertFalse(store.cardDetailsFailed(listed))
+        client.detailHandler = { _ in listed }
+        await store.loadPopular(); await store.loadCardDetails(listed)
+        XCTAssertEqual(client.detailCalls, 2)
+    }
     func testLateDetailsAfterDisconnectCannotRestoreFeedOrAccount() async throws {
         let client = CatalogService(), (store,_,_) = store(client)
         var pending: CheckedContinuation<ZLibraryBook,Error>?
