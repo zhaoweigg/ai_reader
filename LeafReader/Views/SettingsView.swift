@@ -18,6 +18,9 @@ struct SettingsView: View {
                         NavigationLink("Floating button") { ReaderChatButtonSettings() }.accessibilityIdentifier("openChatButtonSettings")
                         NavigationLink("AI settings") { AISettingsView() }.accessibilityIdentifier("openAISettings")
                     }
+                    Section("Book discovery") {
+                        NavigationLink("NYT Books connection") { NYTBooksConnectionView() }.accessibilityIdentifier("openNYTBooksConnection")
+                    }
                     Section("Bring your library") {
                         formatRow("Books", "EPUB, MOBI, AZW, AZW3, PRC, FB2, FBZ")
                         formatRow("Documents", "PDF, TXT, Markdown, HTML, RTF")

@@ -163,13 +163,27 @@ extension ChatScreen {
     // MARK: Discover
 
     /// Discover's books as its grid shows them, row by row from the top left.
-    @MainActor static func discover(_ catalog: ZLibraryStore, library: LibraryStore) -> ChatScreen {
+    @MainActor static func discover(_ catalog: ZLibraryStore, library: LibraryStore, bestsellers: BestsellerStore? = nil) -> ChatScreen {
         ChatScreen(name: "Discover", view: { limit, _ in
-            catalogView(catalog.books, query: catalog.activeQuery, feed: catalog.feed, order: catalog.searchOrder,
+            if let bestsellers, bestsellers.showingBestsellers, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
+                var view: [String: Any] = ["screen": "Discover", "list": "Bestsellers", "source": bestsellers.source.title,
+                    "category": bestsellers.genre.title, "layout": "grid of 3 columns; ranks run row by row from the top left",
+                    "total_items": bestsellers.books.count,
+                    "items": bestsellers.books.prefix(limit).map { ["rank": $0.rank, "title": $0.title, "author": $0.author] as [String: Any] }]
+                if let list = bestsellers.selected { view["list_date"] = list.published }
+                if let book = bestsellers.viewingBook { view["open_book"] = ["title": book.title, "author": book.author, "description": book.summary]; view["open_book_note"] = "The reader is on this bestseller's details page; this book means open_book." }
+                if let error = bestsellers.error { view["status"] = error }
+                return view
+            }
+            return catalogView(catalog.books, query: catalog.activeQuery, feed: catalog.feed, order: catalog.searchOrder,
                         status: catalogStatus(catalog), canLoadMore: catalog.canLoadMore,
                         owned: Set(library.books.compactMap(\.catalogSource)), limit: limit,
                         open: catalog.viewingBook.map(catalog.latest))
         }, details: { rank, _ in
+            if let bestsellers, bestsellers.showingBestsellers, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
+                guard let book = bestsellers.books.first(where: { $0.rank == rank }) else { return nil }
+                return ["rank": rank, "title": book.title, "author": book.author, "description": book.summary, "source": book.source.title, "category": book.genre.title]
+            }
             guard catalog.books.indices.contains(rank - 1) else { return nil }
             let book = try await catalog.details(catalog.books[rank - 1], description: true)
             var item = catalogItem(book, rank: rank, owned: library.books.contains { $0.catalogSource == book.sourceID })
