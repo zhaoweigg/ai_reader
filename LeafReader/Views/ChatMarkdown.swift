@@ -101,13 +101,15 @@ enum ChatMarkdown {
     static func tolerateBoldMarkers(_ parsed: AttributedString) -> AttributedString {
         let characters = parsed.characters
         var pairs: [(open: Int, close: Int)] = []
+        var cursor = characters.startIndex, cursorOffset = 0
         for (intent, block) in parsed.runs[\.presentationIntent] {
             if intent?.components.contains(where: { if case .codeBlock = $0.kind { return true }; return false }) == true { continue }
             var markers: [Int] = []
             for run in parsed[block].runs where run.inlinePresentationIntent?.contains(.code) != true {
                 var index = run.range.lowerBound
-                let offset = characters.distance(from: characters.startIndex, to: index)
-                var position = offset
+                // Runs come in order: count on from the previous one, not from the start each time.
+                cursorOffset += characters.distance(from: cursor, to: index); cursor = index
+                var position = cursorOffset
                 while index < run.range.upperBound {
                     guard characters[index] == "*" else { index = characters.index(after: index); position += 1; continue }
                     var end = index, count = 0
@@ -116,6 +118,7 @@ enum ChatMarkdown {
                     if count == 2 { markers.append(position) }
                     index = end; position += count
                 }
+                cursor = index; cursorOffset = position
             }
             var pending: Int?
             for marker in markers {

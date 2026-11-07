@@ -65,6 +65,7 @@ struct SelectableChatText: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
+        static let fullWidthLength = 120
         var onSelectionChange: (Bool) -> Void = { _ in }
         private var latest = NSAttributedString()
         private var source: String?
@@ -104,9 +105,15 @@ struct SelectableChatText: UIViewRepresentable {
             if ChatTextWork.enabled { ChatTextWork.measurements += 1 }
             #endif
             if naturalWidth == nil {
-                let natural = view.attributedText.boundingRect(with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
-                                                               options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-                naturalWidth = ceil(natural.width) + 1
+                let text: NSAttributedString = view.attributedText
+                // Only a short single line can be narrower than the column. Measuring a long
+                // reply's one-line extent laid the whole text out a second time per update.
+                if text.length > Self.fullWidthLength || text.string.contains("\n") { naturalWidth = .greatestFiniteMagnitude }
+                else {
+                    let natural = text.boundingRect(with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+                                                    options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+                    naturalWidth = ceil(natural.width) + 1
+                }
             }
             let fittedWidth = min(width, naturalWidth ?? width)
             let measured = view.sizeThatFits(CGSize(width: fittedWidth, height: .greatestFiniteMagnitude))
