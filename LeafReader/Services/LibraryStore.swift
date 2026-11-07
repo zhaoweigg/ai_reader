@@ -272,10 +272,17 @@ final class LibraryStore: ObservableObject {
         } catch { notice = LibraryNotice(title: "iCloud changes could not be saved", message: error.localizedDescription) }
     }
     private func removeUnreferencedVoiceNotes(from previous: [VoiceNote]) {
-        guard let disk else { return }
+        removeUnreferencedVoiceNoteFiles(Set(previous.map(\.id)))
+    }
+    /// Explicit sync tombstones also clean up an old download that finished
+    /// after its annotation was removed. Never collect unknown/in-flight media
+    /// or a clip still referenced by this device's latest edits.
+    func removeUnreferencedVoiceNoteFiles(_ ids: Set<UUID>) {
+        guard canSave, let disk else { return }
         let references = Set(books.flatMap { $0.annotations.compactMap { $0.voiceNote?.id } })
-        let files = VoiceNoteFiles(directory: disk.voiceNotesDirectory)
-        for note in previous where !references.contains(note.id) { files.remove(note) }
+        for id in ids.subtracting(references) {
+            try? FileManager.default.removeItem(at: disk.voiceNotesDirectory.appendingPathComponent(id.uuidString.lowercased() + ".m4a"))
+        }
     }
     private func scheduleSave() {
         saveTask?.cancel()

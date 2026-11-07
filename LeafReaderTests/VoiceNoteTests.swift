@@ -62,6 +62,8 @@ import AVFoundation
         let (draft, first) = try recording(in: root)
         var note = annotation(); note.voiceNote = first; note.voiceNoteUpdatedAt = Date()
         try await library.saveAnnotation(note, bookID: book.id, voiceDraft: draft)
+        library.removeUnreferencedVoiceNoteFiles([first.id])
+        try VoiceNoteFiles.verify(try XCTUnwrap(library.voiceNoteURL(first)), note: first)
         let (replacement, second) = try recording(in: root, duration: 1.6)
         note.voiceNote = second; note.voiceNoteUpdatedAt = Date(); note.updatedAt = Date()
         try await library.saveAnnotation(note, bookID: book.id, voiceDraft: replacement)

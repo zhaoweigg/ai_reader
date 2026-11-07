@@ -316,6 +316,8 @@ final class ICloudSync: ObservableObject {
         let order = Dictionary(uniqueKeysWithValues: library.books.enumerated().map { ($1.fingerprint, $0) })
         books.sort { (order[$0.fingerprint] ?? .max, $0.importedAt) < (order[$1.fingerprint] ?? .max, $1.importedAt) }
         library.adoptSynced(books)
+        let deletedAudio = result.records.reduce(into: Set<UUID>()) { $0.formUnion(($1.deletedVoiceNotes ?? [:]).keys) }
+        library.removeUnreferencedVoiceNoteFiles(deletedAudio)
         adoptSettings(result.settings)
         saveBaseline(result.baseline)
     }

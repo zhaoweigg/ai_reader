@@ -184,6 +184,7 @@ struct AnnotationRow: View {
             if let error = audio.error { Text(error).font(.caption).foregroundStyle(.red) }
         }
         }.onDisappear { audio.close() }
+            .onChange(of: annotation.voiceNote?.id) { _, _ in audio.close() }
             .onChange(of: scenePhase) { _, phase in if phase != .active { audio.suspend(background: phase == .background) } }
     }
 }

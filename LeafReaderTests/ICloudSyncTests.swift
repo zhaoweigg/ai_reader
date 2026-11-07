@@ -110,6 +110,15 @@ final class ICloudSyncTests: XCTestCase {
         XCTAssertNil(phone.library.books.first?.annotations.first?.voiceNote)
         XCTAssertEqual(phone.library.books.first?.annotations.first?.note, text.note)
         XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(phone.library.voiceNoteURL(clip)).path))
+        // A download begun before removal may finish after the local annotation
+        // already lost its clip. The durable tombstone must clean it on retry.
+        let staleLocal = try XCTUnwrap(phone.library.voiceNoteURL(clip))
+        try FileManager.default.copyItem(at: draft, to: staleLocal)
+        let unknownLocal = staleLocal.deletingLastPathComponent().appendingPathComponent(UUID().uuidString.lowercased() + ".m4a")
+        try FileManager.default.copyItem(at: draft, to: unknownLocal)
+        await phone.sync.syncNow()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleLocal.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unknownLocal.path), "Never collect a different editor's in-flight local recording")
     }
 
     func testBadCloudAudioCannotReplaceLocalNotesAndCanBeRetriedAfterRepair() async throws {
