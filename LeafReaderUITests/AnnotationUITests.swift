@@ -102,7 +102,7 @@ final class AnnotationUITests: XCTestCase {
         }
         if flow == "PDF" {
             let search = app.textFields["librarySearch"]; XCTAssertTrue(search.waitForExistence(timeout: 10))
-            search.tap(); search.typeText("Coast"); app.buttons["book-Notes from the Coast"].tap()
+            search.tap(); search.typeText("Coast"); tapVisibleLibraryCard(app.buttons["book-Notes from the Coast"], app: app)
             controls(app); app.buttons["nextPage"].tap()
         } else { openFeatured(app); appearance(app, theme: "Day", flow: flow) }
         return app
@@ -242,7 +242,7 @@ final class AnnotationUITests: XCTestCase {
         let pdf = flow == "PDF"
         if pdf {
             let field = app.textFields["librarySearch"]; XCTAssertTrue(field.waitForExistence(timeout: 10))
-            field.tap(); field.typeText("Coast"); app.buttons["book-Notes from the Coast"].tap()
+            field.tap(); field.typeText("Coast"); tapVisibleLibraryCard(app.buttons["book-Notes from the Coast"], app: app)
             controls(app); app.buttons["nextPage"].tap()
         } else { openFeatured(app); appearance(app, theme: "Day", flow: flow) }
         XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 10))
