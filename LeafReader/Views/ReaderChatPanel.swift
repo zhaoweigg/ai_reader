@@ -6,6 +6,9 @@ struct ChatScrollFollowing: Equatable {
     private var dragging = false
     private var atBottom = true
 
+    /// The reader's finger or momentum is moving the history.
+    var isScrolling: Bool { dragging }
+
     mutating func beginDragging() { dragging = true; followsLatest = false }
     mutating func endDragging() { dragging = false; followsLatest = atBottom }
     mutating func updateBottomDistance(_ distance: CGFloat) {
@@ -930,7 +933,7 @@ struct ReaderChatPanel: View {
                                                                 activity: message.id == session.messages.last?.id ? session.activity : nil) { selected in
                                             if selected { selectedMessage = message.id }
                                             else if selectedMessage == message.id { selectedMessage = nil }
-                                        }
+                                        }.equatable()
                                         if !message.isUser { Spacer(minLength: 0) }
                                     }.id(message.id)
                                 }
@@ -975,6 +978,10 @@ struct ReaderChatPanel: View {
                         .modifier(ChatSwipeMeasurement())
                         #endif
                         .modifier(ChatHistoryInteraction(following: $scrollFollowing))
+                        // Streamed text waits while the history is being scrolled, so the
+                        // scroll keeps its frames; releasing shows what arrived meanwhile.
+                        .onChange(of: scrollFollowing.isScrolling) { _, scrolling in session.holdsStreamedText = scrolling }
+                        .onDisappear { session.holdsStreamedText = false }
                         .modifier(ChatHistoryFollowsLatest(following: scrollFollowing.followsLatest, paused: selectedMessage != nil))
                         .onPreferenceChange(ChatHistoryAtBottom.self) { atBottom in
                             if !ChatHistoryInteraction.usesNativeTracking, let atBottom { scrollFollowing.updateAtBottom(atBottom) }
@@ -1196,13 +1203,19 @@ private struct ChatGeneratedImage: View {
     }
 }
 
-private struct ReaderChatMessageBubble: View {
+private struct ReaderChatMessageBubble: View, Equatable {
     let message: ReaderChatMessage
     let accent: Color
     var imageURL: (String) -> URL? = { _ in nil }
     var activity: String? = nil
     var onSelectionChange: (Bool) -> Void = { _ in }
     @State private var quoteExpanded = false
+
+    // A streaming reply re-publishes the whole history several times a second; only
+    // the bubble whose message changed needs its body and its text view updated.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message == rhs.message && lhs.accent == rhs.accent && lhs.activity == rhs.activity
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
