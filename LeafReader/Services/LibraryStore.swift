@@ -248,10 +248,10 @@ final class LibraryStore: ObservableObject {
             self?.flush()
         }
     }
-    func flush() {
+    func flush(notifyObservers: Bool = true) {
         saveTask?.cancel()
         guard canSave, let disk else { return }
-        do { try disk.save(books); onSave?() }
+        do { try disk.save(books); if notifyObservers { onSave?() } }
         catch { notice = LibraryNotice(title: "Reading position could not be saved", message: error.localizedDescription) }
     }
 }

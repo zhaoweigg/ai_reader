@@ -100,6 +100,9 @@ final class ICloudSync: ObservableObject {
     func syncNow() async {
         guard let folder else { return }
         if let running { await running.value; return }
+        // This pass includes the edits that queued an automatic sync already.
+        pending?.cancel()
+        pending = nil
         let task = Task { await perform(folder) }
         running = task
         await task.value
@@ -108,7 +111,9 @@ final class ICloudSync: ObservableObject {
 
     private func perform(_ folder: SyncFolder) async {
         status = .syncing
-        library.flush()
+        // Persist the latest passage without scheduling another pass through
+        // our own onSave callback. Real edits during the exchange still notify.
+        library.flush(notifyObservers: false)
         let local = library.books
         let baseline = loadBaseline()
         let settings = localSettings()
