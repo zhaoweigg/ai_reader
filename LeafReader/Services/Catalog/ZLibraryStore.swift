@@ -520,6 +520,7 @@ final class ZLibraryStore: ObservableObject {
     }
     #if DEBUG
     @Published private(set) var loadTrace: [String] = []
+    var cachedDetailCount: Int { detailCache.count }
     #endif
     /// One edition's details; `description` also fetches a listed book for its description.
     /// The book whose details page is showing, for Ask Leaf; read when a tool runs, so not published.
@@ -547,7 +548,9 @@ final class ZLibraryStore: ObservableObject {
             try Task.checkCancellation()
             guard token == generation else { return }
             resolved.summary = resolved.summary ?? ""
-            detailCache[book.id] = resolved
+            // Another completion may already have evicted this edition. Do not
+            // put it back outside the bounded cache's insertion/eviction path.
+            if detailCache[book.id] != nil { detailCache[book.id] = resolved }
             updateDetails(latest(book).fillingMissingDetails(from: resolved))
         } catch {
             if token == generation && !Task.isCancelled && !Self.isCancellation(error) {

@@ -460,6 +460,22 @@ private final class CatalogURLProtocol: URLProtocol {
         await store.loadCardDetails(store.books[0]); XCTAssertEqual(client.detailCalls, 2)
         XCTAssertFalse(store.cardDetailsPending(store.books[0]), "An absent rating after a successful request is final")
     }
+    func testLateCardSubscribersCannotGrowMetadataCachePastItsCapacity() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let rows = (1...240).map { ZLibraryBook(remoteID: "\($0)", hash: "abc", title: "Book \($0)", author: "", fileExtension: "", size: "", language: "", year: "", coverURL: nil) }
+        client.popularBooks = rows
+        client.detailHandler = { row in
+            ZLibraryBook(remoteID: row.remoteID, hash: row.hash, title: row.title, author: "Author", fileExtension: "epub", size: "1 MB", language: "English", year: "2026", coverURL: nil)
+        }
+        await store.loadPopular()
+        await withTaskGroup(of: Void.self) { group in
+            for row in rows { group.addTask { await store.loadCardDetails(row) } }
+        }
+        XCTAssertEqual(client.detailCalls, 240)
+        XCTAssertLessThanOrEqual(store.cachedDetailCount, 200)
+        XCTAssertEqual(store.books.count, 240, "Evicting expendable metadata must not remove listed books")
+        XCTAssertTrue(store.books.allSatisfy { $0.fileExtension == "epub" })
+    }
     func testAccountChangeCancelsBackgroundDetailsAndDoesNotReusePreviousAccountsCache() async throws {
         let client = CatalogService(), (store, _, _) = store(client)
         let listed = book
