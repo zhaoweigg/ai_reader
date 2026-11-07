@@ -179,11 +179,7 @@ struct BestsellerFeedClient: BestsellerServing {
                       let isbn = BestsellerText.isbn(rawISBN), let rawTitle = captures(#"(?is)<a\b[^>]*>(.*?)</a>"#, cell).first else { return nil }
                 let title = BestsellerText.plain(rawTitle), parts = cell.components(separatedBy: try! NSRegularExpression(pattern: #"(?i)<br\s*/?>"#))
                 guard parts.count >= 2 else { return nil }
-                let byline = BestsellerText.plain(parts[1]), fields = byline.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                // The final field before the price is the publisher. Preserve
-                // comma-separated coauthors and name suffixes before it.
-                let price = fields.firstIndex { $0.hasPrefix("$") }
-                let author = price.map { fields.prefix($0).dropLast().joined(separator: ", ") } ?? fields.first ?? ""
+                let author = indieAuthor(BestsellerText.plain(parts[1]))
                 guard !title.isEmpty, !author.isEmpty else { return nil }
                 return BestsellerBook(source: .indie, genre: genre, rank: rank, title: String(title.prefix(1000)), author: String(author.prefix(500)),
                                       summary: String(BestsellerText.plain(parts.dropFirst(2).joined(separator: " ")).prefix(3000)), isbns: [isbn],
@@ -191,6 +187,20 @@ struct BestsellerFeedClient: BestsellerServing {
             }
             return try validated(source: .indie, genre: genre, published: published, books: books, now: now)
         }
+    }
+    private static func indieAuthor(_ byline: String) -> String {
+        let fields = byline.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let price = fields.firstIndex(where: { $0.hasPrefix("$") }) else { return fields.first ?? "" }
+        let credits = fields.prefix(price).joined(separator: ", ")
+        // IndieBound flattens author and publisher into one comma-delimited
+        // line. These publisher names also contain commas; remove the full
+        // imprint before preserving coauthors, translators and name suffixes.
+        let imprints = ["Little, Brown and Company", "Little, Brown Books for Young Readers", "Little, Brown",
+                        "Farrar, Straus and Giroux", "Farrar, Straus & Giroux", "Harcourt, Brace and Company"]
+        if let imprint = imprints.first(where: { credits.hasSuffix(", " + $0) }) {
+            return String(credits.dropLast(imprint.count + 2))
+        }
+        return fields.prefix(price).dropLast().joined(separator: ", ")
     }
     private static func validated(source: BestsellerSource, genre: BestsellerGenre, published: String, books: [BestsellerBook], now: Date) throws -> BestsellerList {
         let sorted = books.sorted { $0.rank < $1.rank }

@@ -110,8 +110,15 @@ final class BestsellerFeedTests: XCTestCase {
         XCTAssertThrowsError(try BestsellerFeedClient.indie(Data("<html>Access check</html>".utf8)))
     }
     func testIndieKeepsCoauthorsAndNameSuffixesBeforeThePublisher() throws {
-        let html = String(decoding: indieHTML(), as: UTF8.self).replacingOccurrences(of: "Writer 1, Publisher, $20", with: "Writer One, Jr., Writer Two, Publisher, $20")
-        XCTAssertEqual(try BestsellerFeedClient.indie(Data(html.utf8)).first?.books.first?.author, "Writer One, Jr., Writer Two")
+        for (credits, expected) in [
+            ("Writer One, Jr., Writer Two, Publisher", "Writer One, Jr., Writer Two"),
+            ("Malcolm Gladwell, Little, Brown and Company", "Malcolm Gladwell"),
+            ("Jacob Tierney, Rachel Reid, Little, Brown and Company", "Jacob Tierney, Rachel Reid"),
+            ("Naomi Klein, Astra Taylor, Farrar, Straus and Giroux", "Naomi Klein, Astra Taylor")
+        ] {
+            let html = String(decoding: indieHTML(), as: UTF8.self).replacingOccurrences(of: "Writer 1, Publisher, $20", with: credits + ", $20")
+            XCTAssertEqual(try BestsellerFeedClient.indie(Data(html.utf8)).first?.books.first?.author, expected)
+        }
     }
     func testNYTUsesFullRankingAndPublisherArtworkAndRejectsDuplicateRanks() throws {
         let list = try BestsellerFeedClient.nyt(nytJSON(), genre: .nonfiction)
