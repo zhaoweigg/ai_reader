@@ -14,17 +14,7 @@ final class AnnotationUITests: XCTestCase {
         app.webViews["bookWebView"].exists ? app.webViews["bookWebView"] : app.descendants(matching: .any)["bookPDFView"].firstMatch
     }
     @MainActor private func openFeatured(_ app: XCUIApplication) {
-        let card = app.buttons["featuredBook"]
-        XCTAssertTrue(card.waitForExistence(timeout: 10))
-        let visible = card.frame.intersection(app.frame)
-        let evidence = XCTAttachment(string: "Featured card: \(card.frame); visible: \(visible); app: \(app.frame); hittable: \(card.isHittable)")
-        evidence.name = "Featured card native setup geometry"; evidence.lifetime = .keepAlways; add(evidence)
-        XCTAssertGreaterThan(visible.width, 44); XCTAssertGreaterThan(visible.height, 44)
-        // Xcode 27.2 returned {-1,-1} from Button.tap's automatic scroll/hit
-        // point computation for this visibly rendered card. Tap its measured
-        // visible center in the assigned app, without the auto-scroll heuristic.
-        app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: visible.midX - app.frame.minX, dy: visible.midY - app.frame.minY)).tap()
+        tapVisibleLibraryCard(app.buttons["featuredBook"], app: app)
     }
     @MainActor private func controls(_ app: XCUIApplication) {
         XCTAssertTrue(surface(app).waitForExistence(timeout: 15))

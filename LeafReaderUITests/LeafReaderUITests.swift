@@ -1267,16 +1267,11 @@ final class LeafReaderUITests: XCTestCase {
         if flow == "PDF" {
             // Navigate the real library card; search-field focus is unrelated to selection.
             let card = app.buttons["book-Notes from the Coast"]
-            for _ in 0..<5 {
-                if card.exists && card.isHittable { break }
-                app.scrollViews.firstMatch.swipeUp()
-            }
-            XCTAssertTrue(card.exists && card.isHittable, "PDF fixture must be reachable in the library")
-            card.tap()
+            tapVisibleLibraryCard(card, app: app)
             showReaderControls(app); app.buttons["nextPage"].tap()
         } else {
             XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 10))
-            app.buttons["featuredBook"].tap(); openAppearance(app)
+            tapVisibleLibraryCard(app.buttons["featuredBook"], app: app); openAppearance(app)
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons[flow].tap()
             app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
@@ -2096,7 +2091,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout:8),"Exit must return to the library without first closing chat")
         orient(.portrait)
         if flow=="PDF" {let card=app.buttons["book-Notes from the Coast"];for _ in 0..<5 where !card.isHittable {app.scrollViews.firstMatch.swipeUp()};card.tap()}
-        else {app.buttons["featuredBook"].tap()}
+        else {tapVisibleLibraryCard(app.buttons["featuredBook"], app:app)}
         waitForBook(app);app.buttons["openReaderChat"].tap()
         XCTAssertEqual(input.value as? String,"Keep my exit question");XCTAssertEqual(quote.label,quoted)
         capture(flow+" draft and quote survive direct book Exit",app:app)
@@ -3452,7 +3447,7 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testScrollSwipesReachNextChapterAndPreviousChapter() {
         let app = launchApp()
-        app.buttons["featuredBook"].tap()
+        tapVisibleLibraryCard(app.buttons["featuredBook"], app: app)
         showReaderControls(app)
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()

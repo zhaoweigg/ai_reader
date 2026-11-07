@@ -143,7 +143,8 @@ import AVFoundation
         XCTAssertNil(session.draftURL); XCTAssertNil(session.recordedNote)
     }
     func testBackgroundStopKeepsAPlayableDraftAndCloseDeletesOnlyTheDraft() async throws {
-        let recorder = RecorderStub(), session = VoiceNoteSession(recorder: recorder)
+        let recorder = RecorderStub(); recorder.duration = 8
+        let session = VoiceNoteSession(recorder: recorder)
         session.startRecording(); try await eventually { session.state == .recording }
         session.suspend(background: true)
         try await eventually { session.state == .ready }
@@ -152,9 +153,14 @@ import AVFoundation
         session.togglePlayback(url: url)
         try await eventually { session.isPlaying && session.playbackTime > 0.1 }
         session.pausePlayback(); let paused = session.playbackTime
+        XCTAssertLessThan(paused, clip.duration - 1, "The playback fixture must leave time to test Resume")
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(session.playbackTime, paused, accuracy: 0.02)
         session.togglePlayback(url: url)
+        let snapshot = XCTAttachment(string: "duration=\(clip.duration); paused=\(paused); resumed=\(session.playbackTime); playing=\(session.isPlaying); error=\(session.error ?? "none")")
+        snapshot.name = "Voice note actual pause and resume position"; snapshot.lifetime = .keepAlways; add(snapshot)
+        XCTAssertNil(session.error)
+        XCTAssertEqual(session.playbackTime, paused, accuracy: 0.08, "Resume must retain the cursor when recreating the player")
         try await eventually { session.isPlaying && session.playbackTime > paused + 0.08 }
         session.close(); XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
@@ -196,6 +202,7 @@ import AVFoundation
         var allowed = true, delaysPermission = false, failStart = false
         var permission: CheckedContinuation<Bool, Never>?
         var starts = 0, receivedLimit: TimeInterval = 0
+        var duration: TimeInterval = 1.2
         private var url: URL?
         private var started = Date()
         var currentTime: TimeInterval { Date().timeIntervalSince(started) }
@@ -208,7 +215,7 @@ import AVFoundation
             if failStart { throw VoiceNoteError.unavailable }
             self.url = url; started = Date()
         }
-        func stop() { if let url { try? VoiceNoteFixture.write(to: url, duration: 1.2) }; url = nil }
+        func stop() { if let url { try? VoiceNoteFixture.write(to: url, duration: duration) }; url = nil }
         func cancel() { url = nil }
     }
 }
