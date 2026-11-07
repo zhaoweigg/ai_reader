@@ -55,14 +55,28 @@ final class ZLibraryUITests: XCTestCase {
         // A tall cover cannot fit wholly in the short landscape viewport.
         // Reveal the actual metadata, rather than asserting the entire card fits.
         let landscapeCard = app.buttons["catalogBook-async1"]
+        func revealMetadata(_ label: XCUIElement) {
+            let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
+            let top = app.navigationBars["Z-Library"].frame.maxY + 8
+            let bottom = app.tabBars.firstMatch.frame.minY - 8
+            for _ in 0..<8 {
+                let frame = label.frame
+                if label.isHittable && frame.minY >= top && frame.maxY <= bottom { break }
+                let up = frame.maxY > bottom
+                let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.75 : 0.35))
+                let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.35 : 0.75))
+                start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            }
+            XCTAssertTrue(label.isHittable)
+            XCTAssertGreaterThanOrEqual(label.frame.minY, top)
+            XCTAssertLessThanOrEqual(label.frame.maxY, bottom)
+        }
         let file = landscapeCard.staticTexts["EPUB · 1 MB"]
         XCTAssertTrue(file.waitForExistence(timeout: 5))
-        revealCatalogElement(file, app: app)
-        XCTAssertTrue(file.isHittable)
+        revealMetadata(file)
         let rating = landscapeCard.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "42 ratings")).firstMatch
         XCTAssertTrue(rating.waitForExistence(timeout: 5))
-        revealCatalogElement(rating, app: app)
-        XCTAssertTrue(rating.isHittable)
+        revealMetadata(rating)
         _ = loaded("async1")
         capture("Async metadata recommended Day landscape")
         setReaderOrientation(.portrait, app: app)
