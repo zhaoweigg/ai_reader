@@ -12,16 +12,7 @@ struct ICloudSyncView: View {
     var body: some View {
         Form {
             Section {
-                HStack(spacing: 14) {
-                    Image(systemName: "icloud.fill").font(.title2).foregroundStyle(.white)
-                        .frame(width: 46, height: 46).background(Color.blue.gradient, in: .rect(cornerRadius: 12))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title).font(.headline).accessibilityIdentifier("syncStatus")
-                        Text(subtitle).font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                    if sync.status == .syncing { ProgressView() }
-                }.padding(.vertical, 4)
+                ICloudSyncStatusHeader(title: title, subtitle: subtitle, syncing: sync.status == .syncing)
             }
             if sync.isConnected {
                 Section {
@@ -97,4 +88,26 @@ struct ICloudSyncView: View {
         return "\(when) · \(books) book\(books == 1 ? "" : "s") · \(notes) highlight\(notes == 1 ? "" : "s")"
     }
     private func bytes(_ count: Int64) -> String { ByteCountFormatter.string(fromByteCount: count, countStyle: .file) }
+}
+
+/// Keep the surrounding settings still when the spinner appears or a recent
+/// sync changes from “now” to “2 seconds ago”. Longer errors can still expand.
+struct ICloudSyncStatusHeader: View {
+    let title: String
+    let subtitle: String
+    let syncing: Bool
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "icloud.fill").font(.title2).foregroundStyle(.white)
+                .frame(width: 46, height: 46).background(Color.blue.gradient, in: .rect(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline).accessibilityIdentifier("syncStatus")
+                Text(subtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(2...)
+            }
+            Spacer(minLength: 0)
+            ZStack { if syncing { ProgressView() } }.frame(width: 20, height: 20)
+        }.padding(.vertical, 4)
+            .accessibilityElement(children: .contain).accessibilityIdentifier("syncStatusHeader")
+    }
 }
