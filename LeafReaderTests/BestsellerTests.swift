@@ -206,6 +206,7 @@ final class BestsellerFeedTests: XCTestCase {
         let store = BestsellerStore(defaults: defaults(), credentials: BestsellerCredentials(), service: BestsellerService())
         XCTAssertEqual(store.existing(entry(source: .nyt), in: library)?.id, owned.id)
         XCTAssertNil(store.existing(entry(author: "Other Author"), in: library))
+        XCTAssertNil(store.existing(entry(title: "The Test Book: A different volume"), in: library))
     }
 }
 
@@ -240,6 +241,15 @@ final class BestsellerFeedTests: XCTestCase {
         let book = edition(), values = BestsellerMatching.rank(entry(), editions: [book, book])
         XCTAssertEqual(values.count, 1)
         XCTAssertNil(BestsellerMatchState.ready(BestsellerMatching.rank(entry(), editions: [edition(format: "djvu")])).automatic)
+    }
+    func testDifferentVolumesCannotMatchAndOmittedSubtitlesRequireInspection() {
+        let work = entry(title: "A Series: The First Story", isbns: [])
+        XCTAssertTrue(BestsellerMatching.rank(work, editions: [edition(title: "A Series: The Second Story")]).isEmpty)
+        let partial = BestsellerMatching.rank(work, editions: [edition(title: "A Series")])
+        XCTAssertEqual(partial.first?.confidence, .possible)
+        XCTAssertNil(BestsellerMatchState.ready(partial).automatic)
+        let exact = BestsellerMatching.rank(work, editions: [edition(title: "A SERIES: THE FIRST STORY")])
+        XCTAssertNotNil(BestsellerMatchState.ready(exact).automatic)
     }
     func testMatchingDoesNotReplaceVisibleSearchOrSelectedFeed() async {
         let client = BestsellerCatalog(), store = await catalog(client)

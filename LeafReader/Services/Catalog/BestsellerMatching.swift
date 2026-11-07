@@ -85,18 +85,19 @@ enum BestsellerMatchState: Equatable {
         } else { requests[key] = value }
     }
     nonisolated static func rank(_ entry: BestsellerBook, editions: [ZLibraryBook]) -> [BestsellerEdition] {
-        let sourceISBNs = Set(entry.isbns.compactMap(BestsellerText.canonicalISBN)), title = BestsellerText.title(entry.title), author = BestsellerText.normalized(entry.author)
+        let sourceISBNs = Set(entry.isbns.compactMap(BestsellerText.canonicalISBN)), author = BestsellerText.normalized(entry.author)
         var seen: Set<String> = []
         return editions.compactMap { book -> BestsellerEdition? in
             guard seen.insert(book.id).inserted else { return nil }
             let exactISBN = !sourceISBNs.isDisjoint(with: (book.isbns ?? []).compactMap(BestsellerText.canonicalISBN))
-            let sameTitle = BestsellerText.title(book.title) == title
+            let sameTitle = BestsellerText.compatibleTitles(book.title, entry.title)
+            let fullTitle = BestsellerText.normalized(book.title) == BestsellerText.normalized(entry.title)
             let candidateAuthor = BestsellerText.normalized(book.author)
             let sameAuthor = !author.isEmpty && author == candidateAuthor
             let a = Set(author.split(separator: " ")), b = Set(candidateAuthor.split(separator: " "))
             let relatedAuthor = candidateAuthor.isEmpty || (a.count >= 2 && (a.isSubset(of: b) || b.count >= 2 && b.isSubset(of: a)))
             guard exactISBN || sameTitle && (sameAuthor || relatedAuthor) else { return nil }
-            return BestsellerEdition(book: book, confidence: exactISBN ? .isbn : sameAuthor ? .titleAndAuthor : .possible)
+            return BestsellerEdition(book: book, confidence: exactISBN ? .isbn : sameAuthor && fullTitle ? .titleAndAuthor : .possible)
         }.sorted {
             if $0.confidence.rawValue != $1.confidence.rawValue { return $0.confidence.rawValue > $1.confidence.rawValue }
             func order(_ b: ZLibraryBook) -> Int { b.format == .epub ? 0 : b.format == .pdf ? 1 : b.format != nil ? 2 : 3 }

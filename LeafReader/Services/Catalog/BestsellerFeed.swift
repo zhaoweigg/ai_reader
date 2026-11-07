@@ -65,6 +65,15 @@ enum BestsellerText {
         let base = text.components(separatedBy: ":").first ?? text
         return normalized(base.replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression))
     }
+    static func compatibleTitles(_ lhs: String, _ rhs: String) -> Bool {
+        let base = title(lhs)
+        guard !base.isEmpty, base == title(rhs) else { return false }
+        let a = normalized(lhs.components(separatedBy: ":").dropFirst().joined(separator: ":"))
+        let b = normalized(rhs.components(separatedBy: ":").dropFirst().joined(separator: ":"))
+        // Providers sometimes omit a subtitle. Two different supplied subtitles
+        // can name different volumes, so a shared prefix cannot identify them.
+        return a.isEmpty || b.isEmpty || a == b
+    }
     static func isbn(_ input: String) -> String? {
         let s = input.uppercased().filter { $0.isASCII && ($0.isNumber || $0 == "X") }
         let chars = Array(s)

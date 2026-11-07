@@ -97,14 +97,14 @@ import Combine
     }
     private func saveCache() { defaults.set(try? JSONEncoder().encode(lists), forKey: "bestsellers.cache.v1") }
     func rankings(title: String, author: String) -> [BestsellerBook] {
-        lists.flatMap(\.books).filter { BestsellerText.title($0.title) == BestsellerText.title(title) && BestsellerText.normalized($0.author) == BestsellerText.normalized(author) }
+        lists.flatMap(\.books).filter { BestsellerText.compatibleTitles($0.title, title) && BestsellerText.normalized($0.author) == BestsellerText.normalized(author) }
             .sorted { $0.rank < $1.rank }
     }
     func existing(_ book: BestsellerBook, in library: LibraryStore, candidates: [ZLibraryBook] = []) -> Book? {
         let sources = Set(candidates.map(\.sourceID))
         return library.books.first {
             ($0.catalogSource.map(sources.contains) ?? false) ||
-                (BestsellerText.title($0.title) == BestsellerText.title(book.title) && BestsellerText.normalized($0.author) == BestsellerText.normalized(book.author))
+                (BestsellerText.compatibleTitles($0.title, book.title) && BestsellerText.normalized($0.author) == BestsellerText.normalized(book.author))
         }
     }
 }
