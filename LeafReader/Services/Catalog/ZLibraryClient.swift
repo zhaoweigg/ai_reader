@@ -3,7 +3,7 @@ import CoreFoundation
 
 // The mobile EAPI is unofficial. Keep wire details outside the library and reader.
 enum ZLibraryError: LocalizedError, Equatable {
-    case address, query, signInRequired, challenge, accessCheck, response, metadata, service(String), size, file, busy
+    case address, query, signInRequired, challenge, accessCheck, response, metadata, service(String), size, file, busy, unreachable
     var errorDescription: String? {
         switch self {
         case .address: return "Enter an HTTPS website address without a path, port, or sign-in details."
@@ -17,6 +17,7 @@ enum ZLibraryError: LocalizedError, Equatable {
         case .size: return "This download exceeds Leaf’s 100 MB book limit. Choose a smaller edition."
         case .file: return "The download is not a complete supported book. Try another edition."
         case .busy: return "Another book is being imported. Try again when it finishes."
+        case .unreachable: return "Couldn’t reach Z-Library. Check your connection and try again."
         }
     }
 }

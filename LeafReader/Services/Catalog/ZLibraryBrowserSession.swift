@@ -82,7 +82,9 @@ import WebKit
         let deadline = ContinuousClock.now + .seconds(15)
         while !ready {
             try Task.checkCancellation()
-            if navigationFailed || ContinuousClock.now >= deadline { throw URLError(.cannotLoadFromNetwork) }
+            if navigationFailed || ContinuousClock.now >= deadline {
+                throw ZLibraryRequestFailure(issue: .unreachable, diagnostic: "website document \(navigationFailed ? "failed to load" : "timed out after 15 s")")
+            }
             try await Task.sleep(for: .milliseconds(25))
         }
         guard let url = webView.url, contains(url) else { throw ZLibraryError.address }
@@ -132,13 +134,13 @@ import WebKit
         // one. A browser passes both on its own: it repeats the request once the cookie is
         // stored, and it renders the page. Do the same with fixed bounds: one plain retry,
         // one retry after loading the website document, one delayed retry for its scripts.
-        var retries = 0, reload = "not needed"
-        var result = try await fetch(arguments)
+        var retries = 0, reload = "not needed", attempts = 0
+        var result = try await repeatingDrops(arguments, attempts: &attempts)
         while retries < Self.challengeRetries, Self.isAccessChallenge(result) {
             retries += 1
             if retries == 2 { reload = try await reloadWebsite() ? "completed" : (presented ? "skipped" : "failed") }
             if retries == 3 { try await Task.sleep(for: .seconds(3)) }
-            result = try await fetch(arguments)
+            result = try await repeatingDrops(arguments, attempts: &attempts)
         }
         await contextChanged?(nil)
         guard let result = result as? [String: Any], let kind = result["kind"] as? String else { throw ZLibraryError.response }
@@ -146,29 +148,65 @@ import WebKit
         if kind == "redirect" {
             throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "\(request.httpMethod ?? "GET") \(path) · browser redirect · retries: \(retries)/\(Self.challengeRetries) · website reload: \(reload) · website verification required")
         }
-        if kind == "timeout" { throw URLError(.timedOut) }
+        let attempt = "\(request.httpMethod ?? "GET") \(path)"
+        if kind == "timeout" { throw ZLibraryRequestFailure(issue: .unreachable, diagnostic: "\(attempt) · no response after 30 s") }
+        if kind == "network" {
+            throw ZLibraryRequestFailure(issue: .unreachable, diagnostic: Self.droppedDiagnostic(attempt, attempts: attempts, result: result,
+                background: UIApplication.shared.applicationState == .background))
+        }
         if kind == "size" { throw ZLibraryError.response }
         guard kind == "response", let status = result["status"] as? Int,
               let text = result["text"] as? String, text.utf8.count <= 2 * 1024 * 1024,
               let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil,
-                                             headerFields: ["Content-Type": result["contentType"] as? String ?? ""]) else { throw URLError(.networkConnectionLost) }
+                                             headerFields: ["Content-Type": result["contentType"] as? String ?? ""]) else {
+            throw ZLibraryRequestFailure(issue: .response, diagnostic: "\(attempt) · unreadable browser result")
+        }
         return ZLibraryPayload(data: Data(text.utf8), file: nil, response: response)
     }
 
     static let challengeRetries = 3
+    /// Pauses before repeating a request that got no response at all. Every catalog request
+    /// only reads: book/search is the one POST, so repeating one changes nothing.
+    static let networkRetryDelays: [Double] = [0.6, 1.5]
+    private func repeatingDrops(_ arguments: [String: Any], attempts: inout Int) async throws -> Any? {
+        attempts += 1
+        var result = try await fetch(arguments)
+        for delay in Self.networkRetryDelays where Self.isDropped(result) {
+            try await Task.sleep(for: .seconds(delay))
+            // The document may have gone with the connection, for example after the app was suspended.
+            try await prepare()
+            attempts += 1
+            result = try await fetch(arguments)
+        }
+        return result
+    }
+    private static func isDropped(_ result: Any?) -> Bool { (result as? [String: Any])?["kind"] as? String == "network" }
+    // Fixed fields only: WebKit reports a failed fetch as a bare TypeError, so the name is all
+    // there is to keep. Never the URL query, the request body or anything from the website.
+    static func droppedDiagnostic(_ attempt: String, attempts: Int, result: [String: Any], background: Bool) -> String {
+        let name = String((result["error"] as? String ?? "unknown").filter { $0.isLetter || $0.isNumber || $0 == " " }.prefix(40))
+        let online = (result["online"] as? Bool).map { $0 ? "yes" : "no" } ?? "unknown"
+        return "\(attempt) · no response · attempts: \(attempts) · error: \(name) · browser online: \(online) · app: \(background ? "background" : "foreground")"
+    }
     private func fetch(_ arguments: [String: Any]) async throws -> Any? {
         try Task.checkCancellation()
         let id = UUID().uuidString
         var arguments = arguments; arguments["id"] = id
-        let result = try await withTaskCancellationHandler {
-            try await webView.callAsyncJavaScript(Self.fetchScript, arguments: arguments, in: nil, contentWorld: .defaultClient)
-        } onCancel: { [weak self] in
-            Task { @MainActor in
-                _ = try? await self?.webView.callAsyncJavaScript("globalThis.leafCatalogRequests?.get(id)?.abort();", arguments: ["id": id], in: nil, contentWorld: .defaultClient)
+        do {
+            let result = try await withTaskCancellationHandler {
+                try await webView.callAsyncJavaScript(Self.fetchScript, arguments: arguments, in: nil, contentWorld: .defaultClient)
+            } onCancel: { [weak self] in
+                Task { @MainActor in
+                    _ = try? await self?.webView.callAsyncJavaScript("globalThis.leafCatalogRequests?.get(id)?.abort();", arguments: ["id": id], in: nil, contentWorld: .defaultClient)
+                }
             }
+            try Task.checkCancellation()
+            return result
+        } catch {
+            // The script itself was lost, for example when its page was replaced or its process ended.
+            try Task.checkCancellation()
+            return ["kind": "network", "error": "web view"]
         }
-        try Task.checkCancellation()
-        return result
     }
     // A redirect, or a recognized access-check page in place of JSON. Other HTML (for
     // example a sign-in page) is not retried: reloading the website cannot change it.
@@ -251,7 +289,9 @@ import WebKit
             text += decoder.decode();
         }
         return {kind: 'response', status: response.status, contentType: response.headers.get('Content-Type') || '', text};
-    } catch (error) { return {kind: controller.signal.aborted ? 'timeout' : 'network'}; }
+    } catch (error) {
+        return controller.signal.aborted ? {kind: 'timeout'} : {kind: 'network', error: String(error?.name || 'Error').slice(0, 40), online: navigator.onLine};
+    }
     finally { clearTimeout(timer); globalThis.leafCatalogRequests.delete(id); }
     """
 }

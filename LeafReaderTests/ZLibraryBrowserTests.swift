@@ -12,6 +12,8 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
         var headers: [String: String] = [:]
         var body = "{\"success\":1}"
         var delay: TimeInterval = 0
+        /// Closes the connection without answering, as a dropped request looks to WebKit.
+        var drop = false
     }
     private let listener: NWListener
     private let queue = DispatchQueue(label: "Leaf.catalog.loopback")
@@ -70,6 +72,7 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
             let request = Request(path: fields[1], headers: headers, body: String(decoding: body, as: UTF8.self))
             self.lock.lock(); self.received.append(request); self.lock.unlock()
             let reply = self.handler(request), payload = Data(reply.body.utf8)
+            if reply.drop { connection.cancel(); return }
             var responseHeaders = reply.headers
             responseHeaders["Content-Length"] = String(payload.count)
             responseHeaders["Content-Type"] = responseHeaders["Content-Type"] ?? "application/json"
@@ -276,6 +279,46 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
         do { _ = try await task.value; XCTFail("Cancelled request completed") }
         catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(server.requests.count, 1)
+    }
+
+    private final class Counter: @unchecked Sendable { var value = 0 }
+    private func search(_ server: CatalogLoopbackServer) -> URLRequest {
+        var search = request(server, "/eapi/book/search")
+        search.httpMethod = "POST"; search.httpBody = Data("message=private%20query&page=1".utf8)
+        search.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        return search
+    }
+
+    func testDroppedRequestIsRepeatedWithoutTheReaderSeeingIt() async throws {
+        let seen = Counter()
+        let server = try await server { _ in seen.value += 1; return .init(drop: seen.value == 1) }
+        let browser = browser(server)
+        let result = try await send(search(server), through: browser)
+        XCTAssertEqual(result.response.statusCode, 200)
+        XCTAssertGreaterThanOrEqual(server.requests.count, 2)
+        XCTAssertEqual(Set(server.requests.map(\.body)), ["message=private%20query&page=1"], "The repeat is the same request")
+    }
+
+    func testRequestThatKeepsDroppingEndsInAReadableBoundedFailure() async throws {
+        let server = try await server { _ in .init(drop: true) }, browser = browser(server)
+        do {
+            _ = try await send(search(server), through: browser); XCTFail("Dropped request succeeded")
+        } catch let failure as ZLibraryRequestFailure {
+            XCTAssertEqual(failure.issue, .unreachable)
+            XCTAssertEqual(failure.errorDescription, "Couldn’t reach Z-Library. Check your connection and try again.")
+            XCTAssertTrue(failure.diagnostic.hasPrefix("POST /eapi/book/search · no response · attempts: 3"), failure.diagnostic)
+            XCTAssertTrue(failure.diagnostic.contains("browser online: "), failure.diagnostic)
+            XCTAssertFalse(failure.diagnostic.contains("private"), "The query never reaches the diagnostic")
+        }
+        XCTAssertGreaterThanOrEqual(server.requests.count, 1 + ZLibraryBrowserSession.networkRetryDelays.count)
+    }
+
+    func testDroppedDiagnosticKeepsOnlyFixedFields() {
+        let text = ZLibraryBrowserSession.droppedDiagnostic("GET /eapi/book/request", attempts: 3,
+            result: ["kind": "network", "error": "Type<Error>\nhttps://private", "online": false], background: true)
+        XCTAssertEqual(text, "GET /eapi/book/request · no response · attempts: 3 · error: TypeErrorhttpsprivate · browser online: no · app: background")
+        XCTAssertTrue(ZLibraryBrowserSession.droppedDiagnostic("GET x", attempts: 1, result: [:], background: false).hasSuffix("error: unknown · browser online: unknown · app: foreground"))
+        XCTAssertFalse((ZLibraryError.unreachable.errorDescription ?? "").contains("NSURLError"))
     }
 
     func testBrowserResponseIsBoundedToTwoMegabytes() async throws {
