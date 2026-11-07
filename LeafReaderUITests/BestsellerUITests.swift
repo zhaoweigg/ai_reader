@@ -194,12 +194,12 @@ final class BestsellerUITests: XCTestCase {
         assertLibraryBook("Simply Ina", app: app).bestsellerTapVisible(in: app)
         let web = app.webViews["bookWebView"]; XCTAssertTrue(web.waitForExistence(timeout: 15))
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Opening your book…"]); waitForExpectations(timeout: 20)
-        if !app.buttons["Appearance"].exists { web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).bestsellerTapVisible(in: app) }
+        if !app.buttons["Appearance"].exists { web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap() }
         waitEnabled(app.buttons["Appearance"]); app.buttons["Appearance"].bestsellerTapVisible(in: app)
         app.segmentedControls["appearanceTabs"].buttons["Layout"].bestsellerTapVisible(in: app); app.segmentedControls["readingFlow"].buttons[flow].bestsellerTapVisible(in: app)
-        web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).bestsellerTapVisible(in: app)
+        web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 8)); capture("Imported bestseller rendered in " + flow)
-        if !app.buttons["closeBook"].exists { web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).bestsellerTapVisible(in: app) }
+        if !app.buttons["closeBook"].exists { web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap() }
         app.buttons["closeBook"].bestsellerTapVisible(in: app); assertLibraryBook("Simply Ina", app: app).bestsellerTapVisible(in: app)
         XCTAssertTrue(web.waitForExistence(timeout: 15)); XCTAssertFalse(app.otherElements["readerError"].exists)
         capture("Imported bestseller reopened in " + flow)
