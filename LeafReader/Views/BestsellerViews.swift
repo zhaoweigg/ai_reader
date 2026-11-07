@@ -255,21 +255,25 @@ private struct BestsellerCatalogSearch: View {
     @State private var loading = false
     @State private var error: String?
     @State private var request = UUID()
+    @State private var submittedQuery = ""
+    @State private var hasSearched = false
+    @State private var searchTask: Task<Void, Never>?
     @Environment(\.leafTheme) private var theme
     var body: some View {
         List {
             Section {
                 HStack {
                     TextField("Title, author, or ISBN", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
-                        .onSubmit { Task { await find() } }.accessibilityIdentifier("bestsellerCatalogQuery")
+                        .onSubmit { startSearch() }.accessibilityIdentifier("bestsellerCatalogQuery")
                     if !query.isEmpty {
                         Button("Clear search", systemImage: "xmark.circle.fill") {
-                            query = ""; request = UUID(); loading = false; results = []; error = nil; publishContext()
+                            request = UUID(); searchTask?.cancel(); searchTask = nil
+                            query = ""; submittedQuery = ""; hasSearched = true; loading = false; results = []; error = nil; publishContext()
                         }
                             .labelStyle(.iconOnly).accessibilityIdentifier("bestsellerCatalogClear")
                     }
                 }
-                Button("Search Z-Library") { Task { await find() } }.disabled(loading || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Search Z-Library") { startSearch() }.disabled(loading || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if loading { ProgressView("Searching Z-Library…") }
             if let error { Text(error).font(.subheadline).foregroundStyle(.secondary) }
@@ -285,17 +289,30 @@ private struct BestsellerCatalogSearch: View {
                 }
             }
         }.leafFormStyle().navigationTitle("Search Z-Library").navigationBarTitleDisplayMode(.inline)
-            .task { if query.isEmpty { query = book.title + " " + book.author }; await find() }
-            .onDisappear { request = UUID(); loading = false; discovery.catalogSearch = nil }
+            .task {
+                if !hasSearched { if query.isEmpty { query = book.title + " " + book.author }; startSearch() }
+                else { publishContext() }
+            }
+            .onDisappear {
+                request = UUID(); searchTask?.cancel(); searchTask = nil
+                if loading { hasSearched = false }
+                loading = false; discovery.catalogSearch = nil
+            }
     }
-    private func find() async {
-        let id = UUID(), value = query; request = id; loading = true; error = nil; results = []; publishContext()
-        defer { if request == id { loading = false; publishContext() } }
+    private func startSearch() {
+        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        searchTask?.cancel()
+        let id = UUID(); request = id; submittedQuery = value; hasSearched = true; loading = true; error = nil; results = []; publishContext()
+        searchTask = Task { await find(value, request: id) }
+    }
+    private func find(_ value: String, request id: UUID) async {
+        defer { if request == id { loading = false; searchTask = nil; publishContext() } }
         do { let books = try await catalog.matchingSearch(value); try Task.checkCancellation(); if request == id { results = books } }
         catch { if request == id && !ZLibraryStore.isCancellation(error) { self.error = "The catalog could not be searched. Check your Z-Library connection and try again." } }
     }
     private func publishContext() {
-        discovery.catalogSearch = BestsellerSearchContext(query: query, books: results,
+        discovery.catalogSearch = BestsellerSearchContext(query: submittedQuery, books: results,
             status: loading ? ["Searching Z-Library…"] : error.map { [$0] } ?? [])
     }
 }

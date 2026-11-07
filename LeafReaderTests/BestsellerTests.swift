@@ -221,7 +221,7 @@ final class BestsellerFeedTests: XCTestCase {
         let view = screen.view(5, true)
         XCTAssertEqual(view["list"] as? String, "Search results"); XCTAssertEqual(view["search"] as? String, "The Rush")
         XCTAssertEqual((view["items"] as? [[String: Any]])?.first?["title"] as? String, "The Rush")
-        XCTAssertNil(try await screen.details(2, true))
+        let missing = try await screen.details(2, true); XCTAssertNil(missing)
         catalog.viewingBook = edition(title: "A selected edition")
         XCTAssertEqual((screen.view(5, true)["open_book"] as? [String: Any])?["title"] as? String, "A selected edition")
         catalog.viewingBook = nil; store.catalogSearch = nil; catalog.show(.popular)
