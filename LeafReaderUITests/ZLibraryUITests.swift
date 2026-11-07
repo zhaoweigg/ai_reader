@@ -32,10 +32,26 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(book.waitForExistence(timeout:10)); book.tap()
         XCTAssertTrue(app.staticTexts["catalogSummaryHeading"].waitForExistence(timeout:5))
     }
-    @MainActor private func revealSummaryControl(_ control:XCUIElement,app:XCUIApplication,up:Bool = true) {
+    @MainActor private func revealSummaryControl(_ control:XCUIElement,app:XCUIApplication) {
         let scroll = app.scrollViews["catalogDetailsScroll"]
-        for _ in 0..<8 where !control.isHittable { if up { scroll.swipeUp() } else { scroll.swipeDown() } }
-        XCTAssertTrue(control.exists && control.isHittable)
+        // ScrollView's AX frame extends behind the fixed footer. Generic swipes
+        // start on that footer in landscape, so drag only within visible text.
+        let top = max(scroll.frame.minY,app.navigationBars.firstMatch.frame.maxY) + 8
+        let bottom = min(scroll.frame.maxY,app.buttons["catalogAddBook"].frame.minY - 24)
+        XCTAssertGreaterThan(bottom - top,50)
+        let origin = app.coordinate(withNormalizedOffset:.zero)
+        for _ in 0..<16 {
+            let rect = control.frame
+            if control.isHittable && rect.minY >= top && rect.maxY <= bottom { return }
+            let upwards = rect.maxY > bottom
+            let remaining = upwards ? rect.maxY - bottom : top - rect.minY
+            let distance = max(18,min((bottom - top) * 0.6,remaining + 8))
+            let startY = upwards ? bottom - 8 : top + 8
+            let start = origin.withOffset(CGVector(dx:scroll.frame.midX - app.frame.minX,dy:startY - app.frame.minY))
+            let end = start.withOffset(CGVector(dx:0,dy:upwards ? -distance : distance))
+            start.press(forDuration:0.05,thenDragTo:end,withVelocity:.slow,thenHoldForDuration:0.15)
+        }
+        XCTFail("Summary control must be fully reachable above the footer: \(control.frame), visible y \(top)...\(bottom)")
     }
     @MainActor func testBookDescriptionInDay() { verifyBookDescription(theme:"Day") }
     @MainActor func testBookDescriptionInPaper() { verifyBookDescription(theme:"Paper") }
