@@ -52,7 +52,17 @@ final class ZLibraryUITests: XCTestCase {
         _ = loaded("async1")
         capture("Async metadata recommended Day portrait")
         setReaderOrientation(.landscapeLeft, app: app)
-        revealCatalogElement(app.buttons["catalogBook-async1"], app: app)
+        // A tall cover cannot fit wholly in the short landscape viewport.
+        // Reveal the actual metadata, rather than asserting the entire card fits.
+        let landscapeCard = app.buttons["catalogBook-async1"]
+        let file = landscapeCard.staticTexts["EPUB · 1 MB"]
+        XCTAssertTrue(file.waitForExistence(timeout: 5))
+        revealCatalogElement(file, app: app)
+        XCTAssertTrue(file.isHittable)
+        let rating = landscapeCard.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "42 ratings")).firstMatch
+        XCTAssertTrue(rating.waitForExistence(timeout: 5))
+        revealCatalogElement(rating, app: app)
+        XCTAssertTrue(rating.isHittable)
         _ = loaded("async1")
         capture("Async metadata recommended Day landscape")
         setReaderOrientation(.portrait, app: app)
@@ -60,6 +70,11 @@ final class ZLibraryUITests: XCTestCase {
         openDiscover(app)
         _ = loaded("async1")
         capture("Async metadata Night portrait")
+        app.buttons["catalogBook-async1"].tap()
+        XCTAssertTrue(app.staticTexts["4.8 · 42 ratings"].waitForExistence(timeout: 5))
+        capture("Background-loaded edition opens with cached details")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        _ = loaded("async1")
         app.terminate()
     }
     @MainActor func testBackgroundMetadataFailureKeepsGridUsableAndSelectedDetailsCanRetry() {
