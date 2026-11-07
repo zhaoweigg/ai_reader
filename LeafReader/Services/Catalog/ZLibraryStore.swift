@@ -567,10 +567,11 @@ final class ZLibraryStore: ObservableObject {
                 defer { detailSlots.release() }
                 try Task.checkCancellation()
                 guard token == generation else { throw CancellationError() }
-                var resolved = try await service.details(book, origin: source, session: saved)
+                let resolved = try await service.details(book, origin: source, session: saved)
                 try Task.checkCancellation()
                 guard token == generation else { throw CancellationError() }
                 detailCache[book.id] = resolved
+                detailFailures.remove(book.id)
                 detailOrder.removeAll { $0 == book.id }; detailOrder.append(book.id)
                 while detailOrder.count > 200 { detailCache[detailOrder.removeFirst()] = nil }
                 return resolved
@@ -609,9 +610,9 @@ final class ZLibraryStore: ObservableObject {
             var resolved = try await fetchDetails(book)
             // Fetched without one: the catalog has no description, so it is not asked again.
             if description, resolved.summary == nil { resolved.summary = "" }
-            // A listed edition keeps what its list shows; a description fetch only adds the description.
-            if description, var listed = (books + shelf).first(where: { $0.id == book.id }), !listed.fileExtension.isEmpty {
-                listed.summary = resolved.summary; resolved = listed
+            // Keep known listing fields while enriching its description and missing metadata.
+            if description, let listed = (books + shelf).first(where: { $0.id == book.id }), !listed.fileExtension.isEmpty {
+                resolved = listed.fillingMissingDetails(from: resolved)
             }
             try Task.checkCancellation()
             guard token == generation else { throw CancellationError() }

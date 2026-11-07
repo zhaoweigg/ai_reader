@@ -452,6 +452,8 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertEqual(client.detailCalls, 1); XCTAssertTrue(store.cardDetailsFailed(listed))
         XCTAssertFalse(store.cardDetailsPending(listed)); XCTAssertNil(store.error)
         client.detailHandler = { _ in listed }
+        let selected = try await store.details(listed, description: true)
+        XCTAssertEqual(selected.summary, ""); XCTAssertFalse(store.cardDetailsFailed(listed))
         await store.reload(); await store.loadCardDetails(listed)
         XCTAssertEqual(client.detailCalls, 2); XCTAssertFalse(store.cardDetailsFailed(listed))
         XCTAssertNil(store.books.first?.rating)
