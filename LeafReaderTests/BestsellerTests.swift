@@ -208,6 +208,25 @@ final class BestsellerFeedTests: XCTestCase {
         XCTAssertNil(store.existing(entry(author: "Other Author"), in: library))
         XCTAssertNil(store.existing(entry(title: "The Test Book: A different volume"), in: library))
     }
+    func testAskLeafReadsIndependentSearchThenReturnsToTheListOrSelectedEdition() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let library = LibraryStore(root: root, seedSamples: false), d = defaults(), credentials = BestsellerCredentials()
+        let store = BestsellerStore(defaults: d, credentials: credentials, service: BestsellerService())
+        let catalog = ZLibraryStore(defaults: d, credentials: credentials, client: BestsellerCatalog(), discoversFromLibrary: false)
+        store.showingBestsellers = true; await store.load()
+        catalog.show(query: "Unrelated global search")
+        store.catalogSearch = BestsellerSearchContext(query: "The Rush", books: [edition(title: "The Rush")], status: [])
+        let screen = ChatScreen.discover(catalog, library: library, bestsellers: store)
+        let view = screen.view(5, true)
+        XCTAssertEqual(view["list"] as? String, "Search results"); XCTAssertEqual(view["search"] as? String, "The Rush")
+        XCTAssertEqual((view["items"] as? [[String: Any]])?.first?["title"] as? String, "The Rush")
+        XCTAssertNil(try await screen.details(2, true))
+        catalog.viewingBook = edition(title: "A selected edition")
+        XCTAssertEqual((screen.view(5, true)["open_book"] as? [String: Any])?["title"] as? String, "A selected edition")
+        catalog.viewingBook = nil; store.catalogSearch = nil; catalog.show(.popular)
+        XCTAssertEqual(screen.view(5, true)["list"] as? String, "Bestsellers")
+    }
 }
 
 @MainActor final class BestsellerMatchingTests: XCTestCase {

@@ -249,6 +249,7 @@ private struct BestsellerCatalogSearch: View {
     let book: BestsellerBook
     let close: () -> Void
     @EnvironmentObject private var catalog: ZLibraryStore
+    @EnvironmentObject private var discovery: BestsellerStore
     @State private var query = ""
     @State private var results: [ZLibraryBook] = []
     @State private var loading = false
@@ -262,7 +263,9 @@ private struct BestsellerCatalogSearch: View {
                     TextField("Title, author, or ISBN", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
                         .onSubmit { Task { await find() } }.accessibilityIdentifier("bestsellerCatalogQuery")
                     if !query.isEmpty {
-                        Button("Clear search", systemImage: "xmark.circle.fill") { query = ""; request = UUID(); loading = false; results = [] }
+                        Button("Clear search", systemImage: "xmark.circle.fill") {
+                            query = ""; request = UUID(); loading = false; results = []; error = nil; publishContext()
+                        }
                             .labelStyle(.iconOnly).accessibilityIdentifier("bestsellerCatalogClear")
                     }
                 }
@@ -282,14 +285,18 @@ private struct BestsellerCatalogSearch: View {
                 }
             }
         }.leafFormStyle().navigationTitle("Search Z-Library").navigationBarTitleDisplayMode(.inline)
-            .task { query = book.title + " " + book.author; await find() }
-            .onDisappear { request = UUID() }
+            .task { if query.isEmpty { query = book.title + " " + book.author }; await find() }
+            .onDisappear { request = UUID(); loading = false; discovery.catalogSearch = nil }
     }
     private func find() async {
-        let id = UUID(), value = query; request = id; loading = true; error = nil
-        defer { if request == id { loading = false } }
+        let id = UUID(), value = query; request = id; loading = true; error = nil; results = []; publishContext()
+        defer { if request == id { loading = false; publishContext() } }
         do { let books = try await catalog.matchingSearch(value); try Task.checkCancellation(); if request == id { results = books } }
         catch { if request == id && !ZLibraryStore.isCancellation(error) { self.error = "The catalog could not be searched. Check your Z-Library connection and try again." } }
+    }
+    private func publishContext() {
+        discovery.catalogSearch = BestsellerSearchContext(query: query, books: results,
+            status: loading ? ["Searching Z-Library…"] : error.map { [$0] } ?? [])
     }
 }
 

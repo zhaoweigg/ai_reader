@@ -165,6 +165,12 @@ extension ChatScreen {
     /// Discover's books as its grid shows them, row by row from the top left.
     @MainActor static func discover(_ catalog: ZLibraryStore, library: LibraryStore, bestsellers: BestsellerStore? = nil) -> ChatScreen {
         ChatScreen(name: "Discover", view: { limit, _ in
+            if let search = bestsellers?.catalogSearch, catalog.viewingBook == nil {
+                var view = catalogView(search.books, query: search.query, feed: catalog.feed, order: .bestMatch,
+                    status: search.status, canLoadMore: false, owned: Set(library.books.compactMap(\.catalogSource)), limit: limit)
+                view["list"] = "Search results"
+                return view
+            }
             if let bestsellers, bestsellers.showingBestsellers, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
                 var view: [String: Any] = ["screen": "Discover", "list": "Bestsellers", "source": bestsellers.source.title,
                     "category": bestsellers.genre.title, "layout": "grid of 3 columns; ranks run row by row from the top left",
@@ -180,6 +186,13 @@ extension ChatScreen {
                         owned: Set(library.books.compactMap(\.catalogSource)), limit: limit,
                         open: catalog.viewingBook.map(catalog.latest))
         }, details: { rank, _ in
+            if let search = bestsellers?.catalogSearch, catalog.viewingBook == nil {
+                guard search.books.indices.contains(rank - 1) else { return nil }
+                let book = try await catalog.details(search.books[rank - 1], description: true)
+                var item = catalogItem(book, rank: rank, owned: library.books.contains { $0.catalogSource == book.sourceID })
+                item["description"] = book.summary ?? ""
+                return item
+            }
             if let bestsellers, bestsellers.showingBestsellers, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
                 guard let book = bestsellers.books.first(where: { $0.rank == rank }) else { return nil }
                 return ["rank": rank, "title": book.title, "author": book.author, "description": book.summary, "source": book.source.title, "category": book.genre.title]

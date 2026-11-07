@@ -1,6 +1,12 @@
 import Foundation
 import Combine
 
+struct BestsellerSearchContext {
+    let query: String
+    let books: [ZLibraryBook]
+    let status: [String]
+}
+
 /// Public discovery metadata has its own cache and never changes a Z-Library search.
 @MainActor final class BestsellerStore: ObservableObject {
     @Published var source: BestsellerSource { didSet { defaults.set(source.rawValue, forKey: "bestsellers.source") } }
@@ -12,6 +18,7 @@ import Combine
     @Published private(set) var nytConnected = false
     @Published private(set) var configurationError: String?
     @Published var viewingBook: BestsellerBook?
+    @Published var catalogSearch: BestsellerSearchContext?
     let matching = BestsellerMatching()
     let allowsAutomaticShelf: Bool
     private let defaults: UserDefaults
