@@ -16,6 +16,31 @@ final class AnnotationUITests: XCTestCase {
     @MainActor private func openFeatured(_ app: XCUIApplication) {
         tapVisibleLibraryCard(app.buttons["featuredBook"], app: app)
     }
+    @MainActor private func openAllBookNotes(_ app: XCUIApplication) {
+        let bookmarks = app.tabBars.buttons["Bookmarks"]
+        XCTAssertTrue(bookmarks.waitForExistence(timeout: 5))
+        let frame = bookmarks.frame.intersection(app.frame)
+        let geometry = XCTAttachment(string: "Bookmarks: \(bookmarks.frame); app: \(app.frame); selected before: \(bookmarks.isSelected)")
+        geometry.name = "Bookmarks tab measured tap"; geometry.lifetime = .keepAlways; add(geometry)
+        XCTAssertGreaterThanOrEqual(frame.width, 44); XCTAssertGreaterThanOrEqual(frame.height, 44)
+        // On iOS 27.2 Button.tap opened Discover in failed relaunch checks.
+        // Tap the measured center in this app's scene, then verify the destination.
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.midX - app.frame.minX, dy: frame.midY - app.frame.minY)).tap()
+        expectation(for: NSPredicate { _, _ in bookmarks.isSelected }, evaluatedWith: bookmarks)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.navigationBars["Bookmarks"].waitForExistence(timeout: 5))
+        let filter = app.segmentedControls["librarySavedPassageFilter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        filter.buttons["Highlights & notes"].tap()
+    }
+    @MainActor private func settleNoteAnimation() {
+        // The accessibility label updates before the native Play/Pause
+        // crossfade finishes. Capture its resting appearance, not that blend.
+        let settled = expectation(description: "Note controls finish their native transition")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+    }
     @MainActor private func controls(_ app: XCUIApplication) {
         XCTAssertTrue(surface(app).waitForExistence(timeout: 15))
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Opening your book…"])
@@ -130,6 +155,7 @@ final class AnnotationUITests: XCTestCase {
         XCTAssertTrue(app.progressIndicators["voiceNotePlaybackProgress"].waitForExistence(timeout: 3))
         play.tap()
         XCTAssertEqual(play.label, "Play voice note")
+        settleNoteAnimation()
     }
 
     @MainActor private func editFirstVoice(_ app: XCUIApplication) {
@@ -181,6 +207,10 @@ final class AnnotationUITests: XCTestCase {
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
         controls(app); app.buttons["Saved"].tap()
+        XCTAssertTrue(saved.waitForExistence(timeout: 5))
+        expectation(for: NSPredicate { _, _ in saved.frame.intersection(app.frame).height >= 44 }, evaluatedWith: saved)
+        waitForExpectations(timeout: 5)
+        settleNoteAnimation()
         capture(flow + " landscape saved voice note")
         editFirstVoice(app)
         revealAnnotationControl(app.buttons["removeVoiceNote"], app: app); app.buttons["removeVoiceNote"].tap()
@@ -190,8 +220,7 @@ final class AnnotationUITests: XCTestCase {
         controls(app); app.buttons["closeBook"].tap()
         app.terminate(); orient(.portrait); app.launch(); orient(.portrait)
 
-        app.tabBars.buttons["Bookmarks"].tap()
-        app.segmentedControls["librarySavedPassageFilter"].buttons["Highlights & notes"].tap()
+        openAllBookNotes(app)
         XCTAssertTrue(saved.waitForExistence(timeout: 10))
         previewVoice(app); capture(flow + " audio survives relaunch in all-book notes")
         saved.tap(); controls(app); app.buttons["Saved"].tap()
@@ -296,8 +325,7 @@ final class AnnotationUITests: XCTestCase {
         app.terminate(); orient(.portrait); app.launch()
 
 
-        app.tabBars.buttons["Bookmarks"].tap()
-        app.segmentedControls["librarySavedPassageFilter"].buttons["Highlights & notes"].tap()
+        openAllBookNotes(app)
         let saved = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
         XCTAssertTrue(saved.waitForExistence(timeout: 10))
         capture(flow + " note survives app relaunch")
