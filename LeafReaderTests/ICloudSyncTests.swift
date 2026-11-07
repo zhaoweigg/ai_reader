@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import LeafReader
 
 /// Two simulated devices share one folder standing in for iCloud Drive.
@@ -25,14 +26,14 @@ final class ICloudSyncTests: XCTestCase {
         for url in cleanup { try? FileManager.default.removeItem(at: url) }
     }
 
-    private func device(keepBooks: Bool = true) throws -> Device {
+    private func device(keepBooks: Bool = true, automaticSync: Bool = false) throws -> Device {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafSyncDevice-\(UUID().uuidString)", isDirectory: true)
         cleanup.append(root)
         let library = LibraryStore(root: root, seedSamples: false, metadataLoader: { _, _ in BookMetadata(title: nil, author: nil, cover: nil) })
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "LeafSyncTests.\(UUID().uuidString)"))
         defaults.set(keepBooks, forKey: ICloudSync.Keys.keepBooks)
         let sync = ICloudSync(library: library, defaults: defaults, stateDirectory: root.appendingPathComponent("SyncState"), folderOverride: folder)
-        library.onSave = nil // Tests sync explicitly.
+        if !automaticSync { library.onSave = nil } // Most cases sync explicitly.
         return Device(library: library, sync: sync, defaults: defaults, root: root)
     }
 
@@ -44,6 +45,35 @@ final class ICloudSyncTests: XCTestCase {
 
     private func annotation(_ text: String, at fraction: Double) -> BookAnnotation {
         BookAnnotation(text: text, locator: "epubcfi(/6/2!/4/\(Int(fraction * 100)))", chapter: "One", fraction: fraction)
+    }
+
+    func testAutomaticSyncSettlesAndStillSendsLocalChanges() async throws {
+        let phone = try device(automaticSync: true)
+        defer { phone.sync.disconnect() }
+        let book = try await importBook(phone)
+        var starts = 0
+        let observation = phone.sync.$status.sink { if $0 == .syncing { starts += 1 } }
+        defer { observation.cancel() }
+        await phone.sync.syncNow()
+        XCTAssertEqual(phone.sync.status, .upToDate)
+        XCTAssertEqual(starts, 1)
+        // Observe beyond the real two-second save debounce. The production
+        // callback stays connected, unlike the explicit two-device fixtures.
+        try await Task.sleep(for: .milliseconds(2400))
+        XCTAssertEqual(starts, 1, "A completed sync must not schedule itself again")
+
+        phone.library.setPosition(book.id, locator: "epubcfi(/6/4!/4/8)", fraction: 0.61)
+        let deadline = Date().addingTimeInterval(6)
+        while (starts < 2 || phone.sync.status != .upToDate) && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(starts, 2, "A real local edit must still sync automatically")
+        let remote = folder.appendingPathComponent("Library/\(book.fingerprint).json")
+        let record = try JSONDecoder().decode(SyncedBook.self, from: Data(contentsOf: remote))
+        XCTAssertEqual(record.locator, "epubcfi(/6/4!/4/8)")
+        XCTAssertEqual(record.progress, 0.61, accuracy: 0.0001)
+        try await Task.sleep(for: .milliseconds(2400))
+        XCTAssertEqual(starts, 2, "The automatic pass must settle too")
     }
 
     func testANewDeviceListsTheLibraryAndDownloadsABookWhenOpened() async throws {
@@ -154,5 +184,36 @@ final class ICloudSyncTests: XCTestCase {
         XCTAssertEqual(phone.defaults.double(forKey: "reader.fontSize"), 24)
         XCTAssertFalse(phone.defaults.bool(forKey: "reader.boldText"))
         XCTAssertEqual(phone.defaults.string(forKey: "reader.theme"), "night", "An unchanged setting is not overwritten")
+    }
+}
+
+@MainActor
+final class ICloudSyncStatusLayoutTests: XCTestCase {
+    func testRecentSyncAndSpinnerKeepTheHeaderHeight() throws {
+        for width in [280.0, 330, 600] {
+            var heights: [CGFloat] = []
+            for syncing in [false, true] {
+                let content = ICloudSyncStatusHeader(title: syncing ? "Syncing…" : "Up to date",
+                    subtitle: "Synced \(syncing ? "2 seconds ago" : "now") · 2 books · 0 highlights", syncing: syncing)
+                    .environment(\.dynamicTypeSize, .large)
+                let host = UIHostingController(rootView: content)
+                let size = host.sizeThatFits(in: CGSize(width: width, height: 1000))
+                heights.append(size.height)
+                XCTAssertGreaterThan(size.height, 0)
+                if width >= 330 {
+                    let image = ImageRenderer(content: content.frame(width: width).padding(16).background(ReadingTheme.paper.surface))
+                    let attachment = XCTAttachment(image: try XCTUnwrap(image.uiImage))
+                    attachment.name = "iCloud header \(syncing ? "syncing" : "settled") \(Int(width)) wide"
+                    attachment.lifetime = .keepAlways; add(attachment)
+                }
+            }
+            XCTAssertEqual(heights[0], heights[1], accuracy: 0.5, "The status transition must not move the settings below at \(width)pt")
+        }
+        let error = UIHostingController(rootView: ICloudSyncStatusHeader(title: "Couldn’t sync",
+            subtitle: String(repeating: "The selected folder is unavailable. ", count: 8), syncing: false))
+        let normal = UIHostingController(rootView: ICloudSyncStatusHeader(title: "Up to date", subtitle: "Synced now", syncing: false))
+        XCTAssertGreaterThan(error.sizeThatFits(in: CGSize(width: 330, height: 1000)).height,
+                             normal.sizeThatFits(in: CGSize(width: 330, height: 1000)).height,
+                             "Reserving recent-status space must not truncate longer errors")
     }
 }

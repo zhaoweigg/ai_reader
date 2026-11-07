@@ -806,6 +806,34 @@ final class LeafReaderUITests: XCTestCase {
         capture("Diagnostics cleared and off", app: app)
     }
 
+    @MainActor func testICloudSettingsStayStillAfterRepeatedSync() {
+        continueAfterFailure = false
+        let app = launchApp(syncFixture: true)
+        XCTAssertTrue(app.buttons["book-A Field Guide to Slow Days"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["Paper theme"].waitForExistence(timeout: 5))
+        app.buttons["Paper theme"].tap()
+        revealSettingsRow(app.buttons["openICloudSync"], app: app)
+        app.buttons["openICloudSync"].tap()
+        let status = app.staticTexts["syncStatus"], button = app.buttons["syncNow"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            orient(orientation)
+            revealSettingsRow(button, app: app)
+            let before = button.frame
+            button.tap()
+            let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in status.label == "Up to date" }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
+            // Cover the relative-time text change and the former two-second
+            // feedback loop with actual settings geometry, not a mocked screen.
+            let until = Date().addingTimeInterval(3.2)
+            while Date() < until {
+                XCTAssertEqual(button.frame.minY, before.minY, accuracy: 1, "Sync must not shift the form")
+            }
+            capture("iCloud settings settled \(orientation == .portrait ? "portrait" : "landscape")", app: app)
+        }
+    }
+
     @MainActor func testANewDeviceListsASyncedBookAndDownloadsItWhenOpened() {
         continueAfterFailure = false
         let app = launchApp(syncFixture: true)
