@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false, threeColumnGrid: Bool = false, thumbnails: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false, threeColumnGrid: Bool = false, thumbnails: Bool = false, asyncDetails: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -14,6 +14,7 @@ final class ZLibraryUITests: XCTestCase {
         if shelf { app.launchEnvironment["LEAF_UI_ZLIB_SHELF"] = "1" }
         if threeColumnGrid { app.launchEnvironment["LEAF_UI_ZLIB_GRID"] = "1" }
         if thumbnails { app.launchEnvironment["LEAF_UI_ZLIB_THUMBNAILS"] = "1" }
+        if asyncDetails { app.launchEnvironment["LEAF_UI_ZLIB_ASYNC_DETAILS"] = "1" }
         app.launch()
         if sceneGeometry {
             registerSceneGeometryCleanup(app: app)
@@ -24,6 +25,59 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor private func openDiscover(_ app: XCUIApplication) {
         let tab = app.tabBars.buttons["Discover"]
         XCTAssertTrue(tab.waitForExistence(timeout: 10)); tab.tap()
+    }
+    @MainActor func testVisibleBookDetailsLoadInBackgroundAcrossBrowsingSearchingAndRecommendations() {
+        continueAfterFailure = false
+        let app = launch(sceneGeometry: true, asyncDetails: true)
+        openDiscover(app)
+        func loaded(_ id: String) -> XCUIElement {
+            let card = app.buttons["catalogBook-\(id)"]
+            XCTAssertTrue(card.waitForExistence(timeout: 10))
+            expectation(for: NSPredicate { _, _ in card.label.contains("EPUB · 1 MB") && card.label.contains("42 ratings") }, evaluatedWith: card)
+            waitForExpectations(timeout: 10)
+            return card
+        }
+        let first = loaded("async1")
+        XCTAssertTrue(app.staticTexts["zlibraryFeedTitle"].exists, "Details must load while still on the grid")
+        capture("Async metadata popular Day portrait")
+        let later = app.buttons["catalogBook-async10"]
+        for _ in 0..<7 where !later.exists || !later.isHittable { app.swipeUp() }
+        _ = loaded("async10")
+        for _ in 0..<7 where !first.isHittable { app.swipeDown() }
+        search("background", app: app)
+        _ = loaded("async1")
+        app.buttons["zlibraryClearSearch"].tap()
+        browse("Recommended", app: app)
+        app.buttons["connectZLibrary"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        _ = loaded("async1")
+        capture("Async metadata recommended Day portrait")
+        setReaderOrientation(.landscapeLeft, app: app)
+        revealCatalogElement(app.buttons["catalogBook-async1"], app: app)
+        _ = loaded("async1")
+        capture("Async metadata recommended Day landscape")
+        setReaderOrientation(.portrait, app: app)
+        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap()
+        openDiscover(app)
+        _ = loaded("async1")
+        capture("Async metadata Night portrait")
+        app.terminate()
+    }
+    @MainActor func testBackgroundMetadataFailureKeepsGridUsableAndSelectedDetailsCanRetry() {
+        continueAfterFailure = false
+        let app = launch(details: "failure", asyncDetails: true)
+        openDiscover(app)
+        let card = app.buttons["catalogBook-async1"]
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate { _, _ in card.label.contains("Details unavailable") && card.label.contains("Rating unavailable") }, evaluatedWith: card)
+        waitForExpectations(timeout: 10)
+        XCTAssertFalse(app.staticTexts["Could not load popular books"].exists)
+        XCTAssertTrue(app.textFields["zlibrarySearchField"].isEnabled)
+        capture("Async metadata failure leaves grid usable")
+        revealCatalogElement(card, app: app); card.tap()
+        XCTAssertTrue(app.buttons["retryCatalogDetails"].waitForExistence(timeout: 10))
+        app.buttons["retryCatalogDetails"].tap()
+        XCTAssertTrue(app.buttons["retryCatalogDetails"].waitForExistence(timeout: 10))
+        app.terminate()
     }
     @MainActor func testCatalogThumbnailsStayLoadedAcrossScrollingDetailsFeedsAndSearch() {
         continueAfterFailure = false

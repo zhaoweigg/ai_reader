@@ -136,6 +136,18 @@ struct ZLibraryBook: Identifiable, Equatable, Codable {
     var sourceID: String { "zlibrary:\(id)" }
     var format: BookFormat? { BookFormat.detect(URL(fileURLWithPath: "book.\(fileExtension)")) }
     var placeholder: Book { Book(id: UUID(), title: title, author: author, fileName: "", format: format ?? .epub, fingerprint: hash) }
+    /// A richer response fills gaps without replacing fields the list already supplied.
+    func fillingMissingDetails(from details: ZLibraryBook) -> ZLibraryBook {
+        ZLibraryBook(remoteID: remoteID, hash: hash, title: title,
+                     author: author.isEmpty ? details.author : author,
+                     fileExtension: fileExtension.isEmpty ? details.fileExtension : fileExtension,
+                     size: size.isEmpty ? details.size : size,
+                     language: language.isEmpty ? details.language : language,
+                     year: year.isEmpty ? details.year : year,
+                     coverURL: coverURL ?? details.coverURL, rating: rating ?? details.rating,
+                     ratingCount: ratingCount ?? details.ratingCount, qualityScore: qualityScore ?? details.qualityScore,
+                     summary: summary ?? details.summary)
+    }
 }
 
 struct ZLibraryPayload {
@@ -384,7 +396,7 @@ struct ZLibraryClient: ZLibraryServing {
         return ZLibraryProfile(name: Self.string(user["email"]).isEmpty ? Self.string(user["name"]) : Self.string(user["email"]), remaining: limit.map { max(0, $0 - used) })
     }
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
-        // Popular results are MinBook summaries: fetch only the selected edition, never the whole feed.
+        // Popular results are MinBook summaries. Resolve individual visible or selected editions.
         let object = try await object("book/\(book.remoteID)/\(book.hash)", origin: origin, session: session)
         guard var row = object["book"] as? [String: Any] else { throw ZLibraryError.response }
         for (key, expected) in [("id", book.remoteID), ("hash", book.hash)] {
