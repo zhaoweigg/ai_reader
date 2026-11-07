@@ -30,6 +30,17 @@ final class ChatMarkdownTests: XCTestCase {
         }
     }
 
+    @MainActor func testLongReplyTakesTheColumnWithoutMeasuringItsOneLineExtent() {
+        let view = UITextView(); view.isScrollEnabled = false
+        let coordinator = SelectableChatText.Coordinator()
+        coordinator.update(source: "Short.", markdown: true, traits: view.traitCollection, in: view)
+        XCTAssertLessThan(coordinator.fittedSize(width: 320, in: view).width, 320, "A short reply keeps its natural width")
+        coordinator.update(source: String(repeating: "A longer reply that wraps around. ", count: 12), markdown: true, traits: view.traitCollection, in: view)
+        XCTAssertEqual(coordinator.fittedSize(width: 320, in: view).width, 320, "A long reply spans the column")
+        coordinator.update(source: "Two\n\nlines", markdown: true, traits: view.traitCollection, in: view)
+        XCTAssertEqual(coordinator.fittedSize(width: 320, in: view).width, 320, "A multi-paragraph reply spans the column")
+    }
+
     @MainActor func testChangedTextFormattingAndDynamicTypeInvalidateCachedLayout() {
         let view = UITextView(); view.isScrollEnabled = false
         let coordinator = SelectableChatText.Coordinator()
