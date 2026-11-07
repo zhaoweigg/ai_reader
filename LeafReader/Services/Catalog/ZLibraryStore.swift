@@ -564,13 +564,24 @@ struct UITestZLibraryClient: ZLibraryServing {
         return UITesting.flag("LEAF_UI_ZLIB_GRID") ? books + sampleBooks() : books
     }
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
+        let summaryMode = UITesting.environment("LEAF_UI_ZLIB_SUMMARY")
+        if summaryMode == "loading" { try await Task.sleep(for:.seconds(4)) }
         try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()
         if UITesting.environment("LEAF_UI_ZLIB_DETAILS") == "failure" { throw ZLibraryError.metadata }
+        if summaryMode == "retry", !(await UITestCatalogRequestHistory.shared.repeated("summary-" + book.id)) { throw ZLibraryError.response }
+        let summary: String?
+        switch summaryMode {
+        case "missing": summary = nil
+        case "short": summary = "A quiet guide to noticing everyday life."
+        case "long", "loading", "retry": summary = String(repeating:"A reader learns to notice the small details of everyday life, from morning light to the sounds of the coast. ",count:6) + "The final passage brings those observations together."
+        case "chinese": summary = String(repeating:"这本书讲述了一个人在日常生活中重新发现细节的故事，从清晨的光线到海边的声音。",count:8) + "最后一段将这些观察串联起来。"
+        default: summary = "A fixture description of \(book.title)."
+        }
         return ZLibraryBook(remoteID: book.remoteID, hash: book.hash, title: book.title, author: book.author,
                             fileExtension: UITesting.environment("LEAF_UI_ZLIB_DETAILS") == "unsupported" ? "djvu" : "epub",
                             size: "1 MB", language: "English", year: "2026", coverURL: book.coverURL,
                             rating: book.rating, ratingCount: book.ratingCount, qualityScore: book.qualityScore,
-                            summary: "A fixture description of \(book.title).")
+                            summary: summary)
     }
     func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile { ZLibraryProfile(name:"Preview account",remaining:5) }
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook] {

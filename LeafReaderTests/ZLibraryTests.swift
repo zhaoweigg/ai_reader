@@ -362,6 +362,34 @@ private final class CatalogURLProtocol: URLProtocol {
         catch { XCTAssertEqual(error as? ZLibraryError,.file) }
         XCTAssertEqual(transport.requests.count,1)
     }
+    func testCatalogDescriptionDecodesMarkupAndKeepsEditionMetadata() async throws {
+        let transport = CatalogTransport { [self] _,_ in
+            try response(["success":1,"book":["description":"<p>Olive &amp; Adam <b>meet</b>.</p><p>第二段<br>Fin.</p>"]])
+        }
+        let details = try await ZLibraryClient(transport:transport).details(book,origin:origin,session:nil)
+        XCTAssertEqual(details.summary,"Olive & Adam meet.\n\n第二段\nFin.")
+        XCTAssertEqual(details.fileSummary,book.fileSummary)
+        XCTAssertEqual(details.editionSummary,book.editionSummary)
+        XCTAssertEqual(transport.requests.count,1)
+    }
+    func testDescriptionFetchCachesMissingAndPresentTextWithoutReplacingListedEdition() async throws {
+        let descriptions: [String?] = [nil,"","A short description.","这是一段中文简介。"]
+        for text in descriptions {
+            let client = CatalogService(), (store,_,_) = store(client)
+            client.popularBooks = [book]
+            let incoming = ZLibraryBook(remoteID:book.remoteID,hash:book.hash,title:"Other metadata",author:"Other author",fileExtension:"pdf",size:"8 MB",language:"French",year:"2026",coverURL:nil,summary:text)
+            client.detailHandler = { _ in incoming }
+            await store.loadPopular()
+            let first = try await store.details(book,description:true)
+            let second = try await store.details(book,description:true)
+            XCTAssertEqual(first.summary,text ?? "")
+            XCTAssertEqual(first.fileSummary,book.fileSummary)
+            XCTAssertEqual(first.editionSummary,book.editionSummary)
+            XCTAssertEqual(first.title,book.title)
+            XCTAssertEqual(second,first)
+            XCTAssertEqual(client.detailCalls,1,"Reopening a fetched description, including a missing one, must reuse its result")
+        }
+    }
     func testResolvedDetailsUpdateFeedAndAreReusedWithoutAnotherRequest() async throws {
         let client = CatalogService(), (store,_,_) = store(client)
         let sparse = ZLibraryBook(remoteID:book.remoteID,hash:book.hash,title:book.title,author:book.author,fileExtension:"",size:"",language:"",year:"",coverURL:nil)

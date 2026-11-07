@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false, threeColumnGrid: Bool = false, thumbnails: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false, threeColumnGrid: Bool = false, thumbnails: Bool = false, summary: String? = nil) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -14,6 +14,7 @@ final class ZLibraryUITests: XCTestCase {
         if shelf { app.launchEnvironment["LEAF_UI_ZLIB_SHELF"] = "1" }
         if threeColumnGrid { app.launchEnvironment["LEAF_UI_ZLIB_GRID"] = "1" }
         if thumbnails { app.launchEnvironment["LEAF_UI_ZLIB_THUMBNAILS"] = "1" }
+        if let summary { app.launchEnvironment["LEAF_UI_ZLIB_SUMMARY"] = summary }
         app.launch()
         if sceneGeometry {
             registerSceneGeometryCleanup(app: app)
@@ -24,6 +25,109 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor private func openDiscover(_ app: XCUIApplication) {
         let tab = app.tabBars.buttons["Discover"]
         XCTAssertTrue(tab.waitForExistence(timeout: 10)); tab.tap()
+    }
+    @MainActor private func openSummaryBook(_ app:XCUIApplication) {
+        openDiscover(app)
+        let book = app.buttons["catalogBook-sample"]
+        XCTAssertTrue(book.waitForExistence(timeout:10)); book.tap()
+        XCTAssertTrue(app.staticTexts["catalogSummaryHeading"].waitForExistence(timeout:5))
+    }
+    @MainActor private func revealSummaryControl(_ control:XCUIElement,app:XCUIApplication,up:Bool = true) {
+        let scroll = app.scrollViews["catalogDetailsScroll"]
+        for _ in 0..<8 where !control.isHittable { if up { scroll.swipeUp() } else { scroll.swipeDown() } }
+        XCTAssertTrue(control.exists && control.isHittable)
+    }
+    @MainActor func testBookDescriptionInDay() { verifyBookDescription(theme:"Day") }
+    @MainActor func testBookDescriptionInPaper() { verifyBookDescription(theme:"Paper") }
+    @MainActor func testBookDescriptionInNight() { verifyBookDescription(theme:"Night") }
+    @MainActor private func verifyBookDescription(theme:String) {
+        continueAfterFailure = false
+        let app = launch(sceneGeometry:true,summary:"long")
+        defer { setReaderOrientation(.portrait,app:app); app.terminate() }
+        app.tabBars.buttons["Settings"].tap(); app.buttons[theme + " theme"].tap()
+        openSummaryBook(app)
+        let summary = app.staticTexts["catalogBookSummary"], toggle = app.buttons["toggleCatalogSummary"]
+        XCTAssertTrue(toggle.waitForExistence(timeout:10)); XCTAssertEqual(toggle.value as? String,"Collapsed")
+        XCTAssertTrue(summary.label.hasSuffix("The final passage brings those observations together."))
+        let collapsed = summary.frame.height
+        XCTAssertLessThanOrEqual(collapsed,app.staticTexts["catalogDetailAuthor"].frame.height * 4.4)
+        XCTAssertGreaterThan(summary.frame.minY,app.staticTexts["catalogSummaryHeading"].frame.maxY)
+        let cover = app.descendants(matching:.any)["catalogDetailCover"].firstMatch
+        XCTAssertEqual(cover.frame.width,120,accuracy:2)
+        XCTAssertTrue(app.buttons["catalogAddBook"].isHittable)
+        capture(theme + " compact catalog description portrait")
+        toggle.tap()
+        expectation(for:NSPredicate { _, _ in summary.frame.height > collapsed + 60 },evaluatedWith:summary); waitForExpectations(timeout:5)
+        XCTAssertEqual(toggle.value as? String,"Expanded")
+        capture(theme + " expanded catalog description portrait")
+        revealSummaryControl(toggle,app:app); toggle.tap()
+        expectation(for:NSPredicate { _, _ in abs(summary.frame.height - collapsed) < 2 },evaluatedWith:summary); waitForExpectations(timeout:5)
+        setReaderOrientation(.landscapeLeft,app:app)
+        revealSummaryControl(toggle,app:app)
+        XCTAssertEqual(toggle.value as? String,"Collapsed")
+        XCTAssertGreaterThan(app.frame.width,app.frame.height)
+        XCTAssertTrue(app.buttons["catalogAddBook"].isHittable)
+        capture(theme + " compact catalog description landscape")
+        toggle.tap(); XCTAssertEqual(toggle.value as? String,"Expanded")
+        revealSummaryControl(toggle,app:app)
+        capture(theme + " expanded catalog description landscape")
+        toggle.tap(); setReaderOrientation(.portrait,app:app)
+        app.navigationBars.buttons["Z-Library"].tap()
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:5)); app.buttons["catalogBook-sample"].tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout:5)); XCTAssertEqual(toggle.value as? String,"Collapsed")
+        XCTAssertTrue(summary.label.hasSuffix("The final passage brings those observations together."))
+    }
+    @MainActor func testShortAndMissingCatalogDescriptions() {
+        continueAfterFailure = false
+        for mode in ["short","missing"] {
+            let app = launch(summary:mode)
+            defer { app.terminate() }
+            openSummaryBook(app)
+            let text = mode == "short" ? app.staticTexts["catalogBookSummary"] : app.staticTexts["catalogSummaryEmpty"]
+            XCTAssertTrue(text.waitForExistence(timeout:10))
+            XCTAssertFalse(app.buttons["toggleCatalogSummary"].exists)
+            XCTAssertFalse(app.staticTexts["catalogSummaryError"].exists)
+            XCTAssertTrue(app.buttons["catalogAddBook"].isEnabled)
+            capture("Catalog description " + mode)
+        }
+    }
+    @MainActor func testCatalogDescriptionLoadingAndRetryLeaveEditionUsable() {
+        continueAfterFailure = false
+        for mode in ["loading","retry"] {
+            let app = launch(summary:mode)
+            defer { app.terminate() }
+            openSummaryBook(app)
+            if mode == "loading" {
+                XCTAssertTrue(app.descendants(matching:.any)["catalogSummaryLoading"].firstMatch.waitForExistence(timeout:5))
+                XCTAssertTrue(app.buttons["catalogAddBook"].isEnabled)
+                capture("Catalog description loading with usable edition")
+            } else {
+                XCTAssertTrue(app.staticTexts["catalogSummaryError"].waitForExistence(timeout:10))
+                XCTAssertFalse(app.staticTexts["catalogDetailsError"].exists)
+                XCTAssertTrue(app.buttons["catalogAddBook"].isEnabled)
+                capture("Catalog description retry keeps add action")
+                app.buttons["retryCatalogSummary"].tap()
+            }
+            XCTAssertTrue(app.buttons["toggleCatalogSummary"].waitForExistence(timeout:15))
+            XCTAssertFalse(app.staticTexts["catalogSummaryError"].exists)
+            capture("Catalog description " + mode + " resolved")
+        }
+    }
+    @MainActor func testChineseCatalogDescriptionUsesRealLineClamping() {
+        continueAfterFailure = false
+        let app = launch(summary:"chinese")
+        defer { app.terminate() }
+        openSummaryBook(app)
+        let summary = app.staticTexts["catalogBookSummary"], toggle = app.buttons["toggleCatalogSummary"]
+        XCTAssertTrue(toggle.waitForExistence(timeout:10))
+        XCTAssertTrue(summary.label.hasSuffix("最后一段将这些观察串联起来。"))
+        let collapsed = summary.frame.height
+        toggle.tap()
+        expectation(for:NSPredicate { _, _ in summary.frame.height > collapsed + 60 },evaluatedWith:summary); waitForExpectations(timeout:5)
+        capture("Chinese catalog description expanded")
+        revealSummaryControl(toggle,app:app); toggle.tap()
+        expectation(for:NSPredicate { _, _ in abs(summary.frame.height - collapsed) < 2 },evaluatedWith:summary); waitForExpectations(timeout:5)
+        capture("Chinese catalog description four lines")
     }
     @MainActor func testCatalogThumbnailsStayLoadedAcrossScrollingDetailsFeedsAndSearch() {
         continueAfterFailure = false
