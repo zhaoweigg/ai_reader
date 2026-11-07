@@ -182,17 +182,34 @@ struct ZLibraryBookView: View {
     @State private var connection = false
     @State private var resolved: ZLibraryBook?
     @State private var detailsError: String?
+    @State private var descriptionFailed = false
     @State private var loadingDetails = false
     @State private var detailsAttempt = 0
     @State private var detailsRequest = UUID()
     private var edition: ZLibraryBook { resolved ?? book }
+    private var description: String { edition.summary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
     private var existing: Book? { library.books.first { $0.catalogSource == book.sourceID } }
     var body: some View {
         ScrollView {
             VStack(spacing:18) {
-                ZLibraryCover(book:edition).frame(width:150)
+                ZLibraryCover(book:edition).frame(width:120).accessibilityElement(children:.ignore).accessibilityLabel(edition.title + " cover").accessibilityIdentifier("catalogDetailCover")
                 Text(edition.title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
-                Text(edition.author).foregroundStyle(.secondary)
+                Text(edition.author).foregroundStyle(.secondary).accessibilityIdentifier("catalogDetailAuthor")
+                VStack(alignment:.leading,spacing:9) {
+                    Text("About this book").font(.headline).accessibilityAddTraits(.isHeader).accessibilityIdentifier("catalogSummaryHeading")
+                    if !description.isEmpty {
+                        CatalogBookSummary(text:description).id(book.id)
+                    } else if loadingDetails || (edition.summary == nil && !descriptionFailed) {
+                        ProgressView("Loading description…").font(.subheadline).accessibilityIdentifier("catalogSummaryLoading")
+                    } else if descriptionFailed {
+                        Text("The description couldn’t be loaded.").font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("catalogSummaryError")
+                        if !edition.fileExtension.isEmpty {
+                            Button("Try again") { detailsAttempt += 1 }.font(.subheadline.weight(.semibold)).accessibilityIdentifier("retryCatalogSummary")
+                        }
+                    } else {
+                        Text("No description available for this edition.").font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("catalogSummaryEmpty")
+                    }
+                }.frame(maxWidth:.infinity,alignment:.leading)
                 VStack(alignment:.leading,spacing:14) {
                     Text("This edition").font(.caption).foregroundStyle(.secondary)
                     HStack { Image(systemName:"doc").font(.title2).foregroundStyle(theme.accent); VStack(alignment:.leading,spacing:4) {
@@ -216,6 +233,7 @@ struct ZLibraryBookView: View {
                 }
             }.padding(24).frame(maxWidth:520).frame(maxWidth:.infinity)
         }
+        .accessibilityIdentifier("catalogDetailsScroll")
         .background(theme.canvas).toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle("Book details").navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge:.bottom) {
             VStack(spacing:8) {
@@ -252,7 +270,7 @@ struct ZLibraryBookView: View {
         // The same request also carries the description Ask Leaf uses for “this book”.
         guard edition.fileExtension.isEmpty || edition.summary == nil else { return }
         let listed = !edition.fileExtension.isEmpty
-        let request = UUID(); detailsRequest = request; loadingDetails = true; detailsError = nil
+        let request = UUID(); detailsRequest = request; loadingDetails = true; detailsError = nil; descriptionFailed = false
         defer { if request == detailsRequest { loadingDetails = false } }
         do {
             let details = try await catalog.details(book, description: true)
@@ -260,10 +278,61 @@ struct ZLibraryBookView: View {
             guard request == detailsRequest else { return }
             resolved = details
         } catch {
-            // A listed edition is already usable; only a missing format is worth an error here.
-            if !listed, request == detailsRequest && !Task.isCancelled && !ZLibraryStore.isCancellation(error) { detailsError = error.localizedDescription }
+            // Description failures do not stop an already listed edition being added.
+            if request == detailsRequest && !Task.isCancelled && !ZLibraryStore.isCancellation(error) {
+                descriptionFailed = true
+                if !listed { detailsError = error.localizedDescription }
+            }
         }
     }
+}
+
+/// Measures both layouts at the available width so short descriptions never
+/// acquire a redundant expand button, including after rotation or a text-size change.
+private struct CatalogBookSummary: View {
+    @Environment(\.leafTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let text: String
+    @State private var expanded = false
+    @State private var overflows = false
+
+    var body: some View {
+        VStack(alignment:.leading,spacing:0) {
+            Text(text).font(.body).lineLimit(expanded ? nil : 4)
+                .fixedSize(horizontal:false,vertical:true).frame(maxWidth:.infinity,alignment:.leading)
+                .accessibilityIdentifier("catalogBookSummary")
+                .background(alignment:.topLeading) {
+                    ZStack(alignment:.topLeading) {
+                        measuredText(lines:4,key:"preview")
+                        measuredText(lines:nil,key:"full")
+                    }.hidden().accessibilityHidden(true).allowsHitTesting(false)
+                }
+            if overflows {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration:0.18)) { expanded.toggle() }
+                } label: {
+                    HStack(spacing:4) {
+                        Text(expanded ? "Read less" : "Read more")
+                        Image(systemName:expanded ? "chevron.up" : "chevron.down").font(.caption2.weight(.semibold))
+                    }.font(.subheadline.weight(.semibold)).frame(minHeight:44,alignment:.leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(theme.accent).accessibilityIdentifier("toggleCatalogSummary")
+                    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            }
+        }
+        .onPreferenceChange(CatalogSummaryHeights.self) { heights in
+            if let full = heights["full"], let preview = heights["preview"] { overflows = full > preview + 1 }
+        }
+        .onChange(of:text) { _, _ in expanded = false }
+    }
+    private func measuredText(lines:Int?,key:String) -> some View {
+        Text(text).font(.body).lineLimit(lines).fixedSize(horizontal:false,vertical:true)
+            .frame(maxWidth:.infinity,alignment:.leading)
+            .background { GeometryReader { proxy in Color.clear.preference(key:CatalogSummaryHeights.self,value:[key:proxy.size.height]) } }
+    }
+}
+private struct CatalogSummaryHeights: PreferenceKey {
+    static var defaultValue: [String:CGFloat] = [:]
+    static func reduce(value:inout [String:CGFloat],nextValue:() -> [String:CGFloat]) { value.merge(nextValue(),uniquingKeysWith: { _, next in next }) }
 }
 
 struct ZLibraryConnectionView: View {
