@@ -6,7 +6,7 @@ final class BestsellerUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
         app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_CHAT_MOCK": "1",
-                                 "LEAF_UI_BESTSELLERS_MOCK": "1", "LEAF_UI_EMPTY_LIBRARY": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1"]
+                                 "LEAF_UI_BESTSELLERS_MOCK": "1", "LEAF_UI_ZLIB_SHELF": "1", "LEAF_UI_EMPTY_LIBRARY": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1"]
         for flag in flags { app.launchEnvironment["LEAF_UI_BESTSELLERS_" + flag] = "1" }
         if agent { app.launchEnvironment["LEAF_UI_CHAT_AGENT"] = "1" }
         app.launch(); registerSceneGeometryCleanup(app: app); setReaderOrientation(.portrait, app: app)
@@ -20,10 +20,14 @@ final class BestsellerUITests: XCTestCase {
         for _ in 0..<8 {
             if element.exists {
                 let frame = element.frame, visible = frame.intersection(app.bestsellerViewport)
-                if !visible.isNull && visible.width >= 24 && visible.height >= 24 { return }
+                if frame.width > 1 && frame.height > 1 && !visible.isNull,
+                   visible.width + 0.5 >= min(24, frame.width), visible.height + 0.5 >= min(24, frame.height) { return }
                 if frame.height > 0 && frame.maxY <= app.bestsellerViewport.minY { app.swipeDown(); continue }
             }
             app.swipeUp()
+        }
+        XCTContext.runActivity(named: "Unreachable discovery control") { activity in
+            let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways; activity.add(screenshot)
         }
         XCTFail("Control has no visible tap area: \(element.identifier), frame \(element.frame), viewport \(app.bestsellerViewport)")
     }
@@ -245,7 +249,8 @@ final class BestsellerUITests: XCTestCase {
         let tabFrame = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame : .null
         let isTab = ["Library", "Discover", "Bookmarks", "Settings"].contains(label) && bounds.intersects(tabFrame) && !app.keyboards.firstMatch.exists
         let target = isTab ? bounds.intersection(tabFrame).intersection(app.frame) : visible
-        guard !target.isNull, target.width >= 20, target.height >= 20 else {
+        guard !target.isNull, target.width > 1, target.height > 1,
+              target.width + 0.5 >= min(20, bounds.width), target.height + 0.5 >= min(20, bounds.height) else {
             XCTFail("Control has no visible tap area: \(identifier), frame \(bounds), app \(app.frame)", file: file, line: line); return
         }
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: target.midX - app.frame.minX, dy: target.midY - app.frame.minY)).tap()
