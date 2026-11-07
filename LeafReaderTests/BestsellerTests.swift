@@ -223,12 +223,16 @@ final class BestsellerFeedTests: XCTestCase {
         let catalog = ZLibraryStore(defaults: d, credentials: credentials, client: BestsellerCatalog(), discoversFromLibrary: false)
         store.showingBestsellers = true; await store.load()
         catalog.show(query: "Unrelated global search")
-        store.catalogSearch = BestsellerSearchContext(query: "The Rush", books: [edition(title: "The Rush")], status: [])
+        store.catalogSearch = BestsellerSearchContext(generation: catalog.matchingContextID, query: "The Rush", books: [edition(title: "The Rush")], status: [])
         let screen = ChatScreen.discover(catalog, library: library, bestsellers: store)
         let view = screen.view(5, true)
         XCTAssertEqual(view["list"] as? String, "Search results"); XCTAssertEqual(view["search"] as? String, "The Rush")
         XCTAssertEqual((view["items"] as? [[String: Any]])?.first?["title"] as? String, "The Rush")
         let missing = try await screen.details(2, true); XCTAssertNil(missing)
+        let current = store.catalogSearch
+        store.catalogSearch = BestsellerSearchContext(generation: UUID(), query: "Previous account query", books: [edition(title: "Previous account book")], status: [])
+        XCTAssertNotEqual(screen.view(5, true)["search"] as? String, "Previous account query")
+        store.catalogSearch = current
         let selected = edition(title: "A selected edition"); catalog.beginViewing(selected)
         XCTAssertEqual((screen.view(5, true)["open_book"] as? [String: Any])?["title"] as? String, "A selected edition")
         catalog.endViewing(selected); store.catalogSearch = nil; catalog.show(.popular)

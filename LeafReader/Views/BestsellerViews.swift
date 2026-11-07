@@ -258,6 +258,7 @@ private struct BestsellerCatalogSearch: View {
     @State private var submittedQuery = ""
     @State private var hasSearched = false
     @State private var searchTask: Task<Void, Never>?
+    @State private var searchContext: UUID?
     @Environment(\.leafTheme) private var theme
     var body: some View {
         List {
@@ -289,7 +290,12 @@ private struct BestsellerCatalogSearch: View {
                 }
             }
         }.leafFormStyle().navigationTitle("Search Z-Library").navigationBarTitleDisplayMode(.inline)
-            .task {
+            .task(id: catalog.matchingContextID) {
+                if searchContext != catalog.matchingContextID {
+                    request = UUID(); searchTask?.cancel(); searchTask = nil
+                    hasSearched = false; loading = false; results = []; error = nil
+                    searchContext = catalog.matchingContextID
+                }
                 if !hasSearched { if query.isEmpty { query = book.title + " " + book.author }; startSearch() }
                 else { publishContext() }
             }
@@ -312,7 +318,7 @@ private struct BestsellerCatalogSearch: View {
         catch { if request == id && !ZLibraryStore.isCancellation(error) { self.error = "The catalog could not be searched. Check your Z-Library connection and try again." } }
     }
     private func publishContext() {
-        discovery.catalogSearch = BestsellerSearchContext(query: submittedQuery, books: results,
+        discovery.catalogSearch = BestsellerSearchContext(generation: catalog.matchingContextID, query: submittedQuery, books: results,
             status: loading ? ["Searching Z-Library…"] : error.map { [$0] } ?? [])
     }
 }

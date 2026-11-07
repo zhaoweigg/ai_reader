@@ -2,6 +2,7 @@ import Foundation
 import Combine
 
 struct BestsellerSearchContext {
+    let generation: UUID
     let query: String
     let books: [ZLibraryBook]
     let status: [String]

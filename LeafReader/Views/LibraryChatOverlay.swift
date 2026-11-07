@@ -165,7 +165,7 @@ extension ChatScreen {
     /// Discover's books as its grid shows them, row by row from the top left.
     @MainActor static func discover(_ catalog: ZLibraryStore, library: LibraryStore, bestsellers: BestsellerStore? = nil) -> ChatScreen {
         ChatScreen(name: "Discover", view: { limit, _ in
-            if let search = bestsellers?.catalogSearch, catalog.viewingBook == nil {
+            if let search = bestsellers?.catalogSearch, search.generation == catalog.matchingContextID, catalog.viewingBook == nil {
                 var view = catalogView(search.books, query: search.query, feed: catalog.feed, order: .bestMatch,
                     status: search.status, canLoadMore: false, owned: Set(library.books.compactMap(\.catalogSource)), limit: limit)
                 view["list"] = "Search results"
@@ -186,7 +186,7 @@ extension ChatScreen {
                         owned: Set(library.books.compactMap(\.catalogSource)), limit: limit,
                         open: catalog.viewingBook.map(catalog.latest))
         }, details: { rank, _ in
-            if let search = bestsellers?.catalogSearch, catalog.viewingBook == nil {
+            if let search = bestsellers?.catalogSearch, search.generation == catalog.matchingContextID, catalog.viewingBook == nil {
                 guard search.books.indices.contains(rank - 1) else { return nil }
                 let book = try await catalog.details(search.books[rank - 1], description: true)
                 var item = catalogItem(book, rank: rank, owned: library.books.contains { $0.catalogSource == book.sourceID })
