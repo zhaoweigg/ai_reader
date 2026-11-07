@@ -9,10 +9,11 @@ struct SyncFolder {
     var covers: URL { root.appendingPathComponent("Covers", isDirectory: true) }
     var library: URL { root.appendingPathComponent("Library", isDirectory: true) }
     var chats: URL { root.appendingPathComponent("Chats", isDirectory: true) }
+    var voiceNotes: URL { root.appendingPathComponent("VoiceNotes", isDirectory: true) }
     var settings: URL { root.appendingPathComponent("Settings.json") }
 
     func prepare() throws {
-        for directory in [books, covers, library, chats] {
+        for directory in [books, covers, library, chats, voiceNotes] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
     }
@@ -85,14 +86,29 @@ struct SyncFolder {
     }
 
     /// Copies a file out of the folder, downloading it from iCloud first if needed.
-    func download(_ url: URL, to destination: URL) throws {
+    func download(_ url: URL, to destination: URL, maximumBytes: Int64? = nil) throws {
         try? FileManager.default.startDownloadingUbiquitousItem(at: url)
         var result: Result<Void, Error> = .success(())
         var coordinationError: NSError?
         NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { url in
             result = Result {
                 let staging = destination.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString).download")
-                try FileManager.default.copyItem(at: url, to: staging)
+                defer { try? FileManager.default.removeItem(at: staging) }
+                if let maximumBytes {
+                    guard maximumBytes > 0, maximumBytes <= VoiceNote.maximumBytes else { throw VoiceNoteError.invalidRecording }
+                    let input = try FileHandle(forReadingFrom: url)
+                    defer { try? input.close() }
+                    guard FileManager.default.createFile(atPath: staging.path, contents: nil) else { throw VoiceNoteError.unavailable }
+                    let output = try FileHandle(forWritingTo: staging)
+                    defer { try? output.close() }
+                    var count: Int64 = 0
+                    while let chunk = try input.read(upToCount: 64 * 1024), !chunk.isEmpty {
+                        count += Int64(chunk.count)
+                        guard count <= maximumBytes else { throw VoiceNoteError.invalidRecording }
+                        try output.write(contentsOf: chunk)
+                    }
+                    try output.close()
+                } else { try FileManager.default.copyItem(at: url, to: staging) }
                 if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
                 try FileManager.default.moveItem(at: staging, to: destination)
             }

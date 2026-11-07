@@ -28,7 +28,7 @@ struct ReaderSelectionRequest: Identifiable, Equatable {
     let context: ReadingChatContext
 }
 
-enum ReaderAnnotationIntent: Equatable { case highlight, note }
+enum ReaderAnnotationIntent: Equatable { case highlight, note, voiceNote }
 struct ReaderListeningRequest: Equatable { let id = UUID(); let locator: String }
 
 /// What a book surface asks the reader model when its native selection settles.
@@ -58,6 +58,7 @@ struct ReaderSelectionHooks {
     if let annotation, let annotate = hooks.annotate {
         actions.append(ReaderSelectionAction(title: "Highlight", image: "highlighter", id: "highlight") { annotate(.highlight, annotation) })
         actions.append(ReaderSelectionAction(title: "Add Note", compactTitle: "Note", image: "square.and.pencil", id: "note") { annotate(.note, annotation) })
+        actions.append(ReaderSelectionAction(title: "Voice Note", compactTitle: "Voice", image: "mic", id: "voiceNote") { annotate(.voiceNote, annotation) })
     }
     let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view

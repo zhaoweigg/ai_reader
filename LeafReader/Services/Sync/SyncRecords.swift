@@ -20,6 +20,9 @@ struct SyncedBook: Codable, Equatable {
     var annotations: [BookAnnotation]
     var deletedBookmarks: [UUID: Date] = [:]
     var deletedAnnotations: [UUID: Date] = [:]
+    /// Media cleanup is retried after a failed iCloud deletion, even once the
+    /// annotation no longer contains the old clip's identity.
+    var deletedVoiceNotes: [UUID: Date]?
     var removedAt: Date?
 
     init(_ book: Book) {
@@ -50,6 +53,8 @@ struct SyncedBook: Codable, Equatable {
         result.removedAt = [removedAt, other.removedAt].compactMap { $0 }.max()
         result.deletedBookmarks = deletedBookmarks.merging(other.deletedBookmarks, uniquingKeysWith: max)
         result.deletedAnnotations = deletedAnnotations.merging(other.deletedAnnotations, uniquingKeysWith: max)
+        let deletedAudio = (deletedVoiceNotes ?? [:]).merging(other.deletedVoiceNotes ?? [:], uniquingKeysWith: max)
+        result.deletedVoiceNotes = deletedAudio.isEmpty ? nil : deletedAudio
 
         var bookmarks = self.bookmarks
         for mark in other.bookmarks where !bookmarks.contains(where: { $0.id == mark.id }) { bookmarks.append(mark) }
@@ -59,7 +64,8 @@ struct SyncedBook: Codable, Equatable {
         var annotations = self.annotations
         for note in other.annotations {
             if let index = annotations.firstIndex(where: { $0.id == note.id }) {
-                if note.updatedAt > annotations[index].updatedAt { annotations[index] = note }
+                let current = annotations[index]
+                annotations[index] = current.mergingEdits(from: note)
             } else { annotations.append(note) }
         }
         result.annotations = annotations.filter { note in result.deletedAnnotations[note.id].map { $0 < note.updatedAt } ?? true }

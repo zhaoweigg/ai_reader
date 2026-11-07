@@ -47,6 +47,112 @@ final class ICloudSyncTests: XCTestCase {
         BookAnnotation(text: text, locator: "epubcfi(/6/2!/4/\(Int(fraction * 100)))", chapter: "One", fraction: fraction)
     }
 
+    private func voiceNote(_ device: Device, book: Book) async throws -> (BookAnnotation, URL) {
+        let draft = device.root.appendingPathComponent("recording.m4a")
+        try VoiceNoteFixture.write(to: draft, duration: 1.4)
+        var note = annotation("A spoken thought 中文", at: 0.3)
+        note.note = "Keep the written note too"
+        note.voiceNote = try VoiceNoteFiles.inspect(draft, id: UUID()); note.voiceNoteUpdatedAt = Date()
+        try await device.library.saveAnnotation(note, bookID: book.id, voiceDraft: draft)
+        return (note, draft)
+    }
+
+    func testVoiceNotesRestoreOnANewDeviceWithoutDownloadingTheBook() async throws {
+        let phone = try device(), tablet = try device(keepBooks: false)
+        let book = try await importBook(phone), (note, _) = try await voiceNote(phone, book: book)
+        await phone.sync.syncNow(); XCTAssertEqual(phone.sync.status, .upToDate)
+        await tablet.sync.syncNow(); XCTAssertEqual(tablet.sync.status, .upToDate)
+        let restored = try XCTUnwrap(tablet.library.books.first)
+        XCTAssertEqual(restored.annotations, [note]); XCTAssertFalse(tablet.library.isDownloaded(restored))
+        let clip = try XCTUnwrap(restored.annotations.first?.voiceNote)
+        try VoiceNoteFiles.verify(try XCTUnwrap(tablet.library.voiceNoteURL(clip)), note: clip)
+        XCTAssertEqual(clip.id, note.voiceNote?.id)
+        XCTAssertNotEqual(restored.id, book.id, "Media IDs survive local book-ID changes")
+    }
+
+    func testConcurrentTextAndAudioEditsBothArriveAndAudioRemovalDoesNotResurrect() async throws {
+        let phone = try device(), tablet = try device()
+        let book = try await importBook(phone)
+        var base = annotation("Concurrent note", at: 0.3); base.note = "Original"
+        base.updatedAt = Date().addingTimeInterval(-30)
+        try phone.library.saveAnnotation(base, bookID: book.id)
+        await phone.sync.syncNow(); await tablet.sync.syncNow()
+        let tabletBook = try XCTUnwrap(tablet.library.books.first)
+        var text = base; text.note = "Text edited on tablet"
+        text.contentUpdatedAt = base.updatedAt.addingTimeInterval(1); text.updatedAt = text.contentUpdatedAt!
+        try tablet.library.saveAnnotation(text, bookID: tabletBook.id)
+        let draft = phone.root.appendingPathComponent("concurrent.m4a"); try VoiceNoteFixture.write(to: draft)
+        var audio = base; audio.voiceNote = try VoiceNoteFiles.inspect(draft, id: UUID())
+        audio.voiceNoteUpdatedAt = base.updatedAt.addingTimeInterval(2); audio.updatedAt = audio.voiceNoteUpdatedAt!
+        audio.contentUpdatedAt = base.updatedAt
+        try await phone.library.saveAnnotation(audio, bookID: book.id, voiceDraft: draft)
+        await phone.sync.syncNow(); await tablet.sync.syncNow(); await phone.sync.syncNow()
+        for current in [phone.library.books.first, tablet.library.books.first] {
+            XCTAssertEqual(current?.annotations.first?.note, text.note)
+            XCTAssertEqual(current?.annotations.first?.voiceNote, audio.voiceNote)
+        }
+        var removed = try XCTUnwrap(tablet.library.books.first?.annotations.first)
+        removed.voiceNote = nil; removed.voiceNoteUpdatedAt = Date(); removed.updatedAt = Date()
+        try tablet.library.saveAnnotation(removed, bookID: tabletBook.id)
+        await tablet.sync.syncNow()
+        let clip = try XCTUnwrap(audio.voiceNote)
+        let cloud = folder.appendingPathComponent("VoiceNotes/" + clip.fileName)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cloud.path))
+        // A previously failed cleanup/stale upload is retried from the durable
+        // media tombstone even after the record has already dropped its clip.
+        try FileManager.default.copyItem(at: draft, to: cloud)
+        let inFlight = folder.appendingPathComponent("VoiceNotes/" + UUID().uuidString.lowercased() + ".m4a")
+        try FileManager.default.copyItem(at: draft, to: inFlight)
+        await tablet.sync.syncNow()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cloud.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: inFlight.path), "Never collect a different device's in-flight upload")
+        await phone.sync.syncNow(); await tablet.sync.syncNow()
+        XCTAssertNil(phone.library.books.first?.annotations.first?.voiceNote)
+        XCTAssertEqual(phone.library.books.first?.annotations.first?.note, text.note)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(phone.library.voiceNoteURL(clip)).path))
+    }
+
+    func testBadCloudAudioCannotReplaceLocalNotesAndCanBeRetriedAfterRepair() async throws {
+        let phone = try device(), tablet = try device(keepBooks: false)
+        let book = try await importBook(phone), (note, source) = try await voiceNote(phone, book: book)
+        await phone.sync.syncNow()
+        let clip = try XCTUnwrap(note.voiceNote), cloud = folder.appendingPathComponent("VoiceNotes/" + clip.fileName)
+        try Data("Invalid recording".utf8).write(to: cloud, options: .atomic)
+        await tablet.sync.syncNow()
+        if case .failed = tablet.sync.status { } else { XCTFail("Corrupt media must fail the sync") }
+        XCTAssertTrue(tablet.library.books.isEmpty, "Do not adopt a record pointing at unverified audio")
+        try VoiceNoteFiles.verify(try XCTUnwrap(phone.library.voiceNoteURL(clip)), note: clip)
+        try FileManager.default.removeItem(at: cloud); try FileManager.default.copyItem(at: source, to: cloud)
+        await tablet.sync.syncNow(); XCTAssertEqual(tablet.sync.status, .upToDate)
+        XCTAssertEqual(tablet.library.books.first?.annotations, [note])
+    }
+
+    func testDeletingABookRemovesItsAudioAndReimportDoesNotRestoreMissingMedia() async throws {
+        let phone = try device(), tablet = try device()
+        let book = try await importBook(phone), (note, _) = try await voiceNote(phone, book: book)
+        await phone.sync.syncNow(); await tablet.sync.syncNow()
+        let clip = try XCTUnwrap(note.voiceNote), cloud = folder.appendingPathComponent("VoiceNotes/" + clip.fileName)
+        phone.library.remove(book.id)
+        await phone.sync.syncNow(); await tablet.sync.syncNow()
+        XCTAssertEqual(phone.sync.status, .upToDate); XCTAssertEqual(tablet.sync.status, .upToDate)
+        XCTAssertTrue(tablet.library.books.isEmpty); XCTAssertFalse(FileManager.default.fileExists(atPath: cloud.path))
+        _ = try await importBook(phone)
+        await phone.sync.syncNow(); await tablet.sync.syncNow()
+        XCTAssertEqual(phone.sync.status, .upToDate); XCTAssertEqual(tablet.sync.status, .upToDate)
+        XCTAssertTrue(tablet.library.books.first?.annotations.allSatisfy { $0.voiceNote == nil } == true)
+    }
+
+    func testVoiceDownloadsAreBoundedAndNeverReplaceAnExistingFileOnFailure() throws {
+        let target = try device(), path = folder.appendingPathComponent("too-large.m4a")
+        try Data(repeating: 7, count: 100_000).write(to: path)
+        let destination = target.root.appendingPathComponent("kept.m4a"), kept = Data("Keep this".utf8)
+        try kept.write(to: destination)
+        XCTAssertThrowsError(try SyncFolder(root: folder).download(path, to: destination, maximumBytes: 100))
+        XCTAssertEqual(try Data(contentsOf: destination), kept)
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: target.root.path).filter { $0.hasSuffix(".download") }
+        XCTAssertTrue(leftovers.isEmpty)
+    }
+
     func testAutomaticSyncSettlesAndStillSendsLocalChanges() async throws {
         let phone = try device(automaticSync: true)
         defer { phone.sync.disconnect() }

@@ -29,15 +29,15 @@ targets:
       path: LeafReader/Info.plist
       properties:
         CFBundleDisplayName: Leaf
-        CFBundleShortVersionString: "1.34.8"
-        CFBundleVersion: "136"
+        CFBundleShortVersionString: "1.36.0"
+        CFBundleVersion: "138"
         UIBackgroundModes: [audio]
         UIAppFonts:
           - Reader/fonts/LXGWWenKaiLite-Regular.ttf
           - Reader/fonts/NotoSerifCJKsc-Regular.otf
           - Reader/fonts/LXGWNeoZhiSong.ttf
           - Reader/fonts/LXGWNeoXiHei.ttf
-        NSMicrophoneUsageDescription: Use the microphone to dictate an editable question in Ask Leaf. Recording stops when you stop dictation or leave the chat.
+        NSMicrophoneUsageDescription: Record voice notes on book passages or dictate questions in Ask Leaf. Recording starts only when you choose it and stops when you stop or leave the recording view.
         NSPhotoLibraryAddUsageDescription: Save pictures that Ask Leaf draws for you to your photo library when you choose Save Image.
         NSSpeechRecognitionUsageDescription: Turn your voice into text for Ask Leaf. Speech may be processed by Apple when on-device recognition is unavailable.
         UILaunchScreen: {}

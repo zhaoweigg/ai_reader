@@ -89,6 +89,10 @@ Tap a highlight to edit its color or note. **Saved → Highlights & notes** list
 
 Annotations are local to the imported book and survive closing the book and app relaunches. Exact CFI ranges keep web-book highlights attached to text through reading-flow, font, margin, and theme changes. PDF highlights use saved character ranges and leave the imported PDF unchanged. Rendering uses overlays and a bounded page/chapter window; it does not wrap or rewrite book text. Older libraries without annotations remain readable. Annotation saves update the visible library only after an atomic disk write succeeds.
 
+Choose **Voice Note** on a selected passage to record an audio note, with an optional written note. Tap **Record voice note**, **Stop recording**, then Play to preview before **Save**. Recording requires microphone permission and stops after ten minutes, when Leaf leaves the foreground, or when another Leaf audio feature starts. Opening the editor never starts recording. Playback and recording pause book narration; voice recordings are not transcribed or sent to AI providers.
+
+Saved audio can be played from **Saved → Highlights & notes** and the all-book **Bookmarks** list. Edit a note to remove its audio or remove and record a replacement; **Cancel** preserves the saved version. Removing audio keeps the written note and highlight, while deleting the annotation removes both. Clips are bounded AAC files stored separately from the library manifest. With iCloud sync enabled, verified audio attachments sync with their passages, including to a new phone whose book files remain in iCloud. Concurrent text and audio edits merge independently; explicit audio removals stay removed.
+
 ## AI chat setup and provider architecture
 
 Open **Settings → AI settings** (also available in the chat’s options menu). Anthropic is initially selected with `claude-haiku-5-5`; a menu also offers `claude-haiku-4-5`, and any model ID can be entered directly. Add your own Anthropic API key, then tap **Save AI settings**. No credentials are bundled or read from developer environment files. API billing and model access belong to the selected provider account.

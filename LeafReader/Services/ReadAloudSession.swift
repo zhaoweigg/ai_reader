@@ -426,6 +426,9 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
         notificationTokens.append(NotificationCenter.default.addObserver(forName: ChatDictationSession.willRecord, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pause() }
         })
+        notificationTokens.append(NotificationCenter.default.addObserver(forName: VoiceNoteSession.willActivate, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pause() }
+        })
         notificationTokens.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
             guard (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue else { return }
             Task { @MainActor in self?.pause() }
