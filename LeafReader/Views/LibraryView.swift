@@ -65,7 +65,7 @@ struct LibraryView: View {
                     if let book = featured, query.isEmpty, filter == .all, format == nil {
                         featuredBook(book)
                     }
-                    if !shelf.isEmpty, query.isEmpty, filter == .all, format == nil {
+                    if (!shelf.isEmpty || catalog.shelfLoading || catalog.shelfError != nil || catalog.connected && catalog.shelf.isEmpty), query.isEmpty, filter == .all, format == nil {
                         discoverShelf
                     }
                     if discovery.allowsAutomaticShelf, query.isEmpty, filter == .all, format == nil {
@@ -152,6 +152,11 @@ struct LibraryView: View {
             }
             // Searching hides the featured book and shelf; keep the search field in view.
             .onChange(of: query.isEmpty) { _, empty in if !empty { proxy.scrollTo("libraryHeader", anchor: .top) } }
+            .refreshable {
+                async let catalogRefresh: Void = catalog.loadShelf(force: true)
+                async let bestsellerRefresh: Void = discovery.loadShelf(force: true)
+                _ = await (catalogRefresh, bestsellerRefresh)
+            }
             }
             .background(theme.canvas)
             .toolbarBackground(theme.canvas, for: .navigationBar)
@@ -173,8 +178,11 @@ struct LibraryView: View {
                         .disabled(library.isImporting).accessibilityIdentifier("importBooks")
                 }
             }
-            .task(id: catalog.connected) { await catalog.loadShelf() }
+            .task(id: catalog.shelfContext) { await catalog.loadShelf() }
             .task { await discovery.loadShelf() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await catalog.loadShelf() } }
+            }
             .sheet(item: $bestsellerBook) { entry in
                 NavigationStack {
                     BestsellerBookView(book: entry, close: { bestsellerBook = nil })
@@ -264,7 +272,18 @@ struct LibraryView: View {
                 Spacer()
                 Button("See all") { onDiscover(catalog.shelfFeed) }.font(.subheadline.weight(.semibold)).accessibilityIdentifier("discoverSeeAll")
             }
-            catalogRow(shelf, identifier: "discoverShelfBook")
+            if catalog.shelfLoading { ProgressView("Refreshing Z-Library…").font(.caption).accessibilityIdentifier("discoverShelfLoading") }
+            if let error = catalog.shelfError {
+                Text(error).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("discoverShelfError")
+                HStack {
+                    Button("Try again") { Task { await catalog.loadShelf(force: true) } }.accessibilityIdentifier("retryDiscoverShelf")
+                    Button("Open in Discover") { onDiscover(catalog.shelfFeed) }
+                }.font(.caption).disabled(catalog.shelfLoading)
+            } else if shelf.isEmpty, !catalog.shelfLoading, catalog.shelf.isEmpty {
+                Text("Z-Library has no recommendations for this account yet.").font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("discoverShelfEmpty")
+            }
+            if !shelf.isEmpty { catalogRow(shelf, identifier: "discoverShelfBook") }
         }
     }
     private var catalogSearch: some View {

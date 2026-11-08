@@ -65,7 +65,7 @@ struct BestsellerSearchContext {
     }
 
     func load(force: Bool = false) async { await load(source: source, force: force) }
-    func loadShelf() async { if allowsAutomaticShelf { await load() } }
+    func loadShelf(force: Bool = false) async { if allowsAutomaticShelf { await load(force: force) } }
     func load(source requested: BestsellerSource, force: Bool = false) async {
         if let request = requests[requested] { await request.1.value; return }
         if !force, let saved = lists.first(where: { $0.source == requested }) {

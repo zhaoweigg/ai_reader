@@ -26,6 +26,12 @@ import WebKit
     }
 }
 
+struct ZLibraryShelfContext: Hashable {
+    let generation: UUID
+    let origin: URL
+    let connected: Bool
+}
+
 @MainActor
 final class ZLibraryStore: ObservableObject {
     @Published private(set) var origin: ZLibraryOrigin
@@ -55,8 +61,13 @@ final class ZLibraryStore: ObservableObject {
     @Published private(set) var shelfFeed: ZLibraryFeed = .popular
     /// Whether the library may request books before the user opens Discover.
     let discoversFromLibrary: Bool
-    private var shelfTask: Task<Void, Never>?
+    @Published private(set) var shelfLoading = false
+    @Published private(set) var shelfError: String?
+    var shelfContext: ZLibraryShelfContext { .init(generation: generation, origin: origin.url, connected: connected) }
+    private var shelfTask: (id: UUID, context: ZLibraryShelfContext, task: Task<Void, Never>)?
     private var shelfGeneration: UUID?
+    private var shelfRetryAfter: Date?
+    private var shelfAttemptContext: ZLibraryShelfContext?
     private struct ShelfCache: Codable {
         let origin: String
         let account: String?
@@ -89,6 +100,7 @@ final class ZLibraryStore: ObservableObject {
         signInData = data; return data
     }
     private let defaults: UserDefaults
+    private let now: () -> Date
     private let credentials: any ChatCredentialStore
     private let clientOverride: (any ZLibraryServing)?
     private var client: any ZLibraryServing { clientOverride ?? ZLibraryClient(transport: websiteBrowser) }
@@ -151,8 +163,8 @@ final class ZLibraryStore: ObservableObject {
     #else
     let isPreview = false
     #endif
-    init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(service: "com.weizhao.leafreader.zlibrary"), client: (any ZLibraryServing)? = nil, discoversFromLibrary: Bool = true) {
-        self.defaults = defaults; self.credentials = credentials; self.clientOverride = client
+    init(defaults: UserDefaults = .standard, credentials: any ChatCredentialStore = KeychainChatCredentials(service: "com.weizhao.leafreader.zlibrary"), client: (any ZLibraryServing)? = nil, discoversFromLibrary: Bool = true, now: @escaping () -> Date = Date.init) {
+        self.defaults = defaults; self.now = now; self.credentials = credentials; self.clientOverride = client
         self.discoversFromLibrary = discoversFromLibrary
         feed = ZLibraryFeed(rawValue: defaults.string(forKey: "zlibrary.feed") ?? "") ?? .popular
         searchOrder = ZLibrarySearchOrder(rawValue: defaults.string(forKey: "zlibrary.searchOrder") ?? "") ?? .popular
@@ -193,7 +205,8 @@ final class ZLibraryStore: ObservableObject {
         books = []; error = nil; requestDiagnostic = nil; websiteAccessNeeded = false
         recommendationConnectionRequired = false
         loading = false; verifying = false; downloadingID = nil; progress = nil
-        shelfTask?.cancel(); shelfTask = nil; shelfGeneration = nil
+        shelfTask?.task.cancel(); shelfTask = nil; shelfGeneration = nil
+        shelfLoading = false; shelfError = nil; shelfRetryAfter = nil; shelfAttemptContext = nil
         shelf = []; defaults.removeObject(forKey: "zlibrary.shelf")
     }
     func changeAddress(_ address: String) async throws {
@@ -347,44 +360,82 @@ final class ZLibraryStore: ObservableObject {
     func show(query: String) {
         cancelCatalogLoad(); activeQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    /// Loads the shelf once per account. It reuses a Discover list already loaded
-    /// for the same feed, and keeps its saved books when a request fails; Discover
-    /// is where failures are explained.
-    func loadShelf() async {
-        guard discoversFromLibrary, shelfGeneration != generation else { return }
-        if let shelfTask { return await shelfTask.value }
-        let token = generation, source = origin
+    /// Library refreshes share one current request and never replace Discover's
+    /// selected feed, query, pagination or errors. Explicit refresh bypasses snapshots.
+    func loadShelf(force: Bool = false) async {
+        guard discoversFromLibrary else { return }
+        let context = shelfContext
+        if let pending = shelfTask {
+            if pending.context == context { await pending.task.value; return }
+            pending.task.cancel(); shelfTask = nil; shelfLoading = false
+        }
+        let target: ZLibraryFeed = session == nil ? .popular : .recommended
+        if !force {
+            if shelfGeneration == generation, shelfFeed == target { return }
+            // Repeated appearances may retry a transient error, with a short
+            // cooldown. Reconnection and explicit Try again bypass this pause.
+            if shelfAttemptContext == context, let retry = shelfRetryAfter, now() < retry { return }
+        }
+        let token = generation, source = origin, id = UUID()
+        let refresh = force || shelfError != nil
+        shelfLoading = true; shelfError = nil
         let task = Task<Void, Never> { [weak self] in
             guard let self else { return }
+            defer {
+                if self.shelfTask?.id == id { self.shelfTask = nil; self.shelfLoading = false }
+            }
             do {
+                try Task.checkCancellation()
+                guard token == self.generation, source == self.origin, self.shelfTask?.id == id else { return }
                 if self.session == nil {
                     self.session = try self.savedSession(for: source)
                     self.websiteUserAgent = self.session?.userAgent
                 }
                 let saved = self.session, feed: ZLibraryFeed = saved == nil ? .popular : .recommended
+                self.shelfFeed = feed
                 let books: [ZLibraryBook]
-                if let listed = self.snapshots[CatalogKey("", self.searchOrder, feed: feed)] {
+                if !refresh, let listed = self.snapshots[CatalogKey("", self.searchOrder, feed: feed)] {
                     books = listed.books
                 } else {
                     try await self.prepareCatalogWebsiteContext(request: UUID())
-                    try Task.checkCancellation(); guard token == self.generation else { return }
-                    if let saved, feed == .recommended {
-                        books = try await self.client.recommended(origin: source, session: saved)
-                    } else { books = try await self.client.popular(origin: source, session: saved) }
+                    try Task.checkCancellation()
+                    guard token == self.generation, source == self.origin, self.shelfTask?.id == id else { return }
+                    if let saved, feed == .recommended { books = try await self.client.recommended(origin: source, session: saved) }
+                    else { books = try await self.client.popular(origin: source, session: saved) }
                 }
-                try Task.checkCancellation(); guard token == self.generation else { return }
-                self.shelfGeneration = token; self.shelfFeed = feed
-                self.shelf = books.prefix(12).map { book in self.detailCache[book.id].map { book.fillingMissingDetails(from: $0) } ?? book }
-                let cache = ShelfCache(origin: source.url.absoluteString, account: saved?.userID, feed: feed.rawValue, books: self.shelf)
-                self.defaults.set(try? JSONEncoder().encode(cache), forKey: "zlibrary.shelf")
+                try Task.checkCancellation()
+                guard token == self.generation, source == self.origin, self.shelfTask?.id == id else { return }
+                self.cacheShelf(books, feed: feed, source: source, account: saved?.userID)
             } catch {
-                // One attempt per account and launch; reopening the library must not repeat it.
-                if token == self.generation && !Task.isCancelled && !Self.isCancellation(error) { self.shelfGeneration = token }
+                guard token == self.generation, source == self.origin, self.shelfTask?.id == id,
+                      !Task.isCancelled, !Self.isCancellation(error) else { return }
+                self.shelfGeneration = nil
+                if ZLibraryRequestFailure.issue(error) == .signInRequired {
+                    self.connected = false
+                    self.shelfError = "Reconnect Z-Library in Discover to refresh recommendations."
+                } else {
+                    self.shelfError = "Couldn’t refresh Z-Library books. Try again, or check the connection in Discover."
+                }
+                self.shelfAttemptContext = self.shelfContext
+                self.shelfRetryAfter = self.now().addingTimeInterval(30)
             }
         }
-        shelfTask = task
+        shelfTask = (id, context, task)
         await task.value
-        if token == generation { shelfTask = nil }
+    }
+    private func cacheShelf(_ books: [ZLibraryBook], feed: ZLibraryFeed, source: ZLibraryOrigin, account: String?) {
+        shelfGeneration = generation; shelfFeed = feed
+        shelf = books.prefix(12).map { book in detailCache[book.id].map { book.fillingMissingDetails(from: $0) } ?? book }
+        shelfError = nil; shelfRetryAfter = nil; shelfAttemptContext = nil
+        let cache = ShelfCache(origin: source.url.absoluteString, account: account, feed: feed.rawValue, books: shelf)
+        defaults.set(try? JSONEncoder().encode(cache), forKey: "zlibrary.shelf")
+    }
+    /// A successful Discover refresh also repairs a failed/empty Library shelf.
+    /// Supersede older shelf work so its response cannot overwrite this newer list.
+    private func adoptDiscoverShelf(_ books: [ZLibraryBook], feed: ZLibraryFeed, source: ZLibraryOrigin) {
+        guard discoversFromLibrary, feed == (session == nil ? .popular : .recommended) else { return }
+        shelfTask?.task.cancel(); shelfTask = nil; shelfLoading = false
+        cacheShelf(books, feed: feed, source: source, account: session?.userID)
     }
     /// First-page matches for a library search. Discover still performs its own
     /// search, so it verifies the account and keeps its pagination state.
@@ -495,6 +546,7 @@ final class ZLibraryStore: ObservableObject {
             let key = CatalogKey(query, order, feed: feed)
             snapshots[key] = CatalogSnapshot(books: books, page: searchPage, canLoadMore: canLoadMore, limitReached: searchLimitReached)
             touch(key); showingSavedResults = false
+            if query.isEmpty { adoptDiscoverShelf(books, feed: feed, source: source) }
         } catch {
             traceCatalogLoad("failed current=\(token == generation && request == catalogRequest) cancelled=\(Task.isCancelled || Self.isCancellation(error))", request: request)
             if token == generation && request == catalogRequest && !Task.isCancelled && !Self.isCancellation(error) {
@@ -692,6 +744,16 @@ final class ZLibraryStore: ObservableObject {
 #if DEBUG
 struct UITestZLibraryClient: ZLibraryServing {
     func recommended(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> [ZLibraryBook] {
+        if UITesting.flag("LEAF_UI_ZLIB_SHELF_RETRY"), !(await UITestCatalogRequestHistory.shared.repeated("library-shelf-retry")) {
+            throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "Offline shelf retry fixture")
+        }
+        if UITesting.flag("LEAF_UI_ZLIB_RECOMMENDATIONS_EMPTY") { return [] }
+        if UITesting.flag("LEAF_UI_ZLIB_SHELF_REFRESH") {
+            let refreshed = await UITestCatalogRequestHistory.shared.repeated("library-shelf-refresh")
+            return [ZLibraryBook(remoteID: refreshed ? "shelf-refreshed" : "shelf-initial", hash: "shelf-fixture",
+                title: refreshed ? "Refreshed recommendations" : "First recommendations", author: "Leaf Editions",
+                fileExtension: "txt", size: "18 KB", language: "English", year: "2026", coverURL: nil)]
+        }
         if UITesting.flag("LEAF_UI_BESTSELLERS_MOCK") { return UITestBestsellerClient.samples().reversed().flatMap(UITestBestsellerClient.editions) }
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
         try await guardRepeatedRequest("recommended-" + session.userID, path: "user/book/recommended", session: session)
