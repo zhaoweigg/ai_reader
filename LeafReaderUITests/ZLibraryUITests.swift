@@ -25,12 +25,13 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor private func openDiscover(_ app: XCUIApplication) {
         let tab = app.tabBars.buttons["Discover"]
-        XCTAssertTrue(tab.waitForExistence(timeout: 10)); tab.tap()
+        XCTAssertTrue(tab.waitForExistence(timeout: 10)); tab.leafTapVisible(in: app)
+        XCTAssertTrue(tab.isSelected)
     }
     @MainActor private func openSummaryBook(_ app:XCUIApplication) {
         openDiscover(app)
         let book = app.buttons["catalogBook-sample"]
-        XCTAssertTrue(book.waitForExistence(timeout:10)); book.tap()
+        XCTAssertTrue(book.waitForExistence(timeout:10)); book.leafTapVisible(in: app)
         XCTAssertTrue(app.staticTexts["catalogSummaryHeading"].waitForExistence(timeout:5))
     }
     @MainActor private func revealSummaryControl(_ control:XCUIElement,app:XCUIApplication) {
@@ -43,7 +44,7 @@ final class ZLibraryUITests: XCTestCase {
         let origin = app.coordinate(withNormalizedOffset:.zero)
         for _ in 0..<16 {
             let rect = control.frame
-            if control.isHittable && rect.minY >= top && rect.maxY <= bottom { return }
+            if rect.width > 1 && rect.height > 1 && rect.minY >= top && rect.maxY <= bottom { return }
             let upwards = rect.maxY > bottom
             let remaining = upwards ? rect.maxY - bottom : top - rect.minY
             let distance = max(18,min((bottom - top) * 0.6,remaining + 8))
@@ -61,7 +62,8 @@ final class ZLibraryUITests: XCTestCase {
         continueAfterFailure = false
         let app = launch(sceneGeometry:true,summary:"long")
         defer { setReaderOrientation(.portrait,app:app); app.terminate() }
-        app.tabBars.buttons["Settings"].tap(); app.buttons[theme + " theme"].tap()
+        app.tabBars.buttons["Settings"].leafTapVisible(in: app); XCTAssertTrue(app.tabBars.buttons["Settings"].isSelected)
+        app.buttons[theme + " theme"].leafTapVisible(in: app)
         openSummaryBook(app)
         let summary = app.staticTexts["catalogBookSummary"], toggle = app.buttons["toggleCatalogSummary"]
         XCTAssertTrue(toggle.waitForExistence(timeout:10)); XCTAssertEqual(toggle.value as? String,"Collapsed")
@@ -73,26 +75,27 @@ final class ZLibraryUITests: XCTestCase {
         // AX includes clipped decorative circles in the placeholder's bounds.
         // Inspect its rendered size in the screenshots instead of that union.
         XCTAssertTrue(cover.exists)
-        XCTAssertTrue(app.buttons["catalogAddBook"].isHittable)
+        let footer = app.buttons["catalogAddBook"]
+        XCTAssertTrue(footer.isEnabled); XCTAssertTrue(app.frame.contains(footer.frame)); XCTAssertGreaterThanOrEqual(footer.frame.height, 44)
         capture(theme + " compact catalog description portrait")
-        toggle.tap()
+        toggle.leafTapVisible(in: app)
         expectation(for:NSPredicate { _, _ in summary.frame.height > collapsed + 60 },evaluatedWith:summary); waitForExpectations(timeout:5)
         XCTAssertEqual(toggle.value as? String,"Expanded")
         capture(theme + " expanded catalog description portrait")
-        revealSummaryControl(toggle,app:app); toggle.tap()
+        revealSummaryControl(toggle,app:app); toggle.leafTapVisible(in: app)
         expectation(for:NSPredicate { _, _ in abs(summary.frame.height - collapsed) < 2 },evaluatedWith:summary); waitForExpectations(timeout:5)
         setReaderOrientation(.landscapeLeft,app:app)
         revealSummaryControl(toggle,app:app)
         XCTAssertEqual(toggle.value as? String,"Collapsed")
         XCTAssertGreaterThan(app.frame.width,app.frame.height)
-        XCTAssertTrue(app.buttons["catalogAddBook"].isHittable)
+        XCTAssertTrue(footer.isEnabled); XCTAssertTrue(app.frame.contains(footer.frame)); XCTAssertGreaterThanOrEqual(footer.frame.height, 44)
         capture(theme + " compact catalog description landscape")
-        toggle.tap(); XCTAssertEqual(toggle.value as? String,"Expanded")
+        toggle.leafTapVisible(in: app); XCTAssertEqual(toggle.value as? String,"Expanded")
         revealSummaryControl(toggle,app:app)
         capture(theme + " expanded catalog description landscape")
-        toggle.tap(); setReaderOrientation(.portrait,app:app)
-        app.navigationBars.buttons["Z-Library"].tap()
-        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:5)); app.buttons["catalogBook-sample"].tap()
+        toggle.leafTapVisible(in: app); setReaderOrientation(.portrait,app:app)
+        app.navigationBars.buttons["Z-Library"].leafTapVisible(in: app)
+        XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:5)); app.buttons["catalogBook-sample"].leafTapVisible(in: app)
         XCTAssertTrue(toggle.waitForExistence(timeout:5)); XCTAssertEqual(toggle.value as? String,"Collapsed")
         XCTAssertTrue(summary.label.hasSuffix("The final passage brings those observations together."))
     }
@@ -163,14 +166,14 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["zlibraryFeedTitle"].exists, "Details must load while still on the grid")
         capture("Async metadata popular Day portrait")
         let later = app.buttons["catalogBook-async10"]
-        for _ in 0..<7 where !later.exists || !later.isHittable { app.swipeUp() }
+        for _ in 0..<7 where !later.exists || !app.leafContentViewport.contains(later.frame) { app.leafDragContent(up: true) }
         _ = loaded("async10")
-        for _ in 0..<7 where !first.isHittable { app.swipeDown() }
+        for _ in 0..<7 where !app.leafContentViewport.contains(first.frame) { app.leafDragContent(up: false) }
         search("background", app: app)
         _ = loaded("async1")
-        app.buttons["zlibraryClearSearch"].tap()
+        app.buttons["zlibraryClearSearch"].leafTapVisible(in: app)
         browse("Recommended", app: app)
-        app.buttons["connectZLibrary"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        app.buttons["connectZLibrary"].leafTapVisible(in: app); app.buttons["zlibraryPreviewConnect"].leafTapVisible(in: app)
         _ = loaded("async1")
         capture("Async metadata recommended Day portrait")
         setReaderOrientation(.landscapeLeft, app: app)
@@ -183,13 +186,11 @@ final class ZLibraryUITests: XCTestCase {
             let bottom = app.tabBars.firstMatch.frame.minY - 8
             for _ in 0..<8 {
                 let frame = label.frame
-                if label.isHittable && frame.minY >= top && frame.maxY <= bottom { break }
+                if frame.width > 1 && frame.height > 1 && frame.minY >= top && frame.maxY <= bottom { break }
                 let up = frame.maxY > bottom
-                let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.75 : 0.35))
-                let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.35 : 0.75))
-                start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+                app.leafDragContent(up: up, in: scroll)
             }
-            XCTAssertTrue(label.isHittable)
+            XCTAssertGreaterThan(label.frame.width, 1)
             XCTAssertGreaterThanOrEqual(label.frame.minY, top)
             XCTAssertLessThanOrEqual(label.frame.maxY, bottom)
         }
@@ -202,14 +203,18 @@ final class ZLibraryUITests: XCTestCase {
         _ = loaded("async1")
         capture("Async metadata recommended Day landscape")
         setReaderOrientation(.portrait, app: app)
-        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap()
+        app.tabBars.buttons["Settings"].leafTapVisible(in: app); app.buttons["Night theme"].leafTapVisible(in: app)
         openDiscover(app)
         _ = loaded("async1")
         capture("Async metadata Night portrait")
-        app.buttons["catalogBook-async1"].tap()
+        let selected = app.buttons["catalogBook-async1"]
+        revealCatalogElement(selected, app: app); selected.leafTapVisible(in: app)
+        let details = app.navigationBars["Book details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["4.8 · 42 ratings"].waitForExistence(timeout: 5))
         capture("Background-loaded edition opens with cached details")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        details.buttons["Z-Library"].leafTapVisible(in: app)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: details); waitForExpectations(timeout: 8)
         _ = loaded("async1")
         app.terminate()
     }
@@ -315,14 +320,14 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["catalogBook-sample"].label.contains("1.8 MB"))
         XCTAssertTrue(app.buttons["catalogBook-sample"].label.contains("52 ratings"))
         capture("Three column popular Day portrait")
-        app.buttons["catalogBook-grid3"].tap()
+        app.buttons["catalogBook-grid3"].leafTapVisible(in: app)
         XCTAssertTrue(app.navigationBars["Book details"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["墓碑：中国六十年代大饥荒纪实"].exists)
-        app.navigationBars.buttons["Z-Library"].tap()
+        app.navigationBars.buttons["Z-Library"].leafTapVisible(in: app)
         search("books", app: app)
         assertRow(firstRow, next: "grid4")
         capture("Three column search results Day portrait")
-        app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
+        app.buttons["Z-Library connection"].leafTapVisible(in: app); app.buttons["zlibraryPreviewConnect"].leafTapVisible(in: app)
         browse("Recommended", app: app)
         assertRow(["recommended", "sample", "sample2"], next: "grid3")
         capture("Three column recommended Day portrait")
@@ -332,7 +337,7 @@ final class ZLibraryUITests: XCTestCase {
         assertRow(["recommended", "sample", "sample2"])
         capture("Three column recommended Day landscape")
         setReaderOrientation(.portrait, app: app)
-        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap()
+        app.tabBars.buttons["Settings"].leafTapVisible(in: app); app.buttons["Night theme"].leafTapVisible(in: app)
         openDiscover(app)
         browse("Most popular", app: app)
         assertRow(firstRow, next: "grid4")
@@ -373,33 +378,27 @@ final class ZLibraryUITests: XCTestCase {
         let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
         for _ in 0..<12 {
             guard element.exists else {
-                // Report the catalog load sequence that removed the element (LEAF_UI_ZLIB_TRACE).
                 let trace = app.descendants(matching: .any)["zlibraryLoadTrace"].firstMatch
                 return XCTFail("Catalog element disappeared while revealing it. Load trace: \(trace.exists ? trace.label : "unavailable")")
             }
-            let frame = element.frame
-            let top = app.navigationBars["Z-Library"].frame.maxY + 8
-            let bottom = app.frame.maxY - 24
-            if element.isHittable && frame.minY >= top && frame.maxY <= bottom { return }
-            let up = frame.maxY > bottom
-            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.68 : 0.43))
-            let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: up ? 0.43 : 0.68))
-            start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+            let rect = element.frame, viewport = app.leafContentViewport
+            if rect.width > 1 && rect.height > 1 && viewport.contains(rect) { return }
+            app.leafDragContent(up: rect.maxY > viewport.maxY, in: scroll)
         }
-        XCTAssertTrue(element.isHittable)
-        XCTAssertGreaterThanOrEqual(element.frame.minY, app.navigationBars["Z-Library"].frame.maxY)
-        XCTAssertLessThanOrEqual(element.frame.maxY, app.frame.maxY - 20)
+        XCTFail("Catalog element remains outside visible content: \(element.frame), viewport \(app.leafContentViewport)")
     }
     @MainActor private func search(_ query: String, app: XCUIApplication) {
         let field = app.textFields["zlibrarySearchField"]
-        XCTAssertTrue(field.waitForExistence(timeout:5))
+        XCTAssertTrue(field.waitForExistence(timeout:5)); revealCatalogElement(field, app: app)
         // Tapping a long query places the caret in its middle. Use the product's clear
         // control instead of assuming repeated backspace starts at the end of the text.
-        if app.buttons["zlibraryClearSearch"].exists { app.buttons["zlibraryClearSearch"].tap() }
-        field.tap()
+        if app.buttons["zlibraryClearSearch"].exists { app.buttons["zlibraryClearSearch"].leafTapVisible(in: app) }
+        field.leafTapVisible(in: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         field.typeText(query)
+        expectation(for: NSPredicate(format: "value == %@", query), evaluatedWith: field); waitForExpectations(timeout: 8)
         XCTAssertEqual(field.value as? String,query)
-        app.buttons["zlibrarySubmitSearch"].tap()
+        app.buttons["zlibrarySubmitSearch"].leafTapVisible(in: app)
     }
     @MainActor private func chooseOrder(_ title:String, app:XCUIApplication) {
         let menu = app.buttons["zlibrarySearchOrder"]
@@ -413,7 +412,7 @@ final class ZLibraryUITests: XCTestCase {
         let picker = app.segmentedControls["zlibraryFeedPicker"]
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
         revealCatalogElement(picker, app: app)
-        picker.buttons[title].tap()
+        picker.buttons[title].leafTapVisible(in: app)
         expectation(for: NSPredicate(format: "label == %@", title), evaluatedWith: app.staticTexts["zlibraryFeedTitle"])
         waitForExpectations(timeout: 5)
         waitForCatalogLoad(app)

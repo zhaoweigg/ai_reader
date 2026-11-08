@@ -6,6 +6,7 @@ struct LeafReaderApp: App {
     @StateObject private var library: LibraryStore
     @StateObject private var aiSettings: AISettingsStore
     @StateObject private var catalog: ZLibraryStore
+    @StateObject private var bestsellers: BestsellerStore
     @StateObject private var agentTraces: AgentTraceStore
     @StateObject private var sync: ICloudSync
     private let readingDefaults: UserDefaults
@@ -19,6 +20,8 @@ struct LeafReaderApp: App {
         var chatCredentials = KeychainChatCredentials()
         var catalogClient: (any ZLibraryServing)?
         var catalogDiscovery = true
+        var bestsellerService: (any BestsellerServing)?
+        var bestsellerShelf = true
         var syncFolder: URL?
         #if DEBUG
         if let id = UITesting.testID {
@@ -43,6 +46,8 @@ struct LeafReaderApp: App {
             }
             // UI tests never reach the live catalog from the library; shelf cases opt in.
             catalogDiscovery = UITesting.flag("LEAF_UI_ZLIB_MOCK") && UITesting.flag("LEAF_UI_ZLIB_SHELF")
+            bestsellerShelf = UITesting.flag("LEAF_UI_BESTSELLERS_MOCK")
+            if bestsellerShelf { bestsellerService = UITestBestsellerClient(); catalogClient = UITestZLibraryClient() }
             if UITesting.flag("LEAF_UI_ZLIB_MOCK") {
                 catalogClient = UITestZLibraryClient()
                 if UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE") {
@@ -53,6 +58,7 @@ struct LeafReaderApp: App {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUnitTests/\(UUID().uuidString)", isDirectory: true)
             seedSamples = false
             catalogDiscovery = false
+            bestsellerShelf = false
         }
         #endif
         let libraryStore = LibraryStore(root: root, seedSamples: seedSamples)
@@ -67,7 +73,16 @@ struct LeafReaderApp: App {
         _aiSettings = StateObject(wrappedValue: AISettingsStore(defaults: defaults, credentials: chatCredentials, providerOverride: chatProvider, chatGPTOverride: chatGPT))
         var catalogCredentials = chatCredentials
         catalogCredentials.service += ".zlibrary"
+        #if DEBUG
+        if UITesting.flag("LEAF_UI_BESTSELLERS_MOCK"), !UITesting.flag("LEAF_UI_BESTSELLERS_DISCONNECTED") {
+            let value = ZLibrarySession(userID: "bestseller-preview", userKey: "fixture-only")
+            try? catalogCredentials.write(String(decoding: JSONEncoder().encode(value), as: UTF8.self), account: defaults.string(forKey: "zlibrary.origin") ?? "https://z-library.sk")
+        }
+        #endif
         _catalog = StateObject(wrappedValue: ZLibraryStore(defaults: defaults, credentials: catalogCredentials, client: catalogClient, discoversFromLibrary: catalogDiscovery))
+        var bestsellerCredentials = chatCredentials; bestsellerCredentials.service += ".nytbooks"
+        _bestsellers = StateObject(wrappedValue: BestsellerStore(defaults: defaults, credentials: bestsellerCredentials,
+            service: bestsellerService ?? BestsellerFeedClient(), allowsAutomaticShelf: bestsellerShelf))
         readingDefaults = defaults
         if root == nil, let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             Task.detached(priority: .utility) { try? RetiredVoicePackCleanup.removeDownloadedPack(applicationSupport: support) }
@@ -88,7 +103,7 @@ struct LeafReaderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(agentTraces).environmentObject(sync).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
+            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(bestsellers).environmentObject(bestsellers.matching).environmentObject(agentTraces).environmentObject(sync).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
                 #if DEBUG
                 .background(UITestSceneGeometryBridge())
                 .background(UITestScrollTouchProbe())
@@ -109,6 +124,7 @@ struct AppView: View {
     private var theme: ReadingTheme { ReadingTheme(rawValue: themeName) ?? .day }
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var catalog: ZLibraryStore
+    @EnvironmentObject private var bestsellers: BestsellerStore
     @EnvironmentObject private var sync: ICloudSync
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = AppTab.library
@@ -121,15 +137,16 @@ struct AppView: View {
     var body: some View {
         TabView(selection: $tab) {
             LibraryView(onImport: { importing = true }, onOpen: { open($0) },
-                        onDiscover: { catalog.show($0); tab = .discover },
-                        onSearchCatalog: { catalog.show(query: $0); tab = .discover })
+                        onDiscover: { bestsellers.showingBestsellers = false; catalog.show($0); tab = .discover },
+                        onSearchCatalog: { bestsellers.showingBestsellers = false; catalog.show(query: $0); tab = .discover },
+                        onBestsellers: { bestsellers.showingBestsellers = true; catalog.show(catalog.feed); tab = .discover })
                 .tabItem { Label("Library", systemImage: "books.vertical") }.tag(AppTab.library)
             NavigationStack {
                 // Returning to the library also leaves the details of an added book.
                 ZLibraryView(close: { tab = .library; discoverStack = UUID() })
             }.id(discoverStack)
                 .modifier(TabChatHost(chat: discoverChat, finishMovingIdentifier: "finishMovingDiscoverChatButton",
-                                      screen: { ChatScreen.discover(catalog, library: library) }))
+                                      screen: { ChatScreen.discover(catalog, library: library, bestsellers: bestsellers) }))
                 .tabItem { Label("Discover", systemImage: "safari") }.tag(AppTab.discover)
             BookmarksView(onOpen: { id, locator in open(id, locator: locator) })
                 .tabItem { Label("Bookmarks", systemImage: "bookmark") }.tag(AppTab.bookmarks)

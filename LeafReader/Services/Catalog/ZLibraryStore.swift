@@ -3,7 +3,7 @@ import WebKit
 
 /// Two metadata transfers at a time, with cancellable FIFO waiting. A quick
 /// scroll must not leave every off-screen edition waiting to hit the website.
-@MainActor private final class ZLibraryDetailSlots {
+@MainActor final class ZLibraryDetailSlots {
     private var active = 0
     private var waiting: [(UUID, CheckedContinuation<Void, Error>)] = []
     func acquire() async throws {
@@ -94,6 +94,7 @@ final class ZLibraryStore: ObservableObject {
     private var client: any ZLibraryServing { clientOverride ?? ZLibraryClient(transport: websiteBrowser) }
     private var session: ZLibrarySession?
     private var generation = UUID()
+    var matchingContextID: UUID { generation }
     private var downloadTask: Task<Void, Never>?
     private var catalogTask: Task<Void, Never>?
     private var catalogRequest = UUID()
@@ -308,6 +309,29 @@ final class ZLibraryStore: ObservableObject {
         await loadCatalog(query: "")
     }
     func search(_ query: String) async { await loadCatalog(query: query.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    /// A discovery lookup shares the verified account and website transport, but
+    /// does not replace the visible catalog query, feed, pagination or errors.
+    func matchingSearch(_ query: String) async throws -> [ZLibraryBook] {
+        let token = generation, source = origin
+        do {
+            if session == nil { session = try savedSession(for: source); websiteUserAgent = session?.userAgent }
+            guard let saved = session else { throw ZLibraryError.signInRequired }
+            try await prepareCatalogWebsiteContext(request: UUID())
+            try Task.checkCancellation(); guard token == generation else { throw CancellationError() }
+            if !connected {
+                let profile = try await client.profile(origin: source, session: saved)
+                try Task.checkCancellation(); guard token == generation else { throw CancellationError() }
+                connected = true; accountName = profile.name; remaining = profile.remaining
+            }
+            let page = try await client.search(String(query.prefix(500)), page: 1, order: .bestMatch, origin: source, session: saved)
+            try Task.checkCancellation(); guard token == generation, connected else { throw CancellationError() }
+            return page.books
+        } catch {
+            guard token == generation else { throw CancellationError() }
+            if ZLibraryRequestFailure.issue(error) == .signInRequired { connected = false }
+            throw error
+        }
+    }
     func setSearchOrder(_ order: ZLibrarySearchOrder) async {
         guard order != searchOrder else { return }
         searchOrder = order; defaults.set(order.rawValue, forKey: "zlibrary.searchOrder")
@@ -668,6 +692,7 @@ final class ZLibraryStore: ObservableObject {
 #if DEBUG
 struct UITestZLibraryClient: ZLibraryServing {
     func recommended(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> [ZLibraryBook] {
+        if UITesting.flag("LEAF_UI_BESTSELLERS_MOCK") { return UITestBestsellerClient.samples().reversed().flatMap(UITestBestsellerClient.editions) }
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
         try await guardRepeatedRequest("recommended-" + session.userID, path: "user/book/recommended", session: session)
         if UITesting.flag("LEAF_UI_ZLIB_RECOMMENDATIONS_EMPTY") { return [] }
@@ -679,6 +704,7 @@ struct UITestZLibraryClient: ZLibraryServing {
         return UITesting.flag("LEAF_UI_ZLIB_GRID") ? books + sampleBooks() : books
     }
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
+        if UITesting.flag("LEAF_UI_BESTSELLERS_MOCK") { return book }
         let summaryMode = UITesting.environment("LEAF_UI_ZLIB_SUMMARY")
         if summaryMode == "loading" { try await Task.sleep(for:.seconds(4)) }
         try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()
@@ -699,8 +725,11 @@ struct UITestZLibraryClient: ZLibraryServing {
                             ratingCount: UITesting.flag("LEAF_UI_ZLIB_ASYNC_DETAILS") ? 42 : book.ratingCount, qualityScore: book.qualityScore,
                             summary: summary)
     }
-    func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile { ZLibraryProfile(name:"Preview account",remaining:5) }
+    func profile(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> ZLibraryProfile {
+        ZLibraryProfile(name: "Preview account", remaining: UITesting.flag("LEAF_UI_BESTSELLERS_QUOTA") ? 0 : 5)
+    }
     func popular(origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> [ZLibraryBook] {
+        if UITesting.flag("LEAF_UI_BESTSELLERS_MOCK") { return UITestBestsellerClient.samples().flatMap(UITestBestsellerClient.editions) }
         try await guardRepeatedRequest("popular-" + (session?.userID ?? "anonymous"), path: "book/most-popular", session: session)
         if UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE"), let session,
            session.userAgent == nil || session.websiteCookies?.contains(where: { $0.name == "site_access" && $0.value == "refreshed-preview" }) != true {
@@ -741,6 +770,7 @@ struct UITestZLibraryClient: ZLibraryServing {
         ]
     }
     func search(_ query: String, page: Int, order: ZLibrarySearchOrder, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
+        if UITesting.flag("LEAF_UI_BESTSELLERS_MOCK") { return ZLibrarySearchPage(books: UITestBestsellerClient.search(query), hasMore: false) }
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
         try await guardRepeatedRequest("\(query)-\(order.rawValue)-\(page)-\(session?.userID ?? "anonymous")", path: "book/search", session: session)
         if query.lowercased() == "unavailable" { throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "POST /eapi/book/search · HTTP 200 · HTML instead of JSON") }
@@ -752,6 +782,7 @@ struct UITestZLibraryClient: ZLibraryServing {
         return ZLibrarySearchPage(books: sample, hasMore: false)
     }
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL {
+        if UITesting.flag("LEAF_UI_BESTSELLERS_MOCK") { return try await UITestBestsellerClient.download(book, progress: progress) }
         progress(0.3); try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()
         guard let source = Bundle.main.url(forResource: "\(book.title).\(book.fileExtension)", withExtension:nil,subdirectory:"Samples") else { throw ZLibraryError.file }
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).\(book.fileExtension)")

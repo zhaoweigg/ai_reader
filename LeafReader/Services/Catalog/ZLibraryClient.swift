@@ -124,6 +124,7 @@ struct ZLibraryBook: Identifiable, Equatable, Codable {
     var qualityScore: Double? = nil
     /// The catalog's description as plain text; empty once fetched when the catalog has none.
     var summary: String? = nil
+    var isbns: [String]? = nil
     var fileSummary: String { [fileExtension.uppercased(), size.isEmpty ? "Size unavailable" : size].filter { !$0.isEmpty }.joined(separator: " · ") }
     var editionSummary: String { [language, year].filter { !$0.isEmpty }.joined(separator: " · ") }
     var ratingSummary: String {
@@ -146,7 +147,7 @@ struct ZLibraryBook: Identifiable, Equatable, Codable {
                      year: year.isEmpty ? details.year : year,
                      coverURL: coverURL ?? details.coverURL, rating: rating ?? details.rating,
                      ratingCount: ratingCount ?? details.ratingCount, qualityScore: qualityScore ?? details.qualityScore,
-                     summary: summary ?? details.summary)
+                     summary: summary ?? details.summary, isbns: isbns?.isEmpty == false ? isbns : details.isbns)
     }
 }
 
@@ -344,7 +345,16 @@ struct ZLibraryClient: ZLibraryServing {
                             year: string(row["year"]), coverURL: cover.isEmpty ? nil : try? ZLibraryOrigin.fileURL(cover, relativeTo: origin),
                             rating: score(row["rating"]) ?? score(row["interestScore"]),
                             ratingCount: positiveInteger(row["ratingCount"]), qualityScore: score(row["qualityScore"]),
-                            summary: plainText(row["description"]))
+                            summary: plainText(row["description"]), isbns: catalogISBNs(row))
+    }
+    private static func catalogISBNs(_ row: [String: Any]) -> [String]? {
+        let raw = ["isbn", "isbn10", "isbn13"].flatMap { key -> [String] in
+            if let values = row[key] as? [String] { return values }
+            return string(row[key]).components(separatedBy: CharacterSet(charactersIn: ",; \n"))
+        }
+        var seen: Set<String> = []
+        let result = raw.compactMap(BestsellerText.isbn).filter { seen.insert($0).inserted }
+        return result.isEmpty ? nil : result
     }
     /// A description's text without its HTML markup, bounded for the chat.
     static func plainText(_ value: Any?) -> String? {

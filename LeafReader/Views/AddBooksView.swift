@@ -6,6 +6,16 @@ struct ZLibraryView: View {
     let close: () -> Void
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var discovery: BestsellerStore
+    private var bestsellersVisible: Bool { discovery.showingBestsellers && catalog.activeQuery.isEmpty }
+    private var section: Binding<DiscoverSection> {
+        Binding(get: { discovery.showingBestsellers ? .bestsellers : catalog.feed == .popular ? .popular : .recommended }, set: { value in
+            searchFocused = false; searchText = ""
+            discovery.showingBestsellers = value == .bestsellers
+            if value == .bestsellers { catalog.show(catalog.feed); Task { await discovery.load() } }
+            else { Task { await catalog.browse(value == .popular ? .popular : .recommended) } }
+        })
+    }
     private enum Sheet: String, Identifiable { case connection, website; var id: String { rawValue } }
     @State private var sheet: Sheet?
     @State private var searchText = ""
@@ -22,19 +32,20 @@ struct ZLibraryView: View {
                     if !searchText.isEmpty {
                         Button("Clear search", systemImage: "xmark.circle.fill") {
                             searchText = ""; searchFocused = false
-                            Task { await catalog.search("") }
+                            if discovery.showingBestsellers { catalog.show(catalog.feed) }
+                            else { Task { await catalog.search("") } }
                         }.labelStyle(.iconOnly).foregroundStyle(.secondary).accessibilityIdentifier("zlibraryClearSearch")
                     }
                     Button("Search", action: submitSearch)
                         .font(.subheadline.weight(.semibold)).disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("zlibrarySubmitSearch")
                 }.padding(14).frame(minHeight: 48).background(theme.surface, in: .rect(cornerRadius: 14))
-                Picker("Browse books", selection: Binding(get: { catalog.feed }, set: { feed in
-                    searchFocused = false
-                    Task { searchText = ""; await catalog.browse(feed) }
-                })) {
-                    ForEach(ZLibraryFeed.allCases) { feed in Text(feed.title).tag(feed) }
+                Picker("Browse books", selection: section) {
+                    ForEach(DiscoverSection.allCases) { value in Text(value.title).tag(value) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("zlibraryFeedPicker")
+                if bestsellersVisible {
+                    BestsellerGrid(close: close)
+                } else {
                 if !catalog.activeQuery.isEmpty {
                     Menu {
                         Picker("Sort search results", selection: Binding(get: { catalog.searchOrder }, set: { order in
@@ -140,17 +151,21 @@ struct ZLibraryView: View {
                 if catalog.searchLimitReached {
                     Text("Showing the first 300 results. Refine your search to find more books.").font(.footnote).foregroundStyle(.secondary)
                 }
+                }
             }.padding(24).frame(maxWidth:900,alignment:.leading).frame(maxWidth:.infinity)
         }
-        .background(theme.canvas).toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle("Z-Library").navigationBarTitleDisplayMode(.inline)
+        .background(theme.canvas).toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle(bestsellersVisible ? "Discover" : "Z-Library").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement:.topBarTrailing) { Button { sheet = .connection } label: { Image(systemName:"person.crop.circle") }.accessibilityLabel("Z-Library connection") } }
         .onAppear { searchText = catalog.activeQuery; catalog.traceCatalogLoad("view appeared") }
         .onChange(of: searchText) { _, value in
-            if value.isEmpty && !catalog.activeQuery.isEmpty { Task { await catalog.search("") } }
+            if value.isEmpty && !catalog.activeQuery.isEmpty {
+                if discovery.showingBestsellers { catalog.show(catalog.feed) }
+                else { Task { await catalog.search("") } }
+            }
         }
         .onDisappear { catalog.traceCatalogLoad("view disappeared"); catalog.cancelCatalogLoad("view disappeared") }
-        .task { await catalog.search(catalog.activeQuery) }
-        .refreshable { catalog.traceCatalogLoad("pull to refresh"); await catalog.reload() }
+        .task { if bestsellersVisible { await discovery.load() } else { await catalog.search(catalog.activeQuery) } }
+        .refreshable { if bestsellersVisible { await discovery.load(force: true) } else { catalog.traceCatalogLoad("pull to refresh"); await catalog.reload() } }
         #if DEBUG
         .overlay(alignment: .bottomLeading) {
             if UITesting.flag("LEAF_UI_ZLIB_THUMBNAILS") { ZLibraryImageDiagnostics() }
@@ -195,6 +210,7 @@ struct ZLibraryBookView: View {
                 ZLibraryCover(book:edition).frame(width:120).accessibilityElement(children:.ignore).accessibilityLabel(edition.title + " cover").accessibilityIdentifier("catalogDetailCover")
                 Text(edition.title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
                 Text(edition.author).foregroundStyle(.secondary).accessibilityIdentifier("catalogDetailAuthor")
+                BestsellerRankings(title: edition.title, author: edition.author)
                 VStack(alignment:.leading,spacing:9) {
                     Text("About this book").font(.headline).accessibilityAddTraits(.isHeader).accessibilityIdentifier("catalogSummaryHeading")
                     if !description.isEmpty {

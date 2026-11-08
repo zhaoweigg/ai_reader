@@ -7,12 +7,14 @@ struct LibraryView: View {
     @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var catalog: ZLibraryStore
+    @EnvironmentObject private var discovery: BestsellerStore
     @EnvironmentObject private var sync: ICloudSync
     @Environment(\.scenePhase) private var scenePhase
     let onImport: () -> Void
     let onOpen: (UUID) -> Void
     let onDiscover: (ZLibraryFeed) -> Void
     let onSearchCatalog: (String) -> Void
+    let onBestsellers: () -> Void
     @State private var query = ""
     @FocusState private var searchFocused: Bool
     @State private var filter: LibraryFilter = .all
@@ -21,6 +23,7 @@ struct LibraryView: View {
     @State private var deleting: Book?
     @StateObject private var chat = TabChat()
     @State private var catalogBook: ZLibraryBook?
+    @State private var bestsellerBook: BestsellerBook?
     @State private var catalogMatches: [ZLibraryBook] = []
 
     private var visible: [Book] {
@@ -64,6 +67,9 @@ struct LibraryView: View {
                     }
                     if !shelf.isEmpty, query.isEmpty, filter == .all, format == nil {
                         discoverShelf
+                    }
+                    if discovery.allowsAutomaticShelf, query.isEmpty, filter == .all, format == nil {
+                        bestsellerShelf
                     }
                     VStack(alignment: .leading, spacing: 16) {
                         HStack {
@@ -168,6 +174,13 @@ struct LibraryView: View {
                 }
             }
             .task(id: catalog.connected) { await catalog.loadShelf() }
+            .task { await discovery.loadShelf() }
+            .sheet(item: $bestsellerBook) { entry in
+                NavigationStack {
+                    BestsellerBookView(book: entry, close: { bestsellerBook = nil })
+                        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { bestsellerBook = nil } } }
+                }.environment(\.leafTheme, theme).tint(theme.accent)
+            }
             .task(id: query) {
                 catalogMatches = []
                 guard !query.trimmingCharacters(in: .whitespaces).isEmpty, visible.isEmpty else { return }
@@ -214,6 +227,33 @@ struct LibraryView: View {
             Image(systemName: "icloud.and.arrow.down").font(.caption.weight(.semibold)).foregroundStyle(.blue)
                 .padding(7).background(.thinMaterial, in: .circle).padding(6)
                 .accessibilityLabel("In iCloud Drive").accessibilityIdentifier("cloudBadge-\(book.title)")
+        }
+    }
+    private var bestsellerShelf: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Bestsellers").font(.title2.weight(.semibold))
+                Spacer()
+                Button("See all", action: onBestsellers).font(.subheadline.weight(.semibold)).accessibilityIdentifier("bestsellerSeeAll")
+            }
+            if discovery.books.isEmpty {
+                if discovery.isLoading { ProgressView("Loading bestseller lists…") }
+                else { Text("Explore Indie and New York Times lists.").font(.subheadline).foregroundStyle(.secondary) }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        ForEach(discovery.books.prefix(6)) { entry in
+                            Button { searchFocused = false; bestsellerBook = entry } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    BestsellerCover(book: entry)
+                                    Text(entry.title).font(.caption.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
+                                    Text(entry.author).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                }.frame(width: 96, alignment: .leading)
+                            }.buttonStyle(.plain).accessibilityIdentifier("bestsellerShelfBook-\(entry.rank)")
+                        }
+                    }.padding(.horizontal, 24)
+                }.padding(.horizontal, -24)
+            }
         }
     }
     private var discoverShelf: some View {
