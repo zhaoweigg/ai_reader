@@ -243,7 +243,7 @@ sequenceDiagram
     P-->>S: text deltas, tool calls, images, finished
     S->>U: reply grows in 80 ms batches
     S->>S: save every 500 ms and on completion
-    Note over S: Backgrounded mid-reply? The task keeps streaming; if iOS ends it, the reply resumes on return with a notice.
+    Note over S: Backgrounded mid-reply? The task keeps streaming.<br/>If iOS ends it the reply resumes on return with a notice.
 ```
 
 Recent context is capped at 12 turns and 48,000 characters; opaque locators never leave the device. API-key replies default to 2,048 output tokens (256–8,192); the subscription route follows OpenAI's limits. Authentication, quota and malformed-response errors are shown rather than retried. Details: [docs/automatic-chat-retry.md](docs/automatic-chat-retry.md).
