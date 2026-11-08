@@ -747,7 +747,7 @@ struct UITestZLibraryClient: ZLibraryServing {
         if UITesting.flag("LEAF_UI_ZLIB_SHELF_RETRY"), !(await UITestCatalogRequestHistory.shared.repeated("library-shelf-retry")) {
             throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "Offline shelf retry fixture")
         }
-        if UITesting.flag("LEAF_UI_ZLIB_RECOMMENDATIONS_EMPTY") { return [] }
+        if UITesting.flag("LEAF_UI_ZLIB_SHELF_EMPTY") { return [] }
         if UITesting.flag("LEAF_UI_ZLIB_SHELF_REFRESH") {
             let refreshed = await UITestCatalogRequestHistory.shared.repeated("library-shelf-refresh")
             return [ZLibraryBook(remoteID: refreshed ? "shelf-refreshed" : "shelf-initial", hash: "shelf-fixture",

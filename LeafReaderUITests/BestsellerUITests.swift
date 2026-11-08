@@ -61,7 +61,8 @@ final class BestsellerUITests: XCTestCase {
     @MainActor private func libraryShelf(_ app: XCUIApplication, book: String) {
         let tab = app.tabBars.buttons["Library"]; tab.leafTapVisible(in: app); XCTAssertTrue(tab.isSelected)
         let title = app.staticTexts["discoverShelfTitle"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10)); XCTAssertEqual(title.label, "Recommended for you")
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate(format: "label == %@", "Recommended for you"), evaluatedWith: title); waitForExpectations(timeout: 10)
         let card = app.buttons["discoverShelfBook-" + book]; reveal(card, app: app)
         XCTAssertTrue(card.exists)
     }
@@ -112,7 +113,7 @@ final class BestsellerUITests: XCTestCase {
         capture("Library pull refresh updates recommendations beside bestseller shelf")
     }
     @MainActor func testLibraryEmptyRecommendationsHaveAnHonestStateAndKeepBestsellers() {
-        let app = launch(catalogFlags: ["RECOMMENDATIONS_EMPTY"])
+        let app = launch(catalogFlags: ["SHELF_EMPTY"])
         let empty = app.staticTexts["discoverShelfEmpty"]; XCTAssertTrue(empty.waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["discoverShelfError"].exists)
         XCTAssertEqual(app.staticTexts["discoverShelfTitle"].label, "Recommended for you")
