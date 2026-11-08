@@ -60,8 +60,8 @@ struct BookmarksView: View {
                 .toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle("Bookmarks")
                 .sheet(item: $editing) { reference in
                     NavigationStack {
-                        AnnotationEditorView(annotation: reference.annotation, isSaved: true,
-                            onSave: { try library.saveAnnotation($0, bookID: reference.bookID) },
+                        AnnotationEditorView(annotation: reference.annotation, isSaved: true, voiceFirst: reference.annotation.voiceNote != nil,
+                            onSave: { try await library.saveAnnotation($0, bookID: reference.bookID, voiceDraft: $1) },
                             onDelete: { try library.removeAnnotation(reference.id, bookID: reference.bookID) },
                             onClose: { editing = nil })
                     }.environment(\.leafTheme, theme).tint(theme.accent)

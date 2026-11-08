@@ -20,6 +20,7 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var selectionRequest: ReaderSelectionRequest?
     @Published var listeningRequest: ReaderListeningRequest?
     @Published var annotationDraft: BookAnnotation?
+    var annotationStartsWithVoice = false
     @Published var annotationError: String?
     @Published private(set) var liveSelection: ReadingChatContext?
     /// Where reading was before a jump (progress bar, Contents, Search, a saved
@@ -287,7 +288,10 @@ final class ReaderModel: NSObject, ObservableObject {
         let existing = book?.annotations.first { $0.matches(selection) }
         let draft = existing ?? selection.annotation()
         guard draft.valid else { annotationError = BookAnnotationError.selection.localizedDescription; return }
-        if intent == .note { annotationDraft = draft }
+        if intent == .note || intent == .voiceNote {
+            annotationStartsWithVoice = intent == .voiceNote
+            annotationDraft = draft
+        }
         else if existing == nil {
             do { try library.saveAnnotation(draft, bookID: bookID); synchronizeAnnotations() }
             catch { annotationError = error.localizedDescription; return }
@@ -297,10 +301,15 @@ final class ReaderModel: NSObject, ObservableObject {
     }
     func editAnnotation(_ id: UUID) {
         guard let annotation = book?.annotations.first(where: { $0.id == id }) else { return }
+        annotationStartsWithVoice = annotation.voiceNote != nil
         if annotationDraft?.id != id { annotationDraft = annotation }
     }
     func saveAnnotation(_ annotation: BookAnnotation) throws {
         try library.saveAnnotation(annotation, bookID: bookID)
+        synchronizeAnnotations()
+    }
+    func saveAnnotation(_ annotation: BookAnnotation, voiceDraft: URL?) async throws {
+        try await library.saveAnnotation(annotation, bookID: bookID, voiceDraft: voiceDraft)
         synchronizeAnnotations()
     }
     func removeAnnotation(_ id: UUID) throws {

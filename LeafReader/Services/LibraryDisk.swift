@@ -6,6 +6,7 @@ struct LibraryDisk {
     let root: URL
     var booksDirectory: URL { root.appendingPathComponent("Books", isDirectory: true) }
     var coversDirectory: URL { root.appendingPathComponent("Covers", isDirectory: true) }
+    var voiceNotesDirectory: URL { root.appendingPathComponent("VoiceNotes", isDirectory: true) }
     var manifest: URL { root.appendingPathComponent("library.json") }
 
     init(root: URL? = nil) throws {
@@ -13,6 +14,7 @@ struct LibraryDisk {
             .appendingPathComponent("Leaf", isDirectory: true)
         try FileManager.default.createDirectory(at: booksDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: coversDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: voiceNotesDirectory, withIntermediateDirectories: true)
     }
 
     func load() throws -> [Book]? {

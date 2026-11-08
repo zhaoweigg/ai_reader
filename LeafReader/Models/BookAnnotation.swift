@@ -49,18 +49,44 @@ struct BookAnnotation: Identifiable, Codable, Equatable {
     var pdfRanges: [PDFAnnotationRange] = []
     var color: BookAnnotationColor = .yellow
     var note = ""
+    var voiceNote: VoiceNote?
+    /// An explicit removal has a timestamp and no clip. A missing timestamp in
+    /// an older/text-only edit must not erase audio added on another device.
+    var voiceNoteUpdatedAt: Date?
+    var contentUpdatedAt: Date?
     var createdAt = Date()
     var updatedAt = Date()
-    var hasNote: Bool { !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var hasTextNote: Bool { !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var hasNote: Bool { hasTextNote || voiceNote != nil }
     var valid: Bool {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= 12_000,
               note.count <= 20_000, chapter.count <= 300, locator.count <= 8_000,
               fraction.isFinite, (0...1).contains(fraction) else { return false }
+        if let voiceNote, !voiceNote.valid || voiceNoteUpdatedAt == nil { return false }
         if pdfRanges.isEmpty { return locator.hasPrefix("epubcfi(") && locator.hasSuffix(")") }
         return pdfRanges.count <= 128 && pdfRanges.allSatisfy(\.valid) && locator == PDFLocator.page(pdfRanges[0].page)
     }
     func matches(_ selection: BookAnnotationSelection) -> Bool {
         locator == selection.locator && pdfRanges == selection.pdfRanges
+    }
+    func mergingVoiceNote(from other: BookAnnotation) -> BookAnnotation {
+        guard let stamp = other.voiceNoteUpdatedAt else { return self }
+        let mine = voiceNoteUpdatedAt ?? .distantPast
+        // Deterministic ties; an explicit removal wins over a clip at the same instant.
+        guard stamp > mine || stamp == mine && (other.voiceNote?.fileName ?? "~") > (voiceNote?.fileName ?? "~") else { return self }
+        var result = self
+        result.voiceNote = other.voiceNote; result.voiceNoteUpdatedAt = stamp
+        result.updatedAt = max(updatedAt, stamp)
+        return result
+    }
+    /// Text/color and audio can be edited independently on two devices or while
+    /// an editor is open. Adding a recording must not overwrite newer text.
+    func mergingEdits(from other: BookAnnotation) -> BookAnnotation {
+        let audio = mergingVoiceNote(from: other)
+        var result = (other.contentUpdatedAt ?? other.updatedAt) > (contentUpdatedAt ?? updatedAt) ? other : self
+        result.voiceNote = audio.voiceNote; result.voiceNoteUpdatedAt = audio.voiceNoteUpdatedAt
+        result.updatedAt = max(updatedAt, other.updatedAt)
+        return result
     }
     var webPayload: [String: Any] { ["id": id.uuidString, "value": locator, "color": color.hex, "hasNote": hasNote] }
 }

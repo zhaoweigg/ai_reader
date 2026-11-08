@@ -259,7 +259,8 @@ extension ChatScreen {
             item["percent_through_book"] = percent(annotation.fraction); item["saved"] = day(annotation.createdAt)
             if sharePassages {
                 item["text"] = String(annotation.text.prefix(length))
-                if annotation.hasNote { item["note"] = String(annotation.note.prefix(length)) }
+                if annotation.hasTextNote { item["note"] = String(annotation.note.prefix(length)) }
+                if annotation.voiceNote != nil { item["voice_note"] = "Audio attached; no transcript is available." }
             }
         }
         return item

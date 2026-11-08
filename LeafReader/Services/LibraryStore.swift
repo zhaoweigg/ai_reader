@@ -37,6 +37,7 @@ final class LibraryStore: ObservableObject {
     func book(_ id: UUID) -> Book? { books.first { $0.id == id } }
     func fileURL(_ book: Book) -> URL? { disk?.fileURL(book) }
     func coverURL(_ book: Book) -> URL? { book.coverFileName.flatMap { disk?.coversDirectory.appendingPathComponent($0) } }
+    func voiceNoteURL(_ note: VoiceNote) -> URL? { disk.map { VoiceNoteFiles(directory: $0.voiceNotesDirectory).url(for: note) } }
     /// A synced book can be listed before its file has been downloaded to this device.
     func isDownloaded(_ book: Book) -> Bool { fileURL(book).map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
 
@@ -194,14 +195,39 @@ final class LibraryStore: ObservableObject {
         guard annotation.note.count <= 20_000 else { throw BookAnnotationError.noteTooLong }
         guard annotation.valid else { throw BookAnnotationError.selection }
         guard let book = book(bookID), (book.format == .pdf) == !annotation.pdfRanges.isEmpty else { throw BookAnnotationError.selection }
+        var annotation = annotation
+        if let existing = book.annotations.first(where: { $0.id == annotation.id || $0.locator == annotation.locator && $0.pdfRanges == annotation.pdfRanges }) {
+            annotation = annotation.mergingEdits(from: existing)
+        }
+        guard annotation.valid else { throw BookAnnotationError.selection }
+        if let voice = annotation.voiceNote {
+            guard let url = voiceNoteURL(voice) else { throw VoiceNoteError.missingAudio }
+            try VoiceNoteFiles.verify(url, note: voice)
+        }
         try changeAnnotations(bookID) { annotations in
-            if let index = annotations.firstIndex(where: { $0.id == annotation.id }) { annotations[index] = annotation }
+            if let index = annotations.firstIndex(where: { $0.id == annotation.id }) { annotations[index] = annotation.mergingVoiceNote(from: annotations[index]) }
             else if let index = annotations.firstIndex(where: { $0.locator == annotation.locator && $0.pdfRanges == annotation.pdfRanges }) {
                 var replacement = annotation
                 replacement.id = annotations[index].id; replacement.createdAt = annotations[index].createdAt
-                annotations[index] = replacement
+                annotations[index] = replacement.mergingVoiceNote(from: annotations[index])
             }
             else { annotations.append(annotation) }
+        }
+    }
+    /// Copy/validate audio off the main actor, then commit its reference together
+    /// with the text/highlight. A failed manifest write keeps the prior clip.
+    func saveAnnotation(_ annotation: BookAnnotation, bookID: UUID, voiceDraft: URL?) async throws {
+        guard let voiceDraft else { try saveAnnotation(annotation, bookID: bookID); return }
+        guard canSave, book(bookID) != nil, let disk, let voice = annotation.voiceNote, annotation.valid else { throw BookAnnotationError.unavailable }
+        let files = VoiceNoteFiles(directory: disk.voiceNotesDirectory)
+        let created = try await Task.detached(priority: .userInitiated) { try files.store(voiceDraft, note: voice) }.value
+        do {
+            try saveAnnotation(annotation, bookID: bookID)
+            if created && !books.contains(where: { $0.annotations.contains { $0.voiceNote?.id == voice.id } }) { files.remove(voice) }
+        }
+        catch {
+            if created && !books.contains(where: { $0.annotations.contains { $0.voiceNote?.id == voice.id } }) { files.remove(voice) }
+            throw error
         }
     }
     func removeAnnotation(_ annotationID: UUID, bookID: UUID) throws {
@@ -209,11 +235,13 @@ final class LibraryStore: ObservableObject {
     }
     private func changeAnnotations(_ bookID: UUID, change: (inout [BookAnnotation]) -> Void) throws {
         guard canSave, let disk, let index = books.firstIndex(where: { $0.id == bookID }) else { throw BookAnnotationError.unavailable }
+        let previousVoiceNotes = books[index].annotations.compactMap(\.voiceNote)
         var updated = books
         change(&updated[index].annotations)
         // Publish only after an atomic disk write succeeds, including pending reading progress.
         try disk.save(updated)
         books = updated
+        removeUnreferencedVoiceNotes(from: previousVoiceNotes)
         onSave?()
     }
     func remove(_ id: UUID) {
@@ -222,6 +250,7 @@ final class LibraryStore: ObservableObject {
         do {
             try disk.save(remaining)
             books = remaining
+            removeUnreferencedVoiceNotes(from: book.annotations.compactMap(\.voiceNote))
             metadataTasks.removeValue(forKey: id)?.cancel()
             onSave?()
             try disk.removeFiles(book)
@@ -234,11 +263,26 @@ final class LibraryStore: ObservableObject {
         guard canSave, let disk, updated != books else { return }
         saveTask?.cancel()
         let removed = books.filter { old in !updated.contains { $0.id == old.id } }
+        let previousVoiceNotes = books.flatMap { $0.annotations.compactMap(\.voiceNote) }
         do {
             try disk.save(updated)
             books = updated
+            removeUnreferencedVoiceNotes(from: previousVoiceNotes)
             for book in removed { metadataTasks.removeValue(forKey: book.id)?.cancel(); try? disk.removeFiles(book) }
         } catch { notice = LibraryNotice(title: "iCloud changes could not be saved", message: error.localizedDescription) }
+    }
+    private func removeUnreferencedVoiceNotes(from previous: [VoiceNote]) {
+        removeUnreferencedVoiceNoteFiles(Set(previous.map(\.id)))
+    }
+    /// Explicit sync tombstones also clean up an old download that finished
+    /// after its annotation was removed. Never collect unknown/in-flight media
+    /// or a clip still referenced by this device's latest edits.
+    func removeUnreferencedVoiceNoteFiles(_ ids: Set<UUID>) {
+        guard canSave, let disk else { return }
+        let references = Set(books.flatMap { $0.annotations.compactMap { $0.voiceNote?.id } })
+        for id in ids.subtracting(references) {
+            try? FileManager.default.removeItem(at: disk.voiceNotesDirectory.appendingPathComponent(id.uuidString.lowercased() + ".m4a"))
+        }
     }
     private func scheduleSave() {
         saveTask?.cancel()

@@ -13,6 +13,34 @@ final class AnnotationUITests: XCTestCase {
     @MainActor private func surface(_ app: XCUIApplication) -> XCUIElement {
         app.webViews["bookWebView"].exists ? app.webViews["bookWebView"] : app.descendants(matching: .any)["bookPDFView"].firstMatch
     }
+    @MainActor private func openFeatured(_ app: XCUIApplication) {
+        tapVisibleLibraryCard(app.buttons["featuredBook"], app: app)
+    }
+    @MainActor private func openAllBookNotes(_ app: XCUIApplication) {
+        let bookmarks = app.tabBars.buttons["Bookmarks"]
+        XCTAssertTrue(bookmarks.waitForExistence(timeout: 5))
+        let frame = bookmarks.frame.intersection(app.frame)
+        let geometry = XCTAttachment(string: "Bookmarks: \(bookmarks.frame); app: \(app.frame); selected before: \(bookmarks.isSelected)")
+        geometry.name = "Bookmarks tab measured tap"; geometry.lifetime = .keepAlways; add(geometry)
+        XCTAssertGreaterThanOrEqual(frame.width, 44); XCTAssertGreaterThanOrEqual(frame.height, 44)
+        // On iOS 27.2 Button.tap opened Discover in failed relaunch checks.
+        // Tap the measured center in this app's scene, then verify the destination.
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.midX - app.frame.minX, dy: frame.midY - app.frame.minY)).tap()
+        expectation(for: NSPredicate { _, _ in bookmarks.isSelected }, evaluatedWith: bookmarks)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.navigationBars["Bookmarks"].waitForExistence(timeout: 5))
+        let filter = app.segmentedControls["librarySavedPassageFilter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        filter.buttons["Highlights & notes"].tap()
+    }
+    @MainActor private func settleNoteAnimation() {
+        // The accessibility label updates before the native Play/Pause
+        // crossfade finishes. Capture its resting appearance, not that blend.
+        let settled = expectation(description: "Note controls finish their native transition")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+    }
     @MainActor private func controls(_ app: XCUIApplication) {
         XCTAssertTrue(surface(app).waitForExistence(timeout: 15))
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Opening your book…"])
@@ -81,6 +109,151 @@ final class AnnotationUITests: XCTestCase {
     @MainActor func testHighlightsAndNotesInScroll() { verify(flow: "Scroll") }
     @MainActor func testHighlightsAndNotesInPDF() { verify(flow: "PDF") }
 
+    @MainActor func testVoiceNotesInPages() { verifyVoice(flow: "Pages") }
+    @MainActor func testVoiceNotesInScroll() { verifyVoice(flow: "Scroll") }
+    @MainActor func testVoiceNotesInPDF() { verifyVoice(flow: "PDF") }
+
+    @MainActor private func launchVoice(flow: String, denied: Bool = false) -> XCUIApplication {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_CHAT_MOCK": "1", "LEAF_UI_ZLIB_MOCK": "1",
+                                 "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1", "LEAF_UI_VOICE_NOTES": "1"]
+        if denied { app.launchEnvironment["LEAF_UI_VOICE_NOTE_PERMISSION"] = "denied" }
+        app.launch(); geometryApp = app; orient(.portrait)
+        addTeardownBlock { @MainActor in
+            if app.state == .runningForeground { self.setReaderOrientation(.portrait, app: app) }
+            app.terminate()
+        }
+        if flow == "PDF" {
+            let search = app.textFields["librarySearch"]; XCTAssertTrue(search.waitForExistence(timeout: 10))
+            search.tap(); search.typeText("Coast"); tapVisibleLibraryCard(app.buttons["book-Notes from the Coast"], app: app)
+            controls(app); app.buttons["nextPage"].tap()
+        } else { openFeatured(app); appearance(app, theme: "Day", flow: flow) }
+        return app
+    }
+
+    @MainActor private func recordVoice(_ app: XCUIApplication, name: String, background: Bool = false) {
+        let record = app.buttons["recordVoiceNote"]
+        revealAnnotationControl(record, app: app); record.tap()
+        XCTAssertTrue(app.buttons["stopVoiceNote"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["saveAnnotation"].isEnabled, "A running recording cannot be saved halfway through encoding")
+        capture(name + " recording")
+        if background {
+            XCUIDevice.shared.press(.home); app.activate()
+        } else { app.buttons["stopVoiceNote"].tap() }
+        XCTAssertTrue(app.buttons["playVoiceNote"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["saveAnnotation"].isEnabled)
+        XCTAssertFalse(app.buttons["stopVoiceNote"].exists)
+    }
+
+    @MainActor private func previewVoice(_ app: XCUIApplication) {
+        let play = app.buttons["playVoiceNote"]
+        XCTAssertTrue(play.waitForExistence(timeout: 5)); play.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Pause voice note"), evaluatedWith: play)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.progressIndicators["voiceNotePlaybackProgress"].waitForExistence(timeout: 3))
+        play.tap()
+        XCTAssertEqual(play.label, "Play voice note")
+        settleNoteAnimation()
+    }
+
+    @MainActor private func editFirstVoice(_ app: XCUIApplication) {
+        let edit = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "editAnnotation-")).firstMatch
+        XCTAssertTrue(edit.waitForExistence(timeout: 5)); edit.tap()
+        XCTAssertTrue(app.buttons["removeVoiceNote"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor private func verifyVoice(flow: String) {
+        let app = launchVoice(flow: flow), pdf = flow == "PDF", marker = "A spoken thought with " + flow + " text"
+        app.buttons["openReaderChat"].tap()
+        chatInput(app).tap(); chatInput(app).typeText("Keep my voice note question"); app.buttons["Hide keyboard"].tap()
+        select("Voice Note", app: app, pdf: pdf)
+        XCTAssertTrue(app.buttons["recordVoiceNote"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["stopVoiceNote"].exists, "Opening the editor must not start the microphone")
+        XCTAssertFalse(app.buttons["saveAnnotation"].isEnabled)
+        capture(flow + " voice note editor before recording")
+        app.buttons["cancelAnnotation"].tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
+        XCTAssertEqual(chatInput(app).value as? String, "Keep my voice note question")
+
+        select("Voice Note", app: app, pdf: pdf)
+        recordVoice(app, name: flow, background: flow == "Scroll")
+        previewVoice(app)
+        let note = app.textViews["annotationNote"]
+        revealAnnotationControl(note, app: app); note.tap(); note.typeText(marker)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        capture(flow + " optional text with audio")
+        app.buttons["saveAnnotation"].tap()
+        XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 8))
+        XCTAssertEqual(chatInput(app).value as? String, "Keep my voice note question")
+        app.buttons["closeReaderChat"].tap()
+
+        if !pdf { appearance(app, theme: "Paper") }
+        controls(app); app.buttons["Saved"].tap()
+        let saved = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 5))
+        previewVoice(app); capture(flow + " saved audio and text")
+        editFirstVoice(app)
+        revealAnnotationControl(app.buttons["removeVoiceNote"], app: app); app.buttons["removeVoiceNote"].tap()
+        XCTAssertTrue(app.buttons["recordVoiceNote"].exists)
+        app.buttons["cancelAnnotation"].tap()
+        controls(app); app.buttons["Saved"].tap()
+        XCTAssertTrue(app.buttons["playVoiceNote"].waitForExistence(timeout: 5), "Cancel must preserve the original saved audio")
+        app.buttons["Done"].tap()
+
+        if !pdf { appearance(app, theme: "Night") }
+        orient(.landscapeLeft)
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        controls(app); app.buttons["Saved"].tap()
+        XCTAssertTrue(saved.waitForExistence(timeout: 5))
+        expectation(for: NSPredicate { _, _ in saved.frame.intersection(app.frame).height >= 44 }, evaluatedWith: saved)
+        waitForExpectations(timeout: 5)
+        settleNoteAnimation()
+        capture(flow + " landscape saved voice note")
+        editFirstVoice(app)
+        revealAnnotationControl(app.buttons["removeVoiceNote"], app: app); app.buttons["removeVoiceNote"].tap()
+        recordVoice(app, name: flow + " landscape replacement")
+        previewVoice(app); capture(flow + " landscape audio preview")
+        app.buttons["saveAnnotation"].tap()
+        controls(app); app.buttons["closeBook"].tap()
+        app.terminate(); orient(.portrait); app.launch(); orient(.portrait)
+
+        openAllBookNotes(app)
+        XCTAssertTrue(saved.waitForExistence(timeout: 10))
+        previewVoice(app); capture(flow + " audio survives relaunch in all-book notes")
+        saved.tap(); controls(app); app.buttons["Saved"].tap()
+        XCTAssertTrue(saved.waitForExistence(timeout: 5))
+        editFirstVoice(app)
+        revealAnnotationControl(app.buttons["removeVoiceNote"], app: app); app.buttons["removeVoiceNote"].tap()
+        app.buttons["saveAnnotation"].tap()
+        controls(app); app.buttons["Saved"].tap()
+        XCTAssertTrue(saved.waitForExistence(timeout: 5), "Removing audio keeps the written note and passage")
+        XCTAssertFalse(app.buttons["playVoiceNote"].exists)
+        capture(flow + " text remains after audio removal")
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "editAnnotation-")).firstMatch.tap()
+        revealAnnotationControl(app.buttons["deleteAnnotation"], app: app); app.buttons["deleteAnnotation"].tap()
+        controls(app); app.buttons["Saved"].tap()
+        XCTAssertFalse(saved.exists)
+    }
+
+    @MainActor func testDeniedVoiceNotePermissionKeepsSelectionAndAllowsCancel() {
+        let app = launchVoice(flow: "Pages", denied: true)
+        select("Voice Note", app: app, pdf: false)
+        let quote = app.staticTexts["annotationQuote"].label
+        app.buttons["recordVoiceNote"].tap()
+        XCTAssertTrue(app.staticTexts["voiceNoteError"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["voiceNoteSettings"].exists)
+        XCTAssertTrue(app.buttons["recordVoiceNote"].exists)
+        XCTAssertFalse(app.buttons["saveAnnotation"].isEnabled)
+        XCTAssertEqual(app.staticTexts["annotationQuote"].label, quote)
+        capture("Denied microphone keeps the selected passage unsaved")
+        app.buttons["cancelAnnotation"].tap(); controls(app); app.buttons["Saved"].tap()
+        app.segmentedControls["savedPassageFilter"].buttons["Highlights & notes"].tap()
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "savedAnnotation-")).firstMatch.exists)
+    }
+
     @MainActor private func verify(flow: String) {
         continueAfterFailure = false
         orient(.portrait)
@@ -98,9 +271,9 @@ final class AnnotationUITests: XCTestCase {
         let pdf = flow == "PDF"
         if pdf {
             let field = app.textFields["librarySearch"]; XCTAssertTrue(field.waitForExistence(timeout: 10))
-            field.tap(); field.typeText("Coast"); app.buttons["book-Notes from the Coast"].tap()
+            field.tap(); field.typeText("Coast"); tapVisibleLibraryCard(app.buttons["book-Notes from the Coast"], app: app)
             controls(app); app.buttons["nextPage"].tap()
-        } else { app.buttons["featuredBook"].tap(); appearance(app, theme: "Day", flow: flow) }
+        } else { openFeatured(app); appearance(app, theme: "Day", flow: flow) }
         XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 10))
         app.buttons["openReaderChat"].tap()
         chatInput(app).tap(); chatInput(app).typeText("Keep my reading question")
@@ -152,8 +325,7 @@ final class AnnotationUITests: XCTestCase {
         app.terminate(); orient(.portrait); app.launch()
 
 
-        app.tabBars.buttons["Bookmarks"].tap()
-        app.segmentedControls["librarySavedPassageFilter"].buttons["Highlights & notes"].tap()
+        openAllBookNotes(app)
         let saved = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
         XCTAssertTrue(saved.waitForExistence(timeout: 10))
         capture(flow + " note survives app relaunch")
