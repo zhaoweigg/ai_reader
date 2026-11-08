@@ -20,10 +20,6 @@ final class LibraryChatUITests: XCTestCase {
     @MainActor private func input(_ app: XCUIApplication) -> XCUIElement {
         app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
     }
-    @MainActor private func capture(_ name: String) {
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
-    }
     @MainActor private func send(_ text: String, app: XCUIApplication) {
         input(app).tap(); input(app).typeText(text); app.buttons["sendReaderChat"].tap()
         let reply = app.textViews.matching(identifier: "chatReply").firstMatch

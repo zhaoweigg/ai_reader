@@ -42,11 +42,6 @@ import UIKit
         addTeardownBlock { @MainActor in session.stop(); try? FileManager.default.removeItem(at: directory); defaults.removePersistentDomain(forName: name) }
         return (session, speaker, directory, defaults)
     }
-    private func wait(_ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(5)
-        while !condition(), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertTrue(condition())
-    }
     func testLockScreenPlayerShowsTheBookAndFollowsPlaybackAndPassages() async throws {
         let player = RecordingNowPlaying()
         let (session, speaker, directory, _) = setup(nowPlaying: player)
@@ -60,7 +55,7 @@ import UIKit
             let index = Int(locator?.split(separator: ":").last ?? "0") ?? 0
             return index < 3 ? passage(index) : nil
         }
-        session.start(); try await wait { session.state == .playing }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing }
         var info = try XCTUnwrap(player.shown.last)
         XCTAssertEqual(info, ReadAloudNowPlayingInfo(title: "The Art of Noticing", author: "Leaf Editions", chapter: "Chapter 0", isPlaying: true, canGoNext: true, canGoBack: false))
         // The renderer writes at the screen scale, so compare proportions, not points.
@@ -70,7 +65,7 @@ import UIKit
         info = try XCTUnwrap(player.shown.last)
         XCTAssertFalse(info.isPlaying); XCTAssertEqual(info.chapter, "Chapter 0")
         session.resume(); XCTAssertEqual(player.shown.last?.isPlaying, true)
-        speaker.finished?(); try await wait { session.passage?.locator == "position:1" && session.state == .playing }
+        speaker.finished?(); try await eventually(timeout: 5) { session.passage?.locator == "position:1" && session.state == .playing }
         info = try XCTUnwrap(player.shown.last)
         XCTAssertEqual(info.chapter, "Chapter 1"); XCTAssertTrue(info.canGoBack); XCTAssertTrue(info.isPlaying)
         let shownBeforeStop = player.shown.count, clearedBeforeStop = player.cleared
@@ -78,9 +73,9 @@ import UIKit
         XCTAssertGreaterThan(player.cleared, clearedBeforeStop, "Stopping takes the player off the Lock Screen")
         XCTAssertEqual(player.shown.count, shownBeforeStop)
         // Reaching the end of the book clears it as well.
-        session.start(at: "position:2"); try await wait { session.state == .playing }
+        session.start(at: "position:2"); try await eventually(timeout: 5) { session.state == .playing }
         let clearedBeforeEnd = player.cleared
-        speaker.finished?(); try await wait { session.state == .finished }
+        speaker.finished?(); try await eventually(timeout: 5) { session.state == .finished }
         XCTAssertGreaterThan(player.cleared, clearedBeforeEnd)
     }
     func testLockScreenTimeBarEstimatesTheChapterAndLearnsThePace() async throws {
@@ -100,7 +95,7 @@ import UIKit
             default: return nil
             }
         }
-        session.start(); try await wait { session.state == .playing }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing }
         var info = try XCTUnwrap(player.shown.last)
         XCTAssertEqual(info.subtitle, "Chapter 1 · Leaf Editions", "The Lock Screen's second line names the chapter before the author")
         XCTAssertEqual(info.duration ?? 0, 4000 / 16, accuracy: 0.01, "Latin text starts from the default pace")
@@ -124,12 +119,12 @@ import UIKit
         XCTAssertEqual(player.shown.count, shownBefore + 1)
         XCTAssertEqual(player.shown.last?.elapsed ?? 0, 1230 / 20, accuracy: 0.01)
         // Chinese text without a language tag starts from the slower default pace...
-        speaker.finished?(); try await wait { session.passage?.locator == "position:1" && session.state == .playing }
+        speaker.finished?(); try await eventually(timeout: 5) { session.passage?.locator == "position:1" && session.state == .playing }
         info = try XCTUnwrap(player.shown.last)
         XCTAssertEqual(info.subtitle, "第二章 · Leaf Editions")
         XCTAssertEqual(info.duration ?? 0, 900 / (4.5 * 2), accuracy: 0.01); XCTAssertEqual(info.elapsed, 0)
         // ...and a passage without a chapter extent leaves the time bar off.
-        speaker.finished?(); try await wait { session.passage?.locator == "position:2" && session.state == .playing }
+        speaker.finished?(); try await eventually(timeout: 5) { session.passage?.locator == "position:2" && session.state == .playing }
         info = try XCTUnwrap(player.shown.last)
         XCTAssertNil(info.duration); XCTAssertNil(info.elapsed); XCTAssertEqual(info.subtitle, "Leaf Editions")
         // The learned pace survives reopening; a short stretch taught nothing.
@@ -147,15 +142,15 @@ import UIKit
         }
         let send = try XCTUnwrap(player.handler)
         send(.play); XCTAssertEqual(session.state, .idle, "Play before a narration starts does nothing")
-        session.start(); try await wait { session.state == .playing }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing }
         send(.pause); XCTAssertEqual(session.state, .paused); XCTAssertTrue(speaker.paused)
         send(.play); XCTAssertEqual(session.state, .playing); XCTAssertFalse(speaker.paused)
         send(.toggle); XCTAssertEqual(session.state, .paused)
-        send(.next); try await wait { session.passage?.locator == "position:1" }
+        send(.next); try await eventually(timeout: 5) { session.passage?.locator == "position:1" }
         XCTAssertEqual(session.state, .paused, "Next from the Lock Screen keeps a paused narration paused")
         send(.toggle); XCTAssertEqual(session.state, .playing)
-        send(.next); try await wait { session.passage?.locator == "position:2" && session.state == .playing }
-        send(.previous); try await wait { session.passage?.locator == "position:1" && session.state == .playing }
+        send(.next); try await eventually(timeout: 5) { session.passage?.locator == "position:2" && session.state == .playing }
+        send(.previous); try await eventually(timeout: 5) { session.passage?.locator == "position:1" && session.state == .playing }
         XCTAssertEqual(player.shown.last?.chapter, "Chapter 1")
         XCTAssertEqual(player.shown.last?.canGoBack, true)
     }
@@ -199,7 +194,7 @@ import UIKit
         let value = passage(2, text: "Alpha 😀 beta gamma")
         session.source = { locator in locator == "position:3" ? nil : value }
         session.start(at: "position:2", offset: 9)
-        try await wait { session.state == .playing }
+        try await eventually(timeout: 5) { session.state == .playing }
         let count = speaker.spoken.count
         session.speed = 0.75
         XCTAssertEqual(speaker.spoken.count, count + 1)
@@ -221,11 +216,11 @@ import UIKit
             let index = Int(locator?.split(separator: ":").last ?? "0") ?? 0
             return index < 3 ? passage(index) : nil
         }
-        session.start(); try await wait { calls.count == 2 && session.state == .playing }
+        session.start(); try await eventually(timeout: 5) { calls.count == 2 && session.state == .playing }
         XCTAssertEqual(speaker.spoken, ["Passage 0"]); XCTAssertEqual(calls.count, 2)
-        speaker.finished?(); try await wait { session.passage?.locator == "position:1" }
-        speaker.finished?(); try await wait { session.passage?.locator == "position:2" }
-        speaker.finished?(); try await wait { session.state == .finished }
+        speaker.finished?(); try await eventually(timeout: 5) { session.passage?.locator == "position:1" }
+        speaker.finished?(); try await eventually(timeout: 5) { session.passage?.locator == "position:2" }
+        speaker.finished?(); try await eventually(timeout: 5) { session.state == .finished }
         XCTAssertEqual(speaker.spoken, ["Passage 0", "Passage 1", "Passage 2"])
         XCTAssertNil(session.bookmark)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("bookmark.json").path))
@@ -237,7 +232,7 @@ import UIKit
             return locator == nil ? passage(0) : nil
         }
         session.start(); session.pause()
-        try await wait { session.passage != nil }
+        try await eventually(timeout: 5) { session.passage != nil }
         XCTAssertEqual(session.state, .paused); XCTAssertTrue(speaker.spoken.isEmpty)
         session.resume(); XCTAssertEqual(speaker.spoken, ["Passage 0"])
     }
@@ -247,7 +242,7 @@ import UIKit
         session.source = { locator in locator == "position:1" ? nil : value }
         var highlighted: NSRange?, latestPassage: ReadAloudPassage?, following = false
         session.highlight = { passage, range, follow in latestPassage = passage; highlighted = passage == nil ? nil : range; following = follow }
-        session.start(); try await wait { session.state == .playing }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing }
         speaker.progressed?(NSRange(location: 9, length: 4))
         XCTAssertEqual(highlighted, NSRange(location: 9, length: 4)); XCTAssertEqual(session.spokenText, "beta")
         XCTAssertEqual(latestPassage, value); XCTAssertTrue(following)
@@ -277,7 +272,7 @@ import UIKit
         let (session, speaker, directory, defaults) = setup()
         let value = passage(2, text: "Alpha 😀 beta gamma")
         session.source = { locator in locator == "position:3" ? nil : value }
-        session.start(at: "position:2"); try await wait { session.state == .playing }
+        session.start(at: "position:2"); try await eventually(timeout: 5) { session.state == .playing }
         speaker.progressed?(NSRange(location: 9, length: 4))
         session.speed = 1.5
         XCTAssertEqual(speaker.spoken.last, "beta gamma"); XCTAssertEqual(speaker.speeds.last, 1.5)
@@ -291,7 +286,7 @@ import UIKit
         reopened.source = { _ in value }
         XCTAssertEqual(reopened.bookmark?.offset, 9); XCTAssertEqual(reopened.speed, 1.5); XCTAssertEqual(reopened.voice, "")
         XCTAssertFalse(reopened.followsText)
-        reopened.resumeSaved(); try await wait { reopened.state == .playing }
+        reopened.resumeSaved(); try await eventually(timeout: 5) { reopened.state == .playing }
         XCTAssertEqual(reopenedSpeaker.spoken.first, "beta gamma"); reopened.stop()
     }
     func testInitialHighlightUsesSavedOffsetWithoutACompetingParagraphReveal() async throws {
@@ -302,24 +297,24 @@ import UIKit
         session.highlight = { passage, range, _ in if passage != nil { ranges.append(range) } }
         session.reveal = { reveals.append($0) }
         session.start(at: value.locator, offset: 10)
-        try await wait { session.state == .playing }
+        try await eventually(timeout: 5) { session.state == .playing }
         XCTAssertEqual(ranges.last, NSRange(location: 10, length: 1))
         XCTAssertEqual(speaker.spoken.last, "eta gamma")
         XCTAssertTrue(reveals.isEmpty, "The line-following bridge owns navigation; a delayed paragraph reveal must not move it back")
         session.start(at: value.locator, offset: 7) // Low surrogate of the emoji.
-        try await wait { session.state == .playing }
+        try await eventually(timeout: 5) { session.state == .playing }
         XCTAssertEqual(ranges.last, NSRange(location: 6, length: 2))
         XCTAssertEqual(speaker.spoken.last, "😀 beta gamma")
     }
     func testPreviousAndNextWhilePausedKeepAudioPaused() async throws {
         let (session, speaker, _, _) = setup()
         session.source = { [self] locator in passage(Int(locator?.split(separator: ":").last ?? "0") ?? 0) }
-        session.start(); try await wait { session.state == .playing }
-        session.next(); try await wait { session.passage?.locator == "position:1" }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing }
+        session.next(); try await eventually(timeout: 5) { session.passage?.locator == "position:1" }
         session.pause(); let count = speaker.spoken.count
-        session.next(); try await wait { session.passage?.locator == "position:2" }
+        session.next(); try await eventually(timeout: 5) { session.passage?.locator == "position:2" }
         XCTAssertEqual(session.state, .paused); XCTAssertEqual(speaker.spoken.count, count)
-        session.previous(); try await wait { session.passage?.locator == "position:1" }
+        session.previous(); try await eventually(timeout: 5) { session.passage?.locator == "position:1" }
         XCTAssertEqual(session.state, .paused); XCTAssertEqual(speaker.spoken.count, count)
     }
     func testStopCancelsPrefetchAndDoesNotPlayLateCompletion() async throws {
@@ -328,21 +323,21 @@ import UIKit
             if locator != nil { try? await Task.sleep(for: .milliseconds(150)); return passage(1) }
             return passage(0)
         }
-        session.start(); try await wait { session.state == .playing }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing }
         session.stop(); try await Task.sleep(for: .milliseconds(220))
         XCTAssertEqual(session.state, .idle); XCTAssertFalse(session.isPresented); XCTAssertEqual(speaker.spoken.count, 1)
     }
     func testAudioInterruptionAndHeadphoneDisconnectPauseWithoutLosingPosition() async throws {
         let (session, _, _, _) = setup()
         session.source = { [self] locator in locator == nil ? passage(0) : nil }
-        session.start(); try await wait { session.state == .playing }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing }
         NotificationCenter.default.post(name: AVAudioSession.interruptionNotification, object: nil,
             userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
-        try await wait { session.state == .paused }; XCTAssertNotNil(session.bookmark)
+        try await eventually(timeout: 5) { session.state == .paused }; XCTAssertNotNil(session.bookmark)
         session.resume()
         NotificationCenter.default.post(name: AVAudioSession.routeChangeNotification, object: nil,
             userInfo: [AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue])
-        try await wait { session.state == .paused }; XCTAssertEqual(session.bookmark?.locator, "position:0")
+        try await eventually(timeout: 5) { session.state == .paused }; XCTAssertEqual(session.bookmark?.locator, "position:0")
     }
     func testBackgroundKeepsNarratingAcrossPassagesAndRestoresLatestHighlight() async throws {
         let (session, speaker, directory, _) = setup()
@@ -353,14 +348,14 @@ import UIKit
             let index = Int(locator?.split(separator: ":").last ?? "0") ?? 0
             return index < 4 ? passage(index, text: "Alpha beta gamma") : nil
         }
-        session.start(); try await wait { session.state == .playing && sourceCalls == 2 }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing && sourceCalls == 2 }
         session.setForeground(false)
         let renderCount = rendered.count
         speaker.progressed?(NSRange(location: 6, length: 4))
         XCTAssertEqual(session.state, .playing); XCTAssertFalse(speaker.paused)
         for index in 1...2 {
             speaker.finished?()
-            try await wait { session.passage?.locator == "position:\(index)" && session.state == .playing }
+            try await eventually(timeout: 5) { session.passage?.locator == "position:\(index)" && session.state == .playing }
         }
         speaker.progressed?(NSRange(location: 11, length: 5))
         session.followsText = false; session.followsText = true
@@ -393,11 +388,11 @@ import UIKit
         var cleared = 0
         session.highlight = { passage, _, _ in if passage == nil { cleared += 1 } }
         session.start(); session.setForeground(false); session.pause()
-        try await wait { session.passage != nil }
+        try await eventually(timeout: 5) { session.passage != nil }
         XCTAssertEqual(session.state, .paused); XCTAssertTrue(speaker.spoken.isEmpty)
         session.resume(); XCTAssertEqual(session.state, .playing)
         let before = cleared
-        speaker.finished?(); try await wait { session.state == .finished }
+        speaker.finished?(); try await eventually(timeout: 5) { session.state == .finished }
         XCTAssertEqual(cleared, before, "An offscreen completion defers presentation")
         session.setForeground(true)
         XCTAssertEqual(cleared, before + 1); XCTAssertNil(session.bookmark)
@@ -406,7 +401,7 @@ import UIKit
     func testDictationPausesPlaybackSynchronouslyAndKeepsBookmark() async throws {
         let (session, speaker, _, _) = setup()
         session.source = { [self] _ in passage(0) }
-        session.start(); try await wait { session.state == .playing }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing }
         NotificationCenter.default.post(name: ChatDictationSession.willRecord, object: nil)
         XCTAssertEqual(session.state, .paused, "Pause before dictation takes the shared audio session")
         XCTAssertTrue(speaker.paused); XCTAssertEqual(session.bookmark?.locator, "position:0")
@@ -415,7 +410,7 @@ import UIKit
     func testPlaybackResumeRestoresAudioCategoryAfterDictation() async throws {
         let (session, speaker, _, _) = setup()
         session.source = { [self] _ in passage(0) }
-        session.start(); try await wait { session.state == .playing }
+        session.start(); try await eventually(timeout: 5) { session.state == .playing }
         session.pause()
         try AVAudioSession.sharedInstance().setCategory(.record, mode: .measurement)
         session.resume()
@@ -426,10 +421,10 @@ import UIKit
     func testSourceFailureCanBeReplacedWithoutAffectingBookState() async throws {
         let (session, speaker, _, _) = setup()
         session.source = { _ in throw ReadAloudError.noText }
-        session.start(); try await wait { session.state == .failed }
+        session.start(); try await eventually(timeout: 5) { session.state == .failed }
         XCTAssertNotNil(session.error); XCTAssertTrue(speaker.spoken.isEmpty)
         session.source = { [self] _ in passage(3) }
-        session.start(at: "position:3"); try await wait { session.state == .playing }; XCTAssertNil(session.error)
+        session.start(at: "position:3"); try await eventually(timeout: 5) { session.state == .playing }; XCTAssertNil(session.error)
     }
     func testPDFSourceStartsAtSelectedCharacterAndContinuesThroughEmptyPages() async throws {
         let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 400, height: 600))

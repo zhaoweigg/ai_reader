@@ -1499,7 +1499,7 @@ final class ReaderEngineTests: XCTestCase {
         let (book, url) = try prepare("The Art of Noticing.epub", format: .epub)
         let model = try show(book, url: url)
         try await assertOpened(model, contains: "attention")
-        weak var closedView = model.webView
+        weak let closedView = model.webView
         XCTAssertNotNil(closedView)
         window?.rootViewController = nil
         try await waitUntil({ closedView == nil }, timeout: 10)
@@ -3403,7 +3403,7 @@ private struct QuotePreviewReaderHarness: View {
     override var timestamp: TimeInterval { at }
 }
 
-@MainActor private final class MemorySchemeTask: NSObject, WKURLSchemeTask {
+@MainActor private final class MemorySchemeTask: NSObject, @MainActor WKURLSchemeTask {
     let request: URLRequest
     var response: HTTPURLResponse?
     var received = 0

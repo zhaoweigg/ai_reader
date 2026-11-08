@@ -379,7 +379,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
         #if DEBUG
         // Explicit simulator UI launches can exercise real AVSpeech playback with
         // the runtime's installed voices; ordinary launches always stay strict.
-        if UITesting.testID != nil, UITesting.flag("LEAF_UI_APPLE_SPEECH") { highQuality = false }
+        if UITesting.testID != nil, UITesting.flag(.appleSpeech) { highQuality = false }
         #endif
         self.speaker = speaker ?? SystemReadAloudSpeaker(requiresHighQuality: highQuality)
         speed = Self.savedSpeed(defaults: defaults)
@@ -412,7 +412,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
             self.spokenRange = spoken
             self.spokenText = (passage.text as NSString).substring(with: spoken)
             #if DEBUG
-            if !self.isForeground, UITesting.flag("LEAF_UI_BACKGROUND_AUDIO"), self.firstBackgroundProgress == nil {
+            if !self.isForeground, UITesting.flag(.backgroundAudio), self.firstBackgroundProgress == nil {
                 self.firstBackgroundProgress = ProcessInfo.processInfo.systemUptime
             }
             #endif
@@ -580,7 +580,7 @@ enum ReadAloudRemoteCommand { case play, pause, toggle, next, previous }
             stretch = (offset, clock(), speed)
             state = .playing
             #if DEBUG
-            if !isForeground, UITesting.flag("LEAF_UI_BACKGROUND_AUDIO"), backgroundStarts.count < 4 {
+            if !isForeground, UITesting.flag(.backgroundAudio), backgroundStarts.count < 4 {
                 backgroundStarts.append(ProcessInfo.processInfo.systemUptime)
             }
             #endif

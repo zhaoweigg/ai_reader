@@ -38,7 +38,7 @@ struct ReaderAudioPlayer: View {
                     .accessibilityLabel("Stop listening").accessibilityIdentifier("stopListening")
             }
             #if DEBUG
-            if UITesting.flag("LEAF_UI_NOW_PLAYING") {
+            if UITesting.flag(.nowPlaying) {
                 // Re-rendered on every session change, so the value tracks the system player.
                 Text(session.state == .idle ? "" : " ").font(.system(size: 1)).frame(height: 1)
                     .accessibilityIdentifier("nowPlayingProbe").accessibilityValue(SystemNowPlayingPresenter.probe())
@@ -49,7 +49,7 @@ struct ReaderAudioPlayer: View {
                 Text(passage.text).font(.caption).lineLimit(1).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("spokenPassage")
                 #if DEBUG
                     // Equal paragraphs still have distinct source locations.
-                    .accessibilityValue(UITesting.flag("LEAF_UI_BACKGROUND_AUDIO") ? session.backgroundPlaybackTestEvidence
+                    .accessibilityValue(UITesting.flag(.backgroundAudio) ? session.backgroundPlaybackTestEvidence
                         : UITesting.testID == nil ? "" : passage.locator)
                 #endif
             }

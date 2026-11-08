@@ -142,7 +142,7 @@ final class LibraryStore: ObservableObject {
             books.append(book)
         }
         #if DEBUG
-        if let encoded = UITesting.environment("LEAF_UI_CONTENTS_BOOK"), let data = Data(base64Encoded: encoded) {
+        if let encoded = UITesting.value(.contentsBook), let data = Data(base64Encoded: encoded) {
             let fixture = disk.root.appendingPathComponent("Contents Location.epub")
             try data.write(to: fixture)
             defer { try? FileManager.default.removeItem(at: fixture) }

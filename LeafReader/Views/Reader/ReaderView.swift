@@ -209,17 +209,17 @@ struct ReaderContent: View {
         .statusBarHidden(!showsControls)
         .persistentSystemOverlays(showsControls ? .automatic : .hidden)
         .accessibilityAction(.escape) { library.flush(); dismiss() }
-        .task {
+        .task { [weak model] in
             // Configure the retained StateObjects after installation. Creating
             // them eagerly in init would allocate new readers/synthesizers on
             // every parent refresh as reading progress changes.
-            audio.source = { [weak model] locator in
+            audio.source = { locator in
                 guard let model else { throw ReadAloudError.unavailable }
                 return try await model.readAloudPassage(at: locator)
             }
-            audio.reveal = { [weak model] locator in await model?.revealReadAloud(at: locator) }
-            audio.highlight = { [weak model] passage, range, follow in model?.highlightReadAloud(passage, range: range, follow: follow) }
-            audio.clearSource = { [weak model] in model?.webView?.evaluateJavaScript("window.Leaf?.clearReadAloud()", completionHandler: nil) }
+            audio.reveal = { locator in await model?.revealReadAloud(at: locator) }
+            audio.highlight = { passage, range, follow in model?.highlightReadAloud(passage, range: range, follow: follow) }
+            audio.clearSource = { model?.webView?.evaluateJavaScript("window.Leaf?.clearReadAloud()", completionHandler: nil) }
             audio.book = ReadAloudBookInfo(title: book.title, author: book.author, coverURL: library.coverURL(book))
             library.open(book.id)
         }

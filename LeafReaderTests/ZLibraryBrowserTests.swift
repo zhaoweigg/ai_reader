@@ -29,7 +29,7 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
     }
     func start() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            var finished = false
+            nonisolated(unsafe) var finished = false
             listener.stateUpdateHandler = { state in
                 guard !finished else { return }
                 switch state {
@@ -92,8 +92,8 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
         addTeardownBlock { server.stop() }
         return server
     }
-    private func browser(_ server: CatalogLoopbackServer, data: WKWebsiteDataStore = .nonPersistent()) -> ZLibraryBrowserSession {
-        let browser = ZLibraryBrowserSession(testOrigin: server.origin, dataStore: data)
+    private func browser(_ server: CatalogLoopbackServer, data: WKWebsiteDataStore? = nil) -> ZLibraryBrowserSession {
+        let browser = ZLibraryBrowserSession(testOrigin: server.origin, dataStore: data ?? .nonPersistent())
         addTeardownBlock { await MainActor.run { browser.invalidate() } }
         return browser
     }
@@ -105,12 +105,6 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
     private func send(_ request: URLRequest, through browser: ZLibraryBrowserSession) async throws -> ZLibraryPayload {
         try await browser.send(request, toFile: false, progress: { _ in })
     }
-    private func wait(_ predicate: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(8)
-        while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(25)) }
-        XCTAssertTrue(predicate())
-    }
-
     func testHttpOnlyCookieRotationReachesNextRequestWithoutReopeningWebsite() async throws {
         let server = try await server { request in
             if request.path.contains("most-popular") { return .init(headers: ["Set-Cookie": "site_access=rotated; Path=/eapi; HttpOnly; SameSite=Lax"]) }
@@ -149,7 +143,7 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
         }
         let browser = browser(server)
         browser.presentWebsite()
-        try await wait { browser.webView.url?.host == server.origin.host && !browser.webView.isLoading }
+        try await eventually(timeout: 8, interval: 0.025) { browser.webView.url?.host == server.origin.host && !browser.webView.isLoading }
         browser.dismissWebsite()
         let result = try await send(request(server), through: browser)
         XCTAssertEqual(result.response.statusCode, 200)
@@ -252,7 +246,7 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
         }
         let browser = browser(server)
         browser.presentWebsite()
-        try await wait { browser.webView.url?.path == "/" && !browser.webView.isLoading }
+        try await eventually(timeout: 8, interval: 0.025) { browser.webView.url?.path == "/" && !browser.webView.isLoading }
         do { _ = try await send(request(server), through: browser); XCTFail("Persistent redirect must surface the access check") }
         catch let error as ZLibraryRequestFailure { XCTAssertTrue(error.diagnostic.contains("website reload: skipped"), error.diagnostic) }
         XCTAssertEqual(server.requests.filter { $0.path == "/" }.count, 1, "The presented document is left alone")
@@ -274,7 +268,7 @@ private final class CatalogLoopbackServer: @unchecked Sendable {
         let server = try await server { _ in .init(delay: 2) }, browser = browser(server)
         let request = request(server)
         let task = Task { try await self.send(request, through: browser) }
-        try await wait { server.requests.count == 1 }
+        try await eventually(timeout: 8, interval: 0.025) { server.requests.count == 1 }
         task.cancel()
         do { _ = try await task.value; XCTFail("Cancelled request completed") }
         catch { XCTAssertTrue(error is CancellationError) }

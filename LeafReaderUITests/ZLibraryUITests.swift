@@ -344,9 +344,6 @@ final class ZLibraryUITests: XCTestCase {
         capture("Three column popular Night portrait")
         app.terminate()
     }
-    @MainActor private func capture(_ name:String) {
-        let attachment = XCTAttachment(screenshot:XCUIScreen.main.screenshot());attachment.name = name;attachment.lifetime = .keepAlways;add(attachment)
-    }
     @MainActor private func assertWebsiteFixtureHasVisibleText(_ app: XCUIApplication) {
         let heading = app.webViews.staticTexts["Offline connection fixture"]
         XCTAssertTrue(heading.waitForExistence(timeout: 10))

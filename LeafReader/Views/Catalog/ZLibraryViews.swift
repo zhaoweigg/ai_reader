@@ -168,8 +168,8 @@ struct ZLibraryView: View {
         .refreshable { if bestsellersVisible { await discovery.load(force: true) } else { catalog.traceCatalogLoad("pull to refresh"); await catalog.reload() } }
         #if DEBUG
         .overlay(alignment: .bottomLeading) {
-            if UITesting.flag("LEAF_UI_ZLIB_THUMBNAILS") { ZLibraryImageDiagnostics() }
-            if UITesting.flag("LEAF_UI_ZLIB_TRACE") {
+            if UITesting.flag(.zlibThumbnails) { ZLibraryImageDiagnostics() }
+            if UITesting.flag(.zlibTrace) {
                 Text(catalog.loadTrace.joined(separator: " | ")).font(.system(size: 1)).opacity(0.02)
                     .frame(width: 2, height: 2).accessibilityIdentifier("zlibraryLoadTrace")
             }
@@ -443,7 +443,7 @@ private struct ZLibrarySignInWebView: UIViewRepresentable {
         }
         var fixture = false
         #if DEBUG
-        fixture = store.isPreview && UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE")
+        fixture = store.isPreview && UITesting.flag(.zlibWebsiteFixture)
         #endif
         browser.presentWebsite(fixture: fixture)
         return browser.webView
@@ -461,7 +461,8 @@ private struct ZLibrarySignInWebView: UIViewRepresentable {
     let book: ZLibraryBook
     private let images: ZLibraryImages
     @State private var loaded: (url: URL, image: UIImage)?
-    init(book: ZLibraryBook, images: ZLibraryImages = .shared) {
+    init(book: ZLibraryBook, images: ZLibraryImages? = nil) {
+        let images = images ?? .shared
         self.book = book; self.images = images
         _loaded = State(initialValue: book.coverURL.flatMap { url in images.cachedImage(url).map { (url, $0) } })
     }

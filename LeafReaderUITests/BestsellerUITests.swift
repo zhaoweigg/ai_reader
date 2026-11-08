@@ -13,9 +13,6 @@ final class BestsellerUITests: XCTestCase {
         addTeardownBlock { @MainActor in app.terminate() }
         return app
     }
-    @MainActor private func capture(_ name: String) {
-        let image = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); image.name = name; image.lifetime = .keepAlways; add(image)
-    }
     @MainActor private func reveal(_ element: XCUIElement, app: XCUIApplication) {
         for _ in 0..<8 {
             // Lazy Library cards have no AX snapshot before they scroll into

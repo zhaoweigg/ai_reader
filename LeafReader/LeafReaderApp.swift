@@ -26,31 +26,31 @@ struct LeafReaderApp: App {
         #if DEBUG
         if let id = UITesting.testID {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUITests/\(id.uuidString)", isDirectory: true)
-            seedSamples = !UITesting.flag("LEAF_UI_EMPTY_LIBRARY")
+            seedSamples = !UITesting.flag(.emptyLibrary)
             chatCredentials.service = "com.leafreader.uitests.\(id.uuidString)"
-            if UITesting.flag("LEAF_UI_CHAT_MOCK") {
-                chatProvider = UITestChatProvider(slow: UITesting.flag("LEAF_UI_CHAT_SLOW"))
+            if UITesting.flag(.chatMock) {
+                chatProvider = UITestChatProvider(slow: UITesting.flag(.chatSlow))
             }
-            if UITesting.flag("LEAF_UI_CHAT_RECOVERY") { chatProvider = UITestRecoveryChatProvider() }
+            if UITesting.flag(.chatRecovery) { chatProvider = UITestRecoveryChatProvider() }
             defaults = UITesting.defaults
-            if UITesting.flag("LEAF_UI_CHAT_RECOVERY_AGENT") || UITesting.flag("LEAF_UI_CHAT_AGENT") {
+            if UITesting.flag(.chatRecoveryAgent) || UITesting.flag(.chatAgent) {
                 var configuration = ChatConfiguration(); configuration.harness = .agent
                 defaults.set(try? JSONEncoder().encode(configuration), forKey: "ai.configuration")
             }
-            if UITesting.flag("LEAF_UI_SYNC_FIXTURE"), let root {
+            if UITesting.flag(.syncFixture), let root {
                 syncFolder = UITestSyncFixture.seed(next: root)
                 defaults.set(false, forKey: ICloudSync.Keys.keepBooks)
             }
-            if UITesting.flag("LEAF_UI_CHATGPT_CONNECTED") {
+            if UITesting.flag(.chatgptConnected) {
                 chatGPT = ChatGPTAccountStore.uiTestConnected(defaults: defaults, credentials: chatCredentials)
             }
             // UI tests never reach the live catalog from the library; shelf cases opt in.
-            catalogDiscovery = UITesting.flag("LEAF_UI_ZLIB_MOCK") && UITesting.flag("LEAF_UI_ZLIB_SHELF")
-            bestsellerShelf = UITesting.flag("LEAF_UI_BESTSELLERS_MOCK")
+            catalogDiscovery = UITesting.flag(.zlibMock) && UITesting.flag(.zlibShelf)
+            bestsellerShelf = UITesting.flag(.bestsellersMock)
             if bestsellerShelf { bestsellerService = UITestBestsellerClient(); catalogClient = UITestZLibraryClient() }
-            if UITesting.flag("LEAF_UI_ZLIB_MOCK") {
+            if UITesting.flag(.zlibMock) {
                 catalogClient = UITestZLibraryClient()
-                if UITesting.flag("LEAF_UI_ZLIB_WEBSITE_FIXTURE") {
+                if UITesting.flag(.zlibWebsiteFixture) {
                     defaults.set("https://catalog.example", forKey: "zlibrary.origin")
                 }
             }
@@ -65,7 +65,7 @@ struct LeafReaderApp: App {
         _library = StateObject(wrappedValue: libraryStore)
         #if DEBUG
         // A saved place for the Bookmarks tab's chat, without opening a book first.
-        if UITesting.flag("LEAF_UI_SAVED_FIXTURE"), let book = libraryStore.books.first(where: { $0.format != .pdf }), book.bookmarks.isEmpty {
+        if UITesting.flag(.savedFixture), let book = libraryStore.books.first(where: { $0.format != .pdf }), book.bookmarks.isEmpty {
             libraryStore.toggleBookmark(book.id, locator: "leaf-ui-saved-fixture", fraction: 0.42, label: "Fixture bookmark")
         }
         #endif
@@ -74,7 +74,7 @@ struct LeafReaderApp: App {
         var catalogCredentials = chatCredentials
         catalogCredentials.service += ".zlibrary"
         #if DEBUG
-        if UITesting.flag("LEAF_UI_BESTSELLERS_MOCK"), !UITesting.flag("LEAF_UI_BESTSELLERS_DISCONNECTED") {
+        if UITesting.flag(.bestsellersMock), !UITesting.flag(.bestsellersDisconnected) {
             let value = ZLibrarySession(userID: "bestseller-preview", userKey: "fixture-only")
             try? catalogCredentials.write(String(decoding: JSONEncoder().encode(value), as: UTF8.self), account: defaults.string(forKey: "zlibrary.origin") ?? "https://z-library.sk")
         }
@@ -95,7 +95,7 @@ struct LeafReaderApp: App {
         // observer recognizer is proven not to change how reader taps behave.
         var diagnosticsEnvironment = ProcessInfo.processInfo.environment
         #if DEBUG
-        if UITesting.flag("LEAF_UI_SCROLL_TOUCH_TRACE") { diagnosticsEnvironment["LEAF_SCROLL_DIAGNOSTICS"] = "1" }
+        if UITesting.flag(.scrollTouchTrace) { diagnosticsEnvironment["LEAF_SCROLL_DIAGNOSTICS"] = "1" }
         #endif
         ReaderScrollDiagnostics.shared.configure(defaults: defaults, environment: diagnosticsEnvironment,
             directory: (root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)?.appendingPathComponent("Diagnostics", isDirectory: true))

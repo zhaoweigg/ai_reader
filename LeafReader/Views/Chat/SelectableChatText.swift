@@ -7,7 +7,7 @@ enum ChatTextWork {
     static var updates = 0
     static var formats = 0
     static var measurements = 0
-    static var enabled: Bool { UITesting.flag("LEAF_UI_CHAT_SCROLL_PERF") }
+    static var enabled: Bool { UITesting.flag(.chatScrollPerf) }
 }
 #endif
 

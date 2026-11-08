@@ -22,12 +22,6 @@ import ImageIO
     private func assertPresent<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNotNil(value, file: file, line: line) }
     private func assertMissing<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNil(value, file: file, line: line) }
     private func unwrap<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) throws -> T { try XCTUnwrap(value, file: file, line: line) }
-    private func folder() throws -> URL {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CoverTests-\(UUID())")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        return directory
-    }
     private func pixels(_ color: UIColor = .red, size: CGSize = CGSize(width: 240, height: 360)) -> Data {
         UIGraphicsImageRenderer(size: size, format: {
             let format = UIGraphicsImageRendererFormat(); format.scale = 1; return format
@@ -39,15 +33,8 @@ import ImageIO
     private func files(_ directory: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).filter { $0.pathExtension == "png" }
     }
-    private func wait(_ predicate: () -> Bool) async throws {
-        for _ in 0..<100 {
-            if predicate() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTAssertTrue(predicate())
-    }
     func testWarmThumbnailIsAvailableSynchronouslyAndDoesNotDownloadAgain() async throws {
-        let data = pixels(), directory = try folder()
+        let data = pixels(), directory = try temporaryFolder("CoverTests")
         let transport = CoverTransport { [self] in response($0, data: data) }
         let images = ZLibraryImages(transport: transport, directory: directory)
         let first = try unwrap(await images.image(url))
@@ -56,7 +43,7 @@ import ImageIO
         XCTAssertTrue(second === first); XCTAssertEqual(transport.calls[url], 1)
     }
     func testMemoryEvictionAndNewLoaderRestoreThumbnailWithoutNetwork() async throws {
-        let data = pixels(), directory = try folder()
+        let data = pixels(), directory = try temporaryFolder("CoverTests")
         let transport = CoverTransport { [self] in response($0, data: data) }
         let images = ZLibraryImages(transport: transport, directory: directory)
         assertPresent(await images.image(url))
@@ -71,7 +58,7 @@ import ImageIO
         let transport = CoverTransport { [self] request in
             try await Task.sleep(for: .milliseconds(80)); return response(request, data: data)
         }
-        let images = ZLibraryImages(transport: transport, directory: try folder())
+        let images = ZLibraryImages(transport: transport, directory: try temporaryFolder("CoverTests"))
         async let first = images.image(url)
         async let second = images.image(url)
         let result = await (first, second)
@@ -83,9 +70,9 @@ import ImageIO
         let transport = CoverTransport { [self] request in
             try await Task.sleep(for: .milliseconds(150)); return response(request, data: data)
         }
-        let images = ZLibraryImages(transport: transport, directory: try folder())
+        let images = ZLibraryImages(transport: transport, directory: try temporaryFolder("CoverTests"))
         let first = Task { await images.image(url) }, second = Task { await images.image(url) }
-        try await wait { transport.active == 1 }
+        try await eventually(timeout: 1) { transport.active == 1 }
         first.cancel()
         let kept = await second.value, discarded = await first.value
         XCTAssertNotNil(kept); XCTAssertNil(discarded); XCTAssertEqual(transport.calls[url], 1)
@@ -95,10 +82,10 @@ import ImageIO
         let transport = CoverTransport { [self] request in
             try await Task.sleep(for: .milliseconds(120)); return response(request, data: data)
         }
-        let images = ZLibraryImages(transport: transport, directory: try folder())
+        let images = ZLibraryImages(transport: transport, directory: try temporaryFolder("CoverTests"))
         let first = Task { await images.image(url) }
-        try await wait { transport.active == 1 }; first.cancel()
-        try await wait { transport.active == 0 }
+        try await eventually(timeout: 1) { transport.active == 1 }; first.cancel()
+        try await eventually(timeout: 1) { transport.active == 0 }
         let next = await images.image(url), discarded = await first.value
         XCTAssertNotNil(next); XCTAssertNil(discarded)
         XCTAssertTrue(images.cachedImage(url) === next); XCTAssertEqual(transport.calls[url], 2)
@@ -108,7 +95,7 @@ import ImageIO
         let transport = CoverTransport { [self] request in
             try await Task.sleep(for: .milliseconds(40)); return response(request, data: data)
         }
-        let images = ZLibraryImages(transport: transport, directory: try folder())
+        let images = ZLibraryImages(transport: transport, directory: try temporaryFolder("CoverTests"))
         var loaded = 0
         await withTaskGroup(of: Bool.self) { group in
             for i in 0..<24 { group.addTask { await images.image(URL(string: "https://covers.example/\(i).png")!) != nil } }
@@ -125,13 +112,13 @@ import ImageIO
             if responseNumber == 2 { return response(request, data: data, status: 404) }
             return response(request, data: data)
         }
-        let directory = try folder(), images = ZLibraryImages(transport: transport, directory: directory)
+        let directory = try temporaryFolder("CoverTests"), images = ZLibraryImages(transport: transport, directory: directory)
         assertMissing(await images.image(url)); assertMissing(await images.image(url))
         XCTAssertTrue(try files(directory).isEmpty)
         assertPresent(await images.image(url)); XCTAssertEqual(transport.calls[url], 3)
     }
     func testCorruptDiskThumbnailIsReplacedWithoutPoisoningMemory() async throws {
-        let data = pixels(), directory = try folder()
+        let data = pixels(), directory = try temporaryFolder("CoverTests")
         let transport = CoverTransport { [self] in response($0, data: data) }
         let images = ZLibraryImages(transport: transport, directory: directory)
         assertPresent(await images.image(url)); images.discardDecodedImages()
@@ -139,7 +126,7 @@ import ImageIO
         assertPresent(await images.image(url)); XCTAssertEqual(transport.calls[url], 2)
     }
     func testDiskCacheBoundsCountAndBytesAndExpiresOldThumbnails() async throws {
-        let directory = try folder(), data = pixels()
+        let directory = try temporaryFolder("CoverTests"), data = pixels()
         let disk = ZLibraryThumbnailDiskCache(directory: directory, countLimit: 3)
         for i in 0..<8 { assertPresent(await disk.store(data, for: URL(string: "https://covers.example/\(i)")!)) }
         XCTAssertEqual(try files(directory).count, 3)
@@ -147,11 +134,11 @@ import ImageIO
             try FileManager.default.setAttributes([.modificationDate: Date.distantPast], ofItemAtPath: file.path)
         }
         assertMissing(await disk.image(URL(string: "https://covers.example/7")!))
-        let small = ZLibraryThumbnailDiskCache(directory: try folder(), byteLimit: 1)
+        let small = ZLibraryThumbnailDiskCache(directory: try temporaryFolder("CoverTests"), byteLimit: 1)
         assertPresent(await small.store(data, for: url)); assertMissing(await small.image(url))
     }
     func testOnlyDownsampledPixelsArePersistedAndURLQueriesRemainDistinct() async throws {
-        let directory = try folder(), disk = ZLibraryThumbnailDiskCache(directory: directory)
+        let directory = try temporaryFolder("CoverTests"), disk = ZLibraryThumbnailDiskCache(directory: directory)
         let first = URL(string: "https://covers.example/book?edition=1")!, second = URL(string: "https://covers.example/book?edition=2")!
         let large = try unwrap(await disk.store(pixels(size: CGSize(width: 1200, height: 1800)), for: first))
         XCTAssertEqual(max(large.width, large.height), 360)
@@ -167,7 +154,7 @@ import ImageIO
     func testWarmRecreatedCoverRendersImmediatelyAndURLChangesNeverShowTheOldCover() async throws {
         let data = pixels(), blue = pixels(.blue)
         let transport = CoverTransport { [self] request in response(request, data: request.url == url ? data : blue) }
-        let images = ZLibraryImages(transport: transport, directory: try folder()), second = URL(string: "https://covers.example/other.png")!
+        let images = ZLibraryImages(transport: transport, directory: try temporaryFolder("CoverTests")), second = URL(string: "https://covers.example/other.png")!
         assertPresent(await images.image(url)); assertPresent(await images.image(second))
         func book(_ cover: URL?) -> ZLibraryBook {
             ZLibraryBook(remoteID: "12", hash: "aabbcc", title: "Test", author: "Leaf", fileExtension: "epub", size: "1 MB", language: "English", year: "2026", coverURL: cover)

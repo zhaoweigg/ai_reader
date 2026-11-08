@@ -13,7 +13,7 @@ struct BestsellerCover: View {
         ZStack {
             RoundedRectangle(cornerRadius: 4).fill(theme.surface)
             #if DEBUG
-            if UITesting.flag("LEAF_UI_BESTSELLERS_MOCK"), let image = UITestBestsellerClient.cover(book) {
+            if UITesting.flag(.bestsellersMock), let image = UITestBestsellerClient.cover(book) {
                 Image(uiImage: image).resizable().scaledToFit()
             } else { remote }
             #else

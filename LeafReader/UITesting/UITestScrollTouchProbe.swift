@@ -24,7 +24,7 @@ import UIKit
     private static let ticker = Ticker()
 
     static func record(_ scrolls: [UIScrollView], accepted: Bool, at timestamp: TimeInterval, coastAge: (UIScrollView) -> TimeInterval?) {
-        guard UITesting.flag("LEAF_UI_SCROLL_TOUCH_TRACE") else { return }
+        guard UITesting.flag(.scrollTouchTrace) else { return }
         self.accepted = accepted ? "tap" : "stop"
         entries = scrolls.map { scroll in
             var animating = false
@@ -63,7 +63,7 @@ struct UITestScrollTouchProbe: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = Probe()
         view.isUserInteractionEnabled = false
-        if UITesting.flag("LEAF_UI_SCROLL_TOUCH_TRACE") {
+        if UITesting.flag(.scrollTouchTrace) {
             view.isAccessibilityElement = true
             view.accessibilityIdentifier = "uitestScrollTouch"
             view.accessibilityLabel = "Scroll touch trace"
