@@ -1,13 +1,15 @@
 import XCTest
 
 final class BestsellerUITests: XCTestCase {
-    @MainActor private func launch(_ flags: [String] = [], agent: Bool = false) -> XCUIApplication {
+    @MainActor private func launch(_ flags: [String] = [], agent: Bool = false, catalogFlags: [String] = [], emptyLibrary: Bool = true) -> XCUIApplication {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
         app.launchEnvironment = ["LEAF_UI_TEST_ID": UUID().uuidString, "LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_CHAT_MOCK": "1",
                                  "LEAF_UI_BESTSELLERS_MOCK": "1", "LEAF_UI_ZLIB_SHELF": "1", "LEAF_UI_EMPTY_LIBRARY": "1", "LEAF_UI_SCENE_GEOMETRY_FIXTURE": "1"]
         for flag in flags { app.launchEnvironment["LEAF_UI_BESTSELLERS_" + flag] = "1" }
+        for flag in catalogFlags { app.launchEnvironment["LEAF_UI_ZLIB_" + flag] = "1" }
+        if !emptyLibrary { app.launchEnvironment.removeValue(forKey: "LEAF_UI_EMPTY_LIBRARY") }
         if agent { app.launchEnvironment["LEAF_UI_CHAT_AGENT"] = "1" }
         app.launch(); registerSceneGeometryCleanup(app: app); setReaderOrientation(.portrait, app: app)
         addTeardownBlock { @MainActor in app.terminate() }
@@ -55,6 +57,68 @@ final class BestsellerUITests: XCTestCase {
         let book = app.buttons["book-" + title]; reveal(book, app: app)
         XCTAssertEqual(app.buttons.matching(identifier: "book-" + title).count, 1)
         return book
+    }
+    @MainActor private func libraryShelf(_ app: XCUIApplication, book: String) {
+        let tab = app.tabBars.buttons["Library"]; tab.leafTapVisible(in: app); XCTAssertTrue(tab.isSelected)
+        let title = app.staticTexts["discoverShelfTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate(format: "label == %@", "Recommended for you"), evaluatedWith: title); waitForExpectations(timeout: 10)
+        let card = app.buttons["discoverShelfBook-" + book]; reveal(card, app: app)
+        XCTAssertTrue(card.exists)
+    }
+    @MainActor private func connectCatalog(_ app: XCUIApplication) {
+        open(app)
+        app.buttons["Z-Library connection"].leafTapVisible(in: app)
+        app.buttons["zlibraryPreviewConnect"].leafTapVisible(in: app)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["zlibraryPreviewConnect"]); waitForExpectations(timeout: 8)
+    }
+    @MainActor func testLibraryRecommendationsRefreshAfterConnectingAndReconnecting() {
+        let app = launch(["DISCONNECTED"], catalogFlags: ["SHELF_REFRESH"], emptyLibrary: false)
+        app.tabBars.buttons["Settings"].leafTapVisible(in: app); app.buttons["Paper theme"].leafTapVisible(in: app)
+        app.tabBars.buttons["Library"].leafTapVisible(in: app)
+        XCTAssertTrue(app.staticTexts["discoverShelfTitle"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["discoverShelfTitle"].label, "Popular on Z-Library")
+        connectCatalog(app); libraryShelf(app, book: "shelf-initial")
+        capture("Library recommendations appear after connecting")
+        connectCatalog(app); libraryShelf(app, book: "shelf-refreshed")
+        XCTAssertFalse(app.buttons["discoverShelfBook-shelf-initial"].exists)
+        let bestseller = app.buttons["bestsellerShelfBook-1"]; reveal(bestseller, app: app); XCTAssertTrue(bestseller.exists)
+        capture("Paper Library reconnect updates recommendations beside bestsellers")
+    }
+    @MainActor func testLibraryRecommendationFailureShowsRetryAndRecoversWithBestsellersIntact() {
+        let app = launch(["DISCONNECTED"], catalogFlags: ["SHELF_RETRY"])
+        app.tabBars.buttons["Settings"].leafTapVisible(in: app); app.buttons["Night theme"].leafTapVisible(in: app)
+        connectCatalog(app); app.tabBars.buttons["Library"].leafTapVisible(in: app)
+        let error = app.staticTexts["discoverShelfError"]; XCTAssertTrue(error.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["retryDiscoverShelf"].isEnabled); capture("Night Library shows recoverable recommendation error")
+        app.buttons["retryDiscoverShelf"].leafTapVisible(in: app)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: error); waitForExpectations(timeout: 10)
+        let cards = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "discoverShelfBook-"))
+        expectation(for: NSPredicate { _, _ in cards.count > 0 }, evaluatedWith: app); waitForExpectations(timeout: 10)
+        XCTAssertEqual(app.staticTexts["discoverShelfTitle"].label, "Recommended for you")
+        let bestseller = app.buttons["bestsellerShelfBook-1"]; reveal(bestseller, app: app); XCTAssertTrue(bestseller.exists)
+        capture("Night Library retry restores recommendations and keeps bestseller covers")
+    }
+    @MainActor func testLibraryPullToRefreshRequestsFreshRecommendationsAndKeepsBestsellers() {
+        let app = launch(catalogFlags: ["SHELF_REFRESH"])
+        libraryShelf(app, book: "shelf-initial")
+        // Start on the plain Library header and drag down within its visible
+        // vertical scroll surface, above the horizontal recommendation row.
+        let viewport = app.leafContentViewport, origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: app.frame.midX, dy: viewport.minY + 70))
+            .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: app.frame.midX, dy: viewport.maxY - 70)), withVelocity: .slow, thenHoldForDuration: 0.2)
+        let updated = app.buttons["discoverShelfBook-shelf-refreshed"]; XCTAssertTrue(updated.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["discoverShelfBook-shelf-initial"].exists)
+        let bestseller = app.buttons["bestsellerShelfBook-1"]; reveal(bestseller, app: app); XCTAssertTrue(bestseller.exists)
+        capture("Library pull refresh updates recommendations beside bestseller shelf")
+    }
+    @MainActor func testLibraryEmptyRecommendationsHaveAnHonestStateAndKeepBestsellers() {
+        let app = launch(catalogFlags: ["SHELF_EMPTY"])
+        let empty = app.staticTexts["discoverShelfEmpty"]; XCTAssertTrue(empty.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["discoverShelfError"].exists)
+        XCTAssertEqual(app.staticTexts["discoverShelfTitle"].label, "Recommended for you")
+        let bestseller = app.buttons["bestsellerShelfBook-1"]; reveal(bestseller, app: app); XCTAssertTrue(bestseller.exists)
+        capture("Connected empty recommendations keep the public bestseller shelf")
     }
     @MainActor func testLibraryShelfAndAllSourceCategoryFiltersPreserveCatalogSearch() {
         let app = launch()
