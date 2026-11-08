@@ -18,19 +18,22 @@ final class BestsellerUITests: XCTestCase {
     }
     @MainActor private func reveal(_ element: XCUIElement, app: XCUIApplication) {
         for _ in 0..<8 {
+            // Lazy Library cards have no AX snapshot before they scroll into
+            // view. Do not read identifier/frame to find their parent yet.
             if element.exists {
                 let frame = element.frame, viewport = app.leafContentViewport
                 let visible = frame.intersection(viewport)
                 if frame.width > 1 && frame.height > 1 && !visible.isNull,
                    visible.width + 0.5 >= min(24, frame.width), visible.height + 0.5 >= min(24, frame.height) { return }
-                if frame.height > 0 && frame.maxY <= viewport.minY { app.leafDragContent(up: false, in: app.scrollViews.containing(.any, identifier: element.identifier).firstMatch); continue }
-            }
-            app.leafDragContent(up: true, in: app.scrollViews.containing(.any, identifier: element.identifier).firstMatch)
+                let scroll = app.scrollViews.containing(.any, identifier: element.identifier).firstMatch
+                app.leafDragContent(up: frame.maxY > viewport.minY, in: scroll)
+            } else { app.leafDragContent(up: true) }
         }
         XCTContext.runActivity(named: "Unreachable discovery control") { activity in
             let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways; activity.add(screenshot)
         }
-        XCTFail("Control has no visible tap area: \(element.identifier), frame \(element.frame), viewport \(app.leafContentViewport)")
+        let description = element.exists ? "\(element.identifier), frame \(element.frame)" : "lazy control has not materialized"
+        XCTFail("Control has no visible tap area: \(description), viewport \(app.leafContentViewport)")
     }
     @MainActor private func open(_ app: XCUIApplication) {
         app.tabBars.buttons["Discover"].leafTapVisible(in: app)

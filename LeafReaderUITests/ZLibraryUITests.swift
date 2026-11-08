@@ -207,10 +207,14 @@ final class ZLibraryUITests: XCTestCase {
         openDiscover(app)
         _ = loaded("async1")
         capture("Async metadata Night portrait")
-        app.buttons["catalogBook-async1"].leafTapVisible(in: app)
+        let selected = app.buttons["catalogBook-async1"]
+        revealCatalogElement(selected, app: app); selected.leafTapVisible(in: app)
+        let details = app.navigationBars["Book details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["4.8 · 42 ratings"].waitForExistence(timeout: 5))
         capture("Background-loaded edition opens with cached details")
-        app.navigationBars.buttons.element(boundBy: 0).leafTapVisible(in: app)
+        details.buttons["Z-Library"].leafTapVisible(in: app)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: details); waitForExpectations(timeout: 8)
         _ = loaded("async1")
         app.terminate()
     }
