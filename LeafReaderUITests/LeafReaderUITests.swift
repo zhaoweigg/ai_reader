@@ -2058,7 +2058,7 @@ final class LeafReaderUITests: XCTestCase {
             let current=app.sliders["readingProgress"].value as? String,title=app.staticTexts["readerChapterTitle"].label
             if let progress {XCTAssertEqual(current,progress)} else {progress=current}
             if let chapter {XCTAssertEqual(title,chapter)} else {chapter=title}
-            if x==0.5 {capture(flow+" reader Exit visible with chat",app:app)}
+            if x==0.5 {capture(flow+" reader Exit visible with chat")}
             tapBook(x)
             expectation(for:NSPredicate(format:"exists == false"),evaluatedWith:close);waitForExpectations(timeout:5)
         }
@@ -2074,13 +2074,13 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(close.waitForExistence(timeout:5));XCTAssertTrue(close.isHittable)
         XCTAssertEqual(quote.label,quoted);XCTAssertEqual(input.value as? String,"Keep my exit question")
         XCTAssertEqual(surface.frame.width,original.width,accuracy:2);XCTAssertEqual(surface.frame.height,original.height,accuracy:2)
-        capture(flow+" Exit reachable while composing with quote",app:app)
+        capture(flow+" Exit reachable while composing with quote")
         if app.buttons["Hide keyboard"].isHittable {app.buttons["Hide keyboard"].tap()}
         orient(.landscapeLeft)
         if close.exists {tapBook()}
         tapBook();XCTAssertTrue(close.waitForExistence(timeout:5));XCTAssertTrue(close.isHittable)
         XCTAssertTrue(app.buttons["closeReaderChat"].exists);XCTAssertEqual(input.value as? String,"Keep my exit question")
-        capture(flow+" landscape Exit with chat",app:app)
+        capture(flow+" landscape Exit with chat")
         close.tap()
         XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout:8),"Exit must return to the library without first closing chat")
         orient(.portrait)
@@ -2088,7 +2088,7 @@ final class LeafReaderUITests: XCTestCase {
         else {app.buttons["featuredBook"].tap()}
         waitForBook(app);app.buttons["openReaderChat"].tap()
         XCTAssertEqual(input.value as? String,"Keep my exit question");XCTAssertEqual(quote.label,quoted)
-        capture(flow+" draft and quote survive direct book Exit",app:app)
+        capture(flow+" draft and quote survive direct book Exit")
     }
 
     @MainActor func testBookEndingAboveChatInPages() { verifyBookEndingAboveChat(flow: "Pages") }
@@ -2104,7 +2104,7 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertTrue(app.buttons["Page 4"].waitForExistence(timeout: 5));app.buttons["Page 4"].tap()
             showReaderControls(app)
         } else { app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1) }
-        capture(flow+" ending before chat",app:app)
+        capture(flow+" ending before chat")
         let title=app.staticTexts["readerChapterTitle"]
         expectation(for: NSPredicate(format: "label CONTAINS %@",flow == "PDF" ? "Page 4" : "Carry it with you"),evaluatedWith:title)
         waitForExpectations(timeout:10)
@@ -2122,7 +2122,7 @@ final class LeafReaderUITests: XCTestCase {
                 start.press(forDuration:0.01,thenDragTo:end,withVelocity:.slow,thenHoldForDuration:0.1)
             }
             let endings=flow == "PDF" ? surface.staticTexts.allElementsBoundByIndex : surface.staticTexts.containing(NSPredicate(format:"label CONTAINS %@","world will keep offering itself")).allElementsBoundByIndex
-            capture(flow+" final lines "+label,app:app)
+            capture(flow+" final lines "+label)
             XCTAssertFalse(endings.isEmpty)
             let last=endings.last!
             XCTAssertLessThanOrEqual(last.frame.maxY,panel.frame.minY+2,"Final text must clear the chat: \(last.frame) vs \(panel.frame)")
@@ -2155,7 +2155,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(title.label.contains(flow == "PDF" ? "Page 4" : "Carry it with you"))
         app.buttons["openReaderChat"].tap()
         XCTAssertEqual(input.value as? String,"Question about the ending")
-        capture(flow+" saved passage after reopening",app:app)
+        capture(flow+" saved passage after reopening")
         // Rotation preserves the passage, which can reflow onto the preceding
         // physical page. Navigate back to the actual ending before testing it.
         if flow == "Pages" {
@@ -2706,7 +2706,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(input.value as? String,"Why does the author say this?")
         XCTAssertFalse(app.textViews["chatQuestion"].exists,"Quoting must not send the draft")
         XCTAssertTrue(app.buttons["closeReaderChat"].exists)
-        capture(flow + " selection automatically quoted with native menu",app:app)
+        capture(flow + " selection automatically quoted with native menu")
         input.tap();input.typeText(" In this passage.")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
         let composedDraft = input.value as? String ?? ""
@@ -2716,13 +2716,13 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(passage.label,quote,"Keyboard focus must keep the attached selection")
         XCTAssertEqual(surface.frame.width,originalFrame.width,accuracy:2)
         XCTAssertEqual(surface.frame.height,originalFrame.height,accuracy:2)
-        capture(flow + " automatic quote while composing",app:app)
+        capture(flow + " automatic quote while composing")
         orient(.landscapeLeft)
 
         expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);waitForExpectations(timeout:5)
         XCTAssertEqual(passage.label,quote)
         XCTAssertTrue(input.isHittable)
-        capture(flow + " automatic quote landscape keyboard",app:app)
+        capture(flow + " automatic quote landscape keyboard")
         orient(.portrait)
 
         expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
@@ -2738,7 +2738,7 @@ final class LeafReaderUITests: XCTestCase {
         waitForBook(app);app.buttons["openReaderChat"].tap()
         XCTAssertEqual(passage.label,quote)
         XCTAssertEqual(input.value as? String,composedDraft)
-        capture(flow + " automatic quote and draft restored",app:app)
+        capture(flow + " automatic quote and draft restored")
         app.buttons["removeChatSelection"].tap()
         XCTAssertFalse(passage.exists)
         input.tap();input.typeText(" Still my question.")
@@ -3014,7 +3014,7 @@ final class LeafReaderUITests: XCTestCase {
             self.expectation(for:NSPredicate { _,_ in app.frame.width > app.frame.height },evaluatedWith:app);self.waitForExpectations(timeout:5)
             XCTAssertLessThanOrEqual(launcher.frame.maxX,surface.frame.maxX)
             XCTAssertLessThanOrEqual(launcher.frame.maxY,surface.frame.maxY)
-            self.capture(flow + " faint button landscape",app:app)
+            self.capture(flow + " faint button landscape")
             self.orient(.portrait)
 
             self.expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);self.waitForExpectations(timeout:5)
@@ -3045,7 +3045,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(slider.value as? String,"88%")
         slider.adjust(toNormalizedSliderPosition:0)
         XCTAssertEqual(slider.value as? String,"20%")
-        capture(flow + " more visible button settings preview",app:app)
+        capture(flow + " more visible button settings preview")
         app.navigationBars.buttons["Settings"].tap();app.tabBars.buttons["Library"].tap()
         app.buttons["featuredBook"].tap();showReaderControls(app)
         app.buttons["Appearance"].tap()
@@ -3059,7 +3059,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(launcher.frame.width,52,accuracy:1)
         launcher.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).press(forDuration:0.65,thenDragTo:surface.coordinate(withNormalizedOffset:CGVector(dx:0.75,dy:0.4)))
         XCTAssertEqual(launcher.value as? String,"Move mode")
-        capture(flow + " stronger tint in drag mode",app:app)
+        capture(flow + " stronger tint in drag mode")
         app.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.6)).tap()
         XCTAssertEqual(launcher.value as? String,"Stationary")
         let position = launcher.frame
@@ -3096,7 +3096,7 @@ final class LeafReaderUITests: XCTestCase {
             }
         }
         XCTAssertEqual(slider.value as? String,"95%")
-        capture(flow + " faint button live preview",app:app)
+        capture(flow + " faint button live preview")
         app.buttons["Done"].tap()
         XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout:5))
         XCTAssertEqual(input.value as? String,"Keep my transparency draft")
@@ -3105,7 +3105,7 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["closeReaderChat"].tap()
         XCTAssertEqual(launcher.frame.minX,position.minX,accuracy:1)
         XCTAssertEqual(launcher.frame.minY,position.minY,accuracy:1)
-        capture(flow + " 95 percent transparent button over text",app:app)
+        capture(flow + " 95 percent transparent button over text")
         checkRotation?(app, launcher, surface)
         showReaderControls(app);app.buttons["closeBook"].tap()
         app.terminate();app.launch();openButtonSettings()
@@ -3117,7 +3117,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(launcher.frame.minX,position.minX,accuracy:2)
         XCTAssertEqual(launcher.frame.minY,position.minY,accuracy:2)
         XCTAssertEqual(launcher.frame.width,52,accuracy:1)
-        capture(flow + " default opacity and position restored",app:app)
+        capture(flow + " default opacity and position restored")
     }
 
     @MainActor func testTranslucentChatLauncherInBothFlowsThemesAndRotation() {

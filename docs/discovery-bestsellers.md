@@ -10,6 +10,8 @@ Bestseller lookup shares the existing Z-Library connection and transport. It use
 
 Ask Leaf reads the selected chart's source, category, date, ranks, and public descriptions, or the open work/edition. Keys and catalog session data never enter that context.
 
+Library refreshes its Z-Library shelf when the account, connection, or website changes. Pull to refresh reloads both the account shelf and the selected bestseller list. Shelf failures keep saved books visible, show a retry action, and allow an immediate manual retry; automatic retries have a short cooldown. A successful matching Discover feed refresh also updates Library, and older in-flight shelf responses cannot replace it.
+
 ## Verification scope
 
 `BestsellerFeedTests`, `BestsellerStoreTests`, and `BestsellerMatchingTests` cover parsing, full rankings, provider failures, key privacy, cache retention, source changes, account changes, concurrent lookup limits, cancellation, ambiguity, and work ownership. `BestsellerUITests` covers the Library shelf, all filters, catalog search, matching/import transitions, account setup, retries/quota/cancellation, Ask Leaf, the three appearances, scene geometry, and imported-book Pages/Scroll smoke checks. DEBUG native fixtures use original TXT passages and local publisher cover samples; existing catalog EPUB regressions remain separate.

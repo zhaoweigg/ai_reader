@@ -215,6 +215,18 @@ final class BestsellerFeedTests: XCTestCase {
         XCTAssertNil(store.existing(entry(author: "Other Author"), in: library))
         XCTAssertNil(store.existing(entry(title: "The Test Book: A different volume"), in: library))
     }
+    func testLibraryShelfRefreshBypassesFreshCacheAndHonorsAutomaticDiscoverySetting() async {
+        let service = BestsellerService(), store = BestsellerStore(defaults: defaults(), credentials: BestsellerCredentials(), service: service)
+        await store.loadShelf(); await store.loadShelf()
+        let cachedCalls = await service.calls; XCTAssertEqual(cachedCalls, 1)
+        await store.loadShelf(force: true)
+        let refreshedCalls = await service.calls; XCTAssertEqual(refreshedCalls, 2)
+        XCTAssertEqual(store.source, .indie); XCTAssertEqual(store.genre, .nonfiction)
+        let quietService = BestsellerService()
+        let quiet = BestsellerStore(defaults: defaults(), credentials: BestsellerCredentials(), service: quietService, allowsAutomaticShelf: false)
+        await quiet.loadShelf(force: true)
+        let quietCalls = await quietService.calls; XCTAssertEqual(quietCalls, 0); XCTAssertTrue(quiet.books.isEmpty)
+    }
     func testAskLeafReadsIndependentSearchThenReturnsToTheListOrSelectedEdition() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }

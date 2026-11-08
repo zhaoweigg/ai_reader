@@ -195,7 +195,7 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertTrue(store.shelf.isEmpty)
         XCTAssertTrue(ZLibraryStore(defaults: defaults, credentials: credentials, client: client).shelf.isEmpty)
     }
-    func testShelfReusesDiscoverListAndFailureIsSilentAndNotRepeated() async throws {
+    func testShelfReusesDiscoverListAndShowsThrottledFailure() async throws {
         let client = CatalogService(), (store, _, _) = store(client)
         client.popularBooks = [book]
         await store.loadPopular(); await store.loadShelf()
@@ -203,8 +203,124 @@ private final class CatalogURLProtocol: URLProtocol {
         let (failing, _, _) = self.store(client)
         client.popularError = ZLibraryRequestFailure(issue: .challenge, diagnostic: "GET /eapi/book/most-popular · HTTP 200 · HTML instead of JSON")
         await failing.loadShelf(); await failing.loadShelf()
-        XCTAssertTrue(failing.shelf.isEmpty); XCTAssertNil(failing.error)
+        XCTAssertTrue(failing.shelf.isEmpty); XCTAssertNil(failing.error); XCTAssertNotNil(failing.shelfError)
+        XCTAssertFalse(failing.shelfLoading)
         XCTAssertEqual(client.popularSessions.count, 2)
+    }
+    func testShelfContextChangesForReconnectAndOriginEvenWhenConnectedFlagIsUnchanged() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        client.recommendedBooks = [book]
+        let first = await store.connect(session); XCTAssertTrue(first)
+        await store.loadShelf(); let before = store.shelfContext
+        let again = await store.connect(session); XCTAssertTrue(again); XCTAssertTrue(store.connected)
+        XCTAssertNotEqual(store.shelfContext, before); XCTAssertTrue(store.shelf.isEmpty)
+        await store.loadShelf(); XCTAssertEqual(store.shelf, [book]); XCTAssertEqual(client.recommendedSessions.count, 2)
+        let accountContext = store.shelfContext
+        try await store.changeAddress("https://other.example")
+        XCTAssertNotEqual(store.shelfContext, accountContext); XCTAssertEqual(store.shelfContext.origin.host, "other.example")
+        XCTAssertTrue(store.shelf.isEmpty); XCTAssertNil(store.shelfError)
+    }
+    func testFailedShelfCanRetryImmediatelyWithoutChangingTheVisibleDiscoverSearch() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.searchHandler = { [self] _, _ in ZLibrarySearchPage(books: [book], hasMore: true) }
+        await store.search("keep this query")
+        client.recommendedHandler = { throw ZLibraryError.response }
+        await store.loadShelf(); await store.loadShelf()
+        XCTAssertNotNil(store.shelfError); XCTAssertNil(store.error); XCTAssertTrue(store.connected)
+        XCTAssertEqual(client.recommendedSessions.count, 1); XCTAssertFalse(store.shelfLoading)
+        client.recommendedHandler = nil; client.recommendedBooks = [book]
+        await store.loadShelf(force: true)
+        XCTAssertEqual(store.shelf, [book]); XCTAssertNil(store.shelfError); XCTAssertEqual(client.recommendedSessions.count, 2)
+        XCTAssertEqual(store.activeQuery, "keep this query"); XCTAssertEqual(store.books, [book]); XCTAssertTrue(store.canLoadMore)
+    }
+    func testFailedShelfKeepsCachedBooksAndRetriesAfterCooldown() async throws {
+        let client = CatalogService(), (_, credentials, defaults) = store(client)
+        var time = Date(timeIntervalSince1970: 1_800_000_000)
+        let store = ZLibraryStore(defaults: defaults, credentials: credentials, client: client, now: { time })
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.recommendedBooks = [book]; await store.loadShelf()
+        client.recommendedHandler = { throw ZLibraryError.response }
+        await store.loadShelf(force: true)
+        XCTAssertEqual(store.shelf, [book]); XCTAssertNotNil(store.shelfError)
+        await store.loadShelf(); XCTAssertEqual(client.recommendedSessions.count, 2)
+        let newer = ZLibraryBook(remoteID: "fresh", hash: "fresh", title: "Fresh recommendations", author: "Author", fileExtension: "epub", size: "", language: "", year: "", coverURL: nil)
+        time = time.addingTimeInterval(31); client.recommendedHandler = nil; client.recommendedBooks = [newer]
+        await store.loadShelf()
+        XCTAssertEqual(store.shelf, [newer]); XCTAssertNil(store.shelfError); XCTAssertEqual(client.recommendedSessions.count, 3)
+        XCTAssertFalse(store.shelfLoading)
+    }
+    func testExplicitShelfRefreshBypassesDiscoverSnapshotWithoutReplacingIt() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.recommendedBooks = [book]; await store.browse(.recommended)
+        XCTAssertEqual(store.shelf, [book])
+        let newer = ZLibraryBook(remoteID: "fresh", hash: "fresh", title: "Fresh recommendations", author: "Author", fileExtension: "epub", size: "", language: "", year: "", coverURL: nil)
+        client.recommendedBooks = [newer]; await store.loadShelf(force: true)
+        XCTAssertEqual(store.shelf, [newer]); XCTAssertEqual(store.books, [book]); XCTAssertEqual(client.recommendedSessions.count, 2)
+        await store.browse(.recommended)
+        XCTAssertEqual(store.books, [book]); XCTAssertEqual(store.shelf, [newer]); XCTAssertEqual(client.recommendedSessions.count, 2)
+    }
+    func testSuccessfulDiscoverRefreshRepairsShelfAndRejectsAnOlderShelfResponse() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.recommendedHandler = { throw ZLibraryError.response }; await store.loadShelf()
+        XCTAssertNotNil(store.shelfError)
+        var held: CheckedContinuation<[ZLibraryBook], Error>?
+        let requested = expectation(description: "Shelf request started")
+        client.recommendedHandler = { try await withCheckedThrowingContinuation { held = $0; requested.fulfill() } }
+        let pending = Task { await store.loadShelf(force: true) }
+        await fulfillment(of: [requested], timeout: 10)
+        let response = try XCTUnwrap(held)
+        let newer = ZLibraryBook(remoteID: "fresh", hash: "fresh", title: "Fresh recommendations", author: "Author", fileExtension: "epub", size: "", language: "", year: "", coverURL: nil)
+        client.recommendedHandler = nil; client.recommendedBooks = [newer]
+        await store.browse(.recommended)
+        XCTAssertEqual(store.shelf, [newer]); XCTAssertNil(store.shelfError); XCTAssertFalse(store.shelfLoading)
+        response.resume(returning: [book]); await pending.value
+        XCTAssertEqual(store.shelf, [newer]); XCTAssertEqual(store.books, [newer]); XCTAssertFalse(store.shelfLoading)
+    }
+    func testReconnectionRejectsLateShelfDataFromPreviousAccount() async throws {
+        let client = CatalogService(), (store, _, defaults) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        var held: CheckedContinuation<[ZLibraryBook], Error>?
+        let requested = expectation(description: "Previous account shelf started")
+        client.recommendedHandler = { try await withCheckedThrowingContinuation { held = $0; requested.fulfill() } }
+        let pending = Task { await store.loadShelf() }
+        await fulfillment(of: [requested], timeout: 10)
+        let response = try XCTUnwrap(held)
+        let other = ZLibrarySession(userID: "other", userKey: "other-key")
+        let switched = await store.connect(other); XCTAssertTrue(switched)
+        client.recommendedHandler = nil; client.recommendedBooks = []
+        await store.loadShelf(); response.resume(returning: [book]); await pending.value
+        XCTAssertTrue(store.shelf.isEmpty); XCTAssertNil(store.shelfError); XCTAssertFalse(store.shelfLoading)
+        XCTAssertEqual(client.recommendedSessions.last?.userID, "other")
+        let data = try XCTUnwrap(defaults.data(forKey: "zlibrary.shelf"))
+        let cache = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(cache["account"] as? String, "other")
+    }
+    func testConcurrentShelfRefreshCallersShareARequestEvenWhenOneCallerIsCancelled() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        var held: CheckedContinuation<[ZLibraryBook], Error>?
+        let requested = expectation(description: "Shared shelf request started")
+        client.recommendedHandler = { try await withCheckedThrowingContinuation { held = $0; requested.fulfill() } }
+        let first = Task { await store.loadShelf(force: true) }
+        await fulfillment(of: [requested], timeout: 10)
+        let joined = expectation(description: "Second caller joined")
+        let second = Task { joined.fulfill(); await store.loadShelf(force: true) }
+        await fulfillment(of: [joined], timeout: 10)
+        first.cancel()
+        let response = try XCTUnwrap(held); response.resume(returning: [book])
+        await first.value; await second.value
+        XCTAssertEqual(client.recommendedSessions.count, 1); XCTAssertEqual(store.shelf, [book]); XCTAssertFalse(store.shelfLoading)
+    }
+    func testRejectedShelfConnectionShowsReconnectWithoutARepeatedRequestLoop() async throws {
+        let client = CatalogService(), (store, _, _) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.recommendedHandler = { throw ZLibraryError.signInRequired }
+        await store.loadShelf(); XCTAssertFalse(store.connected)
+        XCTAssertTrue(store.shelfError?.contains("Reconnect") == true); XCTAssertNil(store.error)
+        await store.loadShelf(); XCTAssertEqual(client.recommendedSessions.count, 1); XCTAssertFalse(store.shelfLoading)
     }
     func testDiscoveryOffMakesNoLibraryRequestsAndPreviewLeavesDiscoverUnchanged() async throws {
         let client = CatalogService(), (store, credentials, defaults) = store(client)

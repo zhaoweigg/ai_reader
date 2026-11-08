@@ -3,6 +3,16 @@ import Foundation
 #if DEBUG
 struct UITestZLibraryClient: ZLibraryServing {
     func recommended(origin: ZLibraryOrigin, session: ZLibrarySession) async throws -> [ZLibraryBook] {
+        if UITesting.flag(.zlibShelfRetry), !(await UITestCatalogRequestHistory.shared.repeated("library-shelf-retry")) {
+            throw ZLibraryRequestFailure(issue: .accessCheck, diagnostic: "Offline shelf retry fixture")
+        }
+        if UITesting.flag(.zlibShelfEmpty) { return [] }
+        if UITesting.flag(.zlibShelfRefresh) {
+            let refreshed = await UITestCatalogRequestHistory.shared.repeated("library-shelf-refresh")
+            return [ZLibraryBook(remoteID: refreshed ? "shelf-refreshed" : "shelf-initial", hash: "shelf-fixture",
+                title: refreshed ? "Refreshed recommendations" : "First recommendations", author: "Leaf Editions",
+                fileExtension: "txt", size: "18 KB", language: "English", year: "2026", coverURL: nil)]
+        }
         if UITesting.flag(.bestsellersMock) { return UITestBestsellerClient.samples().reversed().flatMap(UITestBestsellerClient.editions) }
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
         try await guardRepeatedRequest("recommended-" + session.userID, path: "user/book/recommended", session: session)
@@ -100,12 +110,12 @@ struct UITestZLibraryClient: ZLibraryServing {
         try FileManager.default.copyItem(at:source,to:destination);progress(1);return destination
     }
 }
-private actor UITestCatalogRequestHistory {
+actor UITestCatalogRequestHistory {
     static let shared = UITestCatalogRequestHistory()
     private var keys: Set<String> = []
     func repeated(_ key: String) -> Bool { !keys.insert(key).inserted }
 }
-private struct UITestPopularRedirectTransport: ZLibraryTransport {
+struct UITestPopularRedirectTransport: ZLibraryTransport {
     func send(_ request: URLRequest, toFile: Bool, progress: @escaping @Sendable (Double?) -> Void) async throws -> ZLibraryPayload {
         ZLibraryPayload(data: Data("<html>Fixture access check</html>".utf8), file: nil,
             response: HTTPURLResponse(url: request.url!, statusCode: 307, httpVersion: nil,
