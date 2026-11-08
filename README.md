@@ -1,361 +1,360 @@
 # Leaf for iOS
 
-A native ebook reader for iPhone and iPad with offline reading and optional AI chat, built with SwiftUI, WebKit, and PDFKit. Requires iOS 17+ and Xcode 16+.
+A native ebook reader for iPhone and iPad: offline reading of EPUB, PDF and nine other formats, read-aloud with Apple voices, highlights and voice notes, a book catalog and bestseller charts, iCloud Drive sync, and an optional AI reading companion ("Ask Leaf") that works with your own API key or ChatGPT subscription. Built with SwiftUI, WebKit and PDFKit. Requires iOS 17 or later and Xcode 16 or later.
+
+```mermaid
+mindmap
+  root((Leaf))
+    Read
+      EPUB · PDF · MOBI · FB2 · CBZ · TXT · MD · HTML · RTF
+      Pages or Scroll
+      7 themes · 7 typefaces · 12–32 pt
+      Contents · search · bookmarks · return pill
+    Listen
+      Apple voices, sentence highlight
+      Lock Screen player
+      Resume saved position
+    Annotate
+      Highlights in 4 colors
+      Written notes
+      Voice notes
+    Ask Leaf
+      Anthropic · Chat Completions · ChatGPT subscription
+      Passage, page or whole-book tools
+      Also on Discover, Bookmarks and Library
+      Dictation · pictures · Markdown
+    Discover
+      Z-Library catalog
+      Indie and NYT bestsellers
+    Sync
+      iCloud Drive folder
+      Library, places, notes, chats, settings
+```
 
 ## Run
 
-Open `LeafReader.xcodeproj`, select the **LeafReader** scheme and an iPhone/iPad simulator, and press Run. The project is checked in and has no Swift Package Manager or CocoaPods dependencies. Physical-device signing is configured for the owner's Personal Team and the registered bundle identifier `com.weizhao.leafreader`. If building with another account, select your own development team in Signing & Capabilities and a unique bundle identifier.
+Open `LeafReader.xcodeproj`, select the **LeafReader** scheme and an iPhone or iPad simulator, and press Run. There are no package-manager dependencies. Device signing is set up for the owner's Personal Team and bundle identifier `com.weizhao.leafreader`; with another account, choose your own team and a unique identifier under Signing & Capabilities.
 
-`project.yml` is the project source. If you change targets or resources, regenerate with [XcodeGen](https://github.com/yonaskolb/XcodeGen):
+`project.yml` is the source of truth for targets, version and Info.plist keys. After changing it, or after moving source files, regenerate the project with [XcodeGen](https://github.com/yonaskolb/XcodeGen):
 
-```sh
+```bash
 xcodegen generate
+```
+
+```bash
 xcodebuild -project LeafReader.xcodeproj -scheme LeafReader -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -derivedDataPath build test CODE_SIGNING_ALLOWED=NO
 ```
 
-## Supported files
+## How Leaf is put together
 
-| Format | Reader | Notes |
+Four tabs sit on a handful of observable stores. Views never talk to the network or the file system directly: a store or session owns each concern, and the reader itself is a WebKit or PDFKit surface driven by a view model.
+
+```mermaid
+flowchart TB
+    subgraph UI["Views (SwiftUI)"]
+        direction LR
+        Library["Library"]
+        Discover["Discover"]
+        Bookmarks["Bookmarks"]
+        Settings["Settings"]
+        Reader["Reader<br/>Pages · Scroll · PDF"]
+        Chat["Ask Leaf panel<br/>+ floating twin button"]
+    end
+    subgraph Stores["Stores and sessions (@MainActor, ObservableObject)"]
+        direction LR
+        LibraryStore["LibraryStore<br/>books, places, annotations"]
+        ReaderModel["ReaderModel<br/>one open book"]
+        ChatSession["ReaderChatSession<br/>one conversation"]
+        AISettings["AISettingsStore<br/>provider + credentials"]
+        ZLibraryStore["ZLibraryStore"]
+        BestsellerStore["BestsellerStore"]
+        ReadAloud["ReadAloudSession"]
+        Sync["ICloudSync"]
+    end
+    subgraph Engines["Engines and services"]
+        direction LR
+        Foliate["foliate-js in WKWebView<br/>leaf-reader:// scheme"]
+        PDFKit["PDFKit"]
+        Providers["ChatProvider<br/>HTTP · ChatGPT OAuth"]
+        Agent["ReadingAgent tools<br/>BookTextIndex"]
+        History["ChatHistoryStore<br/>SQLite"]
+        Catalog["ZLibraryClient over<br/>ZLibraryBrowserSession (WebKit)"]
+        Feeds["BestsellerFeed<br/>IndieBound · NYT Books API"]
+        Speech["AVSpeechSynthesizer<br/>MPNowPlayingInfoCenter"]
+        Folder["SyncFolder<br/>coordinated iCloud Drive files"]
+        Disk["LibraryDisk<br/>Documents/Leaf"]
+    end
+    Library & Bookmarks --> LibraryStore
+    Reader --> ReaderModel --> Foliate & PDFKit
+    Chat --> ChatSession --> Providers & Agent & History
+    ChatSession --> AISettings
+    Discover --> ZLibraryStore --> Catalog
+    Discover --> BestsellerStore --> Feeds
+    Reader --> ReadAloud --> Speech
+    Settings --> Sync --> Folder
+    LibraryStore --> Disk
+    Sync -.-> LibraryStore & History
+```
+
+### Repository map
+
+```text
+LeafReader/
+├── LeafReaderApp.swift        app entry, tab bar, store wiring
+├── Models/                    Book, annotations, chat records, PDF locators, reading preferences
+├── Services/
+│   ├── Library/               LibraryStore, LibraryDisk, cover and metadata extraction
+│   ├── Reader/                ReaderModel, asset handler for leaf-reader://, scroll diagnostics
+│   ├── Chat/                  providers, ReaderChatSession, agent tools, history, retry, dictation
+│   ├── Catalog/               Z-Library client and browser session, bestseller feeds
+│   ├── Speech/                read-aloud session, Apple voice catalog, sentence splitter
+│   ├── Sync/                  ICloudSync, SyncFolder, synced record types
+│   └── VoiceNotes/            recorder and clip files
+├── Views/
+│   ├── Library/ Reader/ Chat/ Catalog/ Settings/
+├── UITesting/                 DEBUG-only fixtures, probes and the launch-flag registry
+└── Resources/
+    ├── Reader/                index.html, bridge.js, foliate/, reader.css, bundled CJK fonts
+    └── Samples/               five original sample books seeded on first launch
+LeafReaderTests/               unit and rendered-WebKit tests (+ Fixtures/)
+LeafReaderUITests/             XCUITest flows (+ Fixtures/)
+docs/                          design notes; docs/history holds past verification logs
+scripts/                       simulator lease, job runner, coordination audit and dashboard
+ThirdParty/                    pinned dependency manifest and local foliate-js changes
+```
+
+## Reading a book
+
+```mermaid
+flowchart LR
+    Files["Files app · Share sheet<br/>Discover download · iCloud Drive"] --> Import
+    Import["LibraryDisk.prepareImport<br/>copy · SHA-256 fingerprint · ≤100 MB"] --> Manifest["library.json<br/>atomic write"]
+    Import --> Meta["BookMetadataLoader<br/>title · author · cover"]
+    Manifest --> Shelf["Library grid<br/>search · sort · favorites · formats"]
+    Shelf -->|open| Model["ReaderModel<br/>restores saved place"]
+    Model -->|EPUB MOBI FB2 CBZ TXT MD HTML RTF| Web["WKWebView + foliate-js<br/>lazy chapters · CFI positions"]
+    Model -->|PDF| PDF["PDFView<br/>page locators"]
+    Web & PDF --> Surface["Reader surface<br/>tap center for controls"]
+    Surface --> Places["Saved place · bookmarks · highlights<br/>written back to library.json"]
+```
+
+Books are copied into the app's own folder and never modified. The web engine fetches an archive's directory and only the requested entries, in ranges of at most 256 KB, so EPUB and CBZ files stay on disk. In **Scroll**, the current chapter and its two neighbours share one scrolling surface and distant chapters are released; **Pages** keeps a single-chapter page-turn layout. Saved places, bookmarks and highlights are EPUB CFIs or PDF page-and-character ranges, so they survive font, margin, theme and flow changes.
+
+| Format | Engine | Notes |
 | --- | --- | --- |
-| EPUB 2/3 | foliate-js in WKWebView | Reflowable and fixed-layout; table of contents, text search, CFI position restoration |
-| PDF | Apple PDFKit | Text search, page navigation, pinch to zoom; password unlocking |
-| MOBI, PRC, AZW | foliate-js | DRM-free Mobipocket, including PalmDOC and HUFF/CDIC compression |
-| AZW3 / KF8 | foliate-js | DRM-free Kindle Format 8, including combo MOBI/KF8 books |
-| FB2, FBZ, `.fb2.zip` | foliate-js | FictionBook, including compressed books |
-| CBZ | foliate-js | ZIP comic archives with supported images; natural page order |
-| TXT | Local text adapter | UTF-8; paragraphs and line breaks preserved |
-| Markdown | Local text adapter | Headings, bold, inline/fenced code, quotes, and simple lists; no raw HTML |
-| HTML, HTM | Local HTML adapter | Standalone documents; inline/data assets; scripts and network resources blocked |
-| RTF | Foundation + text adapter | Text extracted; rich formatting simplified |
+| EPUB 2/3 | foliate-js | Reflowable and fixed layout; contents, search, CFI restoration |
+| PDF | PDFKit | Search, page navigation, pinch zoom, password unlocking |
+| MOBI, PRC, AZW, AZW3/KF8 | foliate-js | DRM-free Mobipocket and Kindle Format 8 |
+| FB2, FBZ, `.fb2.zip` | foliate-js | FictionBook, compressed or not |
+| CBZ | foliate-js | ZIP comic archives in natural page order |
+| TXT, Markdown | text adapter | UTF-8; Markdown headings, emphasis, code, quotes, lists |
+| HTML, HTM | HTML adapter | Standalone documents; scripts and network loads blocked |
+| RTF | Foundation + text adapter | Text extracted, rich formatting simplified |
 
-DRM removal, KFX, ACSM, CBR/RAR, DjVu, legacy DOC, and DOCX are not implemented. Convert those to EPUB or PDF before importing. Image-only PDFs and comics have no OCR or text search. Imports are capped at 100 MB. EPUB and CBZ archives stay on disk: the reader fetches their directory and requested entries in ranges of at most 256 KB, with native delivery in 64 KB chunks. EPUB chapter documents and resources are unloaded as you navigate. FBZ uses the same disk-backed ZIP access, but its inner FB2 document still needs parsing as a whole; plain text, HTML, FB2, and legacy MOBI formats also retain whole-book parsing costs. Typography controls affect reflowable books; fixed-layout books preserve their layout. PDF page color changes the surrounding canvas, not the printed page.
+Not supported: DRM removal, KFX, ACSM, CBR/RAR, DjVu, DOC and DOCX. Image-only PDFs and comics have no OCR, so no search or read-aloud.
 
-WebKit can terminate its separate renderer for reasons it does not disclose to Leaf. Leaf attempts one automatic recovery from the saved passage, with a 60-second guard against repeated reloads. A repeated failure offers **Reload book** without claiming that memory was the cause. Local `ReaderLifecycle` logs distinguish observed native memory warnings from renderer termination; memory warnings also clear transient search results. Closing the reader disconnects observers, clears document/range references and resource URLs, closes the ZIP reader, and detaches the native WebKit/PDF surfaces.
+### Appearance
 
-## Features
+Tap the centre of the page, then **Aa**. The panel is a compact sheet so the page stays visible while you adjust it.
 
-Version **1.24.1 (113)** uses Apple speech only. Listen offers downloaded Enhanced and Premium Apple voices, automatic language matching, playback speed and follow controls. The Natural voice engine, model download UI and native inference libraries have been removed. Existing Apple voice/rate preferences and saved listening cursors are preserved; old engine preferences are discarded, and the app removes its obsolete downloaded model directory on a normal launch. No model or inference framework download is required to build Leaf.
+```mermaid
+flowchart LR
+    Aa["Appearance panel"] --> Font["Font<br/>7 typefaces · 12–32 pt · line spacing"]
+    Aa --> Layout["Layout<br/>margins · Pages or Scroll"]
+    Aa --> Themes["Themes<br/>Day Paper Night Sepia Sage Dusk Black<br/>Compact Standard Large presets"]
+    Aa --> Fine["Fine tuning<br/>exact spacing and margin sliders"]
+    Font & Layout & Themes & Fine --> Prefs["ReaderPreferences<br/>saved across books and launches"]
+    Prefs --> Anchor["Reflow anchored to the current passage"]
+```
 
-- Multi-file import from Files and iCloud Drive, plus Open in Leaf from another app.
-- App-owned file copies, SHA-256 duplicate detection, atomic library manifests, and visible import errors.
-- Search and filter the library, sort books, favorites, recent reading, and finished books.
-- Table of contents, page turning/swiping, progress seeking, and full-book text search (up to 200 results).
-- Fullscreen reading with a center tap to reveal controls; page-edge taps and swipes return to uninterrupted reading.
-- Translucent floating Ask Leaf chat with streaming AI replies, page/selection context, Stop, and Retry.
-- Select text and choose **Ask Leaf** in the native edit menu to open chat directly with a removable quote attached. When chat is already open, selecting book text automatically attaches it above the composer in Pages, Scroll, and PDFs. Adjusting or making a new selection replaces that draft quote without changing your question. Focusing the keyboard or clearing the native highlight keeps the quote; remove it with its X. Closing chat finishes the native selection so reader taps work normally, while the saved quote remains attached when chat reopens. Type a question or use **Explain** and **Summarize** inside chat to prepare an editable draft; nothing is sent until you choose Send. Switching shortcuts replaces the prior preset while preserving your own question. Sent selections remain visible above their questions in saved history; tap a quote to expand or collapse it. Unsent quotes and drafts persist per book, and passage sharing settings still apply.
-- Swappable Anthropic and Chat Completions providers, editable model IDs/endpoints, and device-only Keychain credentials.
-- Persistent reading positions and per-book bookmarks, including a library-wide bookmarks tab.
-- Persistent text highlights in four colors and notes, with per-book and library-wide saved-passage lists.
-- Day, paper, and night themes; three typefaces; adjustable font size, line and paragraph spacing, and page margins; paginated or vertical flow.
-- Original short sample books in EPUB, PDF, FB2, and TXT.
-- Cover thumbnails and embedded title/author metadata load during import; existing books with missing covers are checked automatically on launch.
-- Native accessibility labels, Dynamic Type in app controls, iPad layouts, and landscape support.
+Typefaces are Georgia, Palatino and the system font plus four bundled CJK faces: LXGW WenKai Lite, Noto Serif CJK SC, LXGW Neo ZhiSong and LXGW Neo XiHei. The theme also colours the library, bookmarks, menus and Ask Leaf; PDF pages and comic artwork keep their own colours. A **Return to reading** pill appears after a seek or a contents jump so you can go back, and **Contents** has a "Reading here" shortcut to the current chapter.
 
-Books open with the title bar, bottom controls, and system status indicators hidden. Tap the center of the page to show or hide controls. In paginated mode, tap the left/right edges or swipe to turn pages; controls hide when reading resumes. Menus overlay the page without resizing it, preserving the current passage and bookmarks. Loading, error, password, and VoiceOver states keep controls available.
+## Listen
 
-Reflowable books follow your finger during a swipe and settle with a brief 0.36-second slide. Short swipes visibly return to the current page; page turns settle before accepting another turn. Holding still before lifting does not count as a flick, and interrupted drags return to the current passage. Reduce Motion disables settling animation; continuous scrolling keeps its normal behavior.
+```mermaid
+flowchart LR
+    Start["Listen from this page<br/>or 'Listen from here' on a selection"] --> Passage["Bounded passage + CFI cursor<br/>read-aloud.js or PDFReadAloudSource"]
+    Passage --> Split["Sentence splitter<br/>≤48 CJK / ≤160 Latin chars per utterance"]
+    Split --> Synth["AVSpeechSynthesizer<br/>downloaded Enhanced/Premium Apple voices<br/>language matched automatically"]
+    Synth --> Highlight["Amber highlight follows the spoken line<br/>Follow can be turned off"]
+    Synth --> NowPlaying["Lock Screen / Control Center<br/>title · chapter · author · progress"]
+    Synth --> Cursor["Saved listening cursor per book<br/>Resume saved position"]
+    Passage -->|"end of passage"| Passage
+```
 
-Tap the center, then open **Appearance (Aa)** while reading. **Font** contains the typeface, text size (12–32 pt), A−/A+ buttons, and visual line-spacing choices. **Layout** contains visual margin choices and paginated/scrolling flow. **Themes** contains page colors and Compact, Standard, and Large reading presets. **Fine tuning** exposes precise sliders for line/paragraph spacing and side/top/bottom margins. The panel opens as a compact sheet so the page stays visible while adjusting it; drag upward for more room. Tap the visible book page or swipe down from the title bar to dismiss and resume reading. The dismissal tap keeps your place, including when tapping a page edge.
+Speech is entirely on device; no book text leaves the phone. Playback continues in the background (the `audio` background mode) and pauses on interruptions or when headphones disconnect. Only the current and one prefetched passage are held in memory.
 
-**Themes → Compact** fits more text in one tap: 17 pt text, 1.35 line spacing, 0.35 em paragraph spacing, 12 pt side margins, and 8 pt top/bottom margins. Changes apply immediately and are saved across books and app restarts. The same controls are available in Settings.
+## Highlights, notes and voice notes
 
-Text size uses the selected 12–32 pt value in both Pages and Scroll, with browser text autosizing disabled. Changing size or flow anchors reflow to the current passage rather than a percentage through the chapter.
+Select text and choose **Highlight**, **Note** or **Voice Note** from the compact selection toolbar (Ask Leaf, Listen, Highlight, Note, Copy, More).
 
-In vertical **Scroll**, adjacent chapters share the scrolling surface, so a swipe can continue across a chapter boundary. Leaf prepares only the current chapter and its immediate neighbors, releases distant chapters, and keeps saved passages and bookmarks tied to their EPUB CFIs. **Pages** retains its single-chapter page-turn layout.
+```mermaid
+flowchart LR
+    Select["Selection<br/>CFI range or PDF character range"] --> Highlight["Highlight<br/>yellow · green · blue · pink"]
+    Select --> Note["Written note"]
+    Select --> Voice["Voice note<br/>AAC clip · ≤10 min · mic permission"]
+    Highlight & Note & Voice --> Annotation["BookAnnotation in library.json<br/>clip in Documents/Leaf/VoiceNotes"]
+    Annotation --> Overlay["Painted as overlays<br/>book text untouched"]
+    Annotation --> Lists["Saved → Highlights & notes<br/>Bookmarks tab across books"]
+```
 
-**Listen** in the reader’s bottom menu opens voice, speed and start controls. Choose **Listen from this page**, or select any word/passage and choose **Listen from here** in the native selection menu. Speech begins at that position and continues through subsequent chapters/pages. The compact player has pause/resume, previous/next passage, speed and Stop controls. The last listening cursor is saved per book; **Resume saved listening position** restores it after closing or relaunching. Automatic voice selection matches the text’s language, and the voice picker lists voices available on the device. Speech uses Apple’s [on-device speech synthesis](https://developer.apple.com/documentation/avfoundation/speech-synthesis), with no AI credentials or book text sent to an AI provider. Text must be extractable; image-only comics and scans cannot be read aloud. Playback pauses in the background and on interruptions/headphone disconnection. The current rendered line is highlighted as speech advances; following uses its actual on-screen position and resumes at the saved speech offset. Follow the spoken passage can be disabled to browse elsewhere while listening. Only one bounded passage and one prefetched passage are kept; chapter extraction does not navigate or eagerly render the book.
+Recording stops when Leaf leaves the foreground or another Leaf audio feature starts. Recordings are never transcribed or sent to an AI provider.
 
-Version **1.14.1 (58)** uses a compact horizontal selection toolbar: **Ask Leaf**, **Listen**, **Highlight**, **Note**, **Copy**, and **More**. Swipe the row sideways to reach hidden actions. Both native selection handles remain accessible, and actions refresh when the selected range changes, including after Copy. **More** opens the standard iOS toolbar, including Copy, Look Up, Translate, and Share where available. Tapping outside continues to the book or chat composer. Actions use the current passage, including neighboring chapters visible in Scroll.
+## Ask Leaf
 
+Ask Leaf is a resizable, frosted panel launched from a translucent **twin button**: the large leaf opens chat, the small satellite on its upper edge opens a quick theme arc. Long-press to drag the button anywhere; its position, transparency (20–95 %) and panel heights are saved. Text keeps its full width underneath the button. The same panel also answers questions about the **Discover**, **Bookmarks** and **Library** screens.
 
-Version **1.14.6 (63)** keeps the spoken highlight moving inside a paragraph with the Apple voices. Each passage is now spoken as a queue of sentence-sized utterances (a sentence, or a clause cut at commas when a sentence exceeds 48 Chinese or 160 English characters), and the start of every utterance moves the highlight, follow position and saved cursor to that sentence. Voices that report word boundaries still move the highlight word by word; voices that report none (the installed build left the highlight on a paragraph's first line until the next paragraph) now advance at least once per sentence. Pause, resume, speed and voice changes apply to the whole queue; stopping discards it.
+```mermaid
+flowchart TB
+    Q["Question + optional quote<br/>typed or dictated"] --> Session["ReaderChatSession"]
+    Session --> Ctx{"Include current passage?"}
+    Ctx -->|yes| Snap["Snapshot: selection, visible range<br/>or PDF page · ≤12,000 chars"]
+    Ctx -->|no| NoCtx["Metadata only"]
+    Snap & NoCtx --> Harness{"Book context setting"}
+    Harness -->|"Pre-fetched evidence (Sam)"| Evidence["BookTextIndex lookup<br/>before the request"]
+    Harness -->|"Book search agent (Claude)"| Tools["Model calls tools:<br/>search_book · read_passage · list_chapters<br/>search_conversation · get_current_view · get_item_details"]
+    Evidence & Tools --> Provider["ChatProvider"]
+    Provider --> Anthropic["Anthropic Messages<br/>API key"]
+    Provider --> OpenAICompat["Chat Completions compatible<br/>any HTTPS endpoint + key"]
+    Provider --> ChatGPT["ChatGPT subscription<br/>OAuth · Responses API · can draw pictures"]
+    Anthropic & OpenAICompat & ChatGPT --> Stream["SSE stream → ChatEvent"]
+    Stream --> Panel["Markdown reply, 80 ms batches<br/>history follows unless you scroll"]
+    Stream --> HistoryDB["SQLite history per book<br/>24-message pages · pictures beside it"]
+```
 
+### What happens to one request
 
-Version **1.14.8 (65)** is an internal cleanup with no intended user-facing change: the web and PDF surfaces share one set of selection-palette hooks, the reader and library chat share one resizable panel container, PDF locators and the UI-test launch context have single definitions, and the Z-Library, speech, ChatGPT-account and import code lose their duplicated helpers.
+```mermaid
+sequenceDiagram
+    participant U as Reader
+    participant S as ReaderChatSession
+    participant R as ChatRetryBudget
+    participant P as Provider
+    U->>S: Send
+    S->>S: append question, checkpoint draft
+    S->>S: begin background task (survives app switch)
+    S->>P: stream(request)
+    alt transient failure (connection lost, 408/409/429/5xx, socket dropped)
+        P-->>S: error
+        S->>R: may retry?
+        R-->>S: yes, wait 0.6 s / 1.2 s (+jitter), 2 extra requests max
+        S->>P: stream(request) again
+    end
+    P-->>S: text deltas, tool calls, images, finished
+    S->>U: reply grows in 80 ms batches
+    S->>S: save every 500 ms and on completion
+    Note over S: Backgrounded mid-reply? The task keeps streaming; if iOS ends it, the reply resumes on return with a notice.
+```
 
-Apple narration highlights the current spoken word in amber in Pages, Scroll, and text-based PDFs. Pause keeps the word highlighted; Stop clears it. Turn off Follow to browse elsewhere while listening. The temporary highlight preserves the book text, saved highlights, notes, bookmarks, and reading positions. Speech and chapter loading remain bounded and lazy.
+Recent context is capped at 12 turns and 48,000 characters; opaque locators never leave the device. API-key replies default to 2,048 output tokens (256–8,192); the subscription route follows OpenAI's limits. Authentication, quota and malformed-response errors are shown rather than retried. Details: [docs/automatic-chat-retry.md](docs/automatic-chat-retry.md).
 
-**Ask Leaf** opens a frosted chat panel at about one third of the screen height. Drag its top edge/grabber up or down to resize it; the chosen size is saved across books and relaunches, adapts to rotation, and stays within the reading viewport. Reading and keyboard-open sizes are saved separately. Expand the panel to browse history in landscape or while typing. By default, typing uses a compact composer above the keyboard, leaving the book visible without resizing its viewport. Its edge remains draggable while the keyboard is open. Swipe the exposed book to browse while keeping the keyboard and draft, or use Hide keyboard to see more of the page. Chat stays open while tapping or browsing the book. Close it with X or an intentional downward swipe on its header; dragging the top edge resizes it without closing. The launcher is a translucent 52 pt leaf button, initially 112 pt above the reader’s bottom edge and 18 pt from the right. Text remains visible through it without blur, wrapping, or a reserved gutter, in both Pages and Scroll (including PDFs and fixed-layout books). Set **Settings → Reading companion → Floating button → Transparency**, or open **Floating button** from the chat options menu, to adjust the button from 20% to 95% transparent. The live preview and reset apply immediately across books and relaunches; the default remains 88%. Tint, symbol and outline fade together, with a contrasting symbol at stronger tint. Long press enters move mode with one heavier haptic impact; lifting, repeated dragging and finishing move mode do not repeat that activation cue. Drag to a new position, then tap elsewhere to finish. Move mode stays active between drags; the finishing tap does not turn a page or activate reader controls. The position is saved across books and launches, adapts proportionally on rotation, and stays within the safe reading viewport. VoiceOver offers named movement actions; Reduce Transparency uses a solid button. In vertical Scroll, chapters continue on one native scrolling surface; the current chapter and its immediate neighbors are prepared lazily, and distant chapters are released.
+### Providers and credentials
 
-Conversations, attached passage snapshots, and unsent drafts are saved locally for each book until the user clears them. Closing a book or restarting Leaf restores its discussion. History is stored in an indexed SQLite database under the library's `ChatHistory` directory with iOS file protection, atomic transactions, and a 256 KB database page cache. The reader loads 24-message pages rather than the entire archive; **Earlier**, **Newer**, and **Latest** browse saved history. History does not expire or truncate automatically. Book fingerprints identify conversations, so removing a book keeps its history and reimporting the exact same file restores it. Previously closed chats from versions before 1.4.0 were never saved and cannot be recovered.
+| Provider | Auth | Transport | Notes |
+| --- | --- | --- | --- |
+| Anthropic | API key in Keychain | `HTTPChatProvider`, Messages API streaming | Default model `claude-haiku-5-5`; any model ID can be typed |
+| Chat Completions compatible | API key per endpoint | `HTTPChatProvider` | Full HTTPS endpoint and model ID; legacy `max_tokens` switch |
+| ChatGPT subscription | OAuth via `ASWebAuthenticationSession`, loopback callback on 127.0.0.1 | `ChatGPTSubscriptionProvider`, `POST /v1/responses` with `store: false` | Account-specific model list; RS256 ID-token verification; image generation tool |
 
-Sending dismisses the keyboard to show the streamed reply. A question is committed before a provider request starts. Active replies and drafts checkpoint at 500 ms intervals, with immediate saves on completion, Stop, backgrounding, and leaving the reader. Interrupted saved replies restore with Retry available; Retry replaces a failed or stopped answer while keeping the original question and passage snapshot. **Chat options → Clear conversation** asks for confirmation, cancels any active response, and removes that book's complete saved conversation and draft. Late stream events cannot recreate cleared messages. Storage failures are shown instead of silently discarding existing history or sending an unsaved question; unreadable stores are kept intact. Saved history is separate from the bounded recent context sent to the chosen provider. There are no sample answers in normal use.
+Keys and tokens are stored `WhenUnlockedThisDeviceOnly` and are not synced. Requests require HTTPS, refuse redirects and disable caching and cookies. Raw provider error bodies are never shown or logged. Each reply shows which harness answered it; the agent's steps can be inspected in the on-device trace (Settings → Diagnostics).
 
-## Highlights and notes
+## Discover
 
-Select text while reading and choose **Highlight** for a yellow highlight, or **Add Note** to open an editor with the exact selected passage. The editor offers yellow, green, blue, and pink, plus **Save** and **Cancel**. Saving an empty note keeps the highlight. Cancel leaves a new selection unsaved.
+The Discover tab shows Z-Library's **Most popular** and **Recommended** feeds, search with eight sort orders, book details, and a **Bestsellers** section with Indie and New York Times hardcover fiction and nonfiction charts. The Library tab has a cover shelf that opens the same screens.
 
-Tap a highlight to edit its color or note. **Saved → Highlights & notes** lists passages for the current book; the **Bookmarks** tab also has a **Highlights & notes** filter across books. Tap a saved passage to return to it, or its pencil to edit. Delete from the editor or swipe a saved row to remove the highlight and its note together.
+```mermaid
+flowchart LR
+    subgraph ZLib["Z-Library (unofficial mobile API, your own account)"]
+        Store["ZLibraryStore"] --> Client["ZLibraryClient<br/>popular · recommended · search · details · download"]
+        Client --> Browser["ZLibraryBrowserSession<br/>hidden WKWebView shares the website's cookie jar"]
+        Browser --> Site["z-library domain"]
+        Site -->|"307 to same URL<br/>(DiamWall cookie handout)"| Browser
+        Browser -->|"repeat once with the cookie"| Site
+        Site -->|"517 access-check page"| Browser
+        Browser -->|"load the page once,<br/>script sets the cookie"| Site
+        Browser -->|"dropped request"| Browser
+        Browser -->|"retry after 0.6 s, 1.5 s"| Site
+    end
+    subgraph Best["Bestsellers (public rankings)"]
+        BStore["BestsellerStore<br/>6-hour cache"] --> Indie["IndieBound national list"]
+        BStore --> NYT["NYT Books API<br/>your key in Keychain"]
+        BStore --> Match["BestsellerMatching<br/>finds editions in the catalog"]
+    end
+    Client -->|"download ≤100 MB<br/>to a protected temp file"| Import["Library import"]
+    Match --> Client
+```
 
-Annotations are local to the imported book and survive closing the book and app relaunches. Exact CFI ranges keep web-book highlights attached to text through reading-flow, font, margin, and theme changes. PDF highlights use saved character ranges and leave the imported PDF unchanged. Rendering uses overlays and a bounded page/chapter window; it does not wrap or rewrite book text. Older libraries without annotations remain readable. Annotation saves update the visible library only after an atomic disk write succeeds.
+Access checks, expired sessions, unavailable domains and download limits are reported as readable errors with a redacted **Request details** diagnostic. Credentials are never sent to a different origin. Cover thumbnails are downsampled into an 8 MB cache. Details: [docs/discovery-bestsellers.md](docs/discovery-bestsellers.md).
 
-Choose **Voice Note** on a selected passage to record an audio note, with an optional written note. Tap **Record voice note**, **Stop recording**, then Play to preview before **Save**. Recording requires microphone permission and stops after ten minutes, when Leaf leaves the foreground, or when another Leaf audio feature starts. Opening the editor never starts recording. Playback and recording pause book narration; voice recordings are not transcribed or sent to AI providers.
+## iCloud Drive sync
 
-Saved audio can be played from **Saved → Highlights & notes** and the all-book **Bookmarks** list. Edit a note to remove its audio or remove and record a replacement; **Cancel** preserves the saved version. Removing audio keeps the written note and highlight, while deleting the annotation removes both. Clips are bounded AAC files stored separately from the library manifest. With iCloud sync enabled, verified audio attachments sync with their passages, including to a new phone whose book files remain in iCloud. Concurrent text and audio edits merge independently; explicit audio removals stay removed.
+Leaf has no server and no account. Sync works through a folder you pick in iCloud Drive (create one named **Leaf**, choose it on each device).
 
-## AI chat setup and provider architecture
+```mermaid
+flowchart LR
+    subgraph Device["This device"]
+        Lib["library.json<br/>places · bookmarks · annotations"]
+        Chats["ChatHistory (SQLite)"]
+        Prefs["Reading settings"]
+        Books["Book files · covers · voice clips"]
+    end
+    subgraph Folder["iCloud Drive / Leaf"]
+        Records["Per-book and per-conversation JSON records<br/>SyncBaseline tracks what each device last saw"]
+        Blobs["Books and covers, uploaded once"]
+    end
+    Lib & Chats & Prefs -->|"ICloudSync merges three ways<br/>and resolves iCloud conflict versions"| Records
+    Books -->|"upload once"| Blobs
+    Blobs -->|"download on open, or keep all books"| Books
+    Records --> Other["Other iPhone or iPad"]
+    Blobs --> Other
+```
 
-Open **Settings → AI settings** (also available in the chat’s options menu). Anthropic is initially selected with `claude-haiku-5-5`; a menu also offers `claude-haiku-4-5`, and any model ID can be entered directly. Add your own Anthropic API key, then tap **Save AI settings**. No credentials are bundled or read from developer environment files. API billing and model access belong to the selected provider account.
-
-To use your **ChatGPT subscription**, select **ChatGPT subscription** in the Provider menu, tap **Continue with ChatGPT**, and approve Leaf on OpenAI’s secure sign-in page. Choose a model from the account-specific list, then tap **Save AI settings**. Leaf uses OpenAI’s documented dynamic registration and OAuth plan-sharing flow; no API key or client secret is required. Availability depends on OpenAI’s eligibility and workspace policies. This personal, locally running integration does not establish eligibility for a paid or remotely hosted distribution.
-
-ChatGPT access, rotating refresh, and retained ID tokens live together in device-only Keychain storage. A stable opaque host UUID lives in preferences. Account registrations remain separate even if their emails match, and sign-out retains the issued client ID for future sign-in. Requests are cancelled when switching or disconnecting accounts. The app verifies RS256 signatures against OpenAI’s HTTPS JWKS, issuer, audience, expiration, nonce, and returning-account subject before accepting a new identity. Refreshes are serialized; stale refresh results cannot overwrite a newer sign-in. Signing out attempts remote revocation, then clears local tokens and reports if remote revocation could not be confirmed.
-
-An active connection displays its account and model, with **Add another ChatGPT account** as a separate action. **Continue with ChatGPT** appears when sign-in is needed; an active account does not show a redundant **Sign in again** button. Cancelling an additional login or reconnect attempt is silent and preserves the existing credentials, selected account, model catalog, and saved model. Actual sign-in failures remain visible. Account labels omit internal registration IDs, and connection status and model selection have explicit accessibility labels and values.
-
-The iOS flow uses `ASWebAuthenticationSession` with a short-lived `NWListener` bound specifically to `127.0.0.1`, following OpenAI’s required HTTP loopback callback. It validates callback state, destination, host, path, duplicates, and returned client ID, and limits request size and time. Local networking is enabled for this callback; remote OAuth and inference endpoints remain pinned to HTTPS. The listener never binds to Wi-Fi/LAN interfaces. Leaf never collects the account password or borrows credentials from ChatGPT/Codex or another app.
-
-Subscription requests use only `POST https://api.openai.com/v1/responses`, with `store: false`, `stream: true`, explicit conversation input, and account-available models. They omit unsupported output-token limits, sampling fields, server-side conversation IDs, and tools. A successful Responses reply without a Content-Type header is parsed as SSE rather than rejected before reading its body; an explicitly incompatible media type is rejected. Completion requires parsed answer text and a terminal Responses event; partial, failed, and quota-limited streams are handled separately. Subscription failures never trigger API-key billing. Your ChatGPT account’s approved plan/credit settings and usage limits still apply; **ChatGPT Settings → Usage** is linked from Leaf. The sign-in and inference contracts are documented in [OpenAI’s registration guide](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [session lifecycle guide](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions), and [subscription Responses reference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
-
-To change models on the same provider, edit only the model ID. To use another service with Chat Completions streaming, select **Chat Completions compatible**, enter its full HTTPS endpoint (including the completion path), its model ID, and its key. This adapter sends `max_completion_tokens` by default; enable the legacy `max_tokens` option if required by that service. The app remembers a separate profile for each API format. Keys are scoped to the exact endpoint and API format, so changing destinations requires an appropriate saved or newly entered key. Use **Remove saved key** to delete a credential.
-
-**Include current passage** controls whether Leaf shares book details and text. On Send, the reader snapshots selected text, or the visible EPUB/text range/current PDF page if nothing is selected. Context is capped at 12,000 characters, and unusually escape-heavy text is further reduced. It never uses the diagnostic `visibleText()` method, which exposes a whole loaded chapter. Images, scans, and comics have no text analysis; Leaf explains when no readable passage is available. There is no OCR, whole-book retrieval, web browsing, or external tool execution. The system prompt asks for grounded explanations in the reader’s language and avoids spoilers beyond supplied text.
-
-Recent conversation input is capped at 12 turns and 48,000 characters, with each question tied to its own bounded passage snapshot. Opaque reading locators stay on device. Disabling passage sharing also removes attached passages and metadata from prior turns in subsequent requests; previously typed questions and replies remain conversational input. Provider retention policies apply to data already sent. For API-key providers, replies are limited to 2,048 output tokens by default, adjustable from 256–8,192. ChatGPT subscription requests omit that unsupported limit and follow the subscription route’s limits. Interrupted or truncated replies are visibly marked and can be retried. Requests have no automatic retries, avoiding duplicate billable requests.
-
-Implementation boundaries:
-
-- `ChatProvider` streams provider-neutral `ChatEvent` values. The reader UI and `ReaderChatSession` do not depend on a vendor SDK or API response shape. Inject another implementation through `AISettingsStore.provider()` to add local inference, a backend proxy, or another API.
-- `HTTPChatProvider` translates Anthropic Messages and Chat Completions requests/events. `ChatGPTSubscriptionProvider` implements the distinct OAuth-authorized Responses contract. `ChatTransport` separates networking from parsing and supports deterministic tests. SSE framing preserves blank lines, CRLF, multiline events, and UTF-8 across network chunks; thinking/usage metadata are not rendered as answer text.
-- `AISettingsStore` persists nonsecret configuration in UserDefaults. `KeychainChatCredentials` stores keys with `WhenUnlockedThisDeviceOnly`. Remote API requests require HTTPS, refuse redirects, and disable caching/cookies. Raw provider error bodies are never shown or logged by Leaf. The system authentication browser manages its own sign-in cookies; its callback uses HTTP only on IPv4 loopback.
-- UI tests explicitly inject a debug-only fake streaming provider using both `--ui-testing` and `LEAF_UI_CHAT_MOCK=1`. Normal launches and Release builds never substitute a fake reply.
-
-The request formats were checked against [Anthropic streaming documentation](https://platform.claude.com/docs/en/build-with-claude/streaming), [Haiku model documentation](https://platform.claude.com/docs/en/models/haiku-5-5/overview), and the [official OpenAI Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create). Actual provider calls require a user-supplied API key or the user’s explicit ChatGPT OAuth grant; automated verification uses intercepted HTTP streams and injected providers without transmitting book text or incurring API charges.
+Every read and write goes through `NSFileCoordinator`, so iCloud never sees a half-written file and cloud-only files are downloaded before use. Concurrent edits on two devices are merged record by record; explicit removals win over stale copies. API keys, sign-ins, voice packs, search caches and the floating button's position stay per device. **Stop Syncing** leaves the library on both the device and in iCloud Drive.
 
 ## Storage and privacy
 
-Library files live in `Documents/Leaf/Books`, cover images in `Documents/Leaf/Covers`, and the atomic JSON manifest in `Documents/Leaf/library.json`. The manifest holds metadata, favorites, reading positions, bookmarks, highlights, and notes. Imported originals are never modified. Removing a book removes only Leaf's copy and saved places. Files can be shared through the book's context menu or copied using Finder file sharing. iOS may include Documents in device/iCloud backups; Leaf implements no cross-device sync, account, analytics, or server.
+```mermaid
+flowchart TB
+    Docs["Documents/Leaf"] --> B["Books/<br/>your unmodified copies"]
+    Docs --> C["Covers/"]
+    Docs --> V["VoiceNotes/<br/>AAC clips"]
+    Docs --> M["library.json<br/>metadata · places · bookmarks · highlights · notes"]
+    Docs --> H["ChatHistory/<br/>SQLite per library, pictures beside it"]
+    Docs --> T["AgentTraces/<br/>opt-in debugging"]
+    KC["Keychain (this device only)"] --> K1["AI keys · ChatGPT tokens"]
+    KC --> K2["Z-Library session · NYT key"]
+    UD["UserDefaults"] --> P["Reading preferences · provider choice · theme · button position"]
+```
 
-The local `leaf-reader://` scheme exposes only bundled reader resources and the currently opened book. Reader website data is nonpersistent. The reader WebView’s CSP blocks outbound network loads and embedded scripts; an additional sanitizer removes active markup. External book links are not opened automatically. A damaged manifest is preserved and reported rather than replaced. Optional AI requests originate from the native chat service after the reader sends a question; they do not relax the book WebView’s network restrictions.
+The reader's `leaf-reader://` scheme serves only bundled reader resources and the open book. Its WebView blocks outbound network loads and scripts, website data is non-persistent, and a sanitizer strips active markup from imported HTML. AI requests leave from the native chat service only after you press Send, and only with the passage you chose to include. iOS may include Documents in device backups.
 
 ## Tests
 
-### Spoken-line following verification
-
-Version **1.13.2 (56)** highlights the full rendered line containing the current speech cursor in Pages, Scroll and PDF. EPUB/HTML line paint uses laid-out text fragments, keeps inline text together and isolates pagination columns without adding character spans or changing CFIs. Following checks physical line visibility instead of cached visible-range endpoints, which can include offscreen text after reflow. Starting and resuming immediately use the saved speech offset, avoiding a competing navigation to the paragraph beginning. PDF line paint remains separate from selection, annotations and the original file.
-
-Verification passed **111 distinct cases**: 53 rendered reader-engine cases, 14 speech/session/PDF cases, 19 chat-history cases, eight annotation units and 17 native UI workflows. The final evidence includes **159 inspected screenshots**. A strict 252-state geometry sweep covers Pages/Scroll, portrait/landscape viewports, all 12–32 pt sizes and three fonts, with exact line bounds, visible paint and unchanged CFIs. The line-boundary oracle handles 38 observed cases where WebKit includes a zero-width caret on the preceding line. Real Chinese speech resumes inside a long paragraph; English speech advances full-line paint in Pages, Scroll and PDF. Chapter directions, book ends, saved-passage reopening, lazy resource bounds, margins/themes, native selection, persistent highlights/notes, chat resizing/dismissal, drafts/quotes, launcher dragging/restoration and software-keyboard layouts also pass.
-
-Evidence combines passing cases across the full unit run and focused reruns, with an explicit source-equivalence chain through final production head `97f864c`; it is not one uninterrupted test run. The final native suite has 16 passes, plus the separately completed real-speech native workflow. Per-case heads/bundles, the resolved geometry-oracle failure, packaged resource hashes, screenshot reviews and build/signature checks are recorded in `build/spoken-line-verification-summary.json` and `build/spoken-line-passing-case-index.json`.
-
-Native landscape checks use an opt-in DEBUG fixture that requests actual scene geometry through the public `UIWindowScene` API and asserts rendered app/book dimensions. This verifies landscape layouts, not automatic physical-device rotation. The fixture and its app modifier are excluded from Release. Verification used iOS 26.5 simulators and real system speech; AI responses were mocked. Physical iPhone/iPad UI, voice quality/Bluetooth routes, OCR, total resident memory and unmerged speech providers were not measured. Playback remains foreground only. Phone delivery requires the coordinator's signed build from clean merged main and build-specific installation approval.
-
-### Expanded selection and spoken-word verification
-
-Version **1.13.0 (54)** passed **113 distinct checks**: 49 rendered reader-engine cases, 13 speech/session/PDF cases, 19 chat-history cases, eight annotation units, and 24 native UI workflows. All **151 screenshots** in the final evidence were inspected. Coverage includes actual rendered books in Pages and Scroll, both chapter directions, book ends and reopening, all 12–32 pt sizes with three fonts, margins, Day/Paper/Night, all six themes in native UI, and actual portrait/landscape. The selection list and standard iOS actions were exercised in Pages, Scroll, and PDF, including exact Copy/paste, repeated selection, saved highlights/notes, chat composing, and window cleanup. Actual speech callbacks advance the visible word highlight in all three readers; pause, rotation, keyboard composing, and Stop are captured. Launcher dragging/restoration, chat resizing/dismissal, drafts/quotes, and lazy chapter/resource bounds also pass.
-
-The final production source is `7b39788`; `1313ee1` changes only an obsolete UI-test retry that dismissed the new button-based list and could fall back to a hidden library action. The corrected case targets the explicit selection button and asserts the exact attached quote. App executables are byte-identical between those builds. Final evidence combines 89 passing unit cases, 20 individually completed passing native cases from an interrupted run, and four passing replacement/remaining native cases. Failed/interrupted results and earlier overlapping orientation runs are excluded. A single coordinated restart of simulator B recovered actual rotation without a product change; the cause of the earlier rotation failure is unproven. The case index, screenshot reviews, source equivalence, resolved failures, and limitations are recorded in `build/spoken-highlight-verification-summary.json`.
-
-Verification used iOS 26.5 simulators with real system speech and fixture books; AI responses were mocked. Physical iPhone/iPad UI, voice quality/Bluetooth routes, OCR, and total resident memory were not measured. Playback remains foreground only. Phone delivery uses a separate signed build from clean merged main and requires the coordinator's build-specific installation approval.
-
-### Read-aloud verification
-
-The original read-aloud verification for **1.12.0 (52)** covered **103 distinct passing cases**: 44 rendered reader-engine cases, 12 speech/session/PDF cases, 19 chat-history cases, eight annotation units and 20 native UI workflows. Pages and Scroll were exercised with rendered books, forward/back chapter boundaries, book ends, saved-passage reopening, all 12–32 pt sizes, three fonts, margins and Day/Paper/Night. Native checks also cover all six themes, actual portrait/landscape, translucent launcher dragging/restoration, chat resizing, selection and composing with the software keyboard. Pages, Scroll and PDF retain highlights, notes and chat drafts after the selection menu gains **Listen from here**; native menu pagination is covered.
-
-Real English and Chinese system voices produced PCM audio; a number-only passage without language metadata also completed with the device voice. Speech extraction keeps CFI offsets and the original DOM intact, skips empty/nonlinear chapters lazily, limits each passage to 800 UTF-16 units and retains one prefetched passage and at most one detached chapter document. Source/session regressions cover cancellation, pause during loading, rapid navigation, hard line breaks, saved word offsets, speed/voice changes and interruption/disconnection pauses. Native listening checks cover both entry points, pause/resume, speed, actual keyboard geometry, unchanged book viewport, background pausing and saved resume. Evidence and source provenance are recorded locally in `build/read-aloud-verification-summary.json` and the `ReadAloud*.xcresult` bundles.
-
-Playback is foreground only. Physical-phone/iPad UI, physical voice quality/Bluetooth routes and total resident memory were not measured. Image-only books/scans need extractable text. Phone delivery uses a clean merged-main build and the coordinator's build-specific installation approval.
-
-### Highlights and notes verification
-
-Highlight/note verification for **1.9.14 (43)** covers **37 distinct passing cases**: eight annotation units, five library checks, 17 chat-history units, four rendered/native engine checks, and three complete native UI workflows. The rendering sweep covers **126 states** across all 12–32 pt sizes, Pages and Scroll, three fonts, Day/Paper/Night, and margin settings. Exact text-range CFIs, lazy chapter overlays, chapter/book boundaries, saved-passage reopening, PDF visible-page/zoom rendering, original PDF bytes and cover artwork were checked.
-
-Native Pages, Scroll and PDF workflows passed selection-menu creation, Cancel, Highlight, note composition with the keyboard, color edits, Ask Leaf draft retention, actual landscape editing, app relaunch, library-wide saved-passage navigation and deletion. The landscape Form test now scrolls to offscreen controls. After a simulator reported landscape while the app stayed portrait, a device-only restart and an exclusive rotation-sensitive UI window restored actual landscape; geometry assertions were kept. All 24 named final screenshots were inspected, including actual landscape note fields. The three actual UI-test library manifests also confirmed the notes were deleted from disk. Evidence is `build/AnnotationsTargetedA.xcresult`, `build/AnnotationsNativeB.xcresult`, `build/AnnotationsRecoveredB.xcresult` and `build/annotations-verification-summary.json`. Physical-phone UI, iPad and live-provider requests were not exercised; phone installation is coordinated from clean merged main after explicit approval.
-
-### Z-Library popular books
-
-Popular results may contain only ID, hash, title, author, and cover. Opening a book with no format loads that selected edition through `GET /eapi/book/{id}/{hash}` before showing **Add to library**. The feed does not fan out into per-book requests. Resolved metadata updates the current feed and is reused when reopening the same entry. A lookup failure or still-missing format offers **Try again**; only a known unsupported format shows the unsupported-edition message. Full details retain the same edition identity, summary cover/title, and available rating metadata. The download client also resolves sparse inputs and preserves its existing supported-format, file-byte, size, session, quota, and credential checks.
-
-The sparse-record contract and detail endpoint were checked against this [primary implementation investigation](https://github.com/heartleo/zlib/blob/main/docs/android-eapi-deep-dive.md#数据模型与调用行为). Provider availability and a real account download still require manual verification; these changes do not automate access to a blocked website.
-
-Choose **Add books → Z-Library** to browse **Most popular** without a search step. Each card represents an edition returned by the service and displays the available metadata. Pull down to refresh.
-
-Book details includes **About this book** below the author and a smaller cover. The catalog description previews four rendered lines; **Read more** and **Read less** expand it inline when needed. Short descriptions have no extra control. Loading, missing descriptions and retryable failures are shown separately, while a listed edition can still be added. Descriptions reuse the existing selected-book request/cache and stay in the catalog’s language; no AI request is made.
-
-Each popular/search card now keeps **format and file size**, **language and publication year**, and the available **Z-Library rating and rating count** visible, including after the edition is added to the library. A missing size or rating says **Size unavailable** or **No rating provided**; a missing rating count is omitted. `filesizeString` is preferred, with a positive numeric `filesize` byte count as fallback. Book scores use `rating` or `interestScore`; `qualityScore` is shown separately as **File quality** on the edition details page. Scores retain the provider's numeric value without assuming a five-star denominator. Rating counts are labelled ratings, never written reviews. Written reviews are unavailable through this connection; the details page says so. Metadata uses the existing bounded popular/search payload, with no detail request for each card.
-
-Wire-field references are the maintained [heartleo EAPI model and mapping](https://github.com/heartleo/zlib/blob/main/eapi.go), [KOReader mapping of interestScore to rating](https://github.com/ZlibraryKO/zlibrary.koplugin/blob/main/zlibrary/api.lua), and [optional rating/ratingCount metadata extraction](https://github.com/rookslog/zlibrary-mcp/blob/master/lib/enhanced_metadata.py). Public client schemas are compatibility evidence, not a promise that every live edition includes those optional fields. Preview ratings and sizes are isolated DEBUG fixtures.
-
-The **Title, author, or ISBN** field searches the catalog through `POST /eapi/book/search` when **Search** or the keyboard's search key is pressed. This is a provider search, not a filter over the popular feed. Queries use a UTF-8 form body; the established website cookies and browser identity stay in headers on the configured origin. Clear the field to return to Most popular. Opening an edition and returning, refreshing, retrying, or reconnecting retains the submitted query. Search text stays in memory and is not written to Keychain or a search-history file.
-
-**Search order** provides the website's eight choices: Most popular (`popular`, the default), Best match (`bestmatch`), Recently added (`date`), Title A–Z (`titleA`), Title Z–A (`title`), Year (`year`), File size ↓ (`filesize`), and File size ↑ (`filesizeA`). Leaf sends `order` in the search POST body and preserves the provider's returned sequence, rather than sorting only a downloaded page. Wire values follow the [documented Android search-order mapping](https://github.com/heartleo/zlib/blob/main/docs/android-eapi-deep-dive.md#排序apk-声明调用点与服务端效果). Changing the order on an active query cancels the previous request, rejects late results, and restarts page one; pagination, retry, refresh and reconnect use the same selected order. The selection is saved in local preferences; query text is not. The control appears only after a query is submitted, including search loading/error states. It is hidden on the Most popular landing feed and while drafting the first query. Clearing a query returns to that feed and hides the control while retaining the selected preference for the next search.
-
-Search loads 30 editions at a time with **Load more books**, deduplicates editions across pages, and stops when the service returns a short or repeated page. At most ten pages are retained per query; a prompt asks the user to refine a broad search at that limit. A new query or a return to Most popular cancels the prior request; request/account identifiers also reject responses from providers that ignore cancellation. A failed next page retains earlier results and retries that same page. Empty results and search failures have distinct states; search diagnostics contain `POST /eapi/book/search`, status, and response category, without the query/body or session secrets.
-
-**Connection** opens the configured HTTPS website (initially `https://z-library.sk`) for the user to sign in. The app reads only that website’s session cookies, verifies the account through the profile endpoint, and stores the session in device-only Keychain rather than storing a password. Cancelling a reconnect retains the existing connection. Disconnecting removes the saved session and the sign-in web data. External top-level sign-in redirects require the user to explicitly configure the trusted destination address first.
-
-The website session includes same-host cookies (respecting path and expiry) and the browser identity captured from the user's sign-in view. A stable per-origin WebKit data store preserves browser storage across in-place app updates. Website completion, dismissal, and app inactivity snapshot the current verified account's cookies in Keychain, including cookies WebKit treats as session-only. Catalog loads restore saved account cookies and merge newer browser context automatically; opening the website again must not overwrite its newer cookies or identity. A Keychain read blocked while the device was locked is retried when the catalog is used. Disconnect clears both Keychain credentials and the origin's browser data, even before the website is opened on that launch. Browser context from another account is never silently adopted. Existing two-cookie Keychain records remain readable; website context already discarded by an older build may require one final manual website check. These cookies are never sent to another API host or a signed download CDN. Ordinary HTTPS redirects within the configured origin's EAPI are followed with a three-redirect limit and loop detection.
-
-**Access checks.** The provider's DiamWall layer answers a bare API request with `307` to the same URL plus a short-lived (five-minute) `__diamwall` cookie, and a request carrying only that cookie with a small `517 Access Denied | DiamWall` page whose script sets a second cookie. A browser passes both without user action, which is why **Open website** always restored the catalog. Leaf now does what the browser does, with fixed bounds: after a same-URL redirect or a recognized access-check page it repeats the request once (WebKit has already stored the cookie), then once more after loading the website document in the retained hidden browser, then a final time three seconds later for the page's scripts. At most four requests and one document load per catalog call; the request never leaves the configured origin or `/eapi/`, and a presented website sheet is never reloaded under the user. Other HTML (for example a sign-in page) is not retried. Streamed downloads repeat a same-URL redirect once when it hands out cookies for the origin, and those cookies are saved to the browser. Only after these bounded retries does the access-check error appear with **Open website**.
-
-**Account connected** confirms the profile check, not successful catalog retrieval. A feed failure retains the account and offers **Open website**, **Try again**, and expandable **Request details**. Those details contain the endpoint, HTTP status, and response category. Rejected redirects additionally report fixed categories for the target and policy reason, followed-hop count, a boolean response-cookie-update indicator, and a recognized access-check marker (when present); browser-session redirects report the retry count and whether the website document reload completed, failed, or was skipped. They never contain cookie values/names, account details, raw response bodies, redirect URLs/paths, URL queries/fragments, arbitrary server headers, or remote host names. HTML is never presented as a successful empty book list.
-
-Catalog navigation keeps the popular list and three recently visited search/order combinations in memory, including pagination and empty results. Switching back restores the list without another API request. **Previously loaded · Pull down to refresh** identifies restored data; the **Refresh books** button, pull-to-refresh, Retry, new query, or sort change still performs a request. Failed refreshes preserve loaded books alongside the error. Disconnect, successful reconnect, and address changes clear all retained lists. The retained metadata is bounded to 200 popular rows and three searches of up to 300 rows each; book contents are not part of this state.
-
-A live user capture from **1.9.10 (39)** confirmed a search POST returning HTTP 307 to the same URL, a response-cookie-update indicator, and a DiamWall marker. This establishes an access-check response, not why the provider issued it. The cause was later confirmed from a Mac without an account: the `307` is DiamWall's cookie handout, repeated after every five-minute cookie expiry, and Leaf refused that self-redirect by policy in both the native transport and the browser session (`redirect: 'manual'`) while its own loopback test showed the repeated request succeeding. Leaf now explains recognized access checks directly and keeps the connected account. Request reuse removes unnecessary navigation requests; it does not guarantee access for a fresh request or bypass website verification. Redirect limits, cookie behavior, and origin restrictions are unchanged.
-
-Verification for **1.9.11 (40)** passed **65 distinct checks**, with zero failures or skips in the final evidence: 62 catalog/session/transport units (`build/CatalogReuseUnitsVerified.xcresult`), one all-eight-sort/pagination/details UI case (`build/CatalogReuseRefreshSortUI.xcresult`), and two switching/refresh/diagnostic UI cases (`build/CatalogReuseVisibleUI.xcresult`). Coverage includes bounded search retention and eviction, query/order/pagination restoration, empty and 300-result lists, account/origin isolation, cancelled late completions, resolved details, explicit refresh requests, retained books on failure, and a production-client POST/307 fixture. Native UI exercised ten view switches in each of fresh portrait and landscape scenes, the Refresh button, readable access-check errors, retained cards, and expanded redacted diagnostics. Screenshots were inspected in `build/catalog-reuse-visible-attachments/` and `build/catalog-reuse-refresh-sort-attachments/`; the summary is `build/catalog-reuse-verification.json`.
-
-The initial unsigned UI artifact could not access Keychain; normal simulator signing and strict verification resolved that test setup failure. A preexisting unit assertion was changed to use explicit refresh rather than navigation. Ambiguous refresh drags were replaced with the public Refresh action, and offscreen landscape test interactions now use bounded slow scrolling before taps/captures. Earlier failures remain in their logs and are superseded by the passing evidence above. All checks use fixtures; live provider success, physical-phone UI, iPad UI, and reliable in-place rotation are not claimed. This catalog-only change does not alter reader layout, navigation, or chat. The coordinator builds clean merged main and verifies its signature before offering a specific iPhone installation.
-
-This uses Z-Library’s unofficial mobile interface, including `book/most-popular`; it is not OAuth. The user confirmed account sign-in and the popular feed work on their phone with 1.8.2 (25). The user has also confirmed live search works on 1.8.4 (28). Download and optional rating-field compatibility still require manual service verification; automated live access remains unavailable. Website verification pages, unavailable domains, expired sessions, and download limits are reported separately from successful imports. The app does not automatically send account credentials to alternative domains. If the interface is unavailable, a book downloaded in the user’s browser can still be added from Files.
-
-Book downloads stream into protected temporary files with a 100 MB cap. Catalog/image responses are limited to 2 MB; cover thumbnails are downsampled and use an 8 MB cache. Download redirects strip credentials when leaving the configured origin. Completed books pass through the existing import and cover-extraction path; failures and cancellations remove partial downloads. Content duplicates link the existing book without replacing its reading location, bookmarks, or conversation identity.
-
-Debug UI tests opt into an isolated sample catalog with `--ui-testing`, a unique `LEAF_UI_TEST_ID`, and `LEAF_UI_ZLIB_MOCK=1`. The preview account and bundled sample downloads do not contact Z-Library and are excluded from Release builds.
-
-Verification for **1.12.1 build 53** access-check retries passed **98 distinct cases**, zero unresolved failures: 83 unit/loopback cases (`ZLibraryTests`, `ZLibrarySessionUpgradeTests`, `LibraryTests`, `ZLibraryBrowserTests`) on head `bbc86aa` in `build/ZLibraryAccessRetryUnits.xcresult`, where the one failure was a wrong expectation in the new download-challenge test (the download reads the browser jar, not the request header); that test-only correction is head `8304bb7`, on which all 14 `ZLibraryBrowserTests` passed again in `build/ZLibraryAccessRetryUnits2.xcresult`. All 15 `ZLibraryUITests` passed on `bbc86aa` in `build/ZLibraryAccessRetryUI.xcresult` (app sources identical to `8304bb7`), including Day/Night/Dusk, portrait/landscape, the explicit-refresh access-check card with retained books, the readable landscape diagnostic, and importing into Pages and Scroll; 53 screenshots exported to `build/zlibrary-access-retry-attachments/`, five representative ones inspected. New loopback coverage uses real WebKit against a local server: a 307 cookie handout is repeated exactly once with the stored cookie and the POST body intact; a 517 access-check page is passed by loading the website document, whose script sets the cookie, and that document is reused by Open website; a persistent redirect stops after the bounded retries with a redacted diagnostic; an HTML sign-in page is not retried; a presented website sheet is never reloaded; a streamed download repeats a same-URL cookie redirect once, keeps jar cookies, saves the handed-out cookie, and still refuses a cookieless same-URL redirect. The `307` + five-minute cookie and the `517` page were observed live from a Mac without an account; the fix itself has not been exercised against the live provider from the app, so the first catalog load after a five-minute idle on the phone is the real confirmation. Reader layout, navigation, and chat are unchanged. The coordinator builds clean merged main and asks before installing.
-
-The **1.9.9 build 38** redirect-diagnostic change is an investigation build, not a fix for the unresolved live popular-feed failure. The user supplied `GET /eapi/book/most-popular · HTTP 307 · redirect not followed`; the previous build did not retain enough redacted information to distinguish a self-redirect, hop limit, cross-origin destination, or website access check. The redirect policy, request methods, cookies, and retry behavior remain unchanged. Search and popular-feed fixtures are independent so the exact successful-search → clear → failing-popular sequence can be tested without assuming both endpoints return the same response. Public reports of provider access-check redirects are supporting leads, not proof of the user's actual redirect destination. A live capture from this diagnostic build is still needed before selecting a behavioral fix. Verification passed **57 distinct checks**: 56 catalog/unit cases (`build/RedirectDiagnosticsVerified.xcresult`, runtime `2d1c950`) and the exact-flow native UI case (`build/RedirectDiagnosticsRecoveredVerified.xcresult`, test head `e59dea6`). Earlier UI attempts exposed an offscreen swipe and a simulator orientation-delivery problem; their failing results are retained, and only the corrected run after a B-only reboot is accepted. The final test repeats successful search → clear → rejected popular request in fresh portrait and landscape app scenes, requires actual landscape geometry (874×402), and checks that the expanded diagnostic text is fully inside the viewport. Screenshots were inspected in `build/redirect-diagnostics-recovered-attachments/`; the fixture access-check marker is synthetic and is not evidence of the live provider marker. This covers fresh scenes, not reliable in-place rotation. No reader layout/navigation/chat changes or new live-provider verification are claimed. The coordinator builds and signs clean merged main before requesting installation approval for this diagnostic build.
-
-Verification for **1.9.7 build 36** session restoration passed **58 distinct targeted cases** across the final checks: 53 catalog/session/transfer/order unit cases, 3 native UI cases, and 2 app-upgrade phases. The final combined sort-main runtime was checked in `build/SessionRestoreSortIntegrated.xcresult` (53 units + 2 UI, tested head `1ba289a`); the connected-but-unavailable UI also passed in `build/SessionRestoreAllVerified.xcresult` (49 units + 3 UI, head `163fc25`, before sort integration). The actual upgrade fixture ran phase one with installed **1.9.4 (33)** (`build/SessionRestoreVersion33Prepare.xcresult`), then installed **1.9.6 (36)** in place and ran phase two in a new process (`build/SessionRestoreVersion36Upgrade.xcresult`). It restores both the lifecycle-snapshotted session-only cookie/identity from real simulator Keychain and a newer persistent WebKit cookie deliberately absent from Keychain, without opening the website or checking the connection. Source-option styling main `7e1a77d` was then integrated without auth/session overlap and the preview version advanced to 1.9.7 (36); the final combined source was built again. Native UI exercises the real offline WebKit page-finish/identity callback, closing that page with Cancel instead of Check connection, and recovery through relaunch; normal scene transitions also exercise the background hook, whose contribution is not isolated from the browser callbacks. Account/origin isolation, locked-Keychain retry, failed snapshot writes, fresh-cookie/identity preservation, and disconnect-before-opening cleanup have regression coverage. Portrait/landscape catalog/account screenshots and offline website readiness/recovery screenshots were inspected (`build/session-restore-integrated-attachments/`, `build/session-restore-attachments/`). Reader layout, navigation, and chat are unchanged; the full reading-mode/typography matrix is outside this catalog/session change. Live provider session/challenge behavior remains unverified. The coordinator prepares and verifies clean merged main before asking for this build's phone-install approval.
-
-Verification for **1.9.8 build 37** contextual search sorting passed **2/2 focused native UI cases**, zero failures/skips (`build/ZLibraryOrderContext.xcresult`, tested head `0c2415d5ad51b7ff90d1805ceca7bddc501976c2`, based on auth/source/sort main `cd1d6ae`). The updated existing cases verify the control is absent on Most popular and while drafting the first query, appears for submitted searches and errors, hides after Clear and relaunch, and retains the chosen order on the next submitted search. All eight choices, paging/details, retry, Day/Night and portrait/landscape are exercised. Screenshots of the clean popular feed and active search menus were inspected (`build/zlibrary-order-context-attachments/`). The change is a catalog-view visibility condition; model/auth/reader code is untouched. No new live service verification is claimed. The coordinator builds and signs clean merged main before requesting installation approval.
-
-Verification for **1.9.5 build 34** search sorting passed **62/62 targeted cases**, zero failures/skips: 47 catalog tests, 5 library tests and 10 native catalog UI cases (`build/ZLibraryOrderVerified.xcresult`, runtime head `99b1fd299cb48a5e3acd88e670a0f2a0c074acdd`, integrated detail/download main `77e0041`). Four new HTTP/store cases cover all eight wire values, retaining server response order, cancellation and stale-result rejection for the same query with a new order, pagination restart, retry/refresh/reconnect, and preferences without persisted query text. Two new UI cases select every option with a Chinese query, verify result-set replacement/paging/details navigation, and check failure retry and saved selection after relaunch. Day portrait and Night landscape menus, selected-order results, saved preference and actual imported-book Pages/Scroll screenshots were inspected (`build/zlibrary-order-attachments/`). Existing sparse-book details/download tests and Day/Night/Dusk metadata checks also passed. These service checks use offline fixtures; live provider sorting remains unverified because automated access to the website is blocked. Reader layout/navigation engine is unchanged by this feature. The coordinator builds and verifies clean merged main before requesting installation approval.
-
-Verification for **1.9.2 build 31** catalog metadata passed **48 distinct targeted cases**, zero failures/skips: 37 catalog/session/transfer tests, 5 library tests, and 6 catalog UI cases (`build/ZLibraryMetadataVerified.xcresult`, tested head `188d3f18eafc5ef92eb983b829954ce4693b96c4`). New parser coverage exercises both feeds without detail-request fanout, byte-size fallback, malformed/missing values, and independent book/file-quality scores. After integrating resize main `5ec806a`, the metadata and catalog import→actual Pages/Scroll cases passed again (`build/ZLibraryMetadataIntegrated.xcresult`, head `a68de16a30eb5d83de564fe92060e045d4993773`). The final metadata UI case also passed with assertions that both card bottoms are inside the landscape viewport (`build/ZLibraryMetadataViewport.xcresult`, head `a46a85d`); this test-only addition leaves the integrated runtime unchanged. Portrait/landscape Day/Night, Dusk catalog/search/details, missing ratings, file-quality icon, and both imported-book reading screenshots were inspected. Final screenshots are in `build/zlibrary-metadata-viewport-attachments/` and `build/zlibrary-metadata-integrated-attachments/`. Three supplemental macOS parser/client cases also passed against production source. Metadata UI uses isolated DEBUG fixtures; live optional score-field compatibility and written reviews are not verified/supported. Reader layout/engine is unchanged by this feature, so the full typography/chapter-boundary matrix is outside its scope. The coordinator builds clean merged main and verifies signing before requesting this specific phone installation.
-
-Verification for **1.8.4 build 28** catalog search passed **43 distinct targeted cases**: 34 catalog/session/transfer tests (ten new search cases), 5 library tests, and 4 native UI cases. `build/ZLibrarySearchVerified.xcresult` passed all 39 units and three UI cases; its new search UI case exposed a test-helper error that deleted from the middle of a long query and left a suffix. The helper now uses Clear and asserts the exact input. Both the corrected search scenario and searched-book import/reading scenario passed on the integrated sent-quote baseline in `build/ZLibrarySearchUIFinal.xcresult`, with zero failures or skips. This covers pagination/deduplication, empty results, failure/retry, returning to popular, preserving the query through book details, real simulator Keychain, duplicate linking, and actual EPUB reading in Pages and Scroll. Screenshots for portrait/landscape, composing with the keyboard, empty/failure states, and both reading flows were inspected (`build/zlibrary-search-final-attachments/`). Ten search cases also passed in local macOS harnesses: three against the production HTTP client and seven against the production store logic with unused platform adapters stubbed; these supplement iOS verification. Reader layout/engine is unchanged. Live search/download requests have not been verified; automated access to the blocked website is not attempted. The install coordinator separately builds clean merged main and verifies signing before asking for specific installation approval.
-
-Verification for the **1.8.2 build 25** session-handoff fix passed **32/32 targeted cases**, zero failures or skips: 24 catalog/session/transfer tests, 5 library tests, and 3 native catalog UI tests (`build/ZLibraryAccessVerified.xcresult`, `build/zlibrary-access-summary.json`). New coverage checks legacy-session decoding, website-cookie/identity persistence and restoration, cookie path/expiry/header safety, bounded API redirects without host changes or website-challenge traversal, redacted diagnostics, connected-account feed failures, website-context refresh without another login, and true expired-account handling. The native tests use real simulator Keychain storage, inspect the connected-but-unavailable UI through relaunch, and open the imported EPUB in both Pages and Scroll. Catalog and failure-state screenshots were inspected in portrait/landscape; both actual reading-flow screenshots were also inspected (`build/zlibrary-access-attachments/`). Signed Release build and strict signature verification passed (`build/zlibrary-access-release.log`). These are fixture-based service checks; the live website's feed/download response remains unverified because automated access to that site was blocked by browser safety policy. This feature artifact is not offered for phone installation: the coordinator builds and verifies clean merged main before requesting approval for that specific build.
-
-Verification for **1.7.0 build 22** passed all **25 distinct targeted cases**: 18 catalog/session/transfer tests, 5 library tests, and 2 native UI tests. `build/ZLibrarySigned.xcresult` passed all 23 unit cases plus the connection/address UI case; the corrected reader-readiness helper and final import UI passed in `build/ZLibraryUIVerified.xcresult`. The import flow exercises real simulator Keychain storage, a sample-file download, duplicate linking, and actual EPUB reading in both Pages and Scroll. A separate fresh-library case verifies embedded-cover extraction before import success. Screenshots were inspected for the catalog in portrait/landscape, the added-book state, and both reading flows. Use normal simulator signing for these UI tests: disabling signing prevents real Keychain access. Results/screenshots are under `build/zlibrary-signed-*` and `build/zlibrary-ui-verified-*`.
-
-The initial broader regression attempt was interrupted after shared CoreSimulator startup and WebKit failures during concurrent agent runs. It is not reported as a passing full suite; final feature checks ran serially on the healthy iPhone 17 Pro simulator after the shared service was restarted. Ten production-client HTTP/parser/download cases additionally passed as native macOS checks (`build/zlibrary-host-checks.log`). Release signing and verification passed, but no live Z-Library account grant or download has been completed.
-
-`LeafReaderTests` covers format aliases, duplicate imports, source preservation, invalid files, manifest corruption, bookmark persistence, and actual WebKit rendering of EPUB, FB2, TXT, MOBI, HTML, CBZ, plus PDFKit rendering/navigation/search. EPUB tests also search rendered content, navigate, bookmark, and reopen at the saved location. UI tests exercise the library, appearance controls, bookmarks, and library search.
-
-The initial version was verified on October 20, 2026: **16 tests passed, zero failures or skips**, on iPhone 17 Pro Simulator running iOS 26.5 (13 unit/integration tests and 3 UI tests). The PDF UI test turns a page, closes the reader, and verifies that reopening restores that page. EPUB restoration checks that the start of the saved passage is visible; progress estimates can change with pagination. Debug UI tests use a separate temporary library and preferences suite for each test instead of changing the normal library or reading settings.
-
-Version **1.0.1 build 2** passed **25 tests with zero failures or skips** on the same Simulator. Nine new metadata tests verify covers and authors before the first read, EPUB 2/3 declarations, SVG rasterization, XHTML cover pages with relative image paths, PDF thumbnails, persistence, existing-library updates, retry after failure, and deletion during extraction. Results: `build/CoverFixFinal-20261020.xcresult` and `build/cover-fix-test-summary-20261020.json`.
-
-Version **1.0.2 build 3** balances the Leaf toolbar logo's horizontal padding and centers its icon and title within a 44-point row. The existing library/reader/bookmarks/appearance UI test passed, and screenshots confirmed the logo spacing at the top of the library and after scrolling. Results: `build/LeafTitleAlignmentFinal-20261020.xcresult` and `build/title-alignment-final-attachments/`.
-
-Version **1.0.3 build 4** passed **27 tests with zero failures or skips**. Page layout now supplies valid CSS lengths to the paginator, preventing excessive blank space. New controls adjust page margins and paragraph spacing, with a compact preset and smaller minimum text size. A Chinese HTML regression fixture verifies actual page dimensions, increased visible text, and preservation of the saved passage when changing density or switching to scrolling. The UI test verifies that layout settings survive a restart. Results: `build/LeafDensityFinal-20261020.xcresult`; screenshots and density measurements are exported to `build/density-final-attachments/`.
-
-Version **1.0.4 build 5** reorganizes Appearance into a compact Font/Layout/Themes panel with a visible reading page, visual margin and spacing choices, and reading presets. The full **27-test suite passed** (`build/LeafAaControls-20261020.xcresult`). Subsequent targeted checks verify night controls, text-size buttons, preset selection and persistence, page bounds, density, scrolling, PDF navigation, and EPUB search/position restoration after the final preview refinements. The web surface prevents outer scrolling during focus restoration after dismissing the sheet. Visual artifacts are in `build/aa-controls-attachments/`, `build/aa-visual-final-attachments/`, and `build/aa-focus-final-attachments/`.
-
-Version **1.0.5 build 6** passed **28 tests with zero failures or skips** (`build/LeafImmersiveFinal-20261020.xcresult`). Reading controls now overlay a stable, larger page viewport and hide automatically. A new UI test checks hidden controls on opening, a center tap to reveal/hide them, unchanged page height and bookmarked passage during toggling, edge-tap navigation, and hiding on swipes. Updated EPUB/PDF and appearance tests exercise the same tap-to-reveal interaction. Screenshots are exported to `build/immersive-final-attachments/`; the summary is `build/immersive-final-test-summary-20261020.json`.
-
-Version **1.0.6 build 7** removes Done from Appearance. Both existing appearance UI tests passed, verifying swipe-down dismissal, hidden reading controls after dismissal, and saved preferences after relaunch (`build/LeafRemoveDone-20261020.xcresult`). Screenshots are in `build/remove-done-attachments/`.
-
-Version **1.0.7 build 8** passed **29 tests with zero failures or skips** (`build/LeafPageMotionFull-20261020.xcresult`). Page-turn animation is now enabled for paginated reflowable books, with a 360 ms settle (375 ms measured in the full run). WebKit tests sample intermediate movement and verify snap-back, paused releases, interrupted drags, overlapping input, and forward/backward position restoration. The immersive UI test verifies short-drag cancellation and real forward/backward swipes using saved bookmarks. Timing measurements and screenshots are in `build/page-motion-full-attachments/`; upstream engine modifications are described in `ThirdParty/LOCAL_CHANGES.md`.
-
-Version **1.0.8 build 9** passed **31 tests with zero failures or skips** (`build/LeafFontFinal-20261020.xcresult`, completed October 21). WebKit text autosizing previously changed a requested 12 pt to 20 pt and could retain distorted sizing after returning to Pages. A new regression sweeps every integer size from 12–32 pt through Scroll → Pages → Scroll → Pages, checking actual font and glyph sizes, line height, text width, visible content, and passage preservation in all 84 cases. Reflow now pins to text, with an inset to avoid losing the anchored line at an exact pixel boundary. The UI test checks 12/32 pt scrolling previews, vertical swipes, and returning to Pages at 22 pt. Measurements and screenshots are in `build/font-final-attachments/`.
-
-Version **1.0.9 build 10** dismisses Appearance when the exposed book page is tapped. A temporary tap target consumes the dismissal tap, preserving the current page even at its edges. Both targeted UI tests passed (`build/LeafTapDismiss-20261021.xcresult`): the immersive test checks dismissal and the unchanged bookmarked passage, and the appearance test checks controls, swipe dismissal, and preference persistence.
-
-Version **1.1.0 build 11** passed **32 tests with zero failures or skips** (`build/LeafChatFinal2-20261021.xcresult`). The new chat UI test verifies the compact panel height, unchanged book viewport with the keyboard, sample message submission, the latest reply visible after reopening, page-tap dismissal without navigation, and bookmark preservation. Reading, appearance, font-size sweeps, imports, and PDF checks also passed. Screenshots are in `build/chat-final2-attachments/`; the summary is `build/chat-final2-test-summary-20261021.json`.
-
-Version **1.1.1 build 12** passed **six targeted checks with zero failures or skips** (`build/LeafComposeFinal-20261021.xcresult`). Day and night chat checks verify a compact composer above the keyboard, visible book content, a stable book viewport, forward/backward swipes while retaining the keyboard and draft, draft restoration after closing chat, and keyboard dismissal when sending or choosing Hide keyboard. The text-size sweep, page-turn animation, immersive controls, and PDF navigation checks also passed. Screenshots are in `build/compose-final-attachments/`; the summary is `build/compose-final-test-summary-20261021.json`.
-
-Version **1.2.0 build 13** passed **24 final targeted tests with zero failures or skips** (`build/LeafAIChatVerified-20261021.xcresult`): 18 provider, transport, Keychain, and conversation lifecycle tests; two actual WebKit/PDF context tests; and four UI checks for settings persistence, missing-key draft preservation, Stop/Retry, and reading while typing in day/night themes. Tests include byte-fragmented Unicode SSE, cancellation of the underlying HTTP request, malformed/interrupted responses, HTTP errors, endpoint credential isolation, bounded history, disabled passage sharing, and retrying the original passage. Results and screenshots are `build/ai-chat-verified-test-summary-20261021.json` and `build/ai-chat-verified-attachments/`.
-
-The broader 53-test regression run (`build/LeafAIChatFinal-20261021.xcresult`) passed 52 tests, including all reading, import, metadata, font-size sweep, animation, and PDF checks. Its sole failure was a simulated tap missing the passage-sharing switch; the final targeted run uses a precise switch tap and verifies the changed value both immediately and after relaunch. UI tests isolate their Keychain service as well as their library and preferences. No test uses a live provider credential or incurs API charges.
-
-Version **1.3.0 build 14** passed the full **78-test suite with zero failures or skips** (`build/LeafChatGPTFinal-20261021.xcresult`). This includes 22 new ChatGPT tests for real RSA signature validation, state/nonce/PKCE and callback checks, token exchange and rotating refresh, refresh coalescing, stale-refresh protection, sign-out during refresh, remote revocation failure, account/model isolation, subscription stream completion and quota errors, and preventing API-key fallback. A native UI test opens `ASWebAuthenticationSession`, accepts the system browser prompt, and completes an actual IPv4 loopback callback into Leaf using local test data. Existing EPUB/PDF context, metadata, import, font-size/flow sweeps, page animation, keyboard layout, Stop/Retry, settings, and reading restoration checks also passed. Summary and visual evidence: `build/chatgpt-final-test-summary-20261021.json` and `build/chatgpt-final-attachments/`.
-
-Version **1.3.1 build 15** adds disk-backed EPUB/CBZ archive access and renderer recovery. A private audit of the owner's 1,373-section, roughly 12 MB EPUB completed 160 dispersed chapter jumps with one loaded chapter document, at most seven active resource URLs totaling 2,470,931 bytes, 256 KB maximum archive reads, and zero active resource URLs after close. These resource counts are not a measurement of total iOS/WebKit memory. The audit used a local build-product copy of the owner's book; the committed regression fixture is a synthetic 128-section EPUB with shared styles and artwork. Evidence is `build/LeafMemoryPrivateBook-20261021.xcresult` and `build/memory-private-attachments/`. The available phone termination reports did not establish the cause of the reported reader interruption, so recovery and diagnostics do not label every WebKit exit as memory exhaustion.
-
-The full regression run passed **81 tests with zero failures or skips** (`build/LeafMemoryFinal-20261021.xcresult`), including all 11 UI tests. After adding stale-surface callback guards, **all 18 final reader tests passed** (`build/LeafMemoryVerified-20261021.xcresult`), including two additional checks that native transfers stop after cancellation, chunks never exceed 64 KB, and closing the reader deallocates its native `WKWebView`. Across these runs, all 83 distinct test cases passed. Summaries are `build/memory-final-test-summary-20261021.json` and `build/memory-verified-test-summary-20261021.json`; UI evidence is `build/memory-final-attachments/`.
-
-Version **1.3.2 build 16** verified 44 chat/auth unit tests plus the native browser callback (`build/LeafChatGPTConnection-20261021.xcresult`) and a final connected-account UI test (`build/LeafChatGPTConnectionUI-20261021.xcresult`). Cancellation checks cover browser cancellation, task cancellation, cancelled network requests, first-time sign-in, reconnecting, retaining credentials/catalog/model across restoration, and preserving real error reporting. The UI test confirms the connected state, account/model accessibility values, explicit add-account action, absence of redundant login controls, and unchanged connection/model with no error banner after cancellation. Final screenshots are `build/chatgpt-connection-ui-attachments/`. Test account fixtures are isolated behind explicit debug-only UI-test flags and are absent from the signed Release executable.
-
-Version **1.4.0 build 17** passed 28 final chat/history unit tests plus the final clear-and-restart UI check (`build/LeafChatHistoryVerified-20261021.xcresult`, 29 passed, no failures or skips). Three additional UI checks passed in `build/LeafChatHistory-20261021.xcresult`: conversation/draft restoration after closing and relaunching, Stop/Retry, and retained partial replies after restart. All 32 distinct targeted tests passed across these runs. Coverage includes a 1,200-message archive, bounded pagination without deletion, book isolation, restoring original passage context, reimporting an identical book, checkpoint durability, clearing despite late events, write-failure recovery without duplicate sends, and preserving unreadable data. The clear UI check handles native confirmation popovers that omit a Cancel button by dismissing outside before verifying no deletion. Summaries are `build/chat-history-verified-test-summary-20261021.json` and `build/chat-history-test-summary-20261021.json`; screenshots are `build/chat-history-verified-attachments/` and `build/chat-history-restoration-attachments/`.
-
-Version **1.4.1 build 18** passed all 56 chat, authentication, and history unit tests (`build/ChatResponseFinal-20261021.xcresult`, no failures or skips). A regression test uses the real URLSession transport with a headerless HTTP 200 response, byte-fragmented UTF-8, CRLF, and a terminal Responses event. Additional checks reject malformed, empty, interrupted, and explicitly incompatible responses. A temporary debug-only probe reproduced the same missing Content-Type failure on the owner's iPhone, then verified a completed live ChatGPT subscription reply after accepting a valid headerless SSE stream. The probe used a short greeting without book text and recorded only status, event schema, and answer length; credentials and generated text were not exported. Probe source and launch hooks are absent from the final app. Diagnostics are `build/chat-probe-result.json`, `build/chat-probe-result-4.json`, and `build/chat-response-final-test-summary.json`.
-
-The native browser roundtrip was verified on iPhone 17 Pro Simulator running iOS 26.5. OAuth exchanges and Responses streams use signed test identities and intercepted network fixtures. A live OpenAI account grant and real subscription-backed inference have not been performed: the owner must approve Leaf in the secure browser, and OpenAI's account/app eligibility and usage policies apply. Debug-only callback test controls are excluded from the Release build.
-
-Cover extraction runs separately from the reader, so it does not mark books as opened or change reading positions, bookmarks, or favorites. Images are converted to PNG thumbnails with a maximum dimension of 600 pixels, including SVG covers. Books without embedded artwork retain their generated covers, and successful coverless checks are remembered across launches. Existing books with missing artwork are updated automatically without reimporting.
-
-The verified build bundles the reader engine, sample books, and test fixtures with their directory structure intact. WebKit's deferred ResizeObserver layout notification is no longer treated as a failed book import. The library toolbar and cover bounds were also checked in captured screenshots.
-
-Local verification artifacts (ignored by source control):
-
-- `build/LeafVerified-20261020.xcresult` — full Xcode test result.
-- `build/LeafCoverLayout-20261020.xcresult` — targeted UI recheck after final cover spacing adjustments.
-- `build/leaf-test-summary-20261020.json` — machine-readable test summary.
-- `build/previews/` — library, book grid, EPUB day/night, and PDF screenshots.
-
-The fixtures establish rendering for the formats named above; they do not test every publisher's EPUB layout, every Kindle encoding, or every supported adapter. iCloud Drive picking has not been verified in this run.
-
-## Physical iPhone installation
-
-On October 20, 2026, version **1.0.0 build 1** was built and signed for the owner's iPhone 17 Pro running iOS 27.0, installed successfully, and launched. A subsequent device process query confirmed the app remained running. The signed bundle includes the reader engine and all four sample books; its signature and device provisioning were validated. This establishes installation and launch, rather than a complete on-device reading or iCloud import test.
-
-Version **1.0.2 build 3** was also signed, verified, and installed successfully. The phone was locked when launch was attempted, so this update's on-device appearance remains to be checked after unlocking and opening Leaf. Installation and launch diagnostics are recorded in `build/title-alignment-iphone-install-20261020.json` and `build/title-alignment-iphone-launch-20261020.json`.
-
-Version **1.0.3 build 4** was signed, verified, installed, and launched successfully on the same iPhone. Installation and launch diagnostics are saved in `build/density-iphone-install-20261020.json` and `build/density-iphone-launch-20261020.json`.
-
-Version **1.0.4 build 5** was also signed, verified, installed, and launched successfully. A before/after comparison confirmed that the five-book library manifest was unchanged by the update. Diagnostics are `build/aa-controls-iphone-install-20261020.json`, `build/aa-controls-iphone-launch-20261020.json`, and `build/aa-final-phone-library-preservation.json`.
-
-Version **1.0.5 build 6** was signed, verified, installed, and launched successfully, with the five-book library manifest preserved. Diagnostics are `build/immersive-iphone-install-20261020.json`, `build/immersive-iphone-launch-20261020.json`, and `build/immersive-phone-library-preservation.json`.
-
-Version **1.0.7 build 8** was signed, verified, installed, and launched successfully. Diagnostics are `build/page-motion-iphone-install-20261020.json` and `build/page-motion-iphone-launch-20261020.json`.
-
-Version **1.1.0 build 11** was signed, verified, installed, and launched successfully on October 21, 2026. Diagnostics are `build/chat-iphone-install-20261021.json` and `build/chat-iphone-launch-20261021.json`.
-
-Version **1.1.1 build 12** was signed, verified, and installed successfully on October 21, 2026. The launch request was blocked because the iPhone was locked; opening Leaf manually completes launch. Diagnostics are `build/compose-iphone-install-20261021.json` and `build/compose-iphone-launch-20261021.json`.
-
-Version **1.2.0 build 13** was built in Release configuration, signed, verified, and installed successfully on October 21, 2026. Diagnostics are `build/ai-chat-iphone-verified-build-20261021.log` and `build/ai-chat-iphone-install-20261021.json`. Launch and live-provider verification are deferred; the owner can open Leaf and add an API key in AI settings.
-
-Version **1.3.0 build 14** was built in Release configuration, signed, verified, installed, and launched successfully on October 21, 2026. Diagnostics are `build/chatgpt-iphone-generic-build-20261021.log`, `build/chatgpt-iphone-install-20261021.json`, and `build/chatgpt-iphone-launch-20261021.json`. Live ChatGPT authorization and subscription inference still require the owner to sign in, approve Leaf, and select an available model in AI settings.
-
-Version **1.3.1 build 15** was built in Release configuration, signed, verified, installed, and launched successfully on October 21, 2026. The five-book library manifest was byte-for-byte unchanged across the update. Diagnostics are `build/memory-iphone-build-20261021.log`, `build/memory-iphone-install-20261021.json`, `build/memory-iphone-launch-20261021.json`, and `build/memory-phone-library-preservation.json`.
-
-Version **1.3.2 build 16** was built in Release configuration, signed, verified, and installed successfully on October 21, 2026. The phone was locked, so remote launch was blocked; opening Leaf after unlocking completes launch. Diagnostics are `build/chatgpt-connection-iphone-final-build-20261021.log`, `build/chatgpt-connection-iphone-install-20261021.json`, and `build/chatgpt-connection-iphone-launch-20261021.json`.
-
-Version **1.4.0 build 17** was built in Release configuration, signed, verified, and installed successfully on October 21, 2026. Remote launch was blocked because the iPhone was locked. Diagnostics are `build/chat-history-iphone-build-20261021.log`, `build/chat-history-iphone-install-20261021.json`, and `build/chat-history-iphone-launch-20261021.json`.
-
-The unique app identifier and development team are saved in `project.yml` and the generated Xcode project. Installation artifacts are `build/iphone-signing-validation-20261020.json`, `build/iphone-install-20261020.json`, and `build/iphone-launch-20261020.json`; the signed build log is `build/leaf-iphone-signed-build-20261020.log`. This is a development-signed installation; its profile expiration is recorded in the signing-validation artifact.
+```mermaid
+flowchart LR
+    subgraph Unit["LeafReaderTests · 486 tests"]
+        U1["Rendered WebKit and PDFKit<br/>every format, 12–32 pt, both flows, CFI meaning"]
+        U2["Chat: providers, SSE, history, retry,<br/>agent tools, Markdown, dictation"]
+        U3["Catalog: parsers, cookies, redirects,<br/>loopback WebKit server"]
+        U4["Sync, speech, annotations, themes, voice notes"]
+    end
+    subgraph UI["LeafReaderUITests · 220 tests"]
+        X1["Reader flows in Pages, Scroll and PDF"]
+        X2["Ask Leaf on every screen"]
+        X3["Discover, bestsellers, annotations"]
+        X4["Simulator isolation probes"]
+    end
+    App["App launched with --ui-testing<br/>+ LEAF_UI_TEST_ID + LEAF_UI_* flags"] --> Seams["LeafReader/UITesting<br/>UITestFlag registry · fixtures · probes<br/>DEBUG only, absent from Release"]
+    UI --> App
+    Seams --> App
+```
+
+Every UI launch gets its own temporary library, defaults suite and Keychain service, so tests never touch a real library. `UITestFlag` lists every launch flag the app understands; a fixture is added by adding a case there. Reader changes are verified in both Pages and Scroll, in portrait and landscape, across themes and the full font-size range, with chat closed, open and composing (the checklist is in `AGENTS.md`). Rendered-geometry tests measure actual WebKit layout rather than mocking it.
+
+Three simulators can run jobs at once under exclusive leases; `scripts/simulator_lease.py` fails closed before a launch and `scripts/simulator_job.py` runs one job and restores only that device's keyboard preference. See [docs/simulator-ui-isolation.md](docs/simulator-ui-isolation.md). Past per-version verification and iPhone installation logs are archived in [docs/history](docs/history/).
 
 ## Dependencies
 
-[foliate-js](https://github.com/johnfactotum/foliate-js) (MIT), [zip.js](https://github.com/gildas-lormeau/zip.js) (BSD-3-Clause), and [fflate](https://github.com/101arrowz/fflate) (MIT) are vendored for offline use. Versions, the pinned foliate-js commit, download provenance, and archive checksums are recorded in `ThirdParty/dependencies.json`; upstream licenses are preserved in the resource tree and available in Settings.
+[foliate-js](https://github.com/johnfactotum/foliate-js) (MIT), [zip.js](https://github.com/gildas-lormeau/zip.js) (BSD-3-Clause) and [fflate](https://github.com/101arrowz/fflate) (MIT) are vendored for offline use; the pinned commit, versions and checksums are in `ThirdParty/dependencies.json`, and Leaf's local changes to the paginator are listed in `ThirdParty/LOCAL_CHANGES.md`. The four bundled CJK typefaces ship under the SIL Open Font License with their license files next to them. Licenses are shown in Settings → Open-source acknowledgments.
 
-
-This is an implemented first version, not an App Store submission. Signing, App Store metadata, distribution, cloud sync, OCR, and DRM services require separate setup or development.
-
-Version **1.4.1 build 18** was built in Release configuration, signed, verified, installed, and launched successfully on the iPhone on October 21, 2026. Diagnostics are `build/chat-response-device-build.log`, `build/chat-response-iphone-install.json`, and `build/chat-response-iphone-launch.json`.
-
-Version **1.5.0 build 20** raises the Ask Leaf launcher and wraps horizontal reflowable text around its circular footprint in both Pages and Scroll. Regression coverage checks all 12–32 pt font sizes in both flows, normal line widths away from the button, preservation of text and CFI references, forward/backward chapter-edge gestures, momentum reaching a chapter edge after release, book boundaries, and one loaded chapter. Future reader verification requirements are recorded in `AGENTS.md`.
-
-Validation for **1.5.0 build 20**: `build/ChatWrapBothModesFinal.xcresult` passed 90 unit tests and 3 UI tests (93 passed, no failures/skips). Its 210 layout checks cover every 12–32 pt size in both flows and assert circular clearance, full paragraph width, full-width unaffected lines, unchanged book text, and stable CFI text. The UI checks exercise both flows with Day/Paper/Night, all margin presets, portrait/landscape, typing, chat open/closed, and real swipes into the next/previous chapter. `build/ChatWrapScrollAnchor.xcresult` adds a passing scrolling-anchor check across four margins; `build/ChatWrapLandscapeVerified.xcresult` adds a passing viewport/launcher geometry check for both flows. All 95 distinct tests passed across these runs. Full-screen landscape captures are under `build/chat-wrap-landscape-attachments/`; the capture helper uses the device screen because application-element screenshots crop incorrectly when rotated. Test summaries and geometry attachments are under `build/chat-wrap-both-modes-*` and `build/chat-wrap-scroll-anchor-summary.json`.
-
-Version **1.5.0 build 20** was built in Release, signed, verified, and installed on the iPhone. Remote launch was blocked by the locked screen; open Leaf after unlocking. Build/install/launch records are `build/chat-wrap-device-build-20.log`, `build/chat-wrap-20-iphone-install.json`, and `build/chat-wrap-20-iphone-launch.json`.
-
-
-Version **1.6.0 build 21** adds native **Ask Leaf** selection menus in WebKit and PDFKit. Ask a question, Explain selection, and Summarize selection open an editable draft with the exact selected passage attached; requests are sent only with Send. A removable quote remains visible while typing, uses a compact row in landscape, and persists with unsent per-book drafts. Chat stays open when tapping or browsing the book; use Close or swipe down on its top bar to dismiss it. Sending commits the question and consumes its attachment in one transaction. Disabling passage sharing still excludes the passage from outgoing requests. Selection notifications also tolerate the native bridge being removed during book cleanup.
-
-Final focused verification passed **41 tests with zero failures or skips** (`build/ChatExplicitDismissalVerified.xcresult`): 37 chat/history and WebKit/PDF unit tests plus four native UI cases. Coverage includes the full 12–32 pt sweep in Pages and Scroll, selected-passage attachment and removal, persistence, disabled passage sharing, detached-bridge cleanup, and reader deallocation. The UI cases exercise native selection menus in both flows, Day/Paper/Night, portrait/landscape, typing, book taps and navigation with chat open, draft retention, and explicit Close/top-bar swipe dismissal. A separate coordinated smoke run passed both cases (`build/ChatCoordinatedSmoke.xcresult`), including the native PDF selection menu and retained chat after tapping the PDF. These runs cover 42 distinct cases; screenshots were inspected for PDF selection, landscape chat, and selected-passage typing. Summaries and screenshots are under `build/chat-explicit-dismissal-*` and `build/chat-coordinated-smoke-*`. The integrated build with the catalog feature also passed (`build/chat-catalog-integration-build.log`). Final checks ran serially after resolving shared-simulator interference.
-
-Version **1.8.0 build 23** changes Ask Leaf to a translucent overlay without text wrapping or a reserved gutter. Long press to enter move mode, drag as often as needed, then tap elsewhere to finish without turning a page. The position persists across books and relaunches, adapts to rotation, and stays within the safe viewport. VoiceOver provides movement actions; Reduce Transparency uses a solid button. Scroll page commands at either end of the book now safely stay on the current chapter.
-
-Version **1.8.1 build 24** opens chat immediately when choosing **Ask Leaf** from a text selection. **Explain** and **Summarize** shortcuts live beside the attached passage in chat and prepare an editable draft without sending it. The shortcuts hide while typing to preserve space for the book; the selected quote stays attached and is saved with the draft.
-
-Final focused verification for **1.8.0 build 23** passed **8 tests with zero failures or skips** (`build/MovableChatIntegratedWarm.xcresult`) on the iPhone 17 Pro iOS 26.5 simulator. Three engine cases verify both-flow chapter/book boundaries, reopening a saved passage (including an element-boundary heading CFI), scroll momentum, and one loaded chapter. Five UI cases verify long-press activation, ignored short drags, repeated dragging, tap-away dismissal without navigation, saved positions across relaunch/rotation, edge clamping, full-width PDF rendering, chapter swipes, Day/Paper/Night, all margin presets, and chat/keyboard layouts in portrait and landscape. Screenshots were inspected for translucent text overlap, the move indicator, full reading widths, and landscape/PDF placement; exports and the summary are under `build/movable-chat-integrated-warm-*`. The 12–32 pt, three-typeface geometry and CFI regressions remain in `ReaderEngineTests` for the combined unit run. The integrated Release artifact includes catalog browsing and selected-text chat with explicit dismissal, passed strict code-signature verification, and is versioned 1.8.0 (23). Phone installation is coordinated after the combined regression run.
-
-### App themes
-
-Choose **Day, Paper, Night, Sepia, Sage, or Dusk** in Settings under **App theme**, or while reading under **Appearance → Themes**. The preview uses your selected typeface. The choice applies immediately to the library, bookmarks, menus, reading pages, and Ask Leaf, and is remembered across books and relaunches. It changes colors without changing your font size, spacing, margins, or saved passage. Original PDF and comic artwork keeps its colors.
-
-The existing `reader.theme` preference and Day/Paper/Night raw values remain compatible. Theme colors, native color scheme, and reader link accents share one palette; dark filled actions use contrasting text. Selection has an outline, checkmark, and VoiceOver selected state, with two preview columns at accessibility text sizes.
-
-Theme verification covers **127 distinct unit cases and 20 distinct UI cases**, deduplicated across `build/ThemesAllUnits.xcresult`, `build/ThemesReaderUI.xcresult`, `build/ThemesIntegrationUI.xcresult`, and `build/ThemesFinalModes.xcresult`. Geometry includes 72 theme/font/flow/orientation states, the existing 126 typography states covering every 12–32 pt size, and 210 full-width overlay states. Checks cover Pages and Scroll, forward/back chapter boundaries, book ends, saved CFI/bookmarks, relaunch persistence, all margin presets and typefaces, portrait/landscape, chat closed/open/composing, and movable-button behavior. Final runtime `d005f767ab8ac97f634f39f202bcd8854bdf8ef5` includes sent quotes and catalog search; the final three UI cases passed with zero failures/skips on **1.9.0 (29)**.
-
-The first full unit run passed 126/127: the simulator GPU process stopped responding during the initial EPUB 2 cover extraction. All nine metadata checks passed on recheck, including that case in 1.6 seconds. The first broad UI run passed 14/16; the expanded theme grid required scrolling within the Appearance form to reach presets, and a native setup tap after rotation was missed. The corrected 16-case integration run and final 3-case mode run both passed; no setup-tap retry was needed during the final all-theme sweep. Screenshots were reviewed for all six library/settings palettes, landscape selection, full reading widths, translucent icons, quote restoration, and Dusk catalog/search/details/connection screens. Evidence and deduplicated results are under `build/theme-verification-summary.json` and `build/themes-*-attachments/`; a comparison is `build/theme-preview.jpg`. Verification used the assigned iOS 26.5 iPhone simulators with mock AI/catalog data. iPad and physical-device UI were not exercised; the coordinator builds and signs merged main before requesting any iPhone installation.
-
-Floating-button verification for **1.9.10 (39)** covers **26 distinct passing cases**: seven preference/sizing units, four rendered-engine cases, and fifteen UI cases across Pages, Scroll, and PDF chat resizing. The two coordinated iOS 26.5 simulator jobs covered chapter boundaries/book ends, saved CFI reopening, 210 full-width overlay states across 12–32 pt, all six themes, margins, portrait/landscape, repeated dragging, chat selection/dismissal/resizing, keyboard state, saved quotes/history/drafts, and transparency preview/reset/persistence. The first A run passed 16/17; XCTest's normalized slider gesture stopped at 93% in Scroll. One bounded physical end-of-track gesture corrected the test, and the focused Scroll rerun passed the unchanged exact-95% and saved-95% assertions. B passed 9/9. Screenshots were inspected, including the final 95% preview and button over text. Evidence is in `build/ChatButtonAppearanceA.xcresult`, `build/ChatButtonAppearanceB.xcresult`, `build/ChatButtonScrollEndpoint.xcresult`, and `build/chat-button-verification-summary.json`. The integrated source preserves main's catalog diagnostics and passes a generic simulator build-for-testing. Physical vibration strength, physical-phone UI, and iPad UI remain unverified; the coordinator builds clean merged main before offering installation.
-
-Automatic-quote verification for **1.9.13 (42)** covers **36 distinct passing cases**: 17 chat-history units, seven rendered-engine checks, and 12 native UI cases. Pages, Scroll and PDF checks cover automatic quote attachment without the menu action, draft preservation, keyboard focus, rotation, explicit removal and reopening. Whole-paragraph, partial-text and mixed-endpoint selections retain exact CFI range meaning in both flows; chapter/book boundaries, bookmarks and saved-passage restoration remain intact. Additional UI checks cover the existing native selection menu, all six themes and margin presets, normal reading widths, chat minimum/maximum sizes, keyboard/reading size restoration, repeated dragging, saved button positions and explicit dismissal. No text-layout or typography changes were made, so this feature did not repeat the full font-size sweep.
-
-The final 31-case run passed 30/31; the new range test initially compared visual selection line breaks with DOM range text and used paginated geometry in Scroll. The corrected isolated range test passed with exact original DOM-text and flow assertions. Recovered dismissal and four final Web UI checks also passed, leaving no unresolved failures. A simulator reported landscape while its app remained portrait; a device-only B restart, explicit portrait precondition and exclusive native-UI rotation window restored real in-place rotation with unchanged landscape assertions. Evidence is `build/AutoQuoteFinal.xcresult`, `build/AutoQuoteRangeVerified.xcresult`, `build/AutoQuoteRecoveredDismissal.xcresult`, `build/AutoQuoteRecoveredWebUI.xcresult` and `build/auto-quote-verification-summary.json`. All 75 named final/recovered screenshots were inspected. Normal signed simulator builds and the generic arm64 test build passed; physical-device UI, iPad and live-provider requests were not exercised. Phone installation remains coordinated from clean merged main after explicit approval.
-
-
-Continuous-Scroll verification for **1.9.15 (44)** covers **77 distinct passing cases**: 62 engine/history/annotation cases and 15 native UI cases, deduplicated across runs. Final production source is `f52df687965fbd1bb2c89f52344c8223166b3529`, integrated with main’s automatic quotes and persistent highlights/notes. Rendered Pages and Scroll checks cover forward/back chapter boundaries, both book ends, bookmarks, saved-passage reopening, exact selected-neighbor CFIs and chapter labels, annotation alignment/hit testing, pending-load reuse and delayed backward preparation. Sweeps include every 12–32 pt size, Georgia/Palatino/System, margin presets, all six themes, portrait/landscape, 126 typography states, 72 theme/orientation states, 210 normal-width overlay states, and 63 neighboring-chapter style/CFI rows. A 128-chapter fixture with 48 random jumps retained at most three ready chapter documents/frames; tracked blob resource leases returned to zero on close. These resource counters are not a measurement of total app memory.
-
-Native UI verified real swipes into the next and previous chapters, flow/font changes, selection and annotation editing, chat closed/open/composing, keyboard browsing, repeated long-press dragging and tap-away completion, saved positions, minimum/maximum chat resizing, separate reading/keyboard size restoration, relaunch, and actual landscape geometry. All 77 named initial screenshots and 23 final follow-up/software-keyboard screenshots were inspected. Final evidence: `build/ContinuousScrollFinalVerifiedEngines.xcresult` (62/62), `build/ContinuousScrollFinalUI.xcresult` (13/15), `build/ContinuousScrollFinalFollowups.xcresult` (three relevant Scroll regressions passed), and `build/ContinuousScrollSoftwareKeyboard.xcresult` (both remaining resize cases passed). Earlier failures are retained: the final CFI fix restores zero-width line-break anchors, and the native resize tests require real software-keyboard transitions. For keyboard UI tests, disable **I/O → Keyboard → Connect Hardware Keyboard** on the assigned simulator only, then restore its original setting afterward; an offscreen keyboard preview is not an open software keyboard. Height assertions were retained. There are no unresolved failures.
-
-The final summary is `build/continuous-scroll-verification-summary.json`. This verification uses rendered fixture books on iOS 26.5 iPhone simulators and mock AI replies. Physical-phone/iPad UI, live-provider requests, total resident-memory profiling, and continuous vertical-writing/fixed-layout navigation were not verified. The new chapter window applies to horizontally written reflowable books in vertical Scroll; other renderers keep their existing behavior. Phone installation is coordinated from a signed clean merged-main build after specific installation approval.
+This is a personal, development-signed build, not an App Store submission.
