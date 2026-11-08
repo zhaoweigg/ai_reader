@@ -45,9 +45,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.35.0</string>
+	<string>1.37.0</string>
 	<key>CFBundleVersion</key>
-	<string>137</string>
+	<string>139</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -56,7 +56,7 @@
 		<true/>
 	</dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Use the microphone to dictate an editable question in Ask Leaf. Recording stops when you stop dictation or leave the chat.</string>
+	<string>Record voice notes on book passages or dictate questions in Ask Leaf. Recording starts only when you choose it and stops when you stop or leave the recording view.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save pictures that Ask Leaf draws for you to your photo library when you choose Save Image.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

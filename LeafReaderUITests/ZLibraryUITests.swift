@@ -75,7 +75,8 @@ final class ZLibraryUITests: XCTestCase {
         // AX includes clipped decorative circles in the placeholder's bounds.
         // Inspect its rendered size in the screenshots instead of that union.
         XCTAssertTrue(cover.exists)
-        XCTAssertTrue(app.buttons["catalogAddBook"].isHittable)
+        let footer = app.buttons["catalogAddBook"]
+        XCTAssertTrue(footer.isEnabled); XCTAssertTrue(app.frame.contains(footer.frame)); XCTAssertGreaterThanOrEqual(footer.frame.height, 44)
         capture(theme + " compact catalog description portrait")
         toggle.leafTapVisible(in: app)
         expectation(for:NSPredicate { _, _ in summary.frame.height > collapsed + 60 },evaluatedWith:summary); waitForExpectations(timeout:5)
@@ -87,7 +88,7 @@ final class ZLibraryUITests: XCTestCase {
         revealSummaryControl(toggle,app:app)
         XCTAssertEqual(toggle.value as? String,"Collapsed")
         XCTAssertGreaterThan(app.frame.width,app.frame.height)
-        XCTAssertTrue(app.buttons["catalogAddBook"].isHittable)
+        XCTAssertTrue(footer.isEnabled); XCTAssertTrue(app.frame.contains(footer.frame)); XCTAssertGreaterThanOrEqual(footer.frame.height, 44)
         capture(theme + " compact catalog description landscape")
         toggle.leafTapVisible(in: app); XCTAssertEqual(toggle.value as? String,"Expanded")
         revealSummaryControl(toggle,app:app)
@@ -384,12 +385,14 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor private func search(_ query: String, app: XCUIApplication) {
         let field = app.textFields["zlibrarySearchField"]
-        XCTAssertTrue(field.waitForExistence(timeout:5))
+        XCTAssertTrue(field.waitForExistence(timeout:5)); revealCatalogElement(field, app: app)
         // Tapping a long query places the caret in its middle. Use the product's clear
         // control instead of assuming repeated backspace starts at the end of the text.
         if app.buttons["zlibraryClearSearch"].exists { app.buttons["zlibraryClearSearch"].leafTapVisible(in: app) }
         field.leafTapVisible(in: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         field.typeText(query)
+        expectation(for: NSPredicate(format: "value == %@", query), evaluatedWith: field); waitForExpectations(timeout: 8)
         XCTAssertEqual(field.value as? String,query)
         app.buttons["zlibrarySubmitSearch"].leafTapVisible(in: app)
     }

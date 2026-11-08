@@ -19,12 +19,13 @@ final class BestsellerUITests: XCTestCase {
     @MainActor private func reveal(_ element: XCUIElement, app: XCUIApplication) {
         for _ in 0..<8 {
             if element.exists {
-                let frame = element.frame, visible = frame.intersection(app.leafContentViewport)
+                let frame = element.frame, viewport = app.leafContentViewport
+                let visible = frame.intersection(viewport)
                 if frame.width > 1 && frame.height > 1 && !visible.isNull,
                    visible.width + 0.5 >= min(24, frame.width), visible.height + 0.5 >= min(24, frame.height) { return }
-                if frame.height > 0 && frame.maxY <= app.leafContentViewport.minY { app.leafDragContent(up: false); continue }
+                if frame.height > 0 && frame.maxY <= viewport.minY { app.leafDragContent(up: false, in: app.scrollViews.containing(.any, identifier: element.identifier).firstMatch); continue }
             }
-            app.leafDragContent(up: true)
+            app.leafDragContent(up: true, in: app.scrollViews.containing(.any, identifier: element.identifier).firstMatch)
         }
         XCTContext.runActivity(named: "Unreachable discovery control") { activity in
             let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways; activity.add(screenshot)
@@ -201,20 +202,42 @@ final class BestsellerUITests: XCTestCase {
         let add = app.buttons["bestsellerDetailAdd"]; waitEnabled(add); add.leafTapVisible(in: app)
         XCTAssertTrue(app.buttons["bestsellerViewLibrary"].waitForExistence(timeout: 15)); app.buttons["bestsellerViewLibrary"].leafTapVisible(in: app)
         assertLibraryBook("Simply Ina", app: app).leafTapVisible(in: app)
-        let web = app.webViews["bookWebView"]; XCTAssertTrue(web.waitForExistence(timeout: 15))
-        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Opening your book…"]); waitForExpectations(timeout: 20)
-        if !app.buttons["Appearance"].exists { web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap() }
+        let web = app.webViews["bookWebView"]
+        func waitForText() {
+            XCTAssertTrue(web.waitForExistence(timeout: 15))
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Opening your book…"]); waitForExpectations(timeout: 20)
+            expectation(for: NSPredicate { _, _ in
+                web.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "This original Leaf test passage")).allElementsBoundByIndex.contains {
+                    let visible = $0.frame.intersection(web.frame)
+                    return !visible.isNull && visible.width > 20 && visible.height > 20
+                }
+            }, evaluatedWith: web); waitForExpectations(timeout: 15)
+            XCTAssertFalse(app.otherElements["readerError"].exists)
+        }
+        func controls() {
+            if !app.buttons["closeBook"].exists { web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap() }
+            XCTAssertTrue(app.buttons["closeBook"].waitForExistence(timeout: 8))
+        }
+        func percent() -> Double {
+            let progress = app.sliders["readingProgress"]
+            return Double((progress.value as? String ?? "").filter { "0123456789.".contains($0) }) ?? -1
+        }
+        waitForText(); controls()
         waitEnabled(app.buttons["Appearance"]); app.buttons["Appearance"].leafTapVisible(in: app)
         app.segmentedControls["appearanceTabs"].buttons["Layout"].leafTapVisible(in: app); app.segmentedControls["readingFlow"].buttons[flow].leafTapVisible(in: app)
         XCTAssertTrue(app.segmentedControls["readingFlow"].buttons[flow].isSelected)
         app.navigationBars["Appearance"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.segmentedControls["appearanceTabs"]); waitForExpectations(timeout: 8)
-        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 8)); capture("Imported bestseller rendered in " + flow)
-        if !app.buttons["closeBook"].exists { web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap() }
-        app.buttons["closeBook"].leafTapVisible(in: app); assertLibraryBook("Simply Ina", app: app).leafTapVisible(in: app)
-        XCTAssertTrue(web.waitForExistence(timeout: 15)); XCTAssertFalse(app.otherElements["readerError"].exists)
-        capture("Imported bestseller reopened in " + flow)
+        waitForText(); controls()
+        XCTAssertTrue(app.sliders["readingProgress"].waitForExistence(timeout: 8))
+        let initial = percent(); XCTAssertGreaterThanOrEqual(initial, 0)
+        app.buttons["nextPage"].leafTapVisible(in: app)
+        expectation(for: NSPredicate { _, _ in percent() > initial }, evaluatedWith: web); waitForExpectations(timeout: 10)
+        let saved = percent(); waitForText(); capture("Imported bestseller rendered in " + flow)
+        controls(); app.buttons["closeBook"].leafTapVisible(in: app); assertLibraryBook("Simply Ina", app: app).leafTapVisible(in: app)
+        waitForText(); controls(); XCTAssertEqual(percent(), saved, accuracy: 2, "The imported book must restore its saved passage")
+        capture("Imported bestseller reopened at saved passage in " + flow)
     }
 }
 
@@ -229,11 +252,15 @@ final class BestsellerUITests: XCTestCase {
         guard surface.exists, !visible.isNull, visible.width > 24, visible.height > 48 else {
             return XCTFail("No visible scroll surface: \(surface.frame), viewport \(leafContentViewport)")
         }
-        // Start in the scroll view's leading padding, outside covers, segmented
-        // controls and the fixed footer. Whole-app swipes can hit those controls.
+        // The outer margin does not receive scroll gestures. Start inside the
+        // content, with the fixed footer and bars excluded from the drag area.
+        XCTContext.runActivity(named: "Native content scroll") { activity in
+            let evidence = XCTAttachment(string: "scroll=\(surface.frame), usable=\(visible), up=\(up)")
+            evidence.lifetime = .keepAlways; activity.add(evidence)
+        }
         let origin = coordinate(withNormalizedOffset: .zero)
-        let start = origin.withOffset(CGVector(dx: visible.minX - frame.minX, dy: (up ? visible.maxY : visible.minY) - frame.minY))
-        let end = origin.withOffset(CGVector(dx: visible.minX - frame.minX, dy: (up ? visible.minY : visible.maxY) - frame.minY))
+        let start = origin.withOffset(CGVector(dx: visible.midX - frame.minX, dy: (up ? visible.maxY : visible.minY) - frame.minY))
+        let end = origin.withOffset(CGVector(dx: visible.midX - frame.minX, dy: (up ? visible.minY : visible.maxY) - frame.minY))
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
     }
     var leafContentViewport: CGRect {
@@ -249,6 +276,13 @@ final class BestsellerUITests: XCTestCase {
         if keyboards.firstMatch.exists {
             let bottom = keyboards.firstMatch.frame.minY
             if bottom > visible.minY && bottom < visible.maxY { visible.size.height = bottom - visible.minY }
+        }
+        for id in ["bestsellerDetailAdd", "bestsellerViewLibrary", "catalogAddBook", "catalogViewLibrary"] {
+            let footer = buttons[id]
+            if footer.exists {
+                let top = footer.frame.minY - 16
+                if top > visible.minY && top < visible.maxY { visible.size.height = top - visible.minY }
+            }
         }
         return visible
     }

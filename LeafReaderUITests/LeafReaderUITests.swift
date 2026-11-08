@@ -1081,7 +1081,7 @@ final class LeafReaderUITests: XCTestCase {
         let search = app.textFields["librarySearch"]
         XCTAssertTrue(search.waitForExistence(timeout: 10))
         search.tap(); search.typeText("Coast")
-        app.buttons["book-Notes from the Coast"].tap()
+        tapVisibleLibraryCard(app.buttons["book-Notes from the Coast"], app: app)
         showReaderControls(app)
         let bookmark = app.buttons["toggleBookmark"]
         XCTAssertTrue(bookmark.waitForExistence(timeout: 10))
@@ -1106,7 +1106,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Page 2 of 4"].exists)
         capture("PDF translucent movable button", app: app)
         app.buttons["closeBook"].tap()
-        app.buttons["book-Notes from the Coast"].tap()
+        tapVisibleLibraryCard(app.buttons["book-Notes from the Coast"], app: app)
         showReaderControls(app)
         XCTAssertTrue(app.staticTexts["Page 2 of 4"].waitForExistence(timeout: 10))
     }
@@ -1267,16 +1267,11 @@ final class LeafReaderUITests: XCTestCase {
         if flow == "PDF" {
             // Navigate the real library card; search-field focus is unrelated to selection.
             let card = app.buttons["book-Notes from the Coast"]
-            for _ in 0..<5 {
-                if card.exists && card.isHittable { break }
-                app.scrollViews.firstMatch.swipeUp()
-            }
-            XCTAssertTrue(card.exists && card.isHittable, "PDF fixture must be reachable in the library")
-            card.tap()
+            tapVisibleLibraryCard(card, app: app)
             showReaderControls(app); app.buttons["nextPage"].tap()
         } else {
             XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 10))
-            app.buttons["featuredBook"].tap(); openAppearance(app)
+            tapVisibleLibraryCard(app.buttons["featuredBook"], app: app); openAppearance(app)
             app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
             app.segmentedControls["readingFlow"].buttons[flow].tap()
             app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
@@ -2160,8 +2155,8 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["closeReaderChat"].tap();showReaderControls(app)
         XCTAssertTrue(title.label.contains(flow == "PDF" ? "Page 4" : "Carry it with you"))
         app.buttons["closeBook"].tap()
-        if flow == "PDF" { let card=app.buttons["book-Notes from the Coast"];for _ in 0..<5 where !card.isHittable {app.scrollViews.firstMatch.swipeUp()};card.tap() }
-        else {app.buttons["featuredBook"].tap()}
+        if flow == "PDF" { tapVisibleLibraryCard(app.buttons["book-Notes from the Coast"], app: app) }
+        else { tapVisibleLibraryCard(app.buttons["featuredBook"], app: app) }
         showReaderControls(app)
         XCTAssertTrue(title.label.contains(flow == "PDF" ? "Page 4" : "Carry it with you"))
         app.buttons["openReaderChat"].tap()
@@ -3452,7 +3447,7 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testScrollSwipesReachNextChapterAndPreviousChapter() {
         let app = launchApp()
-        app.buttons["featuredBook"].tap()
+        tapVisibleLibraryCard(app.buttons["featuredBook"], app: app)
         showReaderControls(app)
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()

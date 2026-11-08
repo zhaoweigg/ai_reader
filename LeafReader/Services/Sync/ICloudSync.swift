@@ -124,11 +124,12 @@ final class ICloudSync: ObservableObject {
         let localFiles = Dictionary(uniqueKeysWithValues: local.compactMap { book in
             library.isDownloaded(book) ? library.fileURL(book).map { (book.fingerprint, $0) } : nil })
         let coversDirectory = library.disk?.coversDirectory
+        let voiceNotesDirectory = library.disk?.voiceNotesDirectory
         do {
             let result = try await Task.detached(priority: .utility) {
                 try Self.exchange(folder: folder, local: local, baseline: baseline, localFiles: localFiles,
                                   localCovers: localCovers, coversDirectory: coversDirectory,
-                                  settings: settings, chats: archive == nil ? nil : chats)
+                                  settings: settings, chats: archive == nil ? nil : chats, voiceNotesDirectory: voiceNotesDirectory)
             }.value
             adopt(result)
             for conversation in result.chats { try archive?.adopt(conversation) }
@@ -154,7 +155,7 @@ final class ICloudSync: ObservableObject {
     /// coordination may wait for iCloud downloads.
     nonisolated static func exchange(folder: SyncFolder, local: [Book], baseline: SyncBaseline, localFiles: [String: URL],
                                      localCovers: [String: URL], coversDirectory: URL?, settings: SyncedSettings,
-                                     chats: [SyncedConversation]?, now: Date = Date()) throws -> Exchange {
+                                     chats: [SyncedConversation]?, voiceNotesDirectory: URL? = nil, now: Date = Date()) throws -> Exchange {
         try folder.prepare()
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let decoder = JSONDecoder()
@@ -163,6 +164,7 @@ final class ICloudSync: ObservableObject {
         var records: [SyncedBook] = []
         var newCovers: [String: String] = [:]
         var nextBaseline = SyncBaseline()
+        var removedVoiceNotes: Set<UUID> = []
 
         for fingerprint in fingerprints.sorted() {
             let url = folder.library.appendingPathComponent(fingerprint + ".json")
@@ -182,7 +184,47 @@ final class ICloudSync: ObservableObject {
                     mine = current
                 }
             }
-            guard let merged = [mine, remote].compactMap({ $0 }).reduce(nil, { (sum: SyncedBook?, next) in sum?.merged(with: next) ?? next }) else { continue }
+            guard var merged = [mine, remote].compactMap({ $0 }).reduce(nil, { (sum: SyncedBook?, next) in sum?.merged(with: next) ?? next }) else { continue }
+            if merged.isRemoved {
+                // Retain the annotation/text tombstones, but deleting a book also
+                // deletes its audio. Reimporting it must not restore missing media.
+                for index in merged.annotations.indices where merged.annotations[index].voiceNote != nil {
+                    merged.annotations[index].voiceNote = nil
+                    merged.annotations[index].voiceNoteUpdatedAt = max(merged.removedAt ?? now, merged.annotations[index].voiceNoteUpdatedAt ?? .distantPast)
+                    merged.annotations[index].updatedAt = max(merged.annotations[index].updatedAt, merged.annotations[index].voiceNoteUpdatedAt!)
+                }
+            } else {
+                // Make clips durable before publishing their references. A new
+                // phone downloads audio even when book files are kept in iCloud.
+                for annotation in merged.annotations where annotation.voiceNote != nil {
+                    let note = annotation.voiceNote!
+                    guard let voiceNotesDirectory, note.valid, annotation.voiceNoteUpdatedAt != nil else { throw VoiceNoteError.invalidRecording }
+                    try FileManager.default.createDirectory(at: voiceNotesDirectory, withIntermediateDirectories: true)
+                    let local = VoiceNoteFiles(directory: voiceNotesDirectory)
+                    let destination = local.url(for: note), cloud = folder.voiceNotes.appendingPathComponent(note.fileName)
+                    if !folder.exists(cloud) {
+                        guard FileManager.default.fileExists(atPath: destination.path) else { throw VoiceNoteError.missingAudio }
+                        try VoiceNoteFiles.verify(destination, note: note)
+                        try folder.upload(destination, to: cloud)
+                    }
+                    if (try? VoiceNoteFiles.verify(destination, note: note)) == nil {
+                        let staging = voiceNotesDirectory.appendingPathComponent("." + UUID().uuidString + ".m4a")
+                        defer { try? FileManager.default.removeItem(at: staging) }
+                        try folder.download(cloud, to: staging, maximumBytes: note.byteCount)
+                        try VoiceNoteFiles.verify(staging, note: note)
+                        if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+                        try FileManager.default.moveItem(at: staging, to: destination)
+                    }
+                }
+            }
+            let previousAudio = Set((remote?.annotations ?? []).compactMap { $0.voiceNote?.id })
+            let currentAudio = Set(merged.annotations.compactMap { $0.voiceNote?.id })
+            var deletedAudio = merged.deletedVoiceNotes ?? [:]
+            for id in previousAudio.subtracting(currentAudio) {
+                deletedAudio[id] = deletedAudio[id] ?? now
+            }
+            merged.deletedVoiceNotes = deletedAudio.isEmpty ? nil : deletedAudio
+            removedVoiceNotes.formUnion((merged.deletedVoiceNotes ?? [:]).keys)
             if merged != remote || versions.count > 1 {
                 try folder.write(encoder.encode(merged), to: url)
                 folder.resolveConflicts(url)
@@ -204,6 +246,10 @@ final class ICloudSync: ObservableObject {
             }
             records.append(merged)
         }
+        // Delete only clips explicitly unlinked by a merged edit, never every
+        // unreferenced file: another device can be uploading before its manifest.
+        let referencedAudio = Set(records.flatMap { $0.annotations.compactMap { $0.voiceNote?.id } })
+        for id in removedVoiceNotes.subtracting(referencedAudio) { try folder.remove(folder.voiceNotes.appendingPathComponent(id.uuidString.lowercased() + ".m4a")) }
 
         var mergedChats: [SyncedConversation] = []
         if let chats {
@@ -235,7 +281,7 @@ final class ICloudSync: ObservableObject {
             folder.resolveConflicts(folder.settings)
         }
         return Exchange(records: records, newCovers: newCovers, settings: mergedSettings, chats: mergedChats, baseline: nextBaseline,
-                        cloudBytes: folder.size(of: folder.books) + folder.size(of: folder.covers))
+                        cloudBytes: folder.size(of: folder.books) + folder.size(of: folder.covers) + folder.size(of: folder.voiceNotes))
     }
 
     nonisolated static func chatFileName(_ conversation: String) -> String {
@@ -270,6 +316,8 @@ final class ICloudSync: ObservableObject {
         let order = Dictionary(uniqueKeysWithValues: library.books.enumerated().map { ($1.fingerprint, $0) })
         books.sort { (order[$0.fingerprint] ?? .max, $0.importedAt) < (order[$1.fingerprint] ?? .max, $1.importedAt) }
         library.adoptSynced(books)
+        let deletedAudio = result.records.reduce(into: Set<UUID>()) { $0.formUnion(($1.deletedVoiceNotes ?? [:]).keys) }
+        library.removeUnreferencedVoiceNoteFiles(deletedAudio)
         adoptSettings(result.settings)
         saveBaseline(result.baseline)
     }

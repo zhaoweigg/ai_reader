@@ -3,6 +3,35 @@ import CoreFoundation
 
 // Explicit public scene-layout fixture; this does not validate simulated device motion.
 extension XCTestCase {
+    /// Rendered card geometry is the oracle: on iOS 27.2, a fully visible
+    /// SwiftUI card can report isHittable=false and Button.tap can use {-1,-1}.
+    @MainActor func visibleLibraryCardFrame(_ card: XCUIElement, app: XCUIApplication) -> CGRect {
+        guard card.exists else { return .zero }
+        let bounds = app.frame
+        var top = bounds.minY, bottom = bounds.maxY
+        let navigation = app.navigationBars.firstMatch
+        if navigation.exists, navigation.frame.height > 0 { top = max(top, navigation.frame.maxY) }
+        let tabBar = app.tabBars.firstMatch
+        if tabBar.exists, tabBar.frame.height > 0 { bottom = min(bottom, tabBar.frame.minY) }
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists, keyboard.frame.height > 0 { bottom = min(bottom, keyboard.frame.minY) }
+        let visible = card.frame.intersection(CGRect(x: bounds.minX, y: top, width: bounds.width, height: max(0, bottom - top)))
+        return visible.isNull ? .zero : visible
+    }
+    @MainActor func tapVisibleLibraryCard(_ card: XCUIElement, app: XCUIApplication) {
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        for _ in 0..<6 {
+            let frame = visibleLibraryCardFrame(card, app: app)
+            if frame.width >= 44 && frame.height >= 44 { break }
+            app.scrollViews.firstMatch.swipeUp()
+        }
+        let visible = visibleLibraryCardFrame(card, app: app)
+        let evidence = XCTAttachment(string: "Card \(card.identifier): \(card.frame); visible: \(visible); app: \(app.frame); hittable: \(card.isHittable)")
+        evidence.name = "Library card native setup geometry"; evidence.lifetime = .keepAlways; add(evidence)
+        XCTAssertGreaterThanOrEqual(visible.width, 44); XCTAssertGreaterThanOrEqual(visible.height, 44)
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: visible.midX - app.frame.minX, dy: visible.midY - app.frame.minY)).tap()
+    }
     @MainActor func setReaderOrientation(_ direction: UIDeviceOrientation, app: XCUIApplication) {
         XCUIDevice.shared.orientation = direction
         guard app.launchEnvironment["LEAF_UI_SCENE_GEOMETRY_FIXTURE"] == "1", let id = app.launchEnvironment["LEAF_UI_TEST_ID"] else { return }

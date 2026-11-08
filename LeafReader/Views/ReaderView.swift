@@ -266,7 +266,8 @@ struct ReaderContent: View {
                     case .annotation:
                         if let annotation = model.annotationDraft {
                             let saved = library.book(book.id)?.annotations.contains { $0.id == annotation.id } == true
-                            AnnotationEditorView(annotation: annotation, isSaved: saved, onSave: { try model.saveAnnotation($0) },
+                            AnnotationEditorView(annotation: annotation, isSaved: saved, voiceFirst: model.annotationStartsWithVoice,
+                                onSave: { try await model.saveAnnotation($0, voiceDraft: $1) },
                                 onDelete: saved ? { try model.removeAnnotation(annotation.id) } : nil,
                                 onClose: { model.annotationDraft = nil; self.panel = nil })
                                 .id(annotation.id)
@@ -276,7 +277,7 @@ struct ReaderContent: View {
                     case .bookmarks:
                         if let current = library.book(book.id) {
                             ReaderSavedPassagesView(book: current, onNavigate: { model.send("navigate", value: $0); self.panel = nil },
-                                onEdit: { model.annotationDraft = $0 }, onDelete: { try model.removeAnnotation($0) },
+                                onEdit: { model.editAnnotation($0.id) }, onDelete: { try model.removeAnnotation($0) },
                                 onRemoveBookmark: { library.removeBookmark(book.id, bookmarkID: $0) })
                         }
                     case .search: ReaderSearchView(model: model) { self.panel = nil; model.hideControls() }
