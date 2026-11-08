@@ -169,6 +169,7 @@ extension ChatScreen {
                 var view = catalogView(search.books, query: search.query, feed: catalog.feed, order: .bestMatch,
                     status: search.status, canLoadMore: false, owned: Set(library.books.compactMap(\.catalogSource)), limit: limit)
                 view["list"] = "Search results"
+                view["layout"] = "vertical list of editions; ranks run from top to bottom"
                 return view
             }
             if let bestsellers, bestsellers.showingBestsellers, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {

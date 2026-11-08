@@ -227,6 +227,7 @@ final class BestsellerFeedTests: XCTestCase {
         let screen = ChatScreen.discover(catalog, library: library, bestsellers: store)
         let view = screen.view(5, true)
         XCTAssertEqual(view["list"] as? String, "Search results"); XCTAssertEqual(view["search"] as? String, "The Rush")
+        XCTAssertEqual(view["layout"] as? String, "vertical list of editions; ranks run from top to bottom")
         XCTAssertEqual((view["items"] as? [[String: Any]])?.first?["title"] as? String, "The Rush")
         let missing = try await screen.details(2, true); XCTAssertNil(missing)
         let current = store.catalogSearch
