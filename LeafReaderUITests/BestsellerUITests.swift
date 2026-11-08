@@ -220,6 +220,7 @@ final class BestsellerUITests: XCTestCase {
         }
         func percent() -> Double {
             let progress = app.sliders["readingProgress"]
+            guard progress.exists else { return -1 }
             return Double((progress.value as? String ?? "").filter { "0123456789.".contains($0) }) ?? -1
         }
         waitForText(); controls()
@@ -233,8 +234,9 @@ final class BestsellerUITests: XCTestCase {
         XCTAssertTrue(app.sliders["readingProgress"].waitForExistence(timeout: 8))
         let initial = percent(); XCTAssertGreaterThanOrEqual(initial, 0)
         app.buttons["nextPage"].leafTapVisible(in: app)
+        waitForText(); controls()
         expectation(for: NSPredicate { _, _ in percent() > initial }, evaluatedWith: web); waitForExpectations(timeout: 10)
-        let saved = percent(); waitForText(); capture("Imported bestseller rendered in " + flow)
+        let saved = percent(); capture("Imported bestseller rendered in " + flow)
         controls(); app.buttons["closeBook"].leafTapVisible(in: app); assertLibraryBook("Simply Ina", app: app).leafTapVisible(in: app)
         waitForText(); controls(); XCTAssertEqual(percent(), saved, accuracy: 2, "The imported book must restore its saved passage")
         capture("Imported bestseller reopened at saved passage in " + flow)
