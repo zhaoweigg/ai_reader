@@ -23,19 +23,12 @@ import XCTest
 }
 
 @MainActor final class ChatDictationTests: XCTestCase {
-    private func wait(_ condition: () -> Bool) async throws {
-        for _ in 0..<500 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(2))
-        }
-        XCTAssertTrue(condition())
-    }
     func testPartialRevisionsReplaceOnlyTheDictatedSegment() async throws {
         let backend = DictationRecognizerProbe()
         let session = ChatDictationSession(recognizer: backend)
         var draft = "Explain"
         session.start(draft: draft, language: .english) { draft = $0 }
-        try await wait { session.state == .recording }
+        try await eventually(timeout: 1, interval: 0.002) { session.state == .recording }
         backend.update?("this", false); XCTAssertEqual(draft, "Explain this")
         backend.update?("this character", false); XCTAssertEqual(draft, "Explain this character")
         backend.update?("this character.", true)
@@ -67,7 +60,7 @@ import XCTest
         let voice = ChatDictationSession(recognizer: backend)
         var draft = ""
         voice.start(draft: draft, language: .system, bookTitle: "十日终焉") { draft = $0 }
-        try await wait { voice.state == .recording }
+        try await eventually(timeout: 1, interval: 0.002) { voice.state == .recording }
         XCTAssertEqual(backend.locale, "zh-CN")
         XCTAssertEqual(voice.localeIdentifier, "zh-CN")
         backend.update?("这个人物是谁？", true)
@@ -78,7 +71,7 @@ import XCTest
         session = ChatDictationSession(recognizer: backend)
         var draft = ""
         session.start(draft: draft, language: .mandarin) { draft = $0 }
-        try await wait { session.state == .recording }
+        try await eventually(timeout: 1, interval: 0.002) { session.state == .recording }
         backend.update?("解释", false); session.finish()
         XCTAssertEqual(session.state, .finishing); XCTAssertEqual(backend.finishes, 1)
         backend.update?("解释这段文字。", true)
@@ -92,7 +85,7 @@ import XCTest
             let session = ChatDictationSession(recognizer: backend)
             var draft = "Keep my question"
             session.start(draft: draft, language: .system) { draft = $0 }
-            try await wait { session.error != nil }
+            try await eventually(timeout: 1, interval: 0.002) { session.error != nil }
             XCTAssertFalse(session.isActive); XCTAssertEqual(backend.starts, 0)
             XCTAssertTrue(session.needsSettings); XCTAssertEqual(draft, "Keep my question")
         }
@@ -101,7 +94,7 @@ import XCTest
         let backend = DictationRecognizerProbe(); backend.delaysAuthorization = true
         let session = ChatDictationSession(recognizer: backend)
         session.start(draft: "Keep me", language: .english) { _ in XCTFail("Cancelled permission must not change the draft") }
-        try await wait { backend.authorization != nil }
+        try await eventually(timeout: 1, interval: 0.002) { backend.authorization != nil }
         session.suspend(background: false)
         XCTAssertEqual(session.state, .authorizing, "A first-use permission dialog may make the app inactive")
         session.suspend(background: true); backend.authorization?.resume(); backend.authorization = nil
@@ -113,11 +106,11 @@ import XCTest
         session = ChatDictationSession(recognizer: backend)
         var draft = "Remember"
         session.start(draft: draft, language: .english) { draft = $0 }
-        try await wait { session.state == .recording }
+        try await eventually(timeout: 1, interval: 0.002) { session.state == .recording }
         backend.update?("this name", false); let old = backend.update
         session.suspend(background: false); XCTAssertEqual(draft, "Remember this name")
         session.start(draft: draft, language: .english) { draft = $0 }
-        try await wait { session.state == .recording }
+        try await eventually(timeout: 1, interval: 0.002) { session.state == .recording }
         old?("discard me", true); XCTAssertEqual(session.state, .recording)
         backend.update?("please", true)
         XCTAssertEqual(draft, "Remember this name please")
@@ -127,7 +120,7 @@ import XCTest
         let session = ChatDictationSession(recognizer: backend)
         var draft = "Unsent question"
         session.start(draft: draft, language: .mandarin) { draft = $0 }
-        try await wait { session.error != nil }
+        try await eventually(timeout: 1, interval: 0.002) { session.error != nil }
         XCTAssertFalse(session.needsSettings); XCTAssertFalse(session.isActive)
         XCTAssertEqual(backend.cancellations, 1); XCTAssertEqual(draft, "Unsent question")
     }
@@ -136,9 +129,9 @@ import XCTest
         let session = ChatDictationSession(recognizer: backend, recordingLimit: .milliseconds(40), finishLimit: .milliseconds(10))
         var draft = ""
         session.start(draft: draft, language: .english) { draft = $0 }
-        try await wait { session.state == .recording }
+        try await eventually(timeout: 1, interval: 0.002) { session.state == .recording }
         backend.update?("Keep the partial text", false)
-        try await wait { !session.isActive }
+        try await eventually(timeout: 1, interval: 0.002) { !session.isActive }
         XCTAssertEqual(backend.finishes, 1); XCTAssertEqual(backend.cancellations, 1)
         XCTAssertEqual(draft, "Keep the partial text"); XCTAssertNil(session.error)
     }
@@ -149,7 +142,7 @@ import XCTest
         let chat = ReaderChatSession(history: history), backend = DictationRecognizerProbe()
         let session = ChatDictationSession(recognizer: backend)
         session.start(draft: chat.draft, language: .mandarin) { chat.draft = $0 }
-        try await wait { session.state == .recording }
+        try await eventually(timeout: 1, interval: 0.002) { session.state == .recording }
         backend.update?("帮我回忆这个人物", false); session.cancel(); chat.close()
         let restored = ReaderChatSession(history: try ChatHistoryStore(directory: url, conversation: "dictation"))
         XCTAssertEqual(restored.draft, "帮我回忆这个人物")

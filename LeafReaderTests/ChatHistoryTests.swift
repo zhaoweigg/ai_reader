@@ -45,11 +45,6 @@ private final class HistoryProvider: ChatProvider {
     private var context: ReadingChatContext {
         ReadingChatContext(title: "A Book", author: "Author", chapter: "Chapter 2", text: "The door stayed shut. 🌿", source: "page", locator: "private-locator")
     }
-    private func wait(_ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(3)
-        while !condition() && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertTrue(condition())
-    }
     private func complete(_ provider: HistoryProvider, _ text: String = "An explanation") {
         provider.continuations.last?.yield(.text(text)); provider.continuations.last?.yield(.finished(truncated: false)); provider.continuations.last?.finish()
     }
@@ -64,15 +59,15 @@ private final class HistoryProvider: ChatProvider {
         let session = ReaderChatSession(directory: directory, conversation: "book")
         XCTAssertTrue(session.hasEarlierMessages); XCTAssertEqual(session.selectedContext, enriched)
         session.send(settings: settings) { XCTFail("Restored attached quote should be used"); return nil }
-        try await wait { !provider.requests.isEmpty }
+        try await eventually { !provider.requests.isEmpty }
         XCTAssertTrue(provider.requests[0].turns.last?.content.contains("Who hid the silver key?") == true)
         XCTAssertTrue(provider.requests[0].turns.last?.content.contains("Lin entered.") == true)
-        complete(provider); try await wait { !session.isSending }
+        complete(provider); try await eventually { !session.isSending }
         session.clear(); XCTAssertTrue(session.messages.isEmpty)
         session.draft = "Why is the silver key important?"
-        session.send(settings: settings) { nil }; try await wait { provider.requests.count == 2 }
+        session.send(settings: settings) { nil }; try await eventually { provider.requests.count == 2 }
         XCTAssertFalse(provider.requests[1].turns.last?.content.contains("earlier_discussion") == true)
-        complete(provider); try await wait { !session.isSending }
+        complete(provider); try await eventually { !session.isSending }
     }
     func testSharingOffRemovesPassagesFromOlderDiscussionAsWellAsRecentMessages() async throws {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
@@ -83,11 +78,11 @@ private final class HistoryProvider: ChatProvider {
         try storage.save(messages, draft: "What about the silver key?", selection: .set(context))
         let session = ReaderChatSession(directory: directory, conversation: "book")
         session.send(settings: settings) { XCTFail("Passage sharing is disabled"); return nil }
-        try await wait { !provider.requests.isEmpty }
+        try await eventually { !provider.requests.isEmpty }
         let request = provider.requests[0].turns.map(\.content).joined()
         XCTAssertTrue(request.contains("earlier_discussion")); XCTAssertFalse(request.contains("passage_excerpt"))
         XCTAssertFalse(request.contains("The door stayed shut.")); XCTAssertFalse(request.contains("private-locator"))
-        complete(provider); try await wait { !session.isSending }
+        complete(provider); try await eventually { !session.isSending }
     }
     func testLibraryGeneralChatHasNoBookContextAndStaysSeparateFromBookHistory() async throws {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
@@ -96,10 +91,10 @@ private final class HistoryProvider: ChatProvider {
         let general = ReaderChatSession(directory: directory, conversation: "leaf.library.general.v1")
         general.draft = "Hello from Library"
         general.send(settings: settings, missingContextNotice: nil) { nil }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertEqual(provider.requests[0].turns.last?.content, "Hello from Library")
         XCTAssertNil(general.messages.first?.context); XCTAssertNil(general.notice)
-        complete(provider); try await wait { !general.isSending }
+        complete(provider); try await eventually { !general.isSending }
         general.close()
         XCTAssertEqual(ReaderChatSession(directory: directory, conversation: "leaf.library.general.v1").messages.count, 2)
         general.clear()
@@ -112,19 +107,19 @@ private final class HistoryProvider: ChatProvider {
         let library = ReaderChatSession(directory: directory, conversation: "same-book")
         library.draft = "Who wrote this?"
         library.send(settings: settings, missingContextNotice: nil) { metadata }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertEqual(library.messages.first?.context, metadata); XCTAssertNil(library.notice)
         XCTAssertTrue(provider.requests[0].turns.last?.content.contains("library_metadata") == true)
         XCTAssertFalse(provider.requests[0].turns.last?.content.contains(context.text) == true)
-        complete(provider); try await wait { !library.isSending }; library.close()
+        complete(provider); try await eventually { !library.isSending }; library.close()
         let reader = ReaderChatSession(directory: directory, conversation: "same-book")
         XCTAssertEqual(reader.messages.count, 2)
         reader.attachSelection(context); reader.draft = "Explain this quote"; reader.close()
         let resumed = ReaderChatSession(directory: directory, conversation: "same-book")
         resumed.send(settings: settings, missingContextNotice: nil) { XCTFail("Use the persisted quote"); return metadata }
-        try await wait { provider.requests.count == 2 }
+        try await eventually { provider.requests.count == 2 }
         XCTAssertEqual(resumed.messages.last(where: \.isUser)?.context, context)
-        complete(provider); try await wait { !resumed.isSending }
+        complete(provider); try await eventually { !resumed.isSending }
     }
     func testLiveSelectionPreservesQuestionAndPersistsLatestQuoteWithoutSending() async throws {
         let directory = try directory(), session = ReaderChatSession(directory: directory, conversation: "live-selection")
@@ -147,7 +142,7 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertTrue(session.messages.isEmpty, "Selection alone must never submit a question")
         // Exercise the scheduled checkpoint, without explicitly flushing the session.
         let saved = try ChatHistoryStore(directory: directory, conversation: "live-selection")
-        try await wait { (try? saved.loadSelectedContext()) == latest }
+        try await eventually { (try? saved.loadSelectedContext()) == latest }
         let restored = ReaderChatSession(directory: directory, conversation: "live-selection")
         XCTAssertEqual(restored.selectedContext, latest); XCTAssertEqual(restored.draft, draft)
         restored.removeSelection(); restored.close()
@@ -160,19 +155,19 @@ private final class HistoryProvider: ChatProvider {
         let next = ReadingChatContext(title: context.title, author: context.author, chapter: context.chapter, text: "Second passage", source: "selection", locator: "next")
         session.attachLiveSelection(first, chatIsPresented: true); session.draft = "First question"
         session.send(settings: settings) { XCTFail("Use the automatically attached quote"); return nil }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         session.draft = "Next question"; session.attachLiveSelection(next, chatIsPresented: true)
         XCTAssertEqual(session.messages.first?.context, first)
-        complete(provider); try await wait { !session.isSending }
+        complete(provider); try await eventually { !session.isSending }
         XCTAssertEqual(session.selectedContext, next); XCTAssertEqual(session.draft, "Next question")
         session.close()
         let restored = ReaderChatSession(directory: directory, conversation: "live-during-reply")
         XCTAssertEqual(restored.selectedContext, next)
         restored.send(settings: settings) { XCTFail("Use the new saved quote"); return nil }
-        try await wait { provider.requests.count == 2 }
+        try await eventually { provider.requests.count == 2 }
         XCTAssertEqual(restored.messages.filter(\.isUser).last?.context, next)
         XCTAssertNil(restored.selectedContext)
-        complete(provider); try await wait { !restored.isSending }
+        complete(provider); try await eventually { !restored.isSending }
     }
     func testSelectedPassageAndDraftRestoreUntilSentOrExplicitlyRemoved() async throws {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
@@ -188,11 +183,11 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertEqual(restored.draft, original.draft)
         XCTAssertNil(ReaderChatSession(directory: directory, conversation: "book-b").selectedContext)
         restored.send(settings: settings) { XCTFail("Use the selection snapshot even after native selection disappears"); return nil }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertEqual(restored.messages.first?.context, selection)
         XCTAssertTrue(provider.requests[0].turns.last?.content.contains(selection.text) == true)
         XCTAssertNil(restored.selectedContext)
-        complete(provider); try await wait { !restored.isSending }
+        complete(provider); try await eventually { !restored.isSending }
         let sent = ReaderChatSession(directory: directory, conversation: "book-a")
         XCTAssertNil(sent.selectedContext); XCTAssertEqual(sent.draft, "")
         XCTAssertEqual(sent.messages.first?.context, selection)
@@ -216,10 +211,10 @@ private final class HistoryProvider: ChatProvider {
         let restored = ReaderChatSession(directory: directory, conversation: "shortcuts")
         XCTAssertEqual(restored.draft, "Summarize this passage."); XCTAssertEqual(restored.selectedContext, context)
         restored.send(settings: settings) { XCTFail("Use the saved selection"); return nil }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertEqual(restored.messages.first?.text, "Summarize this passage.")
         XCTAssertEqual(restored.messages.first?.context, context)
-        complete(provider); try await wait { !restored.isSending }
+        complete(provider); try await eventually { !restored.isSending }
     }
     func testSelectionShortcutsPreserveCustomQuestionWithoutAccumulatingPrompts() throws {
         let session = ReaderChatSession(directory: try directory(), conversation: "custom")
@@ -255,11 +250,11 @@ private final class HistoryProvider: ChatProvider {
         let session = ReaderChatSession(directory: directory, conversation: "book-a")
         session.attachSelection(context, prompt: "Explain this")
         session.send(settings: settings) { XCTFail("Sharing is off"); return nil }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertFalse(provider.requests[0].turns.contains { $0.content.contains(self.context.text) })
         XCTAssertNil(session.messages.first?.context)
         XCTAssertTrue(session.notice?.contains("sharing is off") == true)
-        complete(provider); try await wait { !session.isSending }
+        complete(provider); try await eventually { !session.isSending }
         XCTAssertEqual(ReaderSelectionIntent.ask.prompt(for: "选中文字"), "")
         XCTAssertEqual(ReaderSelectionIntent.explain.prompt(for: "选中文字"), "请解释这段文字。")
         XCTAssertEqual(ReaderSelectionIntent.summarize.prompt(for: "选中文字"), "请总结这段文字。")
@@ -270,9 +265,9 @@ private final class HistoryProvider: ChatProvider {
         let session = ReaderChatSession(directory: directory, conversation: "book-a")
         session.draft = "为什么？ 🌿"
         session.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         complete(provider, "Because the passage leaves it uncertain.")
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
         session.draft = "Follow up\nwith a detail\u{0}🌿"
         session.close()
         let restored = ReaderChatSession(directory: directory, conversation: "book-a")
@@ -281,10 +276,10 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertEqual(restored.draft, session.draft)
         XCTAssertNil(restored.historyError)
         restored.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 2 }
+        try await eventually { provider.requests.count == 2 }
         XCTAssertEqual(provider.requests[1].turns.count, 3)
         XCTAssertTrue(provider.requests[1].turns[0].content.contains("为什么？"))
-        complete(provider); try await wait { !restored.isSending }
+        complete(provider); try await eventually { !restored.isSending }
     }
     func testLargeArchivePagesWithoutDroppingOlderHistoryAndBooksStaySeparate() throws {
         let directory = try directory(), store = try ChatHistoryStore(directory: directory, conversation: "book-a")
@@ -317,9 +312,9 @@ private final class HistoryProvider: ChatProvider {
         let session = ReaderChatSession(directory: directory, conversation: "book-a")
         session.draft = "Explain this"
         session.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         provider.continuations[0].yield(.text("Partial reply"))
-        try await wait { session.messages.last?.text == "Partial reply" }
+        try await eventually { session.messages.last?.text == "Partial reply" }
         try await Task.sleep(for: .milliseconds(650))
         let checkpoint = ReaderChatSession(directory: directory, conversation: "book-a")
         XCTAssertEqual(checkpoint.messages.last?.text, "Partial reply")
@@ -328,9 +323,9 @@ private final class HistoryProvider: ChatProvider {
         session.close()
         let restored = ReaderChatSession(directory: directory, conversation: "book-a")
         restored.retry(settings: settings)
-        try await wait { provider.requests.count == 2 }
+        try await eventually { provider.requests.count == 2 }
         XCTAssertEqual(provider.requests[0].turns, provider.requests[1].turns)
-        complete(provider, "Completed on retry"); try await wait { !restored.isSending }
+        complete(provider, "Completed on retry"); try await eventually { !restored.isSending }
         let final = ReaderChatSession(directory: directory, conversation: "book-a")
         XCTAssertEqual(final.messages.count, 2); XCTAssertEqual(final.messages.last?.text, "Completed on retry")
     }
@@ -338,9 +333,9 @@ private final class HistoryProvider: ChatProvider {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
         let session = ReaderChatSession(directory: directory, conversation: "book-a")
         session.draft = "Explain this"; session.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         provider.continuations[0].yield(.text("Partial reply"))
-        try await wait { session.messages.last?.text == "Partial reply" }
+        try await eventually { session.messages.last?.text == "Partial reply" }
         session.draft = "An unsent draft"; session.clear()
         provider.continuations[0].yield(.text("Late response must not return")); provider.continuations[0].finish()
         try await Task.sleep(for: .milliseconds(650))
@@ -354,11 +349,11 @@ private final class HistoryProvider: ChatProvider {
         let provider = HistoryProvider(), settings = settings(provider), session = ReaderChatSession(history: store)
         session.loadEarlier(); XCTAssertTrue(session.hasNewerMessages)
         session.draft = "A followup"; session.send(settings: settings) { nil }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertTrue(provider.requests[0].turns.contains(where: { $0.content == "Message 59" }))
         XCTAssertFalse(provider.requests[0].turns.contains(where: { $0.content == "Message 20" }))
         XCTAssertLessThanOrEqual(provider.requests[0].turns.count, 12)
-        complete(provider); try await wait { !session.isSending }
+        complete(provider); try await eventually { !session.isSending }
         XCTAssertEqual(session.messages.count, 24); XCTAssertFalse(session.hasNewerMessages)
     }
     func testWriteFailureKeepsDraftAndDoesNotSendAndClearFailureKeepsHistory() async throws {
@@ -389,13 +384,13 @@ private final class HistoryProvider: ChatProvider {
         let session = ReaderChatSession(history: history), provider = HistoryProvider(), settings = settings(provider)
         session.draft = "Preserve this question"
         session.send(settings: settings) { history.fails = true; return self.context }
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
         XCTAssertTrue(provider.requests.isEmpty); XCTAssertTrue(session.messages.isEmpty)
         XCTAssertEqual(session.draft, "Preserve this question"); XCTAssertNotNil(session.historyError)
         history.fails = false; XCTAssertTrue(session.flush()); XCTAssertNil(session.historyError)
         session.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 1 }
-        complete(provider); try await wait { !session.isSending }
+        try await eventually { provider.requests.count == 1 }
+        complete(provider); try await eventually { !session.isSending }
         XCTAssertEqual(session.messages.filter(\.isUser).count, 1)
         XCTAssertEqual(try history.backing.page().messages.count, 2)
     }

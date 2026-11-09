@@ -4,7 +4,7 @@ import Foundation
 /// Explicit UI-test injection: exercises the production recovery and chat UI
 /// with actual books, without making network requests or requiring credentials.
 @MainActor
-final class UITestRecoveryChatProvider: ToolChatProvider {
+final class UITestRecoveryChatProvider: @MainActor ToolChatProvider {
     private var attempts: [String: Int] = [:]
     func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
         let events = streamAgent(system: request.system, items: request.turns.map(AgentItem.turn), tools: [], allowTools: false)

@@ -95,13 +95,9 @@ private final class CatalogURLProtocol: URLProtocol {
     private func response(_ value:Any,url:URL?=nil,status:Int=200) throws -> ZLibraryPayload {
         ZLibraryPayload(data:try JSONSerialization.data(withJSONObject:value),file:nil,response:HTTPURLResponse(url:url ?? origin.url,statusCode:status,httpVersion:nil,headerFields:["Content-Type":"application/json"])!)
     }
-    private func folder() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at:url,withIntermediateDirectories:true)
-        addTeardownBlock { try? FileManager.default.removeItem(at:url) };return url
-    }
     private func store(_ client:(any ZLibraryServing)? = nil) -> (ZLibraryStore,CatalogCredentials,UserDefaults) {
-        let name = "LeafZLibraryTests.\(UUID())", defaults = UserDefaults(suiteName:name)!, credentials = CatalogCredentials()
+        let name = "LeafZLibraryTests.\(UUID())", credentials = CatalogCredentials()
+        nonisolated(unsafe) let defaults = UserDefaults(suiteName:name)!
         addTeardownBlock {
             for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix("zlibrary.websiteData.") {
                 if let raw = value as? String, let id = UUID(uuidString: raw) {
@@ -116,11 +112,6 @@ private final class CatalogURLProtocol: URLProtocol {
         }
         defaults.set(origin.url.absoluteString,forKey:"zlibrary.origin")
         return (ZLibraryStore(defaults:defaults,credentials:credentials,client:client ?? CatalogService()),credentials,defaults)
-    }
-    private func wait(_ predicate:()->Bool) async throws {
-        let deadline = Date().addingTimeInterval(3)
-        while !predicate(),Date()<deadline { try await Task.sleep(for:.milliseconds(10)) }
-        XCTAssertTrue(predicate())
     }
     func testAddressesAndSessionValuesRejectCredentialInjection() throws {
         XCTAssertEqual(try ZLibraryOrigin(" https://CATALOG.example/ ").url.absoluteString,"https://catalog.example")
@@ -203,6 +194,26 @@ private final class CatalogURLProtocol: URLProtocol {
         try await store.disconnect()
         XCTAssertTrue(store.shelf.isEmpty)
         XCTAssertTrue(ZLibraryStore(defaults: defaults, credentials: credentials, client: client).shelf.isEmpty)
+    }
+    /// The Library loads a saved account's recommendations without visiting
+    /// Discover, so `connected` is still false. An empty answer must still count
+    /// as a finished recommendations load, or the Library hides the empty state.
+    func testEmptyRecommendationsFromASavedSessionCountAsLoaded() async throws {
+        let client = CatalogService(), (store, credentials, defaults) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.recommendedBooks = []
+        let reopened = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        XCTAssertFalse(reopened.hasCurrentRecommendations)
+        await reopened.loadShelf()
+        XCTAssertTrue(reopened.shelf.isEmpty); XCTAssertNil(reopened.shelfError); XCTAssertFalse(reopened.shelfLoading)
+        XCTAssertEqual(reopened.shelfFeed, .recommended); XCTAssertFalse(reopened.connected)
+        XCTAssertTrue(reopened.hasCurrentRecommendations)
+        let (anonymous, _, _) = self.store(client)
+        client.popularBooks = []
+        await anonymous.loadShelf()
+        XCTAssertEqual(anonymous.shelfFeed, .popular); XCTAssertFalse(anonymous.hasCurrentRecommendations, "An empty public feed is not a recommendations answer")
+        try await reopened.disconnect()
+        XCTAssertFalse(reopened.hasCurrentRecommendations, "Disconnecting forgets the finished load")
     }
     func testShelfReusesDiscoverListAndShowsThrottledFailure() async throws {
         let client = CatalogService(), (store, _, _) = store(client)
@@ -369,13 +380,13 @@ private final class CatalogURLProtocol: URLProtocol {
         var continuation: CheckedContinuation<[ZLibraryBook], Error>?
         client.recommendedHandler = { try await withCheckedThrowingContinuation { continuation = $0 } }
         let pending = Task { await store.browse(.recommended) }
-        try await wait { continuation != nil }
+        try await eventually { continuation != nil }
         await store.loadPopular()
         continuation?.resume(returning: [book]); await pending.value
         XCTAssertEqual(store.feed, .popular); XCTAssertTrue(store.books.isEmpty); XCTAssertNil(store.error)
         continuation = nil
         let disconnected = Task { await store.browse(.recommended) }
-        try await wait { continuation != nil }
+        try await eventually { continuation != nil }
         try await store.disconnect()
         continuation?.resume(returning: [book]); await disconnected.value
         XCTAssertFalse(store.connected); XCTAssertTrue(store.books.isEmpty)
@@ -453,7 +464,7 @@ private final class CatalogURLProtocol: URLProtocol {
     }
     func testDownloadHydratesSparseEditionBeforeFileRequestAndValidatesBytes() async throws {
         let sparse = ZLibraryBook(remoteID:"12",hash:"ab1234",title:"A test book",author:"Test",fileExtension:"",size:"",language:"",year:"",coverURL:nil)
-        let temp = try folder().appendingPathComponent("download.part")
+        let temp = try temporaryFolder("LeafZLibraryTests").appendingPathComponent("download.part")
         try Data([0x50,0x4b,0x03,0x04]).write(to:temp)
         let transport = CatalogTransport { [self] request,toFile in
             switch request.url?.path {
@@ -554,7 +565,7 @@ private final class CatalogURLProtocol: URLProtocol {
         client.detailHandler = { _ in try await withCheckedThrowingContinuation { pending = $0 } }
         client.popularBooks = [listed]; await store.loadPopular()
         let card = Task { await store.loadCardDetails(listed) }
-        try await wait { pending != nil }
+        try await eventually { pending != nil }
         let page = Task { try await store.details(listed, description: true) }
         // Give the selected-page subscription time to join the already running fetch.
         for _ in 0..<10 { await Task.yield() }
@@ -576,7 +587,7 @@ private final class CatalogURLProtocol: URLProtocol {
         }
         client.popularBooks = rows; await store.loadPopular()
         let tasks = rows.map { row in Task { await store.loadCardDetails(row) } }
-        try await wait { client.detailCalls == 2 }
+        try await eventually { client.detailCalls == 2 }
         XCTAssertEqual(active, 2)
         for task in tasks { task.cancel() }
         // The fake transport ignores cancellation, so complete only the two calls it received.
@@ -627,7 +638,7 @@ private final class CatalogURLProtocol: URLProtocol {
         client.detailHandler = { _ in try await withCheckedThrowingContinuation { pending = $0 } }
         client.popularBooks = [listed]; await store.loadPopular()
         let card = Task { await store.loadCardDetails(listed) }
-        try await wait { pending != nil }
+        try await eventually { pending != nil }
         try await store.disconnect(); pending?.resume(returning: listed); await card.value
         XCTAssertTrue(store.books.isEmpty); XCTAssertFalse(store.cardDetailsFailed(listed))
         client.detailHandler = { _ in listed }
@@ -639,7 +650,7 @@ private final class CatalogURLProtocol: URLProtocol {
         var pending: CheckedContinuation<ZLibraryBook,Error>?
         client.detailHandler = { _ in try await withCheckedThrowingContinuation { pending = $0 } }
         let task = Task { try await store.details(book) }
-        try await wait { pending != nil }
+        try await eventually { pending != nil }
         try await store.disconnect()
         pending?.resume(returning:book)
         do { _ = try await task.value;XCTFail("Stale details escaped") } catch { XCTAssertTrue(error is CancellationError) }
@@ -748,7 +759,7 @@ private final class CatalogURLProtocol: URLProtocol {
             return ZLibrarySearchPage(books:[book],hasMore:false)
         }
         let first = Task { await store.search("same query") }
-        try await wait { pending != nil }
+        try await eventually { pending != nil }
         await store.setSearchOrder(.fileSizeAscending)
         XCTAssertEqual(store.books,[book]);XCTAssertFalse(store.loading)
         pending?.resume(returning:ZLibrarySearchPage(books:[],hasMore:true));await first.value
@@ -826,7 +837,7 @@ private final class CatalogURLProtocol: URLProtocol {
             return ZLibrarySearchPage(books:[book],hasMore:false)
         }
         let old = Task { await store.search("old") }
-        try await wait { started }
+        try await eventually { started }
         await store.search("latest")
         await old.value
         XCTAssertTrue(cancelled);XCTAssertEqual(store.activeQuery,"latest")
@@ -837,7 +848,7 @@ private final class CatalogURLProtocol: URLProtocol {
         var continuation: CheckedContinuation<ZLibrarySearchPage,Error>?
         client.searchHandler = { _,_ in try await withCheckedThrowingContinuation { continuation = $0 } }
         let pending = Task { await store.search("old") }
-        try await wait { continuation != nil }
+        try await eventually { continuation != nil }
         await store.loadPopular()
         continuation?.resume(returning:ZLibrarySearchPage(books:[book],hasMore:true))
         await pending.value
@@ -904,7 +915,7 @@ private final class CatalogURLProtocol: URLProtocol {
         var continuation: CheckedContinuation<ZLibrarySearchPage,Error>?
         client.searchHandler = { _,_ in try await withCheckedThrowingContinuation { continuation = $0 } }
         let task = Task { await store.search("pending") }
-        try await wait { continuation != nil }
+        try await eventually { continuation != nil }
         try await store.disconnect()
         continuation?.resume(returning:ZLibrarySearchPage(books:[book],hasMore:true));await task.value
         XCTAssertFalse(store.connected);XCTAssertTrue(store.books.isEmpty);XCTAssertEqual(store.activeQuery,"")
@@ -1065,7 +1076,7 @@ private final class CatalogURLProtocol: URLProtocol {
         client.popularBooks = [book]; await store.loadPopular()
         var pending: CheckedContinuation<ZLibrarySearchPage, Error>?
         client.searchHandler = { _, _ in try await withCheckedThrowingContinuation { pending = $0 } }
-        let task = Task { await store.search("pending") }; try await wait { pending != nil }
+        let task = Task { await store.search("pending") }; try await eventually { pending != nil }
         await store.loadPopular(); XCTAssertEqual(store.books, [book]); XCTAssertFalse(store.loading)
         pending?.resume(returning: ZLibrarySearchPage(books: [], hasMore: false)); await task.value
         XCTAssertEqual(store.books, [book]); XCTAssertTrue(store.activeQuery.isEmpty)
@@ -1173,7 +1184,7 @@ private final class CatalogURLProtocol: URLProtocol {
         do { _ = try await ZLibraryClient(transport:transport).profile(origin:origin,session:session);XCTFail("Wrong account accepted") } catch { XCTAssertEqual(error as? ZLibraryError,.response) }
     }
     func testSignedCDNDownloadHasNoAccountHeadersAndKeepsBookOnDisk() async throws {
-        let temp = try folder().appendingPathComponent("download.part");try Data([0x50,0x4b,0x03,0x04,1,2,3]).write(to:temp)
+        let temp = try temporaryFolder("LeafZLibraryTests").appendingPathComponent("download.part");try Data([0x50,0x4b,0x03,0x04,1,2,3]).write(to:temp)
         let transport = CatalogTransport { [self] request,toFile in
             if !toFile { return try response(["success":1,"file":["downloadLink":"https://cdn.example/book?signature=abc"]]) }
             XCTAssertNil(request.value(forHTTPHeaderField:"Cookie"));XCTAssertNil(request.value(forHTTPHeaderField:"remix-userkey"));XCTAssertEqual(request.url?.host,"cdn.example")
@@ -1183,7 +1194,7 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertEqual(file.pathExtension,"epub");XCTAssertFalse(FileManager.default.fileExists(atPath:temp.path));XCTAssertEqual(try Data(contentsOf:file).count,7)
     }
     func testSameOriginDownloadAuthenticatesAndHTTPLinkIsRejected() async throws {
-        let temp = try folder().appendingPathComponent("download.part");try Data([0x50,0x4b,0x03,0x04]).write(to:temp)
+        let temp = try temporaryFolder("LeafZLibraryTests").appendingPathComponent("download.part");try Data([0x50,0x4b,0x03,0x04]).write(to:temp)
         let transport = CatalogTransport { [self] request,toFile in
             if !toFile { return try response(["success":1,"downloadLink":"/download/file"]) }
             XCTAssertEqual(request.value(forHTTPHeaderField:"remix-userkey"),session.userKey)
@@ -1203,7 +1214,7 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertNil(ZLibraryHTTPTransport.redirect(request,original:origin.url,toFile:true))
     }
     func testRejectedDownloadRemovesTemporaryFile() async throws {
-        let temp = try folder().appendingPathComponent("download.part");try Data("<!DOCTYPE html><html>Please login</html>".utf8).write(to:temp)
+        let temp = try temporaryFolder("LeafZLibraryTests").appendingPathComponent("download.part");try Data("<!DOCTYPE html><html>Please login</html>".utf8).write(to:temp)
         let transport = CatalogTransport { [self] request,toFile in
             if !toFile { return try response(["success":1,"downloadLink":"https://cdn.example/file"]) }
             return ZLibraryPayload(data:Data(),file:temp,response:HTTPURLResponse(url:request.url!,statusCode:200,httpVersion:nil,headerFields:[:])!)
@@ -1262,7 +1273,7 @@ private final class CatalogURLProtocol: URLProtocol {
         let client = CatalogService(), (store,credentials,_) = store(client)
         client.suspendProfile = true
         let task = Task { await store.connect(session) }
-        try await wait { client.continuation != nil }
+        try await eventually { client.continuation != nil }
         try await store.disconnect()
         client.continuation?.resume(returning:ZLibraryProfile(name:"Old response",remaining:2))
         let connected = await task.value;XCTAssertFalse(connected);XCTAssertFalse(store.connected);XCTAssertTrue(credentials.values.isEmpty)
@@ -1422,7 +1433,7 @@ private final class CatalogURLProtocol: URLProtocol {
         client.popularError = nil; client.suspendPopular = true
         // SwiftUI cancels a refresh task when the content it shows changes (QA76-002).
         let refresh = Task { await store.reload() }
-        try await wait { client.popularContinuation != nil }
+        try await eventually { client.popularContinuation != nil }
         refresh.cancel()
         client.popularContinuation?.resume(throwing: failure)
         await refresh.value
@@ -1438,14 +1449,14 @@ private final class CatalogURLProtocol: URLProtocol {
         let client = CatalogService(), (store,_,_) = store(client)
         client.suspendPopular = true
         let load = Task { await store.loadPopular() }
-        try await wait { client.popularContinuation != nil }
+        try await eventually { client.popularContinuation != nil }
         let connected = await store.connect(session);XCTAssertTrue(connected)
         client.popularContinuation?.resume(throwing:ZLibraryError.signInRequired)
         await load.value
         XCTAssertTrue(store.connected);XCTAssertNil(store.error);XCTAssertFalse(store.loading)
     }
     func testExistingFileImportIsLinkedWithoutLosingPassageBookmarksOrChatIdentity() async throws {
-        let root = try folder(), file = root.appendingPathComponent("original.txt")
+        let root = try temporaryFolder("LeafZLibraryTests"), file = root.appendingPathComponent("original.txt")
         try Data("A passage to keep.".utf8).write(to:file)
         let library = LibraryStore(root:root.appendingPathComponent("Library"),seedSamples:false)
         await library.importBooks([file]);let original = try XCTUnwrap(library.books.first)
@@ -1458,7 +1469,7 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertEqual(reopened.books.first?.catalogSource,"zlibrary:12:hash")
     }
     func testNewCatalogBookExtractsCoverAndPersistsSourceBeforeSuccess() async throws {
-        let root = try folder()
+        let root = try temporaryFolder("LeafZLibraryTests")
         let source = try XCTUnwrap(Bundle(for:type(of:self)).url(forResource:"Covered.epub",withExtension:nil,subdirectory:"Fixtures"))
         let library = LibraryStore(root:root,seedSamples:false)
         let imported = try await library.importCatalogBook(source,catalogID:"zlibrary:new:edition",title:"Catalog title",author:"Catalog author")
@@ -1476,9 +1487,9 @@ private final class CatalogURLProtocol: URLProtocol {
     func testQuotaStopsDownloadBeforeFileRequest() async throws {
         let client = CatalogService(), (store,_,_) = store(client)
         _ = await store.connect(session);client.remaining = 0
-        let library = LibraryStore(root:try folder(),seedSamples:false)
+        let library = LibraryStore(root:try temporaryFolder("LeafZLibraryTests"),seedSamples:false)
         store.add(book,library:library)
-        try await wait { store.downloadingID == nil }
+        try await eventually { store.downloadingID == nil }
         XCTAssertEqual(client.downloads,0);XCTAssertNotNil(store.importError);XCTAssertTrue(library.books.isEmpty)
     }
 }

@@ -6,10 +6,6 @@ final class AnnotationUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func capture(_ name: String) {
-        let item = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        item.name = name; item.lifetime = .keepAlways; add(item)
-    }
     @MainActor private func surface(_ app: XCUIApplication) -> XCUIElement {
         app.webViews["bookWebView"].exists ? app.webViews["bookWebView"] : app.descendants(matching: .any)["bookPDFView"].firstMatch
     }

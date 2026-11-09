@@ -69,11 +69,6 @@ final class ChatTests: XCTestCase {
         return events
     }
     private func sse(_ json: String) -> [String] { ["data: \(json)", ""] }
-    private func wait(_ predicate: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(3)
-        while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertTrue(predicate())
-    }
     private func settings(_ override: (any ChatProvider)? = nil) -> (AISettingsStore, MemoryChatCredentials, UserDefaults) {
         let name = "LeafChatTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
@@ -149,10 +144,10 @@ final class ChatTests: XCTestCase {
                 }
             } catch { }
         }
-        try await wait { received }
+        try await eventually { received }
         task.cancel()
         _ = await task.result
-        try await wait { ChatStreamURLProtocol.stopped }
+        try await eventually { ChatStreamURLProtocol.stopped }
     }
 
     func testRedirectsDoNotForwardCredentials() throws {
@@ -399,14 +394,14 @@ final class ChatTests: XCTestCase {
             return ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "林檎是心理咨询师。")], scannedSections: 2, totalSections: 2, complete: true)
         }
         session.send(settings: settings, recall: recall) { nil }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         provider.continuations[0].yield(.text("心理咨询师。")); provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
         session.draft = "再说一遍是谁"
         session.send(settings: settings, recall: recall) {
             ReadingChatContext(title: "测试", author: "", chapter: "第三章", text: "接连死去的两个队友。", source: "page", locator: "b", progress: 0.4)
         }
-        try await wait { provider.requests.count == 2 }
+        try await eventually { provider.requests.count == 2 }
         XCTAssertEqual(terms, ["林檎", "林檎"])
         XCTAssertTrue(provider.requests[1].turns.last?.content.contains("林檎是心理咨询师。") == true)
         session.stop()
@@ -449,11 +444,11 @@ final class ChatTests: XCTestCase {
             lookups += 1; XCTAssertEqual(term, "白虎"); XCTAssertEqual(context.locator, "snapshot-location")
             return ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "白虎守着测试城门。")], scannedSections: 3, totalSections: 3, complete: true)
         }) { XCTFail("Attached selection is already captured"); return nil }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertTrue(provider.requests[0].turns.last?.content.contains("白虎守着测试城门。") == true)
         provider.continuations[0].finish(throwing: ChatError.interrupted)
-        try await wait { !session.isSending }
-        session.retry(settings: settings); try await wait { provider.requests.count == 2 }
+        try await eventually { !session.isSending }
+        session.retry(settings: settings); try await eventually { provider.requests.count == 2 }
         XCTAssertEqual(lookups, 1); XCTAssertEqual(provider.requests[0].turns, provider.requests[1].turns)
         session.stop()
     }
@@ -467,19 +462,19 @@ final class ChatTests: XCTestCase {
         let session = ReaderChatSession(), gate = ContextGate()
         session.draft = "Why?"
         session.send(settings: settings) { await gate.wait() }
-        try await wait { session.messages.count == 2 }
+        try await eventually { session.messages.count == 2 }
         XCTAssertEqual(session.messages[0].text, "Why?"); XCTAssertTrue(session.messages[0].isUser); XCTAssertNil(session.messages[0].context)
         XCTAssertEqual(session.messages[1].state, .streaming); XCTAssertEqual(session.messages[1].text, "")
         XCTAssertEqual(session.activity, "Reading the page…"); XCTAssertEqual(session.draft, ""); XCTAssertTrue(session.isSending)
         XCTAssertTrue(provider.requests.isEmpty, "Nothing leaves before the passage is attached")
         gate.continuation?.resume(returning: context)
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertEqual(session.messages.count, 2)
         XCTAssertEqual(session.messages[0].context?.text, "The door stayed shut."); XCTAssertNil(session.activity)
         XCTAssertTrue(provider.requests[0].turns.last?.content.contains("The door stayed shut.") == true)
         XCTAssertEqual(provider.requests[0].turns.count, 1, "The placeholder is not part of the conversation sent")
         provider.continuations[0].yield(.text("Because.")); provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
         XCTAssertEqual(session.messages.map(\.text), ["Why?", "Because."]); XCTAssertEqual(session.messages[1].state, .complete)
     }
     func testStoppingWhileThePassageLoadsWithdrawsTheQuestionAndRestoresTheDraft() async throws {
@@ -489,7 +484,7 @@ final class ChatTests: XCTestCase {
         let session = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "book")), gate = ContextGate()
         session.draft = "Why?"
         session.send(settings: settings) { await gate.wait() }
-        try await wait { session.messages.count == 2 }
+        try await eventually { session.messages.count == 2 }
         session.stop()
         XCTAssertEqual(session.messages, []); XCTAssertEqual(session.draft, "Why?"); XCTAssertFalse(session.isSending); XCTAssertNil(session.activity)
         gate.continuation?.resume(returning: context)
@@ -500,9 +495,9 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(reopened.messages, []); XCTAssertEqual(reopened.draft, "Why?")
         // Sending again works and persists the question with its passage.
         session.send(settings: settings) { [self] in context }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         provider.continuations[0].yield(.text("Because.")); provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
         session.flush()
         let again = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "book"))
         XCTAssertEqual(again.messages.map(\.text), ["Why?", "Because."]); XCTAssertEqual(again.messages[0].context?.text, "The door stayed shut.")
@@ -514,7 +509,7 @@ final class ChatTests: XCTestCase {
         session.attachSelection(ReadingChatContext(title: "Book", author: "", chapter: "C", text: "白虎", source: "selection", locator: "private"))
         session.draft = "帮我回忆这个人物"
         session.send(settings: settings, recall: { _, _ in XCTFail("Sharing off must skip local book lookup"); return nil }) { XCTFail("Sharing off must skip passage capture"); return nil }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertFalse(provider.requests[0].turns.last?.content.contains("reading_context") == true)
         session.stop()
     }
@@ -540,25 +535,25 @@ final class ChatTests: XCTestCase {
         let (settings, _, _) = settings(provider)
         let session = ReaderChatSession(); session.draft = "Why is it shut?"
         session.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         XCTAssertTrue(session.isSending)
         provider.continuations[0].yield(.text("The passage "))
-        try await wait { session.messages.last?.text == "The passage " }
+        try await eventually { session.messages.last?.text == "The passage " }
         provider.continuations[0].yield(.text("does not say why."))
         provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
         XCTAssertEqual(session.messages.last?.state, .complete)
         var config = settings.configuration; config.sharePage = false
         try settings.save(config, replacementKey: nil)
         session.draft = "What does that imply?"
         session.send(settings: settings) { XCTFail("Sharing disabled must skip context capture"); return nil }
-        try await wait { provider.requests.count == 2 }
+        try await eventually { provider.requests.count == 2 }
         let followup = provider.requests[1].turns
         XCTAssertEqual(followup.count, 3)
         XCTAssertEqual(followup[1].content, "The passage does not say why.")
         XCTAssertFalse(followup.contains { $0.content.contains("The door stayed shut.") })
         provider.continuations[1].yield(.text("A followup")); provider.continuations[1].yield(.finished(truncated: false)); provider.continuations[1].finish()
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
     }
 
     func testStreamedTextReachesTheHistoryInBatchesAndWaitsWhileScrolling() async throws {
@@ -568,13 +563,13 @@ final class ChatTests: XCTestCase {
         let watching = session.$messages.dropFirst().sink { _ in publishes += 1 }
         defer { watching.cancel() }
         session.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         let before = publishes
         provider.continuations[0].yield(.text("First"))
-        try await wait { session.messages.last?.text == "First" }
+        try await eventually { session.messages.last?.text == "First" }
         XCTAssertEqual(publishes, before + 1, "The first words show at once")
         for index in 1...40 { provider.continuations[0].yield(.text(" w\(index)")) }
-        try await wait { session.messages.last?.text.hasSuffix(" w40") == true }
+        try await eventually { session.messages.last?.text.hasSuffix(" w40") == true }
         XCTAssertLessThanOrEqual(publishes - before, 4, "Forty pieces arriving together reach the history as a batch, not one by one")
         XCTAssertEqual(session.messages.last?.text, "First" + (1...40).map { " w\($0)" }.joined())
 
@@ -590,7 +585,7 @@ final class ChatTests: XCTestCase {
         // Finishing never loses text still waiting in a batch.
         provider.continuations[0].yield(.text(" end"))
         provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
         XCTAssertEqual(session.messages.last?.text, settled + " held end"); XCTAssertEqual(session.messages.last?.state, .complete)
     }
 
@@ -598,9 +593,9 @@ final class ChatTests: XCTestCase {
         let provider = ControlledChatProvider(); let (settings, _, _) = settings(provider)
         let session = ReaderChatSession(); session.draft = "Explain"
         session.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         provider.continuations[0].yield(.text("Partial"))
-        try await wait { session.messages.last?.text == "Partial" }
+        try await eventually { session.messages.last?.text == "Partial" }
         provider.continuations[0].yield(.text(" more"))
         try await Task.sleep(for: .milliseconds(30)) // Received, still in its batch.
         session.stop()
@@ -614,18 +609,18 @@ final class ChatTests: XCTestCase {
         let provider = ControlledChatProvider(); let (settings, _, _) = settings(provider)
         let session = ReaderChatSession(); session.draft = "Explain this"
         session.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         provider.continuations[0].yield(.text("Partial"))
-        try await wait { session.messages.last?.text == "Partial" }
+        try await eventually { session.messages.last?.text == "Partial" }
         session.stop()
         XCTAssertTrue(session.canRetry); XCTAssertEqual(session.messages.last?.state, .stopped)
         provider.continuations[0].yield(.text("Must not appear")); provider.continuations[0].finish()
         session.retry(settings: settings)
-        try await wait { provider.requests.count == 2 }
+        try await eventually { provider.requests.count == 2 }
         XCTAssertEqual(provider.requests[0].turns, provider.requests[1].turns)
         XCTAssertEqual(session.messages.filter(\.isUser).count, 1)
         provider.continuations[1].yield(.text("Complete")); provider.continuations[1].yield(.finished(truncated: false)); provider.continuations[1].finish()
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
         XCTAssertEqual(session.messages.last?.text, "Complete"); XCTAssertFalse(session.canRetry)
     }
 
@@ -633,13 +628,13 @@ final class ChatTests: XCTestCase {
         let provider = ControlledChatProvider(); let (settings, _, _) = settings(provider)
         let session = ReaderChatSession(); session.retryPolicy.delays = []; session.draft = "Explain"
         session.send(settings: settings) { self.context }
-        try await wait { provider.requests.count == 1 }
+        try await eventually { provider.requests.count == 1 }
         provider.continuations[0].yield(.text("Partial")); provider.continuations[0].finish(throwing: URLError(.networkConnectionLost))
-        try await wait { !session.isSending }
+        try await eventually { !session.isSending }
         XCTAssertEqual(session.messages.last?.text, "Partial"); XCTAssertEqual(session.messages.last?.state, .failed)
         XCTAssertNotNil(session.error); XCTAssertTrue(session.canRetry)
         session.retry(settings: settings)
-        try await wait { provider.requests.count == 2 }
+        try await eventually { provider.requests.count == 2 }
         XCTAssertEqual(session.messages.filter(\.isUser).count, 1)
         session.clear(); XCTAssertTrue(session.messages.isEmpty); XCTAssertNil(session.error)
     }

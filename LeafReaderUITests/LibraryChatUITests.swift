@@ -20,10 +20,6 @@ final class LibraryChatUITests: XCTestCase {
     @MainActor private func input(_ app: XCUIApplication) -> XCUIElement {
         app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
     }
-    @MainActor private func capture(_ name: String) {
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
-    }
     @MainActor private func send(_ text: String, app: XCUIApplication) {
         input(app).tap(); input(app).typeText(text); app.buttons["sendReaderChat"].tap()
         let reply = app.textViews.matching(identifier: "chatReply").firstMatch
@@ -176,9 +172,8 @@ final class LibraryChatUITests: XCTestCase {
         app.buttons["closeReaderChat"].tap()
         let card = app.buttons["book-The Art of Noticing"]
         func openRemoval() -> XCUIElement {
-            for _ in 0..<6 where !card.isHittable { app.scrollViews.firstMatch.swipeUp() }
-            XCTAssertTrue(card.isHittable)
-            card.press(forDuration: 1)
+            for _ in 0..<6 where visibleLibraryCardFrame(card, app: app).height < 88 { app.scrollViews.firstMatch.swipeUp() }
+            pressVisibleCentre(of: card, in: app, duration: 1)
             app.buttons["Remove book"].tap()
             let alert = app.alerts.firstMatch
             XCTAssertTrue(alert.waitForExistence(timeout: 5), "Removal uses a centered alert, never a root-anchored popover")
@@ -199,8 +194,8 @@ final class LibraryChatUITests: XCTestCase {
         alert.buttons["Cancel"].tap()
         XCTAssertTrue(card.exists)
         setReaderOrientation(.portrait, app: app)
-        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap()
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Settings"); app.buttons["Night theme"].tap()
+        app.selectTab("Library")
         alert = openRemoval()
         capture("Centered library removal Night portrait")
         alert.buttons["Remove from library"].tap()
@@ -237,11 +232,11 @@ final class LibraryChatUITests: XCTestCase {
         app.sliders["chatButtonTransparency"].adjust(toNormalizedSliderPosition: 0.5)
         capture("Library chat shared transparency settings")
         app.buttons["Close"].tap(); app.buttons["closeReaderChat"].tap()
-        app.tabBars.buttons["Bookmarks"].tap()
+        app.selectTab("Bookmarks")
         // Bookmarks has its own Ask Leaf button; the Library tab's chat closed with its tab.
         XCTAssertTrue(app.buttons["openLibraryChat"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["closeReaderChat"].exists)
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         XCTAssertTrue(app.buttons["openLibraryChat"].exists)
         let search = app.textFields["librarySearch"]
         search.tap(); search.typeText("Coast")
@@ -273,8 +268,8 @@ final class LibraryChatUITests: XCTestCase {
         XCTAssertEqual(launcher.frame.minX, moved.minX, accuracy: 1)
         XCTAssertEqual(launcher.frame.minY, moved.minY, accuracy: 1)
         for theme in ["Day", "Paper", "Night"] {
-            app.tabBars.buttons["Settings"].tap(); app.buttons[theme + " theme"].tap()
-            app.tabBars.buttons["Library"].tap()
+            app.selectTab("Settings"); app.buttons[theme + " theme"].tap()
+            app.selectTab("Library")
             capture(theme + " Library floating button")
             launcher.tap()
             capture(theme + " Library chat")
@@ -294,8 +289,9 @@ final class LibraryChatUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         capture("Library expanded panel with keyboard")
         setReaderOrientation(.landscapeLeft, app: app)
-        XCTAssertTrue(input(app).isHittable)
-        XCTAssertTrue(app.buttons["closeReaderChat"].isHittable)
+        // The panel floats over the navigation bar; check it against the window and keyboard.
+        assertOnScreen(input(app), in: app, overBars: true, "Composer stays above the keyboard in landscape")
+        assertOnScreen(app.buttons["closeReaderChat"], in: app, overBars: true, "Close stays reachable in landscape")
         XCTAssertEqual(input(app).value as? String, "Keep my draft through rotation")
         capture("Library landscape composing")
         app.buttons["Hide keyboard"].tap()
@@ -321,7 +317,7 @@ final class LibraryChatUITests: XCTestCase {
     }
     @MainActor func testDiscoverChatReadsTheOpenBookDetailsPage() {
         let app = launch(environment: ["LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_GRID": "1", "LEAF_UI_CHAT_AGENT": "1"])
-        app.tabBars.buttons["Discover"].tap()
+        app.selectTab("Discover")
         let book = app.buttons["catalogBook-sample"]
         XCTAssertTrue(book.waitForExistence(timeout: 10)); book.tap()
         XCTAssertTrue(app.navigationBars["Book details"].waitForExistence(timeout: 5))
@@ -342,7 +338,7 @@ final class LibraryChatUITests: XCTestCase {
     @MainActor func testDiscoverAndBookmarksChatsReadTheirScreensWhenTheyAnswer() {
         let app = launch(environment: ["LEAF_UI_ZLIB_MOCK": "1", "LEAF_UI_ZLIB_GRID": "1", "LEAF_UI_CHAT_AGENT": "1", "LEAF_UI_SAVED_FIXTURE": "1"])
         registerSceneGeometryCleanup(app: app)
-        app.tabBars.buttons["Discover"].tap()
+        app.selectTab("Discover")
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
         let launcher = app.buttons["openLibraryChat"]
         XCTAssertTrue(launcher.waitForExistence(timeout: 5))
@@ -368,7 +364,7 @@ final class LibraryChatUITests: XCTestCase {
         waitForExpectations(timeout: 10)
         app.buttons["closeReaderChat"].tap()
 
-        app.tabBars.buttons["Bookmarks"].tap()
+        app.selectTab("Bookmarks")
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Fixture bookmark")).firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(launcher.waitForExistence(timeout: 5)); launcher.tap()
         XCTAssertTrue(app.textViews["Summarize the top 5 books"].exists, "Every tab continues the one General chat")

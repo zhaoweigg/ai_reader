@@ -7,7 +7,7 @@ actor UITestBestsellerClient: BestsellerServing {
     func lists(source: BestsellerSource, apiKey: String?) async throws -> [BestsellerList] {
         try await Task.sleep(for: .milliseconds(160)); try Task.checkCancellation()
         attempts[source, default: 0] += 1
-        if UITesting.flag("LEAF_UI_BESTSELLERS_FEED_FAILURE"), attempts[source] == 1 { throw BestsellerFeedError.unavailable }
+        if UITesting.flag(.bestsellersFeedFailure), attempts[source] == 1 { throw BestsellerFeedError.unavailable }
         return BestsellerGenre.allCases.map { genre in
             let values = Self.samples(genre)
             let ordered = source == .nyt ? Array(values.reversed()) : values
@@ -56,8 +56,8 @@ actor UITestBestsellerClient: BestsellerServing {
         return UIImage(contentsOfFile: root.appendingPathComponent("BestsellerFixtures/\(isbn).jpg").path)
     }
     nonisolated static func download(_ book: ZLibraryBook, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL {
-        progress(0.15); try await Task.sleep(for: .milliseconds(UITesting.flag("LEAF_UI_BESTSELLERS_SLOW_DOWNLOAD") ? 8_000 : 800)); try Task.checkCancellation()
-        if UITesting.flag("LEAF_UI_BESTSELLERS_DOWNLOAD_FAILURE") { throw ZLibraryError.service("The fixture download failed. Try again.") }
+        progress(0.15); try await Task.sleep(for: .milliseconds(UITesting.flag(.bestsellersSlowDownload) ? 8_000 : 800)); try Task.checkCancellation()
+        if UITesting.flag(.bestsellersDownloadFailure) { throw ZLibraryError.service("The fixture download failed. Try again.") }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
         let text = "\(book.title)\n\n" + String(repeating: "This original Leaf test passage checks that a discovered book imports and opens with its own saved reading position. ", count: 90)
         try text.write(to: url, atomically: true, encoding: .utf8); progress(1); return url

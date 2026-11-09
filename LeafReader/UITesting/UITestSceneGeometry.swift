@@ -32,7 +32,7 @@ struct UITestSceneGeometryBridge: UIViewRepresentable {
     fileprivate func stop() { unregister() }
     override func didMoveToWindow() {
         super.didMoveToWindow(); unregister()
-        guard window != nil, UITesting.flag("LEAF_UI_SCENE_GEOMETRY_FIXTURE"), let id = UITesting.testID?.uuidString else { return }
+        guard window != nil, UITesting.flag(.sceneGeometryFixture), let id = UITesting.testID?.uuidString else { return }
         isAccessibilityElement = true; accessibilityIdentifier = "uitestSceneGeometry"
         accessibilityLabel = "UI test scene geometry"
         for (direction, _, _) in orientations {

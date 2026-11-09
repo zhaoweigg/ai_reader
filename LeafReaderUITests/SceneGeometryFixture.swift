@@ -6,17 +6,7 @@ extension XCTestCase {
     /// Rendered card geometry is the oracle: on iOS 27.2, a fully visible
     /// SwiftUI card can report isHittable=false and Button.tap can use {-1,-1}.
     @MainActor func visibleLibraryCardFrame(_ card: XCUIElement, app: XCUIApplication) -> CGRect {
-        guard card.exists else { return .zero }
-        let bounds = app.frame
-        var top = bounds.minY, bottom = bounds.maxY
-        let navigation = app.navigationBars.firstMatch
-        if navigation.exists, navigation.frame.height > 0 { top = max(top, navigation.frame.maxY) }
-        let tabBar = app.tabBars.firstMatch
-        if tabBar.exists, tabBar.frame.height > 0 { bottom = min(bottom, tabBar.frame.minY) }
-        let keyboard = app.keyboards.firstMatch
-        if keyboard.exists, keyboard.frame.height > 0 { bottom = min(bottom, keyboard.frame.minY) }
-        let visible = card.frame.intersection(CGRect(x: bounds.minX, y: top, width: bounds.width, height: max(0, bottom - top)))
-        return visible.isNull ? .zero : visible
+        visibleFrame(of: card, in: app)
     }
     @MainActor func tapVisibleLibraryCard(_ card: XCUIElement, app: XCUIApplication) {
         XCTAssertTrue(card.waitForExistence(timeout: 10))

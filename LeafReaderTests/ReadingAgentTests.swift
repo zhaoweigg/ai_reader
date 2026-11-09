@@ -26,7 +26,7 @@ private struct ScriptedTransport: ChatTransport {
 
 /// Replays one scripted round per request and records what each request carried.
 @MainActor
-private final class ScriptedAgentProvider: ToolChatProvider {
+private final class ScriptedAgentProvider: @MainActor ToolChatProvider {
     var rounds: [[AgentEvent]]
     var failure: Error?
     var requests: [(items: [AgentItem], allowTools: Bool, system: String)] = []
@@ -66,12 +66,6 @@ final class ReadingAgentTests: XCTestCase {
     private func boundary(_ sections: [BookTextSection]) -> BookTextBoundary {
         BookTextBoundary(section: 3, offset: ((sections[3].text as NSString).range(of: "[读者在这里]")).location)
     }
-    private func folder() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("LeafAgentTests-\(UUID().uuidString)")
-        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
-        return url
-    }
-
     func testSearchRanksAliasesKeepsFirstMentionAndNeverPassesTheReader() async throws {
         let sections = book(), source = FixtureBookSource(sections)
         let index = BookTextIndex(source: retain(source), directory: nil), limit = boundary(sections)
@@ -87,7 +81,7 @@ final class ReadingAgentTests: XCTestCase {
     }
 
     func testPreparedSectionsAreReusedFromDiskWithoutReadingTheBookAgain() async throws {
-        let sections = book(), directory = try folder(), limit = boundary(sections)
+        let sections = book(), directory = try temporaryFolder(create: false), limit = boundary(sections)
         let first = FixtureBookSource(sections)
         _ = try await BookTextIndex(source: retain(first), directory: directory).prepare(through: limit, deadline: .distantFuture)
         XCTAssertEqual(first.reads, 4)
@@ -239,12 +233,6 @@ final class ReadingAgentTests: XCTestCase {
         try settings.save(configuration, replacementKey: nil)
         return settings
     }
-    private func wait(_ predicate: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(3)
-        while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertTrue(predicate())
-    }
-
     func testSessionRecordsAgentStepsAndFallsBackWhenToolsAreRejected() async throws {
         let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
         let context = ReadingChatContext(title: "测试", author: "", chapter: "第四章", text: "白虎", source: "selection", locator: "here", progress: 0.6)
@@ -255,7 +243,7 @@ final class ReadingAgentTests: XCTestCase {
         var recalls = 0
         session.send(settings: try settings(agent, harness: .agent), recall: { _, _ in recalls += 1; return nil },
                      agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) }) { nil }
-        try await wait { !session.isSending && session.messages.count == 2 }
+        try await eventually { !session.isSending && session.messages.count == 2 }
         XCTAssertEqual(session.messages.last?.text, "守门统领。")
         XCTAssertEqual(session.messages.last?.trace?.harness, .agent)
         XCTAssertTrue(session.messages.last?.trace?.caption.contains("searched “白虎”, “老白”") == true)
@@ -269,7 +257,7 @@ final class ReadingAgentTests: XCTestCase {
             recalls += 1
             return ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "白虎是统领。")], scannedSections: 4, totalSections: 4, complete: true)
         }, agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) }) { nil }
-        try await wait { !fallback.isSending && fallback.messages.count == 2 }
+        try await eventually { !fallback.isSending && fallback.messages.count == 2 }
         XCTAssertEqual(fallback.messages.last?.text, "Evidence answer.")
         XCTAssertEqual(fallback.messages.last?.trace?.fellBack, true)
         XCTAssertEqual(recalls, 1)
@@ -280,7 +268,7 @@ final class ReadingAgentTests: XCTestCase {
         evidence.send(settings: try settings(rejecting, harness: .evidence), recall: { term, _ in
             ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "白虎是统领。")], scannedSections: 4, totalSections: 4, complete: true)
         }) { nil }
-        try await wait { !evidence.isSending && evidence.messages.count == 2 }
+        try await eventually { !evidence.isSending && evidence.messages.count == 2 }
         XCTAssertEqual(evidence.messages.last?.trace?.caption, "Pre-fetched evidence · looked up “白虎” (1)")
     }
 
@@ -294,7 +282,7 @@ final class ReadingAgentTests: XCTestCase {
         session.attachSelection(ReadingChatContext(title: "测试", author: "", chapter: "第四章", text: "白虎", source: "selection", locator: "here", progress: 0.6))
         session.draft = "这是谁"
         session.send(settings: settings, agentBook: agentBook) { nil }
-        try await wait { !session.isSending && session.messages.count == 2 }
+        try await eventually { !session.isSending && session.messages.count == 2 }
         guard case .toolResults(let results) = quiet.requests.first?.items.last else { return XCTFail("The name is searched before the first model request") }
         XCTAssertTrue(results.first?.output.contains("第一章") == true)
         XCTAssertTrue(quiet.requests[0].system.contains("text is exactly what the reader highlighted"))
@@ -304,7 +292,7 @@ final class ReadingAgentTests: XCTestCase {
         session.send(settings: settings, agentBook: agentBook) {
             ReadingChatContext(title: "测试", author: "", chapter: "第四章", text: "大家都在大厅里。", source: "page", locator: "here", progress: 0.6)
         }
-        try await wait { !session.isSending && session.messages.count == 4 }
+        try await eventually { !session.isSending && session.messages.count == 4 }
         guard case .toolCalls(_, let calls) = quiet.requests[1].items.dropLast().last else { return XCTFail("The follow-up subject is searched") }
         XCTAssertEqual(calls.first?.arguments, #"{"terms":["白虎"]}"#)
         XCTAssertFalse(quiet.requests[1].items.contains { if case .toolCalls(_, let calls) = $0 { return calls.contains { $0.arguments.contains("再说一遍") } }; return false })
@@ -376,7 +364,7 @@ final class ReadingAgentTests: XCTestCase {
 
     func testAgentAnswerIsTracedWithStepsTimingAndTokensAndKeptOnDevice() async throws {
         let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
-        let directory = try folder(), store = AgentTraceStore(directory: directory)
+        let directory = try temporaryFolder(create: false), store = AgentTraceStore(directory: directory)
         let call = AgentToolCall(id: "c1", name: "read_passage", arguments: #"{"section":0}"#)
         let provider = ScriptedAgentProvider([[.text("Let me check."), .toolCall(call), .usage(TokenUsage(input: 1000, output: 20)), .finished(truncated: false)],
                                               [.text("守门统领。"), .usage(TokenUsage(input: 1500, output: 8, cachedInput: 900)), .finished(truncated: false)]])
@@ -385,7 +373,7 @@ final class ReadingAgentTests: XCTestCase {
         session.draft = "这是谁"
         session.send(settings: try settings(provider, harness: .agent), agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) },
                      traces: store) { nil }
-        try await wait { !session.isSending && store.traces.count == 1 }
+        try await eventually { !session.isSending && store.traces.count == 1 }
         let trace = try XCTUnwrap(store.traces.first)
         // Each request attempt is recorded too (start and outcome) since automatic retry.
         let steps = trace.steps.filter { $0.kind != .request }
@@ -528,7 +516,7 @@ final class ReadingAgentTests: XCTestCase {
         session.draft = "Summarize the top 5 recommendations"
         session.send(settings: try settings(agent, harness: .agent), missingContextNotice: nil,
                      screen: screen(books, details: ["rank": 1, "title": "Book 1", "description": "A described book."])) { nil }
-        try await wait { !session.isSending && session.messages.count == 2 }
+        try await eventually { !session.isSending && session.messages.count == 2 }
         XCTAssertEqual(session.messages.last?.text, "1. Book 1 — a summary.")
         XCTAssertEqual(agent.offered.first, ["search_conversation", "get_current_view", "get_item_details"])
         XCTAssertTrue(agent.requests[0].system.contains("from the Discover screen") && agent.requests[0].system.contains("call get_current_view first"))
@@ -544,7 +532,7 @@ final class ReadingAgentTests: XCTestCase {
         let evidence = ReaderChatSession()
         evidence.draft = "Summarize the top 5 recommendations"
         evidence.send(settings: try settings(plain, harness: .evidence), missingContextNotice: nil, screen: screen(books)) { nil }
-        try await wait { !evidence.isSending && evidence.messages.count == 2 }
+        try await eventually { !evidence.isSending && evidence.messages.count == 2 }
         let request = try XCTUnwrap(plain.plainRequests.first)
         XCTAssertTrue(request.system.contains("comes with current_screen"))
         XCTAssertTrue(request.turns.last?.content.hasPrefix("current_screen (source material") == true)

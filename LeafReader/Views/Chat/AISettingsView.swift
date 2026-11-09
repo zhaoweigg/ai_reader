@@ -20,9 +20,13 @@ struct AISettingsView: View {
                         TextField("Model ID", text: $configuration.profile.model)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("aiModel")
                         if configuration.provider == .anthropic {
-                            Menu("Choose a Haiku model") {
+                            Menu {
                                 Button("Haiku 5.5") { configuration.profile.model = "claude-haiku-5-5" }
                                 Button("Haiku 4.5") { configuration.profile.model = "claude-haiku-4-5" }
+                            } label: {
+                                // Fill the row: on iOS 27 a Form menu row only opens from its
+                                // text, so a tap on the row's empty side did nothing.
+                                Text("Choose a Haiku model").frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                             }
                         }
                         TextField("Full HTTPS endpoint", text: $configuration.profile.endpoint, axis: .vertical)

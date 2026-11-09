@@ -84,20 +84,9 @@ final class ChatRetryTests: XCTestCase {
         try value.save(configuration, replacementKey: nil)
         return value
     }
-    private func wait(_ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(3)
-        while !condition(), Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
-        XCTAssertTrue(condition())
-    }
     private var context: ReadingChatContext {
         .init(title: "Book", author: "Author", chapter: "Chapter 1", text: "Original passage", source: "selection", locator: "private-locator", progress: 0.2)
     }
-    private func folder() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("RetryTests-\(UUID())")
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: url) }; return url
-    }
-
     // MARK: Leaving the screen mid-reply
 
     private let socketAbort = NSError(domain: NSPOSIXErrorDomain, code: 53, userInfo: [NSLocalizedDescriptionKey: "Software caused connection abort"])
@@ -111,7 +100,7 @@ final class ChatRetryTests: XCTestCase {
         provider.replies = [.init(error: socketAbort), .init(events: [.text("Recovered"), .finished(truncated: false)])]
         let session = ReaderChatSession(); session.retryPolicy = immediate; session.draft = "Why?"
         session.send(settings: try settings(provider)) { self.context }
-        try await wait { !session.isSending }
+        try await eventually(interval: 0.005) { !session.isSending }
         XCTAssertEqual(session.messages.last?.text, "Recovered"); XCTAssertNil(session.error)
     }
 
@@ -125,14 +114,14 @@ final class ChatRetryTests: XCTestCase {
         session.appInBackground = { background }
         session.send(settings: try settings(provider)) { self.context }
         background = true; session.appDidEnterBackground()
-        try await wait { !session.isSending }
+        try await eventually(interval: 0.005) { !session.isSending }
         XCTAssertNil(session.error, "No error for a reply cut off by leaving the screen")
         XCTAssertTrue(session.notice?.contains("continues when you come back") == true)
         XCTAssertEqual(session.messages.last?.state, .failed)
         XCTAssertEqual(provider.plainRequests.count, 3)
 
         background = false; session.appWillEnterForeground()
-        try await wait { session.messages.last?.text == "Whole answer" && !session.isSending }
+        try await eventually(interval: 0.005) { session.messages.last?.text == "Whole answer" && !session.isSending }
         XCTAssertEqual(provider.plainRequests.count, 4)
         XCTAssertEqual(provider.plainRequests.last?.turns.last?.content, provider.plainRequests.first?.turns.last?.content, "The same question is asked again")
         XCTAssertEqual(session.messages.count, 2, "The cut-off reply is replaced, not kept beside the new one")
@@ -147,7 +136,7 @@ final class ChatRetryTests: XCTestCase {
         session.appInBackground = { false }
         session.send(settings: try settings(provider)) { self.context }
         session.appDidEnterBackground()
-        try await wait { session.messages.last?.text == "Continued" && !session.isSending }
+        try await eventually(interval: 0.005) { session.messages.last?.text == "Continued" && !session.isSending }
         XCTAssertNil(session.error); XCTAssertEqual(provider.plainRequests.count, 4)
     }
 
@@ -159,7 +148,7 @@ final class ChatRetryTests: XCTestCase {
         session.appInBackground = { background }
         session.send(settings: try settings(refused)) { self.context }
         background = true; session.appDidEnterBackground()
-        try await wait { !session.isSending }
+        try await eventually(interval: 0.005) { !session.isSending }
         XCTAssertNotNil(session.error)
         background = false; session.appWillEnterForeground()
         XCTAssertEqual(refused.plainRequests.count, 1)
@@ -169,7 +158,7 @@ final class ChatRetryTests: XCTestCase {
         let staying = ReaderChatSession(); staying.retryPolicy = immediate; staying.draft = "Why?"
         staying.appInBackground = { false }
         staying.send(settings: try settings(offline)) { self.context }
-        try await wait { !staying.isSending }
+        try await eventually(interval: 0.005) { !staying.isSending }
         XCTAssertEqual(staying.error, "The connection was lost. Check your internet connection and retry.")
 
         // Closing the chat while waiting to continue drops the continue.
@@ -179,7 +168,7 @@ final class ChatRetryTests: XCTestCase {
         closing.appInBackground = { away }
         closing.send(settings: try settings(dropped)) { self.context }
         away = true; closing.appDidEnterBackground()
-        try await wait { !closing.isSending }
+        try await eventually(interval: 0.005) { !closing.isSending }
         closing.close()
         away = false; closing.appWillEnterForeground()
         XCTAssertFalse(closing.isSending); XCTAssertEqual(dropped.plainRequests.count, 3)
@@ -195,7 +184,7 @@ final class ChatRetryTests: XCTestCase {
         let settings = try settings(provider)
         var captures = 0
         session.send(settings: settings) { captures += 1; return self.context }
-        try await wait { !session.isSending }
+        try await eventually(interval: 0.005) { !session.isSending }
         XCTAssertEqual(captures, 1)
         guard transport.requests.count == 2 else { return XCTFail("Expected two transport attempts; got \(transport.requests.count), error: \(session.error ?? "none")") }
         XCTAssertEqual(transport.requests[0].httpBody, transport.requests[1].httpBody)
@@ -205,7 +194,7 @@ final class ChatRetryTests: XCTestCase {
     func testInterruptedStreamReplacesPartialAndPersistsOneFrozenQuestion() async throws {
         let provider = RetryProvider(); provider.replies = [.init(events: [.text("Discard this partial")], error: ChatError.interrupted),
                                                            .init(events: [.text("Replacement answer"), .finished(truncated: false)])]
-        let storage = try ChatHistoryStore(directory: folder(), conversation: "retry")
+        let storage = try ChatHistoryStore(directory: temporaryFolder("RetryTests"), conversation: "retry")
         let session = ReaderChatSession(history: storage); session.retryPolicy = immediate
         let settings = try settings(provider)
         session.attachSelection(context); session.draft = "Original question"
@@ -215,7 +204,7 @@ final class ChatRetryTests: XCTestCase {
             session.draft = "New unsent draft"; session.attachSelection(self.contextWithNewText())
         }
         session.send(settings: settings) { XCTFail("Must reuse attached selection"); return nil }
-        try await wait { !session.isSending }
+        try await eventually(interval: 0.005) { !session.isSending }
         XCTAssertEqual(provider.plainRequests[0].turns, provider.plainRequests[1].turns)
         XCTAssertEqual(session.messages.count, 2); XCTAssertEqual(session.messages.last?.text, "Replacement answer")
         XCTAssertEqual(replyIDs, [session.messages.last!.id]); XCTAssertEqual(session.draft, "New unsent draft")
@@ -233,10 +222,10 @@ final class ChatRetryTests: XCTestCase {
         let session = ReaderChatSession(); session.retryPolicy = immediate; session.draft = "Why?"
         let settings = try settings(provider)
         session.send(settings: settings) { self.context }
-        try await wait { !session.isSending }
+        try await eventually(interval: 0.005) { !session.isSending }
         XCTAssertEqual(provider.plainRequests.count, 3); XCTAssertEqual(session.messages.last?.text, "Partial 3")
         XCTAssertTrue(session.canRetry); XCTAssertNotNil(session.error)
-        session.retry(settings: settings); try await wait { !session.isSending }
+        session.retry(settings: settings); try await eventually(interval: 0.005) { !session.isSending }
         XCTAssertEqual(session.messages.count, 2); XCTAssertEqual(session.messages.last?.text, "Manual recovery")
         XCTAssertEqual(provider.plainRequests[0].turns, provider.plainRequests[3].turns)
     }
@@ -250,12 +239,12 @@ final class ChatRetryTests: XCTestCase {
                 sleeping = true
                 do { try await Task.sleep(for: .seconds(30)) } catch { cancelled = true; throw error }
             }
-            let settings = try settings(provider, traced: true), traces = AgentTraceStore(directory: try folder())
+            let settings = try settings(provider, traced: true), traces = AgentTraceStore(directory: try temporaryFolder("RetryTests"))
             session.send(settings: settings, traces: traces) { self.context }
-            try await wait { sleeping }
+            try await eventually(interval: 0.005) { sleeping }
             XCTAssertTrue(session.activity?.contains("Retrying (1/2)") == true)
             if close { session.close() } else { session.stop() }
-            try await wait { cancelled }
+            try await eventually(interval: 0.005) { cancelled }
             XCTAssertFalse(session.isSending); XCTAssertEqual(provider.requests.count, 1); XCTAssertTrue(session.canRetry)
             XCTAssertEqual(traces.traces.first?.outcome, .stopped)
         }
@@ -265,8 +254,8 @@ final class ChatRetryTests: XCTestCase {
         let provider = RetryProvider(); provider.hold = true
         let session = ReaderChatSession(); session.draft = "Why?"; session.retryPolicy = immediate
         session.send(settings: try settings(provider)) { self.context }
-        try await wait { provider.held != nil }
-        provider.held?.yield(.text("Before stop")); try await wait { session.messages.last?.text == "Before stop" }
+        try await eventually(interval: 0.005) { provider.held != nil }
+        provider.held?.yield(.text("Before stop")); try await eventually(interval: 0.005) { session.messages.last?.text == "Before stop" }
         session.close(); provider.held?.yield(.text("Late")); provider.held?.finish(throwing: URLError(.networkConnectionLost))
         await Task.yield()
         XCTAssertEqual(provider.plainRequests.count, 1); XCTAssertEqual(session.messages.last?.text, "Before stop")
@@ -384,12 +373,12 @@ final class ChatRetryTests: XCTestCase {
             let drawn = picture()
             let provider = RetryProvider()
             provider.replies = [.init(events: [.imageStarted, .image(drawn), .text("Here is the harbor."), .finished(truncated: false)])]
-            let directory = try folder(), pictures = directory.appendingPathComponent("Images")
+            let directory = try temporaryFolder("RetryTests"), pictures = directory.appendingPathComponent("Images")
             let session = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "pictures"), imageDirectory: pictures)
             session.retryPolicy = immediate
             session.draft = "Draw the harbor"
             session.send(settings: try settings(provider, traced: traced)) { self.context }
-            try await wait { !session.isSending }
+            try await eventually(interval: 0.005) { !session.isSending }
             let reply = try XCTUnwrap(session.messages.last)
             XCTAssertNil(session.error, "traced=\(traced)"); XCTAssertEqual(reply.state, .complete)
             XCTAssertEqual(reply.text, "Here is the harbor."); XCTAssertEqual(reply.images?.count, 1)
@@ -415,12 +404,12 @@ final class ChatRetryTests: XCTestCase {
         let provider = RetryProvider()
         provider.replies = [.init(events: [.imageStarted, .image(first)], error: ChatError.interrupted),
                             .init(events: [.imageStarted, .image(second), .finished(truncated: false)])]
-        let directory = try folder(), pictures = directory.appendingPathComponent("Images")
+        let directory = try temporaryFolder("RetryTests"), pictures = directory.appendingPathComponent("Images")
         let session = ReaderChatSession(history: try ChatHistoryStore(directory: directory, conversation: "alone"), imageDirectory: pictures)
         session.retryPolicy = immediate
         session.draft = "Just the picture"
         session.send(settings: try settings(provider)) { self.context }
-        try await wait { !session.isSending }
+        try await eventually(interval: 0.005) { !session.isSending }
         let reply = try XCTUnwrap(session.messages.last)
         XCTAssertNil(session.error); XCTAssertEqual(reply.state, .complete); XCTAssertEqual(reply.text, "")
         XCTAssertEqual(reply.images?.count, 1, "The interrupted attempt's picture is replaced, not kept beside the new one")
@@ -434,11 +423,11 @@ final class ChatRetryTests: XCTestCase {
         for (question, traced, explained) in [("根据本章内容生成一张图片", true, true), ("画一只在海边的猫", false, true), ("Draw the harbor", false, true), ("这是谁", true, false)] {
             let provider = RetryProvider()
             provider.replies = [.init(events: [.imageToolRefused(reason), .text("我现在无法直接生成图片。"), .finished(truncated: false)])]
-            let traces = AgentTraceStore(directory: try folder())
+            let traces = AgentTraceStore(directory: try temporaryFolder("RetryTests"))
             let session = ReaderChatSession(); session.retryPolicy = immediate
             session.draft = question
             session.send(settings: try settings(provider, traced: traced), traces: traces) { self.context }
-            try await wait { !session.isSending }
+            try await eventually(interval: 0.005) { !session.isSending }
             XCTAssertEqual(session.messages.last?.state, .complete, question); XCTAssertNil(session.error, question)
             if explained {
                 XCTAssertEqual(session.notice, "This model or ChatGPT plan didn’t accept drawing (\(reason)), so Leaf answered in words.", question)
@@ -452,7 +441,7 @@ final class ChatRetryTests: XCTestCase {
         XCTAssertTrue(ReaderChatSession.asksForPicture("Could you sketch the scene?"))
     }
     func testPictureStoreAcceptsOnlyItsOwnNamesAndRealImages() throws {
-        let directory = try folder()
+        let directory = try temporaryFolder("RetryTests")
         XCTAssertThrowsError(try ChatImageStore.save(Data("not a picture".utf8), in: directory))
         XCTAssertThrowsError(try ChatImageStore.save(Data([0xFF, 0xD8, 0xFF, 0x00]), in: directory), "A JPEG header alone is not a picture")
         let name = try ChatImageStore.save(picture(), in: directory)
