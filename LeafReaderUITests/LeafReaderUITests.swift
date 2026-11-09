@@ -1281,8 +1281,15 @@ final class LeafReaderUITests: XCTestCase {
         // portrait transform after a public scene-geometry request. Use the
         // measured scene frame, as the native handle drags below do.
         let frame = paragraph.frame
-        let point = CGPoint(x: frame.minX + frame.width * (pdf ? pdfWordOffset : 0.3),
+        var point = CGPoint(x: frame.minX + frame.width * (pdf ? pdfWordOffset : 0.3),
                             y: frame.minY + frame.height * (pdf ? 0.25 : 0.1))
+        if app.frame.width > app.frame.height {
+            // Landscape lays a web paragraph across two columns, so its frame is the box
+            // around both parts and its top edge is blank space in the first column; a PDF
+            // line can start above the visible page. Press the middle of the visible part.
+            let visible = frame.intersection(readingSurface(app).frame)
+            if !visible.isNull { point = CGPoint(x: visible.minX + visible.width * (pdf ? pdfWordOffset : 0.3), y: visible.midY) }
+        }
         XCTAssertTrue(readingSurface(app).frame.contains(point), "The real long press must target visible book text")
         let chat = app.otherElements["readerChatPanel"]
         XCTAssertFalse(chat.exists && chat.frame.contains(point), "Selection setup must not press the chat panel")
