@@ -265,7 +265,7 @@ final class ZLibraryUITests: XCTestCase {
             for _ in 0..<4 { scroll.swipeUp() }
             capture("Thumbnail cache scrolled pass \(pass + 1)")
             top()
-            XCTAssertTrue(app.buttons["catalogBook-cover0"].isHittable)
+            assertOnScreen(app.buttons["catalogBook-cover0"], in: app, "The first cover is shown again at the top")
             XCTAssertEqual(value("first"), originalFirstTransfers)
         }
         capture("Thumbnail cache returned first row")
@@ -290,7 +290,7 @@ final class ZLibraryUITests: XCTestCase {
         openDiscover(app); settled()
         browse("Most popular", app: app); settled()
         capture("Thumbnail cache popular Night portrait")
-        app.buttons["zlibraryRefresh"].tap(); waitForCatalogLoad(app); settled()
+        revealCatalogElement(app.buttons["zlibraryRefresh"], app: app); app.buttons["zlibraryRefresh"].leafTapVisible(in: app); waitForCatalogLoad(app); settled()
         XCTAssertEqual(value("first"), originalFirstTransfers)
         app.terminate()
     }
@@ -379,7 +379,11 @@ final class ZLibraryUITests: XCTestCase {
                 return XCTFail("Catalog element disappeared while revealing it. Load trace: \(trace.exists ? trace.label : "unavailable")")
             }
             let rect = element.frame, viewport = app.leafContentViewport
-            if rect.width > 1 && rect.height > 1 && viewport.contains(rect) { return }
+            // The floating Ask Leaf button sits over scrolling content; a control under
+            // it is not reachable, so move the content until the control is clear of it.
+            let cover = ["openLibraryChat", "openLibraryThemes"].map { app.buttons[$0] }.first { $0.exists && $0.frame.intersects(rect) }
+            if rect.width > 1 && rect.height > 1 && viewport.contains(rect) && cover == nil { return }
+            if let cover, viewport.contains(rect) { app.leafDragContent(up: cover.frame.midY >= rect.midY, in: scroll); continue }
             app.leafDragContent(up: rect.maxY > viewport.maxY, in: scroll)
         }
         XCTFail("Catalog element remains outside visible content: \(element.frame), viewport \(app.leafContentViewport)")
@@ -454,7 +458,7 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 5))
         browse("Recommended", app: app)
         XCTAssertTrue(card.waitForExistence(timeout: 5))
-        app.buttons["zlibraryRefresh"].tap()
+        revealCatalogElement(app.buttons["zlibraryRefresh"], app: app); app.buttons["zlibraryRefresh"].leafTapVisible(in: app)
         waitForCatalogLoad(app)
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         app.terminate(); app.launch(); setReaderOrientation(.portrait, app: app)
@@ -862,7 +866,7 @@ final class ZLibraryUITests: XCTestCase {
             }
             capture("Saved lists after ten view switches \(landscape ? "landscape" : "portrait")")
             // A deliberate refresh still performs a request and presents the real failure.
-            app.buttons["zlibraryRefresh"].tap()
+            revealCatalogElement(app.buttons["zlibraryRefresh"], app: app); app.buttons["zlibraryRefresh"].leafTapVisible(in: app)
             XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
             XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "browser access check")).firstMatch.exists)
             let message = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "browser access check")).firstMatch
@@ -1071,10 +1075,12 @@ final class ZLibraryUITests: XCTestCase {
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 5)
         XCTAssertTrue(recommended.waitForExistence(timeout: 5))
         let library = app.scrollViews.firstMatch
-        for _ in 0..<6 where !recommended.isHittable {
+        // Geometry, not isHittable: a fully shown shelf card can report unhittable on iOS 27.2.
+        for _ in 0..<6 where visibleFrame(of: recommended, in: app).height < 44 {
             library.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)).press(forDuration: 0, thenDragTo: library.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
         }
-        XCTAssertTrue(recommended.isHittable)
+        let shown = visibleFrame(of: recommended, in: app)
+        XCTAssertTrue(shown.width >= 44 && shown.height >= 44, "The recommended shelf book is on screen in landscape: \(recommended.frame), visible \(shown)")
         capture("Library recommendations shelf Night landscape")
         setReaderOrientation(.portrait, app: app)
         app.terminate(); app.launch(); setReaderOrientation(.portrait, app: app)
