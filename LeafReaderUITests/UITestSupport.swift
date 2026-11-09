@@ -41,6 +41,16 @@ extension XCTestCase {
         XCTAssertEqual(visible.height, frame.height, accuracy: 1, message + " (clipped vertically)", file: file, line: line)
     }
 
+    /// Taps the centre of the visible part of `element`. On iOS 27.2 XCUITest's own
+    /// tap on some SwiftUI rows (a Form Menu row) lands nowhere and does nothing.
+    @MainActor func tapVisibleCentre(of element: XCUIElement, in app: XCUIApplication) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        let visible = visibleFrame(of: element, in: app)
+        XCTAssertGreaterThanOrEqual(visible.width, 20); XCTAssertGreaterThanOrEqual(visible.height, 20)
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: visible.midX - app.frame.minX, dy: visible.midY - app.frame.minY)).tap()
+    }
+
     /// Presses the centre of the visible part of `element`, for long presses on
     /// controls whose own hit point is unreliable (see `visibleFrame`).
     @MainActor func pressVisibleCentre(of element: XCUIElement, in app: XCUIApplication, duration: TimeInterval) {

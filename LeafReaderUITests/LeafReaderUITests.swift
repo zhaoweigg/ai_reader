@@ -113,6 +113,9 @@ final class LeafReaderUITests: XCTestCase {
         for _ in 0..<20 {
             // Geometry, not isHittable: iOS 27.2 reports visible Form rows as unhittable.
             if row.exists, row.frame.height > 0, row.frame.minY >= top, row.frame.maxY <= bottom { return }
+            // The last rows of a form cannot scroll into the margins; fully visible
+            // below the navigation bar and above the tab bar is on screen too.
+            if row.exists, row.frame.height > 0, visibleFrame(of: row, in: app).height >= row.frame.height - 1 { return }
             let up = !row.exists || row.frame.maxY > bottom
             if row.exists, row.frame == last { held.toggle() }
             last = row.exists ? row.frame : nil
@@ -121,7 +124,7 @@ final class LeafReaderUITests: XCTestCase {
             if held { start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2) }
             else { start.press(forDuration: 0, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0) }
         }
-        XCTAssertTrue(row.exists && row.frame.minY >= top && row.frame.maxY <= bottom, "Could not reveal \(row.identifier): \(row.exists ? "\(row.frame)" : "absent") within \(top)...\(bottom)")
+        XCTAssertTrue(row.exists && (row.frame.minY >= top && row.frame.maxY <= bottom || visibleFrame(of: row, in: app).height >= row.frame.height - 1), "Could not reveal \(row.identifier): \(row.exists ? "\(row.frame)" : "absent") within \(top)...\(bottom)")
     }
 
     @MainActor private func revealAppearanceControl(_ app: XCUIApplication, _ control: XCUIElement) {
@@ -1280,7 +1283,15 @@ final class LeafReaderUITests: XCTestCase {
         // Web content's element-relative coordinates can retain the physical
         // portrait transform after a public scene-geometry request. Use the
         // measured scene frame, as the native handle drags below do.
-        let frame = paragraph.frame
+        var frame = paragraph.frame
+        if pdf, app.frame.width > app.frame.height, frame.minY < readingSurface(app).frame.minY + 60 {
+            // A line at the top edge of the landscape page lies in the system's edge-gesture
+            // zone, where a long press never reaches the page. Scroll it down first.
+            let surface = readingSurface(app)
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+                .press(forDuration: 0, thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)), withVelocity: .slow, thenHoldForDuration: 0)
+            frame = paragraph.frame
+        }
         var point = CGPoint(x: frame.minX + frame.width * (pdf ? pdfWordOffset : 0.3),
                             y: frame.minY + frame.height * (pdf ? 0.25 : 0.1))
         if app.frame.width > app.frame.height {
@@ -4052,8 +4063,14 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons[flow == "Library" ? "openLibraryChat" : "openReaderChat"].tap()
         XCTAssertTrue(picture.waitForExistence(timeout: 8), "The saved picture comes back with the conversation")
         orient(.landscapeLeft)
-        for _ in 0..<3 where !picture.isHittable { history.swipeDown(velocity: .slow) }
-        XCTAssertTrue(picture.isHittable, "The picture can be reached in landscape")
+        // The picture is taller than the landscape history; reached means a usable
+        // part of it is shown inside the history (geometry, not isHittable, on 27.2).
+        func pictureReached() -> Bool {
+            let shown = picture.frame.intersection(history.frame)
+            return picture.exists && !shown.isNull && shown.height >= min(picture.frame.height, 44) && shown.width >= min(picture.frame.width, 44)
+        }
+        for _ in 0..<3 where !pictureReached() { history.swipeDown(velocity: .slow) }
+        XCTAssertTrue(pictureReached(), "The picture can be reached in landscape: \(picture.frame) in \(history.frame)")
         XCTAssertTrue(history.frame.intersects(picture.frame), "In landscape the picture is drawn inside the chat history")
         XCTAssertLessThanOrEqual(picture.frame.width, history.frame.width + 1)
         capture(flow + " generated picture landscape")
@@ -4353,7 +4370,7 @@ final class LeafReaderUITests: XCTestCase {
         let model = app.textFields["aiModel"]
         XCTAssertTrue(model.waitForExistence(timeout: 5))
         XCTAssertEqual(model.value as? String, "claude-haiku-5-5")
-        app.buttons["Choose a Haiku model"].tap()
+        tapVisibleCentre(of: app.buttons["Choose a Haiku model"], in: app)
         // The menu animates in; wait for its item as the catalog's order menu does.
         let haiku = app.buttons["Haiku 4.5"].firstMatch
         XCTAssertTrue(haiku.waitForExistence(timeout: 5)); haiku.tap()

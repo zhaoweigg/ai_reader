@@ -290,7 +290,7 @@ final class ZLibraryUITests: XCTestCase {
         openDiscover(app); settled()
         browse("Most popular", app: app); settled()
         capture("Thumbnail cache popular Night portrait")
-        revealCatalogElement(app.buttons["zlibraryRefresh"], app: app); app.buttons["zlibraryRefresh"].leafTapVisible(in: app); waitForCatalogLoad(app); settled()
+        tapRefresh(app); waitForCatalogLoad(app); settled()
         XCTAssertEqual(value("first"), originalFirstTransfers)
         app.terminate()
     }
@@ -379,14 +379,25 @@ final class ZLibraryUITests: XCTestCase {
                 return XCTFail("Catalog element disappeared while revealing it. Load trace: \(trace.exists ? trace.label : "unavailable")")
             }
             let rect = element.frame, viewport = app.leafContentViewport
-            // The floating Ask Leaf button sits over scrolling content; a control under
-            // it is not reachable, so move the content until the control is clear of it.
-            let cover = ["openLibraryChat", "openLibraryThemes"].map { app.buttons[$0] }.first { $0.exists && $0.frame.intersects(rect) }
-            if rect.width > 1 && rect.height > 1 && viewport.contains(rect) && cover == nil { return }
-            if let cover, viewport.contains(rect) { app.leafDragContent(up: cover.frame.midY >= rect.midY, in: scroll); continue }
+            if rect.width > 1 && rect.height > 1 && viewport.contains(rect) { return }
             app.leafDragContent(up: rect.maxY > viewport.maxY, in: scroll)
         }
         XCTFail("Catalog element remains outside visible content: \(element.frame), viewport \(app.leafContentViewport)")
+    }
+    /// Taps Refresh after scrolling it clear of the floating Ask Leaf button, which sits
+    /// over scrolling content and can cover it in landscape. Zero-hold drags scroll.
+    @MainActor private func tapRefresh(_ app: XCUIApplication) {
+        let refresh = app.buttons["zlibraryRefresh"]
+        revealCatalogElement(refresh, app: app)
+        let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
+        func covered() -> Bool { ["openLibraryChat", "openLibraryThemes"].contains { app.buttons[$0].exists && app.buttons[$0].frame.intersects(refresh.frame.insetBy(dx: -4, dy: -4)) } }
+        for _ in 0..<4 where covered() {
+            scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.7))
+                .press(forDuration: 0, thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0)
+        }
+        XCTAssertFalse(covered(), "Refresh stays under Ask Leaf: \(refresh.frame)")
+        revealCatalogElement(refresh, app: app)
+        refresh.leafTapVisible(in: app)
     }
     @MainActor private func search(_ query: String, app: XCUIApplication) {
         let field = app.textFields["zlibrarySearchField"]
@@ -457,7 +468,7 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 5))
         browse("Recommended", app: app)
         XCTAssertTrue(card.waitForExistence(timeout: 5))
-        revealCatalogElement(app.buttons["zlibraryRefresh"], app: app); app.buttons["zlibraryRefresh"].leafTapVisible(in: app)
+        tapRefresh(app)
         waitForCatalogLoad(app)
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         app.terminate(); app.launch(); setReaderOrientation(.portrait, app: app)
@@ -865,7 +876,7 @@ final class ZLibraryUITests: XCTestCase {
             }
             capture("Saved lists after ten view switches \(landscape ? "landscape" : "portrait")")
             // A deliberate refresh still performs a request and presents the real failure.
-            revealCatalogElement(app.buttons["zlibraryRefresh"], app: app); app.buttons["zlibraryRefresh"].leafTapVisible(in: app)
+            tapRefresh(app)
             XCTAssertTrue(app.buttons["zlibraryCheckWebsite"].waitForExistence(timeout: 10))
             XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "browser access check")).firstMatch.exists)
             let message = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "browser access check")).firstMatch
