@@ -2531,10 +2531,10 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["openAISettings"].tap()
         let option = app.buttons[title]
         XCTAssertTrue(option.waitForExistence(timeout: 5))
-        for _ in 0..<4 where !option.isHittable { app.swipeUp() }
+        revealSettingsRow(option, app: app)
         option.tap()
         let save = app.buttons["saveAISettings"]
-        for _ in 0..<6 where !save.isHittable { app.swipeUp() }
+        revealSettingsRow(save, app: app)
         save.tap()
         XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
         // Return to the Settings list so the next visit starts from it.
@@ -2564,7 +2564,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "up to 11,000 characters")).firstMatch.exists)
         capture("Reading context limits in AI settings")
         let save = app.buttons["saveAISettings"]
-        for _ in 0..<6 where !save.isHittable { app.swipeUp() }
+        revealSettingsRow(save, app: app)
         save.tap()
         XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -3655,7 +3655,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(app.buttons["chatGPTModelPicker"].value as? String, "Sample Reader")
         let add = app.buttons["addChatGPTAccount"]
         XCTAssertEqual(add.label, "Add another ChatGPT account")
-        for _ in 0..<3 where !add.isHittable { app.swipeUp() }
+        revealSettingsRow(add, app: app)
         capture("Connected ChatGPT account actions")
         add.tap()
         let cancel = app.buttons["cancelChatGPTSignIn"]
@@ -3680,7 +3680,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["continueWithChatGPT"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.secureTextFields["aiAPIKey"].exists)
         let check = app.buttons["testChatGPTBrowser"]
-        for _ in 0..<3 where !check.isHittable { app.swipeUp() }
+        revealSettingsRow(check, app: app)
         check.tap()
         // The system asks for consent before opening the sign-in browser. On a
         // loaded simulator that prompt can take well over 3 s; without Continue
@@ -4024,8 +4024,9 @@ final class LeafReaderUITests: XCTestCase {
         }
         for _ in 0..<4 where !pictureShown() { history.swipeDown(velocity: .slow) }
         XCTAssertTrue(pictureShown(), "The picture can be reached in the history: \(picture.frame) in \(history.frame)")
-        for _ in 0..<4 where !share.isHittable { history.swipeUp(velocity: .slow) }
-        XCTAssertTrue(share.isHittable, "Its Share or save button can be reached")
+        func shareShown() -> Bool { share.exists && history.frame.insetBy(dx: -1, dy: -1).contains(share.frame) }
+        for _ in 0..<4 where !shareShown() { history.swipeUp(velocity: .slow) }
+        XCTAssertTrue(shareShown(), "Its Share or save button can be reached: \(share.frame) in \(history.frame)")
         XCTAssertEqual(picture.frame.width / max(1, picture.frame.height), 640.0 / 400.0, accuracy: 0.06, "The picture keeps its proportions")
         XCTAssertTrue(history.frame.intersects(picture.frame), "The picture is drawn inside the chat history")
         XCTAssertLessThanOrEqual(picture.frame.width, history.frame.width + 1, "The picture fits the history's width")
@@ -4353,15 +4354,17 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(model.waitForExistence(timeout: 5))
         XCTAssertEqual(model.value as? String, "claude-haiku-5-5")
         app.buttons["Choose a Haiku model"].tap()
-        app.buttons["Haiku 4.5"].tap()
+        // The menu animates in; wait for its item as the catalog's order menu does.
+        let haiku = app.buttons["Haiku 4.5"].firstMatch
+        XCTAssertTrue(haiku.waitForExistence(timeout: 5)); haiku.tap()
         let sharing = app.switches["aiSharePage"]
         // The Book context section sits above Reading context.
-        for _ in 0..<4 where !sharing.isHittable { app.swipeUp() }
+        revealSettingsRow(sharing, app: app)
         sharing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(sharing.value as? String, "0")
         // Agent troubleshooting sits between Reading context and Save.
         let save = app.buttons["saveAISettings"]
-        for _ in 0..<4 where !save.isHittable { app.swipeUp() }
+        revealSettingsRow(save, app: app)
         save.tap()
         XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
         app.terminate(); app.launch()

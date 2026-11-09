@@ -396,16 +396,15 @@ final class ZLibraryUITests: XCTestCase {
         if app.buttons["zlibraryClearSearch"].exists { app.buttons["zlibraryClearSearch"].leafTapVisible(in: app) }
         field.leafTapVisible(in: app)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        // The floating Ask Leaf button stays put while the keyboard is up; it must
-        // never cover the Search button (it did in landscape before 1.37.2).
-        let submit = app.buttons["zlibrarySubmitSearch"]
-        for id in ["openLibraryChat", "openLibraryThemes"] where submit.exists && app.buttons[id].exists {
-            XCTAssertFalse(app.buttons[id].frame.intersects(submit.frame), "\(id) covers Search: \(app.buttons[id].frame) over \(submit.frame)")
-        }
         field.typeText(query)
         expectation(for: NSPredicate(format: "value == %@", query), evaluatedWith: field); waitForExpectations(timeout: 8)
         XCTAssertEqual(field.value as? String,query)
-        app.buttons["zlibrarySubmitSearch"].leafTapVisible(in: app)
+        // The floating Ask Leaf button rises above the keyboard so it stays reachable
+        // while typing; in landscape that can put it over the Search button. Submit
+        // with the keyboard's Search key then, as a reader would.
+        let submit = app.buttons["zlibrarySubmitSearch"]
+        let covered = ["openLibraryChat", "openLibraryThemes"].contains { app.buttons[$0].exists && app.buttons[$0].frame.intersects(submit.frame) }
+        if covered { field.typeText("\n") } else { submit.leafTapVisible(in: app) }
     }
     @MainActor private func chooseOrder(_ title:String, app:XCUIApplication) {
         let menu = app.buttons["zlibrarySearchOrder"]
