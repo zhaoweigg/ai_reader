@@ -31,7 +31,6 @@ enum UITestFlag: String, CaseIterable {
     case bestsellersDisconnected = "LEAF_UI_BESTSELLERS_DISCONNECTED"
     case bestsellersDownloadFailure = "LEAF_UI_BESTSELLERS_DOWNLOAD_FAILURE"
     case bestsellersFeedFailure = "LEAF_UI_BESTSELLERS_FEED_FAILURE"
-    case bestsellersMissingKey = "LEAF_UI_BESTSELLERS_MISSING_KEY"
     case bestsellersMock = "LEAF_UI_BESTSELLERS_MOCK"
     case bestsellersQuota = "LEAF_UI_BESTSELLERS_QUOTA"
     case bestsellersSlowDownload = "LEAF_UI_BESTSELLERS_SLOW_DOWNLOAD"

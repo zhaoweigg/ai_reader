@@ -3,19 +3,17 @@ import Foundation
 import UIKit
 
 actor UITestBestsellerClient: BestsellerServing {
-    nonisolated let nytAvailable = !UITesting.flag(.bestsellersMissingKey)
     private var attempts: [BestsellerSource: Int] = [:]
     func lists(source: BestsellerSource, apiKey: String?) async throws -> [BestsellerList] {
         try await Task.sleep(for: .milliseconds(160)); try Task.checkCancellation()
         attempts[source, default: 0] += 1
-        if source == .nyt && !nytAvailable { throw BestsellerFeedError.nytKeyRequired }
         if UITesting.flag(.bestsellersFeedFailure), attempts[source] == 1 { throw BestsellerFeedError.unavailable }
         return BestsellerGenre.allCases.map { genre in
             let values = Self.samples(genre)
             let ordered = source == .nyt ? Array(values.reversed()) : values
             return BestsellerList(source: source, genre: genre, published: "November 4, 2026", fetchedAt: Date(), books: ordered.enumerated().map { index, b in
                 BestsellerBook(source: source, genre: genre, rank: index + 1, title: b.title, author: b.author, summary: b.summary, isbns: b.isbns, sourceURL: b.sourceURL)
-            })
+            }, relayURL: source == .nyt && apiKey == nil ? BestsellerFeedClient.publicNYTURL(genre) : nil)
         }
     }
     nonisolated static func samples(_ genre: BestsellerGenre = .nonfiction) -> [BestsellerBook] {

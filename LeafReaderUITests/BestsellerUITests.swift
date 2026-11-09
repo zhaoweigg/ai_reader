@@ -192,15 +192,21 @@ final class BestsellerUITests: XCTestCase {
         XCTAssertTrue(app.segmentedControls["zlibraryFeedPicker"].buttons["Bestsellers"].isSelected)
         capture("Shared catalog connection preserves bestseller list")
     }
-    @MainActor func testMissingNYTKeyShowsPrivateConnectionAndIndieStillWorks() {
+    @MainActor func testNYTWithoutKeyLoadsBothCategoriesAndKeepsIndieAvailable() {
         let app = launch(["MISSING_KEY"]); open(app)
         app.segmentedControls["bestsellerSourcePicker"].buttons["New York Times"].leafTapVisible(in: app)
-        XCTAssertTrue(app.staticTexts["bestsellerFeedError"].waitForExistence(timeout: 10))
-        app.buttons["NYT Books connection"].leafTapVisible(in: app)
-        XCTAssertTrue(app.secureTextFields["nytAPIKey"].waitForExistence(timeout: 8)); XCTAssertFalse(app.buttons["saveNYTConnection"].isEnabled)
-        capture("NYT Books private connection setup"); app.buttons["Done"].leafTapVisible(in: app)
+        XCTAssertTrue(app.buttons["bestsellerBook-nyt-nonfiction-1"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["bestsellerFeedError"].exists)
+        capture("NYT nonfiction loads without an API key")
+        app.segmentedControls["bestsellerGenrePicker"].buttons["Fiction"].leafTapVisible(in: app)
+        XCTAssertTrue(app.buttons["bestsellerBook-nyt-fiction-1"].waitForExistence(timeout: 10))
+        capture("NYT fiction loads without an API key")
+        let source = app.descendants(matching: .any)["bestsellerPublicSource"].firstMatch; reveal(source, app: app)
+        XCTAssertTrue(source.exists)
+        capture("Public NYT source attribution")
+        let picker = app.segmentedControls["bestsellerSourcePicker"]; reveal(picker, app: app)
         app.segmentedControls["bestsellerSourcePicker"].buttons["Indie"].leafTapVisible(in: app)
-        XCTAssertTrue(app.buttons["bestsellerBook-indie-nonfiction-1"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["bestsellerBook-indie-fiction-1"].waitForExistence(timeout: 10))
     }
     @MainActor func testFeedRetryAndDownloadFailureRemainRecoverable() {
         let app = launch(["FEED_FAILURE", "DOWNLOAD_FAILURE"]); open(app)

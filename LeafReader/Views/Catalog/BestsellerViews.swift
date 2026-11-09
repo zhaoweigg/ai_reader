@@ -74,17 +74,18 @@ struct BestsellerGrid: View {
                     Text(error).font(.subheadline).accessibilityIdentifier("bestsellerFeedError")
                     HStack {
                         Button("Try again") { Task { await discovery.load(force: true) } }.disabled(discovery.isLoading)
-                        if discovery.source == .nyt { Button("NYT Books connection") { nytConnection = true } }
+                        if discovery.source == .nyt && discovery.nytConnected { Button("NYT Books connection") { nytConnection = true } }
                     }.buttonStyle(.bordered)
                 }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(theme.surface, in: .rect(cornerRadius: 14))
-            } else if discovery.needsNYTConnection && discovery.books.isEmpty && !discovery.isLoading {
-                Button("Connect NYT Books") { nytConnection = true }.buttonStyle(.bordered).accessibilityIdentifier("connectNYTBooks")
             }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: 3), alignment: .leading, spacing: 25) {
                 ForEach(discovery.books) { entry in BestsellerCard(book: entry, close: close) }
             }.accessibilityIdentifier("bestsellerGrid")
             if discovery.isLoading && !discovery.books.isEmpty { ProgressView("Refreshing lists…").frame(maxWidth: .infinity) }
             Text(discovery.source.attribution).font(.caption).foregroundStyle(.secondary)
+            if let relay = discovery.selected?.relayURL {
+                Link("Public feed via Team Book Club", destination: relay).font(.caption).accessibilityIdentifier("bestsellerPublicSource")
+            }
             if let error = catalog.importError { Text(error).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("bestsellerImportError") }
         }
         .task(id: discovery.source) { await discovery.load() }
@@ -348,19 +349,22 @@ struct NYTBooksConnectionView: View {
     var body: some View {
         Form {
             Section {
-                Text(discovery.nytConnected ? "API key saved" : "Not connected")
+                Text(discovery.nytConnected ? "API key saved" : "Using public feed · No key required")
                 SecureField("NYT Books API key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("nytAPIKey")
                 Button("Save connection") {
                     do { try discovery.saveNYTKey(key); key = ""; error = nil; Task { await discovery.load(source: .nyt, force: true) } }
                     catch { self.error = "The connection could not be saved. Unlock your device and check the key." }
                 }.disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).accessibilityIdentifier("saveNYTConnection")
                 if discovery.nytConnected {
-                    Button("Disconnect NYT Books", role: .destructive) { do { try discovery.saveNYTKey("") } catch { self.error = "The connection could not be removed." } }
+                    Button("Use public feed", role: .destructive) {
+                        do { try discovery.saveNYTKey(""); Task { await discovery.load(source: .nyt, force: true) } }
+                        catch { self.error = "The connection could not be removed." }
+                    }
                 }
                 if let error { Text(error).foregroundStyle(.red) }
                 if let error = discovery.errors[.nyt] { Text(error).font(.footnote).foregroundStyle(.secondary) }
             } footer: {
-                Text("NYT’s official bestseller feed requires an API key with Books API access. The key is stored privately in Keychain. Indie lists do not need this connection.")
+                Text("NYT lists load from Team Book Club’s public pages without an account. Optionally use NYT’s official API by saving a key with Books API access. The key stays privately in Keychain and is sent only to NYT.")
             }
             Section { Link("Get an NYT Books API key", destination: URL(string: "https://developer.nytimes.com/")!) }
         }.leafFormStyle().navigationTitle("NYT Books").navigationBarTitleDisplayMode(.inline)

@@ -79,7 +79,7 @@ flowchart TB
         Agent["ReadingAgent tools<br/>BookTextIndex"]
         History["ChatHistoryStore<br/>SQLite"]
         Catalog["ZLibraryClient over<br/>ZLibraryBrowserSession (WebKit)"]
-        Feeds["BestsellerFeed<br/>IndieBound · NYT Books API"]
+        Feeds["BestsellerFeed<br/>IndieBound · NYT public relay or Books API"]
         Speech["AVSpeechSynthesizer<br/>MPNowPlayingInfoCenter"]
         Folder["SyncFolder<br/>coordinated iCloud Drive files"]
         Disk["LibraryDisk<br/>Documents/Leaf"]
@@ -277,7 +277,8 @@ flowchart LR
     end
     subgraph Best["Bestsellers (public rankings)"]
         BStore["BestsellerStore<br/>6-hour cache"] --> Indie["IndieBound national list"]
-        BStore --> NYT["NYT Books API<br/>your key in Keychain"]
+        BStore --> NYT["NYT lists<br/>public relay, no key"]
+        NYT -.->|"optional personal key"| NYTAPI["NYT Books API<br/>key in Keychain, sent only to api.nytimes.com"]
         BStore --> Match["BestsellerMatching<br/>finds editions in the catalog"]
     end
     Client -->|"download ≤100 MB<br/>to a protected temp file"| Import["Library import"]
@@ -322,7 +323,7 @@ flowchart TB
     Docs --> H["ChatHistory/<br/>SQLite per library, pictures beside it"]
     Docs --> T["AgentTraces/<br/>opt-in debugging"]
     KC["Keychain (this device only)"] --> K1["AI keys · ChatGPT tokens"]
-    KC --> K2["Z-Library session · NYT key"]
+    KC --> K2["Z-Library session · optional NYT key"]
     UD["UserDefaults"] --> P["Reading preferences · provider choice · theme · button position"]
 ```
 
