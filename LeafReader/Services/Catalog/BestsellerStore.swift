@@ -31,7 +31,6 @@ struct BestsellerSearchContext {
     var books: [BestsellerBook] { selected?.books ?? [] }
     var isLoading: Bool { loading.contains(source) }
     var error: String? { errors[source] }
-    var needsNYTConnection: Bool { source == .nyt && !nytConnected }
 
     init(defaults: UserDefaults = .standard,
          credentials: any ChatCredentialStore = KeychainChatCredentials(service: "com.weizhao.leafreader.nytbooks"),
@@ -48,9 +47,6 @@ struct BestsellerSearchContext {
             }
         }
         nytConnected = ((try? credentials.read(account: "nyt-books")) ?? nil)?.isEmpty == false
-        #if DEBUG
-        if let fixture = service as? UITestBestsellerClient { nytConnected = fixture.nytAvailable }
-        #endif
     }
 
     func saveNYTKey(_ value: String) throws {
@@ -74,14 +70,9 @@ struct BestsellerSearchContext {
         }
         var key: String?
         do { key = try credentials.read(account: "nyt-books") }
-        catch {
-            if requested == .nyt { errors[requested] = "Unlock the device to read your NYT Books connection, then try again."; return }
-        }
+        catch { key = nil } // A locked optional key must not block public rankings.
         if requested == .nyt {
             nytConnected = key?.isEmpty == false
-            #if DEBUG
-            if let fixture = service as? UITestBestsellerClient { nytConnected = fixture.nytAvailable }
-            #endif
         }
         let id = UUID(), provider = service
         loading.insert(requested); errors[requested] = nil

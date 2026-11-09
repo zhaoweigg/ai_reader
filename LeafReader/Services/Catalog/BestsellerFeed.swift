@@ -21,7 +21,12 @@ struct BestsellerList: Codable, Equatable {
     let published: String
     let fetchedAt: Date
     let books: [BestsellerBook]
+    let relayURL: URL?
     var id: String { source.rawValue + ":" + genre.rawValue }
+    init(source: BestsellerSource, genre: BestsellerGenre, published: String, fetchedAt: Date, books: [BestsellerBook], relayURL: URL? = nil) {
+        self.source = source; self.genre = genre; self.published = published
+        self.fetchedAt = fetchedAt; self.books = books; self.relayURL = relayURL
+    }
 }
 
 struct BestsellerBook: Codable, Equatable, Identifiable {
@@ -40,10 +45,9 @@ struct BestsellerBook: Codable, Equatable, Identifiable {
 }
 
 enum BestsellerFeedError: LocalizedError, Equatable {
-    case nytKeyRequired, nytKeyRejected, unavailable, invalidResponse, rateLimited
+    case nytKeyRejected, unavailable, invalidResponse, rateLimited
     var errorDescription: String? {
         switch self {
-        case .nytKeyRequired: return "Connect NYT Books to load its bestseller lists."
         case .nytKeyRejected: return "NYT Books did not accept this API key. Check your connection and try again."
         case .unavailable: return "The bestseller list could not be loaded. Try again."
         case .invalidResponse: return "The provider returned an unfamiliar list format. Your previously loaded list has been kept."
@@ -114,16 +118,19 @@ struct BestsellerFeedClient: BestsellerServing {
     var session: URLSession = URLSession(configuration: .ephemeral)
     func lists(source: BestsellerSource, apiKey: String?) async throws -> [BestsellerList] {
         if source == .indie {
-            let data = try await request(URL(string: "https://www.indiebound.org/bestseller-list-v2")!, source: source)
+            let data = try await request(URL(string: "https://www.indiebound.org/bestseller-list-v2")!)
             return try Self.indie(data)
         }
-        guard let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else { throw BestsellerFeedError.nytKeyRequired }
+        let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return try await withThrowingTaskGroup(of: BestsellerList.self) { group in
             for genre in BestsellerGenre.allCases {
                 group.addTask {
+                    if key.isEmpty {
+                        return try Self.publicNYT(try await request(Self.publicNYTURL(genre)), genre: genre)
+                    }
                     var url = URLComponents(string: "https://api.nytimes.com/svc/books/v3/lists/current/\(genre.listName).json")!
                     url.queryItems = [URLQueryItem(name: "api-key", value: key)]
-                    return try Self.nyt(try await request(url.url!, source: .nyt), genre: genre)
+                    return try Self.nyt(try await request(url.url!, nytAPI: true), genre: genre)
                 }
             }
             var result: [BestsellerList] = []
@@ -131,21 +138,57 @@ struct BestsellerFeedClient: BestsellerServing {
             return result.sorted { $0.genre.rawValue < $1.genre.rawValue }
         }
     }
-    private func request(_ url: URL, source: BestsellerSource) async throws -> Data {
+    private func request(_ url: URL, nytAPI: Bool = false) async throws -> Data {
         var request = URLRequest(url: url, timeoutInterval: 25)
         request.setValue("LeafReader/1.35 (book discovery)", forHTTPHeaderField: "User-Agent")
-        request.setValue(source == .nyt ? "application/json" : "text/html", forHTTPHeaderField: "Accept")
+        request.setValue(nytAPI ? "application/json" : "text/html", forHTTPHeaderField: "Accept")
         let (data, response) = try await session.data(for: request)
         try Task.checkCancellation()
         guard let response = response as? HTTPURLResponse else { throw BestsellerFeedError.invalidResponse }
         switch response.statusCode {
         case 200: break
-        case 401, 403: throw source == .nyt ? BestsellerFeedError.nytKeyRejected : BestsellerFeedError.unavailable
+        case 401, 403: throw nytAPI ? BestsellerFeedError.nytKeyRejected : BestsellerFeedError.unavailable
         case 429: throw BestsellerFeedError.rateLimited
         default: throw BestsellerFeedError.unavailable
         }
         guard !data.isEmpty, data.count <= 3_000_000 else { throw BestsellerFeedError.invalidResponse }
         return data
+    }
+    static func publicNYTURL(_ genre: BestsellerGenre) -> URL {
+        URL(string: "https://www.teambook.club/nyt-bestsellers/\(genre.listName)")!
+    }
+    // Read the public page's schema.org Book list, never executable Next.js state
+    // or its private API. Reject changed, partial, miscategorized or stale charts.
+    static func publicNYT(_ data: Data, genre: BestsellerGenre, now: Date = Date()) throws -> BestsellerList {
+        guard data.count <= 3_000_000, let html = String(data: data, encoding: .utf8),
+              let published = captures(#"Week of ([A-Za-z]+ \d{1,2}, \d{4})"#, html).first else { throw BestsellerFeedError.invalidResponse }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "MMMM d, yyyy"; formatter.isLenient = false
+        guard let date = formatter.date(from: published), formatter.string(from: date) == published,
+              (-14 * 86_400...28 * 86_400).contains(now.timeIntervalSince(date)) else { throw BestsellerFeedError.invalidResponse }
+        let scripts = captures(#"(?is)<script\b[^>]*\btype\s*=\s*["']application/ld\+json["'][^>]*>(.*?)</script\s*>"#, html)
+        for script in scripts {
+            guard let object = (try? JSONSerialization.jsonObject(with: Data(script.utf8))) as? [String: Any],
+                  object["@type"] as? String == "CollectionPage", object["url"] as? String == publicNYTURL(genre).absoluteString,
+                  let list = object["mainEntity"] as? [String: Any], list["@type"] as? String == "ItemList",
+                  list["name"] as? String == genre.caption, list["numberOfItems"] as? Int == 15,
+                  let rows = list["itemListElement"] as? [[String: Any]], rows.count == 15 else { continue }
+            let books = try rows.map { row -> BestsellerBook in
+                guard row["@type"] as? String == "ListItem", let rank = row["position"] as? Int,
+                      let item = row["item"] as? [String: Any], item["@type"] as? String == "Book",
+                      let title = item["name"] as? String, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let author = item["author"] as? [String: Any], let name = author["name"] as? String,
+                      !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let rawISBN = item["isbn"] as? String, let isbn = BestsellerText.isbn(rawISBN) else { throw BestsellerFeedError.invalidResponse }
+                return BestsellerBook(source: .nyt, genre: genre, rank: rank, title: String(title.prefix(1000)), author: String(name.prefix(500)),
+                                      summary: String((item["description"] as? String ?? "").prefix(3000)), isbns: [isbn],
+                                      sourceURL: URL(string: "https://www.nytimes.com/books/best-sellers/\(genre.listName)/")!)
+            }
+            let result = try validated(source: .nyt, genre: genre, published: published, books: books, now: now)
+            return BestsellerList(source: result.source, genre: genre, published: result.published, fetchedAt: now, books: result.books, relayURL: publicNYTURL(genre))
+        }
+        throw BestsellerFeedError.invalidResponse
     }
     static func nyt(_ data: Data, genre: BestsellerGenre, now: Date = Date()) throws -> BestsellerList {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["status"] as? String == "OK",

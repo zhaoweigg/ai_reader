@@ -95,6 +95,63 @@ final class BestsellerFeedTests: XCTestCase {
             ["rank": duplicate && n == 15 ? 14 : n, "title": "Book \(n)", "author": "Writer \(n)", "primary_isbn13": "9780593234174", "description": "A description", "book_image": "https://static01.nyt.com/untrusted-image.jpg"] as [String: Any]
         }]])
     }
+    private func publicNYTHTML(_ genre: BestsellerGenre, count: Int = 15, duplicate: Bool = false, isbn: String = "9780593234174", date: Date = Date()) throws -> Data {
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0); formatter.dateFormat = "MMMM d, yyyy"
+        let rows: [[String: Any]] = (1...count).map { rank in
+            ["@type": "ListItem", "position": duplicate && rank == 15 ? 14 : rank,
+             "item": ["@type": "Book", "name": "Book \(rank)", "author": ["@type": "Person", "name": "Writer \(rank)"],
+                      "isbn": isbn, "description": "A description", "image": "https://static01.nyt.com/ignored.jpg"]]
+        }
+        let object: [String: Any] = ["@type": "CollectionPage", "url": BestsellerFeedClient.publicNYTURL(genre).absoluteString,
+            "mainEntity": ["@type": "ItemList", "name": genre.caption, "numberOfItems": count, "itemListElement": rows]]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        return Data("<html><p>Week of \(formatter.string(from: date))</p><script type='application/ld+json'>\(json)</script></html>".utf8)
+    }
+    func testPublicNYTParsesCompleteRankingsDateISBNsAndRelayAttribution() throws {
+        for genre in BestsellerGenre.allCases {
+            let now = Date(), list = try BestsellerFeedClient.publicNYT(publicNYTHTML(genre, date: now), genre: genre, now: now)
+            XCTAssertEqual(list.books.map(\.rank), Array(1...15)); XCTAssertEqual(list.source, .nyt)
+            XCTAssertEqual(list.genre, genre); XCTAssertEqual(list.relayURL, BestsellerFeedClient.publicNYTURL(genre))
+            XCTAssertEqual(list.books.first?.author, "Writer 1"); XCTAssertEqual(list.books.first?.isbns, ["9780593234174"])
+            XCTAssertEqual(list.books.first?.sourceURL.host, "www.nytimes.com")
+            XCTAssertEqual(list.books.first?.coverURL?.host, "images.penguinrandomhouse.com")
+        }
+    }
+    func testPublicNYTRejectsPartialDuplicateWrongCategoryInvalidISBNAndStalePages() throws {
+        let now = Date()
+        for data in [try publicNYTHTML(.fiction, count: 14), try publicNYTHTML(.fiction, duplicate: true),
+                     try publicNYTHTML(.nonfiction), try publicNYTHTML(.fiction, isbn: "invalid"),
+                     try publicNYTHTML(.fiction, date: now.addingTimeInterval(-30 * 86400)),
+                     try publicNYTHTML(.fiction, date: now.addingTimeInterval(16 * 86400)), Data("<html>unavailable</html>".utf8)] {
+            XCTAssertThrowsError(try BestsellerFeedClient.publicNYT(data, genre: .fiction, now: now))
+        }
+        // NYT's publication date normally leads the date the rankings become available.
+        XCTAssertNoThrow(try BestsellerFeedClient.publicNYT(publicNYTHTML(.fiction, date: now.addingTimeInterval(7 * 86400)), genre: .fiction, now: now))
+    }
+    func testNYTWithoutAKeyRequestsBothPublicPagesWithoutCredentials() async throws {
+        let fiction = try publicNYTHTML(.fiction), nonfiction = try publicNYTHTML(.nonfiction), client = client()
+        BestsellerURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "www.teambook.club"); XCTAssertNil(request.url?.query)
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization")); XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/html")
+            return (200, request.url?.lastPathComponent == "hardcover-fiction" ? fiction : nonfiction)
+        }
+        let lists = try await client.lists(source: .nyt, apiKey: nil)
+        XCTAssertEqual(Set(lists.map(\.genre)), Set(BestsellerGenre.allCases)); XCTAssertTrue(lists.allSatisfy { $0.relayURL != nil })
+    }
+    func testPublicNYTFailureIsAtomicAndDoesNotAskForAKey() async throws {
+        let fiction = try publicNYTHTML(.fiction), client = client()
+        BestsellerURLProtocol.handler = { request in
+            request.url?.lastPathComponent == "hardcover-fiction" ? (200, fiction) : (403, Data("Forbidden".utf8))
+        }
+        do { _ = try await client.lists(source: .nyt, apiKey: nil); XCTFail("Both charts must succeed") }
+        catch { XCTAssertEqual(error as? BestsellerFeedError, .unavailable) }
+    }
+    func testOlderBestsellerCacheDecodesWithoutRelayMetadata() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(BestsellerList(source: .nyt, genre: .fiction, published: "2026-11-08", fetchedAt: Date(), books: [entry()]))) as! [String: Any]
+        object.removeValue(forKey: "relayURL")
+        XCTAssertNil(try JSONDecoder().decode(BestsellerList.self, from: JSONSerialization.data(withJSONObject: object)).relayURL)
+    }
     func testIndieParsesBothCompleteChartsDateEntitiesAndPublisherLinks() throws {
         let lists = try BestsellerFeedClient.indie(indieHTML())
         XCTAssertEqual(lists.map(\.genre), [.fiction, .nonfiction])
@@ -139,7 +196,7 @@ final class BestsellerFeedTests: XCTestCase {
         let full = edition(isbns: ["9780593234174"])
         XCTAssertEqual(old.fillingMissingDetails(from: full).isbns, full.isbns)
     }
-    func testOfficialNYTRequestsUseBothCategoriesAndRequireAKeyBeforeNetworking() async throws {
+    func testOptionalOfficialNYTRequestsUseBothCategoriesAndKeepKeysOnNYTHost() async throws {
         let data = try nytJSON(), client = client()
         BestsellerURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.host, "api.nytimes.com")
@@ -149,8 +206,7 @@ final class BestsellerFeedTests: XCTestCase {
         }
         let lists = try await client.lists(source: .nyt, apiKey: "fixture-key")
         XCTAssertEqual(Set(lists.map(\.genre)), Set(BestsellerGenre.allCases))
-        do { _ = try await client.lists(source: .nyt, apiKey: nil); XCTFail("A missing key must not send a request") }
-        catch { XCTAssertEqual(error as? BestsellerFeedError, .nytKeyRequired) }
+        XCTAssertTrue(lists.allSatisfy { $0.relayURL == nil })
     }
     func testRejectedNYTKeysAndRateLimitsHaveCredentialFreeErrors() async throws {
         let client = client()
@@ -198,11 +254,11 @@ final class BestsellerFeedTests: XCTestCase {
         let task = Task { await store.load(source: .indie, force: true) }; store.source = .nyt
         await task.value; XCTAssertTrue(store.books.isEmpty)
     }
-    func testLockedKeychainDoesNotLeakAnErrorOrEraseOtherSourceCache() async {
+    func testLockedOptionalKeychainStillLoadsNYTAndKeepsOtherSourceCache() async {
         let d = defaults(), c = BestsellerCredentials(), service = BestsellerService()
         let store = BestsellerStore(defaults: d, credentials: c, service: service); await store.load()
         c.locked = true; await store.load(source: .nyt, force: true)
-        XCTAssertNotNil(store.errors[.nyt]); XCTAssertFalse(store.lists.isEmpty)
+        XCTAssertNil(store.errors[.nyt]); XCTAssertEqual(store.lists.count, 4); XCTAssertFalse(store.nytConnected)
     }
     func testExistingLibraryWorkIsRecognizedAcrossSourcesAndSubtitleDifferences() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
