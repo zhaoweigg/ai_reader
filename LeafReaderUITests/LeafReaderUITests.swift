@@ -110,8 +110,9 @@ final class LeafReaderUITests: XCTestCase {
         var held = false, last: CGRect?
         // Fixed margins clear the navigation bar and the floating tab bar.
         let top = app.frame.minY + app.frame.height * 0.12, bottom = app.frame.maxY - app.frame.height * 0.12
-        for _ in 0..<14 {
-            if row.exists, row.isHittable, row.frame.minY >= top, row.frame.maxY <= bottom { return }
+        for _ in 0..<20 {
+            // Geometry, not isHittable: iOS 27.2 reports visible Form rows as unhittable.
+            if row.exists, row.frame.height > 0, row.frame.minY >= top, row.frame.maxY <= bottom { return }
             let up = !row.exists || row.frame.maxY > bottom
             if row.exists, row.frame == last { held.toggle() }
             last = row.exists ? row.frame : nil
@@ -120,7 +121,7 @@ final class LeafReaderUITests: XCTestCase {
             if held { start.press(forDuration: 0.15, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2) }
             else { start.press(forDuration: 0, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0) }
         }
-        XCTAssertTrue(row.exists && row.isHittable, "Could not reveal \(row.identifier): \(row.exists ? "\(row.frame)" : "absent") within \(top)...\(bottom)")
+        XCTAssertTrue(row.exists && row.frame.minY >= top && row.frame.maxY <= bottom, "Could not reveal \(row.identifier): \(row.exists ? "\(row.frame)" : "absent") within \(top)...\(bottom)")
     }
 
     @MainActor private func revealAppearanceControl(_ app: XCUIApplication, _ control: XCUIElement) {
@@ -161,35 +162,35 @@ final class LeafReaderUITests: XCTestCase {
         capture("EPUB night")
         showReaderControls(app)
         app.buttons["closeBook"].tap()
-        app.tabBars.buttons["Bookmarks"].tap()
+        app.selectTab("Bookmarks")
         XCTAssertTrue(app.staticTexts["The Art of Noticing"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         app.buttons["Day theme"].tap()
     }
     @MainActor func testAppThemesApplyAcrossLibraryMenusReaderAndRelaunch() {
         let app = launchApp()
         for theme in ["Day", "Paper", "Night", "Sepia", "Sage", "Dusk", "Black"] {
-            app.tabBars.buttons["Settings"].tap()
+            app.selectTab("Settings")
             let choice = app.buttons[theme + " theme"]
             XCTAssertTrue(choice.waitForExistence(timeout: 5))
             choice.tap()
             XCTAssertTrue(choice.isSelected)
             XCTAssertEqual(["Day", "Paper", "Night", "Sepia", "Sage", "Dusk", "Black"].filter { app.buttons[$0 + " theme"].isSelected }.count, 1)
             capture(theme + " app theme picker")
-            app.tabBars.buttons["Library"].tap()
+            app.selectTab("Library")
             XCTAssertTrue(app.buttons["featuredBook"].waitForExistence(timeout: 5))
             capture(theme + " themed library")
-            app.tabBars.buttons["Bookmarks"].tap()
+            app.selectTab("Bookmarks")
             capture(theme + " themed bookmarks")
-            app.tabBars.buttons["Library"].tap()
+            app.selectTab("Library")
             XCTAssertTrue(app.buttons["importBooks"].waitForExistence(timeout: 5))
         }
         app.terminate(); app.launch()
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         // Black is the last theme chosen above, so it is what the relaunch must restore.
         XCTAssertTrue(app.buttons["Black theme"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Black theme"].isSelected)
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         app.buttons["featuredBook"].tap()
         showReaderControls(app)
         app.buttons["Appearance"].tap()
@@ -198,7 +199,7 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["Sage theme"].tap()
         dismissAppearance(app)
         showReaderControls(app); app.buttons["closeBook"].tap()
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         XCTAssertTrue(app.buttons["Sage theme"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Sage theme"].isSelected)
         capture("Reader theme synchronizes back to Settings")
@@ -207,7 +208,7 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testThemeSelectorFitsLandscapeAndKeepsItsChoiceAfterRotation() {
         let app = launchApp()
         defer { orient(.portrait) }
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         app.buttons["Night theme"].tap()
         orient(.landscapeLeft)
         app.buttons["Sage theme"].tap()
@@ -216,7 +217,7 @@ final class LeafReaderUITests: XCTestCase {
         orient(.portrait)
 
         XCTAssertTrue(app.buttons["Sage theme"].isSelected)
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         app.buttons["featuredBook"].tap()
         showReaderControls(app)
         app.buttons["Appearance"].tap()
@@ -767,8 +768,8 @@ final class LeafReaderUITests: XCTestCase {
         continueAfterFailure = false
         let app = launchApp()
         func openDiagnostics() {
-            app.tabBars.buttons["Settings"].tap()
-            for _ in 0..<6 where !app.switches["diagnosticsRecording"].isHittable { app.swipeUp() }
+            app.selectTab("Settings")
+            revealSettingsRow(app.switches["diagnosticsRecording"], app: app)
             XCTAssertTrue(app.switches["diagnosticsRecording"].waitForExistence(timeout: 5))
         }
         openDiagnostics()
@@ -778,7 +779,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(app.switches["diagnosticsRecording"].value as? String, "1")
         capture("Diagnostics on")
 
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         app.buttons["featuredBook"].tap(); waitForBook(app)
         let surface = readingSurface(app)
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -791,7 +792,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertNotEqual(count.value as? String, "0", "The reader tap was recorded: \(count.label)")
         XCTAssertTrue(app.buttons["diagnosticsShare"].waitForExistence(timeout: 5), "The recording can be shared")
         // The Clear row sits at the bottom of Settings, under the floating tab bar until scrolled up.
-        for _ in 0..<4 where !app.buttons["diagnosticsClear"].isHittable { app.swipeUp() }
+        revealSettingsRow(app.buttons["diagnosticsClear"], app: app)
         app.buttons["diagnosticsClear"].tap()
         expectation(for: NSPredicate(format: "value == %@", "1"), evaluatedWith: count)
         waitForExpectations(timeout: 5)
@@ -804,7 +805,7 @@ final class LeafReaderUITests: XCTestCase {
         continueAfterFailure = false
         let app = launchApp(syncFixture: true)
         XCTAssertTrue(app.buttons["book-A Field Guide to Slow Days"].waitForExistence(timeout: 15))
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         XCTAssertTrue(app.buttons["Paper theme"].waitForExistence(timeout: 5))
         app.buttons["Paper theme"].tap()
         revealSettingsRow(app.buttons["openICloudSync"], app: app)
@@ -839,9 +840,9 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["40% read"].exists, "The reading position arrives with the book")
         capture("Synced library before download")
 
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         // The reading appearance controls come first; the Sync row is below them.
-        for _ in 0..<5 where !app.buttons["openICloudSync"].isHittable { app.swipeUp() }
+        revealSettingsRow(app.buttons["openICloudSync"], app: app)
         app.buttons["openICloudSync"].tap()
         let status = app.staticTexts["syncStatus"]
         XCTAssertTrue(status.waitForExistence(timeout: 5))
@@ -849,7 +850,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.switches["syncKeepBooks"].exists)
         capture("iCloud settings")
         app.navigationBars.buttons.firstMatch.tap()
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
 
         book.tap()
         waitForBook(app)
@@ -1291,11 +1292,11 @@ final class LeafReaderUITests: XCTestCase {
         evidence.name = flow + " native selection gesture target"; evidence.lifetime = .keepAlways; add(evidence)
         target.press(forDuration: 1.2)
     }
-    @MainActor private func assertFiveActionRibbon(_ app: XCUIApplication) {
+    @MainActor private func assertActionRibbon(_ app: XCUIApplication) {
         let menu = app.scrollViews["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
-        let identifiers = ["ask", "listen", "highlight", "note", "copy"]
-        XCTAssertEqual(menu.buttons.count, identifiers.count, "Exactly the five approved actions appear, without overflow")
+        let identifiers = ["ask", "listen", "highlight", "note", "voiceNote", "copy"]
+        XCTAssertEqual(menu.buttons.count, identifiers.count, "Exactly the six approved actions appear, without overflow")
         let row = app.buttons["selection-ask"].frame, bounds = menu.frame
         for id in identifiers {
             let button = app.buttons["selection-" + id]
@@ -1317,7 +1318,7 @@ final class LeafReaderUITests: XCTestCase {
         }
     }
     @MainActor private func revealSelectionAction(_ id: String, app: XCUIApplication) -> XCUIElement {
-        assertFiveActionRibbon(app)
+        assertActionRibbon(app)
         return app.buttons["selection-" + id]
     }
     @MainActor private func tapBookOutsideSelectionPalette(_ app: XCUIApplication) {
@@ -1369,7 +1370,7 @@ final class LeafReaderUITests: XCTestCase {
                 selectFixturePassage(flow, app: app)
                 let menu = app.scrollViews["expandedSelectionMenu"]
                 XCTAssertTrue(menu.waitForExistence(timeout: 6))
-                assertFiveActionRibbon(app)
+                assertActionRibbon(app)
                 capture(flow + " " + theme + " palette at \(size) pt with " + margin + " margins")
                 readingSurface(app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82)).tap()
                 XCTAssertFalse(menu.exists)
@@ -1402,7 +1403,7 @@ final class LeafReaderUITests: XCTestCase {
                 selectFixturePassage(flow, app: app, pdfWordOffset: landscape ? 0.55 : 0.15)
                 let menu = app.scrollViews["expandedSelectionMenu"]
                 XCTAssertTrue(menu.waitForExistence(timeout: 6))
-                assertFiveActionRibbon(app)
+                assertActionRibbon(app)
                 let initial = menu.value as? String ?? ""
                 let initialLocator = app.buttons["selection-ask"].value as? String ?? ""
                 XCTAssertFalse(initial.isEmpty); XCTAssertFalse(initialLocator.isEmpty)
@@ -1414,7 +1415,7 @@ final class LeafReaderUITests: XCTestCase {
                 let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: handle.frame.midX, dy: handle.frame.midY))
                 start.press(forDuration: 0.7, thenDragTo: start.withOffset(CGVector(dx: 80, dy: landscape ? 0 : 35)), withVelocity: .slow, thenHoldForDuration: 0.2)
                 XCTAssertTrue(menu.waitForExistence(timeout: 5), "Native grip changes must restore the ribbon directly")
-                assertFiveActionRibbon(app)
+                assertActionRibbon(app)
                 let extended = menu.value as? String ?? ""
                 XCTAssertGreaterThan(extended.count, initial.count, "Dragging the real native end handle must extend the passage in " + flow)
                 let extendedLocator = app.buttons["selection-ask"].value as? String ?? ""
@@ -1547,7 +1548,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(passage.label, selected)
         let originalLocator = app.buttons["selection-ask"].value as? String ?? ""
         XCTAssertFalse(originalLocator.isEmpty)
-        assertFiveActionRibbon(app)
+        assertActionRibbon(app)
         XCTAssertEqual(menu.value as? String, selected)
         XCTAssertEqual(app.buttons["selection-ask"].value as? String, originalLocator)
         capture(flow + " expanded selection menu all actions")
@@ -1566,7 +1567,7 @@ final class LeafReaderUITests: XCTestCase {
         let landscapeLocator = app.buttons["selection-ask"].value as? String ?? ""
         XCTAssertFalse(landscapeSelection.isEmpty); XCTAssertFalse(landscapeLocator.isEmpty)
         XCTAssertEqual(passage.label, landscapeSelection)
-        assertFiveActionRibbon(app)
+        assertActionRibbon(app)
         XCTAssertEqual(menu.value as? String, landscapeSelection)
         XCTAssertEqual(app.buttons["selection-ask"].value as? String, landscapeLocator)
         capture(flow + " expanded selection menu landscape")
@@ -1600,7 +1601,7 @@ final class LeafReaderUITests: XCTestCase {
         selectFixturePassage("Pages", app: app)
         let menu = app.scrollViews["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
-        assertFiveActionRibbon(app)
+        assertActionRibbon(app)
         XCTAssertFalse(app.menuItems["Leaf actions"].exists || app.buttons["Leaf actions"].exists, "The native toolbar must not cover the expanded actions")
         let firstSelection = menu.value as? String ?? ""
         XCTAssertFalse(firstSelection.isEmpty)
@@ -1639,10 +1640,10 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["chatSelectedPassage"].label, changedSelection)
         capture("Selection window cleared and question restored after reopening")
     }
-    @MainActor func testFiveActionRibbonHasNoOverflowOrStockToolbarInPages() { verifyFiveActionRibbon("Pages") }
-    @MainActor func testFiveActionRibbonHasNoOverflowOrStockToolbarInScroll() { verifyFiveActionRibbon("Scroll") }
-    @MainActor func testFiveActionRibbonHasNoOverflowOrStockToolbarInPDF() { verifyFiveActionRibbon("PDF") }
-    @MainActor private func verifyFiveActionRibbon(_ flow: String) {
+    @MainActor func testActionRibbonHasNoOverflowOrStockToolbarInPages() { verifyActionRibbon("Pages") }
+    @MainActor func testActionRibbonHasNoOverflowOrStockToolbarInScroll() { verifyActionRibbon("Scroll") }
+    @MainActor func testActionRibbonHasNoOverflowOrStockToolbarInPDF() { verifyActionRibbon("PDF") }
+    @MainActor private func verifyActionRibbon(_ flow: String) {
         continueAfterFailure = false
         let app = launchApp(); openSelectionFixture(flow, app: app)
         defer { orient(.portrait) }
@@ -1653,7 +1654,7 @@ final class LeafReaderUITests: XCTestCase {
                 // another word starts a fresh range instead of pressing a grip.
                 selectFixturePassage(flow, app: app, pdfWordOffset: cycle == 0 ? 0.15 : 0.55)
                 let menu = app.scrollViews["expandedSelectionMenu"]
-                assertFiveActionRibbon(app)
+                assertActionRibbon(app)
                 let selected = menu.value as? String ?? ""
                 let locator = app.buttons["selection-ask"].value as? String ?? ""
                 XCTAssertFalse(selected.isEmpty); XCTAssertFalse(locator.isEmpty)
@@ -2518,8 +2519,8 @@ final class LeafReaderUITests: XCTestCase {
     }
 
     @MainActor private func chooseChatHarness(_ title: String, app: XCUIApplication) {
-        app.tabBars.buttons["Settings"].tap()
-        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.selectTab("Settings")
+        revealSettingsRow(app.buttons["openAISettings"], app: app)
         app.buttons["openAISettings"].tap()
         let option = app.buttons[title]
         XCTAssertTrue(option.waitForExistence(timeout: 5))
@@ -2532,14 +2533,14 @@ final class LeafReaderUITests: XCTestCase {
         // Return to the Settings list so the next visit starts from it.
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.buttons["openAISettings"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
     }
     @MainActor func testAgentLimitsApplyAndTraceViewerShowsStepsAndTokens() {
         continueAfterFailure = false
         let app = launchApp()
         chooseChatHarness("Book search agent (Claude)", app: app)
-        app.tabBars.buttons["Settings"].tap()
-        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.selectTab("Settings")
+        revealSettingsRow(app.buttons["openAISettings"], app: app)
         app.buttons["openAISettings"].tap()
         let calls = app.descendants(matching: .any)["agentMaxToolCalls"].firstMatch
         for _ in 0..<6 where !(calls.exists && calls.isHittable) { app.swipeUp() }
@@ -2560,7 +2561,7 @@ final class LeafReaderUITests: XCTestCase {
         save.tap()
         XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         app.buttons["featuredBook"].tap(); waitForBook(app)
         app.buttons["openReaderChat"].tap()
         let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
@@ -2570,8 +2571,8 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.textViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Agent reply: found")).firstMatch.waitForExistence(timeout: 30))
         if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
         app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
-        app.tabBars.buttons["Settings"].tap()
-        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.selectTab("Settings")
+        revealSettingsRow(app.buttons["openAISettings"], app: app)
         app.buttons["openAISettings"].tap()
         revealSettingsRow(decrement, app: app)
         XCTAssertTrue(app.staticTexts["11,000 chars"].exists, "The reading context limit is saved")
@@ -3027,7 +3028,7 @@ final class LeafReaderUITests: XCTestCase {
         let app = launchApp()
         expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
         func openButtonSettings() {
-            app.tabBars.buttons["Settings"].tap()
+            app.selectTab("Settings")
             let link = app.buttons["openChatButtonSettings"]
             let form = app.collectionViews.firstMatch
             XCTAssertTrue(form.waitForExistence(timeout: 5))
@@ -3046,7 +3047,7 @@ final class LeafReaderUITests: XCTestCase {
         slider.adjust(toNormalizedSliderPosition:0)
         XCTAssertEqual(slider.value as? String,"20%")
         capture(flow + " more visible button settings preview")
-        app.navigationBars.buttons["Settings"].tap();app.tabBars.buttons["Library"].tap()
+        app.navigationBars.buttons["Settings"].tap();app.selectTab("Library")
         app.buttons["featuredBook"].tap();showReaderControls(app)
         app.buttons["Appearance"].tap()
         app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
@@ -3112,7 +3113,7 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertEqual(slider.value as? String,"95%")
         app.buttons["resetChatButtonTransparency"].tap()
         XCTAssertEqual(slider.value as? String,"88%")
-        app.navigationBars.buttons["Settings"].tap();app.tabBars.buttons["Library"].tap()
+        app.navigationBars.buttons["Settings"].tap();app.selectTab("Library")
         app.buttons["featuredBook"].tap();waitForBook(app)
         XCTAssertEqual(launcher.frame.minX,position.minX,accuracy:2)
         XCTAssertEqual(launcher.frame.minY,position.minY,accuracy:2)
@@ -3552,9 +3553,9 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testStreamingChatKeepsTheBookVisibleAndPreservesItsPlace() {
         let app = launchApp()
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         app.buttons["Paper theme"].tap()
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         app.buttons["featuredBook"].tap()
         showReaderControls(app)
         app.buttons["toggleBookmark"].tap()
@@ -3634,8 +3635,8 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testConnectedChatGPTOffersAnotherAccountAndCancelsQuietly() {
         let app = launchApp(mockChat: false, chatGPTConnected: true)
-        app.tabBars.buttons["Settings"].tap()
-        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.selectTab("Settings")
+        revealSettingsRow(app.buttons["openAISettings"], app: app)
         app.buttons["openAISettings"].tap()
         let connected = app.descendants(matching: .any)["chatGPTConnectionState"].firstMatch
         XCTAssertTrue(connected.waitForExistence(timeout: 5))
@@ -3664,8 +3665,8 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testChatGPTNativeBrowserReturnsToLeaf() {
         let app = launchApp(mockChat: false, chatGPTBrowser: true)
-        app.tabBars.buttons["Settings"].tap()
-        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.selectTab("Settings")
+        revealSettingsRow(app.buttons["openAISettings"], app: app)
         app.buttons["openAISettings"].tap()
         app.buttons["aiProvider"].tap()
         app.buttons["ChatGPT subscription"].tap()
@@ -4008,8 +4009,14 @@ final class LeafReaderUITests: XCTestCase {
         handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)), withVelocity: .slow, thenHoldForDuration: 0.1)
         // Reveal the picture, then its button, which sits between it and the caption.
-        for _ in 0..<4 where !picture.isHittable { history.swipeDown(velocity: .slow) }
-        XCTAssertTrue(picture.isHittable, "The picture can be reached in the history")
+        // Rendered geometry, not isHittable: iOS 27.2 reports a fully shown image in
+        // the frosted panel as unhittable. Reached means wholly inside the history.
+        func pictureShown() -> Bool {
+            let shown = picture.frame.intersection(history.frame)
+            return picture.exists && !shown.isNull && shown.height >= picture.frame.height - 1 && shown.width >= picture.frame.width - 1
+        }
+        for _ in 0..<4 where !pictureShown() { history.swipeDown(velocity: .slow) }
+        XCTAssertTrue(pictureShown(), "The picture can be reached in the history: \(picture.frame) in \(history.frame)")
         for _ in 0..<4 where !share.isHittable { history.swipeUp(velocity: .slow) }
         XCTAssertTrue(share.isHittable, "Its Share or save button can be reached")
         XCTAssertEqual(picture.frame.width / max(1, picture.frame.height), 640.0 / 400.0, accuracy: 0.06, "The picture keeps its proportions")
@@ -4332,8 +4339,8 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testAISettingsPersistAndMissingKeyKeepsQuestion() {
         let app = launchApp(mockChat: false)
-        app.tabBars.buttons["Settings"].tap()
-        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.selectTab("Settings")
+        revealSettingsRow(app.buttons["openAISettings"], app: app)
         app.buttons["openAISettings"].tap()
         let model = app.textFields["aiModel"]
         XCTAssertTrue(model.waitForExistence(timeout: 5))
@@ -4351,14 +4358,14 @@ final class LeafReaderUITests: XCTestCase {
         save.tap()
         XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
         app.terminate(); app.launch()
-        app.tabBars.buttons["Settings"].tap()
-        for _ in 0..<5 where !app.buttons["openAISettings"].isHittable { app.swipeUp() }
+        app.selectTab("Settings")
+        revealSettingsRow(app.buttons["openAISettings"], app: app)
         app.buttons["openAISettings"].tap()
         XCTAssertEqual(model.value as? String, "claude-haiku-4-5")
-        for _ in 0..<4 where !app.switches["aiSharePage"].isHittable { app.swipeUp() }
+        revealSettingsRow(app.switches["aiSharePage"], app: app)
         XCTAssertEqual(app.switches["aiSharePage"].value as? String, "0")
         capture("AI provider settings")
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         app.buttons["featuredBook"].tap()
         waitForBook(app)
         app.buttons["openReaderChat"].tap()
@@ -4377,9 +4384,9 @@ final class LeafReaderUITests: XCTestCase {
 
     @MainActor func testNightChatKeepsBookVisibleWhileTyping() {
         let app = launchApp()
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         app.buttons["Night theme"].tap()
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         app.buttons["featuredBook"].tap()
         waitForBook(app)
         let surface = readingSurface(app)

@@ -255,8 +255,8 @@ final class ZLibraryUITests: XCTestCase {
         func top() {
             let field = app.textFields["zlibrarySearchField"]
             let scroll = app.scrollViews.containing(.textField, identifier: "zlibrarySearchField").firstMatch
-            for _ in 0..<12 where !field.isHittable { scroll.swipeDown() }
-            XCTAssertTrue(field.isHittable); settled()
+            for _ in 0..<12 where visibleFrame(of: field, in: app).height < field.frame.height - 1 { scroll.swipeDown() }
+            assertOnScreen(field, in: app, "Back at the top, the search field is fully shown"); settled()
         }
         settled()
         capture("Thumbnail cache popular cold Day portrait")
@@ -283,8 +283,8 @@ final class ZLibraryUITests: XCTestCase {
         setReaderOrientation(.landscapeLeft, app: app); settled()
         capture("Thumbnail cache recommended Day landscape")
         setReaderOrientation(.portrait, app: app)
-        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap()
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Settings"); app.buttons["Night theme"].tap()
+        app.selectTab("Library")
         XCTAssertTrue(app.staticTexts["discoverShelfTitle"].waitForExistence(timeout: 10))
         capture("Thumbnail cache library shelf Night")
         openDiscover(app); settled()
@@ -392,6 +392,12 @@ final class ZLibraryUITests: XCTestCase {
         if app.buttons["zlibraryClearSearch"].exists { app.buttons["zlibraryClearSearch"].leafTapVisible(in: app) }
         field.leafTapVisible(in: app)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        // The floating Ask Leaf button stays put while the keyboard is up; it must
+        // never cover the Search button (it did in landscape before 1.37.2).
+        let submit = app.buttons["zlibrarySubmitSearch"]
+        for id in ["openLibraryChat", "openLibraryThemes"] where submit.exists && app.buttons[id].exists {
+            XCTAssertFalse(app.buttons[id].frame.intersects(submit.frame), "\(id) covers Search: \(app.buttons[id].frame) over \(submit.frame)")
+        }
         field.typeText(query)
         expectation(for: NSPredicate(format: "value == %@", query), evaluatedWith: field); waitForExpectations(timeout: 8)
         XCTAssertEqual(field.value as? String,query)
@@ -461,7 +467,7 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor func testRecommendationAccessFailureKeepsConnectionAndPopularWorksInNightLandscape() {
         continueAfterFailure = false
         let app = launch(sceneGeometry: true, recommendations: "failure")
-        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap(); app.tabBars.buttons["Library"].tap()
+        app.selectTab("Settings"); app.buttons["Night theme"].tap(); app.selectTab("Library")
         openDiscover(app)
         browse("Recommended", app: app)
         app.buttons["connectZLibrary"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
@@ -483,7 +489,7 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor func testEmptyRecommendationsStayHonestAndCanSwitchToPopularInDusk() {
         continueAfterFailure = false
         let app = launch(recommendations: "empty")
-        app.tabBars.buttons["Settings"].tap(); app.buttons["Dusk theme"].tap(); app.tabBars.buttons["Library"].tap()
+        app.selectTab("Settings"); app.buttons["Dusk theme"].tap(); app.selectTab("Library")
         openDiscover(app)
         browse("Recommended", app: app)
         app.buttons["connectZLibrary"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
@@ -537,7 +543,7 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor func testSearchOrderInNightLandscapeFailureRetryAndRelaunch() {
         continueAfterFailure = false
         let app = launch(sceneGeometry: true)
-        app.tabBars.buttons["Settings"].tap();app.buttons["Night theme"].tap();app.tabBars.buttons["Library"].tap()
+        app.selectTab("Settings");app.buttons["Night theme"].tap();app.selectTab("Library")
         openDiscover(app)
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:10))
         XCTAssertFalse(app.buttons["zlibrarySearchOrder"].exists)
@@ -628,10 +634,10 @@ final class ZLibraryUITests: XCTestCase {
     @MainActor func testBookCardsShowSizesRatingsAndHonestMissingDataInDarkAppearance() {
         continueAfterFailure = false
         let app = launch(sceneGeometry: true)
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         app.buttons["Night theme"].tap()
         XCTAssertTrue(app.buttons["Night theme"].isSelected)
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         openDiscover(app)
         let rated = app.buttons["catalogBook-sample"], unrated = app.buttons["catalogBook-sample2"]
         XCTAssertTrue(rated.waitForExistence(timeout:10))
@@ -685,8 +691,8 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor func testSparsePopularEntryResolvesDetailsThenImportsWithoutSearch() {
         let app = launch(details: "success")
-        app.tabBars.buttons["Settings"].tap(); app.buttons["Sage theme"].tap()
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Settings"); app.buttons["Sage theme"].tap()
+        app.selectTab("Library")
         openDiscover(app)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout:10))
         app.buttons["catalogBook-sample"].tap()
@@ -989,10 +995,10 @@ final class ZLibraryUITests: XCTestCase {
     }
     @MainActor func testCatalogAndConnectionUseTheSelectedAppTheme() {
         let app = launch()
-        app.tabBars.buttons["Settings"].tap()
+        app.selectTab("Settings")
         app.buttons["Dusk theme"].tap()
         XCTAssertTrue(app.buttons["Dusk theme"].isSelected)
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         openDiscover(app)
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
         capture("Dusk catalog")
@@ -1033,12 +1039,12 @@ final class ZLibraryUITests: XCTestCase {
         waitForExpectations(timeout: 10)
         XCTAssertTrue(app.buttons["catalogBook-sample2"].waitForExistence(timeout: 10))
         capture("See all opens Discover popular")
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         let field = app.textFields["librarySearch"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap(); field.typeText("Coast tides")
         // Typing hides the featured book and shelf; the field must stay on screen.
-        XCTAssertTrue(field.isHittable)
+        assertOnScreen(field, in: app, "The library search field stays on screen while typing")
         XCTAssertGreaterThan(field.frame.minY, app.navigationBars.firstMatch.frame.maxY - 1)
         let fallback = app.buttons["librarySearchZLibrary"]
         XCTAssertTrue(fallback.waitForExistence(timeout: 5))
@@ -1054,7 +1060,7 @@ final class ZLibraryUITests: XCTestCase {
         capture("Fallback search in Discover")
         app.buttons["Z-Library connection"].tap(); app.buttons["zlibraryPreviewConnect"].tap()
         XCTAssertTrue(app.buttons["catalogBook-sample"].waitForExistence(timeout: 10))
-        app.tabBars.buttons["Settings"].tap(); app.buttons["Night theme"].tap(); app.tabBars.buttons["Library"].tap()
+        app.selectTab("Settings"); app.buttons["Night theme"].tap(); app.selectTab("Library")
         app.buttons["libraryClearSearch"].tap()
         expectation(for: NSPredicate(format: "label == %@", "Recommended for you"), evaluatedWith: title)
         waitForExpectations(timeout: 10)
@@ -1078,7 +1084,7 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["discoverSeeAll"].tap()
         expectation(for: NSPredicate(format: "label == %@", "Recommended"), evaluatedWith: app.staticTexts["zlibraryFeedTitle"])
         waitForExpectations(timeout: 10)
-        app.tabBars.buttons["Library"].tap()
+        app.selectTab("Library")
         recommended.tap()
         let add = app.buttons["catalogAddBook"]
         XCTAssertTrue(add.waitForExistence(timeout: 10))

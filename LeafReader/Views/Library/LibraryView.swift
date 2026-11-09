@@ -65,7 +65,7 @@ struct LibraryView: View {
                     if let book = featured, query.isEmpty, filter == .all, format == nil {
                         featuredBook(book)
                     }
-                    if (!shelf.isEmpty || catalog.shelfLoading || catalog.shelfError != nil || catalog.connected && catalog.shelf.isEmpty), query.isEmpty, filter == .all, format == nil {
+                    if (!shelf.isEmpty || catalog.shelfLoading || catalog.shelfError != nil || (catalog.connected || catalog.hasCurrentRecommendations) && catalog.shelf.isEmpty), query.isEmpty, filter == .all, format == nil {
                         discoverShelf
                     }
                     if discovery.allowsAutomaticShelf, query.isEmpty, filter == .all, format == nil {

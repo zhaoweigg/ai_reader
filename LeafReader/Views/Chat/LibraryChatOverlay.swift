@@ -54,6 +54,10 @@ struct TabChatHost: ViewModifier {
                     ReaderChatLauncher(isMoving: $chat.isMoving, location: .library) {
                         onOpen(); chat.open(nil, directory: directory)
                     }
+                    // Keep the button where the reader put it while a search field's
+                    // keyboard is up. Fitting it into the space above the keyboard
+                    // pushed it onto Discover's Search button in landscape.
+                    .ignoresSafeArea(.keyboard)
                 }
             }
             .sheet(isPresented: $chat.choosingConversation) {

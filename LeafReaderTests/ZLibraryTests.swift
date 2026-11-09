@@ -195,6 +195,26 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertTrue(store.shelf.isEmpty)
         XCTAssertTrue(ZLibraryStore(defaults: defaults, credentials: credentials, client: client).shelf.isEmpty)
     }
+    /// The Library loads a saved account's recommendations without visiting
+    /// Discover, so `connected` is still false. An empty answer must still count
+    /// as a finished recommendations load, or the Library hides the empty state.
+    func testEmptyRecommendationsFromASavedSessionCountAsLoaded() async throws {
+        let client = CatalogService(), (store, credentials, defaults) = store(client)
+        let connected = await store.connect(session); XCTAssertTrue(connected)
+        client.recommendedBooks = []
+        let reopened = ZLibraryStore(defaults: defaults, credentials: credentials, client: client)
+        XCTAssertFalse(reopened.hasCurrentRecommendations)
+        await reopened.loadShelf()
+        XCTAssertTrue(reopened.shelf.isEmpty); XCTAssertNil(reopened.shelfError); XCTAssertFalse(reopened.shelfLoading)
+        XCTAssertEqual(reopened.shelfFeed, .recommended); XCTAssertFalse(reopened.connected)
+        XCTAssertTrue(reopened.hasCurrentRecommendations)
+        let (anonymous, _, _) = self.store(client)
+        client.popularBooks = []
+        await anonymous.loadShelf()
+        XCTAssertEqual(anonymous.shelfFeed, .popular); XCTAssertFalse(anonymous.hasCurrentRecommendations, "An empty public feed is not a recommendations answer")
+        try await reopened.disconnect()
+        XCTAssertFalse(reopened.hasCurrentRecommendations, "Disconnecting forgets the finished load")
+    }
     func testShelfReusesDiscoverListAndShowsThrottledFailure() async throws {
         let client = CatalogService(), (store, _, _) = store(client)
         client.popularBooks = [book]

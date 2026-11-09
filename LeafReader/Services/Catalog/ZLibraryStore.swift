@@ -66,6 +66,10 @@ final class ZLibraryStore: ObservableObject {
     var shelfContext: ZLibraryShelfContext { .init(generation: generation, origin: origin.url, connected: connected) }
     private var shelfTask: (id: UUID, context: ZLibraryShelfContext, task: Task<Void, Never>)?
     private var shelfGeneration: UUID?
+    /// The Library shelf finished loading this account's recommendations for the
+    /// current connection, even when there were none. A saved session loads them
+    /// without visiting Discover, so `connected` alone can still be false here.
+    var hasCurrentRecommendations: Bool { shelfFeed == .recommended && shelfGeneration != nil && shelfGeneration == generation }
     private var shelfRetryAfter: Date?
     private var shelfAttemptContext: ZLibraryShelfContext?
     private struct ShelfCache: Codable {
