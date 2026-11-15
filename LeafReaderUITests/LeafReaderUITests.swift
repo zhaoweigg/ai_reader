@@ -2593,11 +2593,17 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(summary.waitForExistence(timeout: 5))
         XCTAssertTrue(summary.label.contains("input tokens"), summary.label)
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "9 calls")).firstMatch.exists)
-        XCTAssertTrue(app.staticTexts["Tool result · search_book"].exists)
-        capture("Agent trace detail")
-        // Steps load lazily; collect each round's usage line while scrolling.
+        // Steps load lazily; collect each round's usage line while scrolling. The
+        // request context row can take an extra line, leaving later steps unloaded.
         let usage = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "agentTraceStepUsage-"))
         var roundsWithUsage = Set<String>()
+        let toolResult = app.staticTexts["Tool result · search_book"]
+        for _ in 0..<4 where !toolResult.exists {
+            usage.allElementsBoundByIndex.forEach { roundsWithUsage.insert($0.identifier) }
+            app.swipeUp()
+        }
+        XCTAssertTrue(toolResult.exists)
+        capture("Agent trace detail")
         for attempt in 0..<4 {
             usage.allElementsBoundByIndex.forEach { roundsWithUsage.insert($0.identifier) }
             if roundsWithUsage.count >= 2 { break }
