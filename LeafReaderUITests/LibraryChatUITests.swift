@@ -244,11 +244,31 @@ final class LibraryChatUITests: XCTestCase {
         XCTAssertFalse(app.buttons["book-The Art of Noticing"].exists)
         app.buttons["openLibraryChat"].tap()
         hideKeyboard(app)
-        XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "General chat")
-        XCTAssertTrue(app.textViews["A separate general question"].exists)
-        chooseBook(app)
+        XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "The Art of Noticing")
         XCTAssertEqual(input(app).value as? String, "Book draft", "Filtering the grid must not change saved book conversations")
+        app.buttons["chooseLibraryConversation"].tap(); app.buttons["chatGeneral"].tap()
+        XCTAssertTrue(app.textViews["A separate general question"].exists)
         capture("Library search keeps book conversations available")
+    }
+    @MainActor func testClosingAndReopeningGeneralChatResumesItsActiveReply() {
+        let app = launch(empty: true, environment: ["LEAF_UI_CHAT_SLOW": "1"])
+        app.buttons["openLibraryChat"].leafTapVisible(in: app)
+        input(app).leafTapVisible(in: app); input(app).typeText("Keep answering while I close this")
+        app.buttons["sendReaderChat"].leafTapVisible(in: app)
+        let reply = app.textViews.matching(identifier: "chatReply").firstMatch
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "Test reply:"), evaluatedWith: reply)
+        waitForExpectations(timeout: 10)
+        hideKeyboard(app)
+        app.buttons["closeReaderChat"].leafTapVisible(in: app)
+        XCTAssertTrue(app.buttons["openLibraryChat"].waitForExistence(timeout: 5))
+        app.buttons["openLibraryChat"].leafTapVisible(in: app)
+        XCTAssertTrue(reply.waitForExistence(timeout: 5)); XCTAssertTrue(reply.label.contains("Test reply:"))
+        XCTAssertFalse(app.buttons["Retry"].exists)
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "what the character assumes."), evaluatedWith: reply)
+        waitForExpectations(timeout: 45)
+        XCTAssertEqual(app.textViews.matching(identifier: "chatQuestion").count, 1)
+        XCTAssertEqual(app.textViews.matching(identifier: "chatReply").count, 1)
+        capture("Reopened general conversation finishes the original reply")
     }
     @MainActor func testLibraryLauncherMovementThemesRotationAndPanelSizing() {
         XCUIDevice.shared.orientation = .portrait

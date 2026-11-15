@@ -140,7 +140,7 @@ final class ChatRetryTests: XCTestCase {
         XCTAssertNil(session.error); XCTAssertEqual(provider.plainRequests.count, 4)
     }
 
-    func testOtherFailuresStillShowAndClosingCancelsAPendingContinue() async throws {
+    func testOtherFailuresStillShowAndStoppingCancelsAPendingContinue() async throws {
         // A refusal is not caused by leaving the screen.
         let refused = RetryProvider(); refused.replies = [.init(error: ChatError.http(401))]
         let session = ReaderChatSession(); session.retryPolicy = immediate; session.draft = "Why?"
@@ -161,7 +161,7 @@ final class ChatRetryTests: XCTestCase {
         try await eventually(interval: 0.005) { !staying.isSending }
         XCTAssertEqual(staying.error, "The connection was lost. Check your internet connection and retry.")
 
-        // Closing the chat while waiting to continue drops the continue.
+        // Explicit Stop while waiting to continue cancels the continue.
         let dropped = RetryProvider(); dropped.replies = Array(repeating: .init(error: socketAbort), count: 3)
         let closing = ReaderChatSession(); closing.retryPolicy = immediate; closing.draft = "Why?"
         var away = false
@@ -169,7 +169,7 @@ final class ChatRetryTests: XCTestCase {
         closing.send(settings: try settings(dropped)) { self.context }
         away = true; closing.appDidEnterBackground()
         try await eventually(interval: 0.005) { !closing.isSending }
-        closing.close()
+        closing.stop()
         away = false; closing.appWillEnterForeground()
         XCTAssertFalse(closing.isSending); XCTAssertEqual(dropped.plainRequests.count, 3)
     }
@@ -230,24 +230,52 @@ final class ChatRetryTests: XCTestCase {
         XCTAssertEqual(provider.plainRequests[0].turns, provider.plainRequests[3].turns)
     }
 
-    func testStopAndCloseCancelBackoffWithoutStartingAnotherRequest() async throws {
-        for close in [false, true] {
-            let provider = RetryProvider(); provider.replies = [.init(error: URLError(.networkConnectionLost))]
-            let session = ReaderChatSession(); session.draft = "Why?"
-            var sleeping = false, cancelled = false
-            session.retryPolicy.sleep = { _ in
-                sleeping = true
-                do { try await Task.sleep(for: .seconds(30)) } catch { cancelled = true; throw error }
-            }
-            let settings = try settings(provider, traced: true), traces = AgentTraceStore(directory: try temporaryFolder("RetryTests"))
-            session.send(settings: settings, traces: traces) { self.context }
-            try await eventually(interval: 0.005) { sleeping }
-            XCTAssertTrue(session.activity?.contains("Retrying (1/2)") == true)
-            if close { session.close() } else { session.stop() }
-            try await eventually(interval: 0.005) { cancelled }
-            XCTAssertFalse(session.isSending); XCTAssertEqual(provider.requests.count, 1); XCTAssertTrue(session.canRetry)
-            XCTAssertEqual(traces.traces.first?.outcome, .stopped)
+    func testClosingDuringBackoffKeepsTheRetryAndOriginalQuestion() async throws {
+        let provider = RetryProvider()
+        provider.replies = [.init(error: URLError(.networkConnectionLost)), .init(events: [.text("Completed"), .finished(truncated: false)])]
+        let session = ReaderChatSession(); session.draft = "Why?"
+        var sleeping = false
+        session.retryPolicy.sleep = { _ in sleeping = true; try await Task.sleep(for: .milliseconds(150)) }
+        session.send(settings: try settings(provider)) { self.context }
+        try await eventually(interval: 0.005) { sleeping }
+        session.close()
+        XCTAssertTrue(session.isSending)
+        try await eventually(interval: 0.005) { !session.isSending }
+        XCTAssertEqual(provider.plainRequests.count, 2); XCTAssertEqual(session.messages.count, 2)
+        XCTAssertEqual(provider.plainRequests.first?.turns, provider.plainRequests.last?.turns)
+        XCTAssertEqual(session.messages.last?.text, "Completed"); XCTAssertEqual(session.messages.last?.state, .complete)
+    }
+    func testClosingPanelKeepsAReplyWaitingForForegroundResume() async throws {
+        let provider = RetryProvider()
+        provider.replies = Array(repeating: .init(error: socketAbort), count: 3)
+            + [.init(events: [.text("Resumed"), .finished(truncated: false)])]
+        let session = ReaderChatSession(); session.retryPolicy = immediate; session.draft = "Why?"
+        var background = false; session.appInBackground = { background }
+        session.send(settings: try settings(provider)) { self.context }
+        background = true; session.appDidEnterBackground()
+        try await eventually(interval: 0.005) { !session.isSending }
+        session.close()
+        background = false; session.appWillEnterForeground()
+        try await eventually(interval: 0.005) { session.messages.last?.text == "Resumed" && !session.isSending }
+        XCTAssertEqual(provider.plainRequests.count, 4); XCTAssertEqual(session.messages.count, 2)
+        XCTAssertNil(session.error)
+    }
+    func testStopCancelsBackoffWithoutStartingAnotherRequest() async throws {
+        let provider = RetryProvider(); provider.replies = [.init(error: URLError(.networkConnectionLost))]
+        let session = ReaderChatSession(); session.draft = "Why?"
+        var sleeping = false, cancelled = false
+        session.retryPolicy.sleep = { _ in
+            sleeping = true
+            do { try await Task.sleep(for: .seconds(30)) } catch { cancelled = true; throw error }
         }
+        let settings = try settings(provider, traced: true), traces = AgentTraceStore(directory: try temporaryFolder("RetryTests"))
+        session.send(settings: settings, traces: traces) { self.context }
+        try await eventually(interval: 0.005) { sleeping }
+        XCTAssertTrue(session.activity?.contains("Retrying (1/2)") == true)
+        session.stop()
+        try await eventually(interval: 0.005) { cancelled }
+        XCTAssertFalse(session.isSending); XCTAssertEqual(provider.requests.count, 1); XCTAssertTrue(session.canRetry)
+        XCTAssertEqual(traces.traces.first?.outcome, .stopped)
     }
 
     func testStopDuringStreamingIgnoresLateTextWithoutRetry() async throws {
@@ -256,7 +284,7 @@ final class ChatRetryTests: XCTestCase {
         session.send(settings: try settings(provider)) { self.context }
         try await eventually(interval: 0.005) { provider.held != nil }
         provider.held?.yield(.text("Before stop")); try await eventually(interval: 0.005) { session.messages.last?.text == "Before stop" }
-        session.close(); provider.held?.yield(.text("Late")); provider.held?.finish(throwing: URLError(.networkConnectionLost))
+        session.stop(); provider.held?.yield(.text("Late")); provider.held?.finish(throwing: URLError(.networkConnectionLost))
         await Task.yield()
         XCTAssertEqual(provider.plainRequests.count, 1); XCTAssertEqual(session.messages.last?.text, "Before stop")
         XCTAssertEqual(session.messages.last?.state, .stopped)

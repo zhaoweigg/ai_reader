@@ -6,7 +6,12 @@ final class ReaderChatSession: ObservableObject {
     @Published private(set) var messages: [ReaderChatMessage] = []
     @Published var draft = "" { didSet { if !restoring { draftDirty = true; scheduleCheckpoint() } } }
     @Published private(set) var selectedContext: ReadingChatContext?
-    @Published private(set) var isSending = false { didSet { if isSending != oldValue { isSending ? holdInBackground() : releaseBackground() } } }
+    @Published private(set) var isSending = false {
+        didSet {
+            if isSending != oldValue { isSending ? holdInBackground() : releaseBackground() }
+            updateRetention()
+        }
+    }
     @Published private(set) var error: String?
     @Published private(set) var notice: String?
     @Published private(set) var historyError: String?
@@ -57,7 +62,24 @@ final class ReaderChatSession: ObservableObject {
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var backgroundedDuringReply = false
-    private var resumeOnForeground = false
+    private var resumeOnForeground = false { didSet { updateRetention() } }
+    private var retentionChanged: ((Bool) -> Void)?
+    private static let conversations = ChatSessionRegistry<ReaderChatSession>()
+
+    /// Library, other tabs and the reader reopen the same live request instead
+    /// of interpreting its saved streaming checkpoint as an interrupted reply.
+    static func conversation(directory: URL?, id: String) -> ReaderChatSession {
+        guard let directory else { return ReaderChatSession(directory: nil, conversation: id) }
+        let key = ChatSessionKey(directory: directory, conversation: id)
+        let session = conversations.session(for: key) { ReaderChatSession(directory: directory, conversation: id) }
+        session.retentionChanged = { [weak session] active in
+            guard let session else { return }
+            conversations.setActive(active, session: session, for: key)
+        }
+        session.updateRetention()
+        return session
+    }
+    private func updateRetention() { retentionChanged?(isSending || resumeOnForeground) }
     /// Held strongly: the continue must still have the settings the question was asked with.
     private var replySettings: AISettingsStore?
     var appInBackground: () -> Bool = { UIApplication.shared.applicationState == .background }
@@ -270,6 +292,9 @@ final class ReaderChatSession: ObservableObject {
     }
 
     func stop() {
+        let waitingToResume = resumeOnForeground
+        resumeOnForeground = false
+        if waitingToResume && !isSending { notice = "Response stopped."; flush() }
         guard isSending else { return }
         flushPendingText()
         generation = UUID(); task?.cancel(); task = nil; isSending = false
@@ -282,7 +307,8 @@ final class ReaderChatSession: ObservableObject {
         notice = "Response stopped."
         flush(); refreshLatest()
     }
-    func close() { resumeOnForeground = false; stop(); flush() }
+    /// Dismissal saves the view's draft and passage; only Stop/Clear cancels a reply.
+    func close() { flush() }
 
     func appDidEnterBackground() {
         if isSending { backgroundedDuringReply = true }

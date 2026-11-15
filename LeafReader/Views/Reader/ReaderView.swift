@@ -63,7 +63,7 @@ struct ReaderContent: View {
         let defaults = UserDefaults.standard
         #endif
         _audio = StateObject(wrappedValue: ReadAloudSession(bookmarkURL: library.disk?.root.appendingPathComponent("Audio/\(book.id.uuidString).json"), defaults: defaults))
-        _chat = StateObject(wrappedValue: ReaderChatSession(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true), conversation: book.fingerprint))
+        _chat = StateObject(wrappedValue: ReaderChatSession.conversation(directory: library.disk?.root.appendingPathComponent("ChatHistory", isDirectory: true), id: book.fingerprint))
     }
     var body: some View {
         ZStack {
@@ -166,6 +166,7 @@ struct ReaderContent: View {
         .overlay {
             if chatIsPresented {
                 ResizableChatPanel(session: chat, location: .reader, fullHeight: bookViewportHeight, bookTitle: book.title, onClose: {
+                    chat.close()
                     chatIsPresented = false
                     model.clearNativeSelection()
                     model.hideControls()
