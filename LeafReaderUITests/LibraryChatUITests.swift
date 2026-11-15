@@ -67,12 +67,11 @@ final class LibraryChatUITests: XCTestCase {
         capture(flow + " Library composing over visible library")
         app.buttons["closeReaderChat"].tap()
         launcher.tap()
-        XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "General chat")
-        chooseBook(app)
+        XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "The Art of Noticing")
         XCTAssertEqual(input(app).value as? String, "A saved Library draft")
         XCTAssertTrue(app.textViews["Remember my Library question"].exists)
-        // Opening the book underneath the panel must synchronously save and stop
-        // Library's owner before the reader creates a session for the same history.
+        // Opening the book checkpoints Library's view; the reader reuses the
+        // conversation owner rather than creating a second history writer.
         app.buttons["featuredBook"].tap()
         let surface = app.webViews["bookWebView"]
         XCTAssertTrue(surface.waitForExistence(timeout: 15))
