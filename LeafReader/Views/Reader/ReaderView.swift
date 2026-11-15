@@ -38,6 +38,9 @@ struct ReaderContent: View {
     @StateObject private var chat: ReaderChatSession
     @EnvironmentObject private var aiSettings: AISettingsStore
     @EnvironmentObject private var agentTraces: AgentTraceStore
+    // Read by Ask Leaf's app-wide tools.
+    @EnvironmentObject private var catalog: ZLibraryStore
+    @EnvironmentObject private var bestsellers: BestsellerStore
     @State private var bookViewportHeight: CGFloat = 0
     @State private var bookViewportFrame: CGRect = .zero
     @State private var chatFrame: CGRect?
@@ -175,9 +178,7 @@ struct ReaderContent: View {
                 }, onButtonSettings: {
                     panel = .buttonAppearance
                 }, onSend: {
-                    chat.send(settings: aiSettings, recall: { term, context in
-                        try await model.recallBookContext(term: term, context: context)
-                    }, agentBook: { context in
+                    chat.send(settings: aiSettings, app: ChatAppData(catalog: catalog, bestsellers: bestsellers, library: library, openBook: book.id), agentBook: { context in
                         try await model.readingAgentBook(for: context)
                     }, traces: agentTraces) { try await model.readingChatContext() }
                 })
@@ -199,9 +200,9 @@ struct ReaderContent: View {
             if !open { model.setReadingClearance(0) }
             updateSpokenClearance()
         }
-        .task(id: chatIsPresented && model.isReady && aiSettings.configuration.harness == .agent && aiSettings.configuration.sharePage) {
+        .task(id: chatIsPresented && model.isReady && aiSettings.configuration.sharePage) {
             // Closing the chat or the book cancels preparation; saved sections are kept.
-            if chatIsPresented && model.isReady && aiSettings.configuration.harness == .agent && aiSettings.configuration.sharePage { await model.warmBookText() }
+            if chatIsPresented && model.isReady && aiSettings.configuration.sharePage { await model.warmBookText() }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showsControls)
         .background(theme.background.ignoresSafeArea()).foregroundStyle(theme.foreground).tint(theme.accent)

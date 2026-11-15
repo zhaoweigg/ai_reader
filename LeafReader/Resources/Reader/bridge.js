@@ -4,7 +4,6 @@ import { createAnnotations } from './annotations.js';
 import { readAloudChunk, revealReadAloud, clearReadAloud, setSpokenRange, clearSpokenRange } from './read-aloud.js';
 import { languageText, contributor } from './metadata-text.js';
 import { nearbyChatText } from './chat-context.js';
-import { retrieveEarlierPassages } from './book-recall.js';
 import { sectionText, textBoundary } from './book-text.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
@@ -19,7 +18,6 @@ const observedDocuments = new WeakSet();
 // Remember the current selection owner without retaining an evicted chapter.
 // An empty current selection must never resurrect an older iframe range.
 let selectedDocument;
-let chatRecallID;
 let readingClearance = 0;
 let spokenClearance = 0;
 let readingViewport;
@@ -437,11 +435,6 @@ async function search({query, generation}) {
 }
 
 window.Leaf = { open, close, command, applyPreferences, search, tap, allowsReaderTap, setReadingClearance,
-    recallBook: async ({term, locator, id, selection}) => {
-        const source=view; chatRecallID=id;
-        return retrieveEarlierPassages(source,term,locator,{selection,prepare:sanitize,cancelled:()=>view!==source || chatRecallID!==id});
-    },
-    cancelRecall: ({id}) => { if (chatRecallID===id) chatRecallID=null; },
     sectionText: ({index}) => sectionText(view, index, sanitize),
     textBoundary: ({locator}) => textBoundary(view, locator, sanitize),
     setSpokenRange: config => {

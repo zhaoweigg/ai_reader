@@ -56,14 +56,7 @@ struct AISettingsView: View {
                         }
                     } header: { Text("API key") } footer: { Text("Your own provider key is stored on this device. API usage is billed by your provider. No key is bundled with Leaf.") }
                 }
-                Section {
-                    Picker("Book context", selection: $configuration.harness) {
-                        ForEach(ReadingChatHarness.allCases) { harness in Text(harness.title).tag(harness) }
-                    }.pickerStyle(.inline).labelsHidden().accessibilityIdentifier("aiHarness")
-                } header: { Text("Book context") } footer: {
-                    Text(configuration.harness.summary + " Each reply shows which one answered.")
-                }
-                if configuration.harness == .agent { AgentLimitsSection(configuration: $configuration) }
+                AgentLimitsSection(configuration: $configuration)
                 Section("Reading context") {
                     Toggle("Include current passage", isOn: $configuration.sharePage).accessibilityIdentifier("aiSharePage")
                     if configuration.sharePage {
@@ -72,9 +65,7 @@ struct AISettingsView: View {
                         contextStepper("Text after", value: $configuration.contextLimits.after, range: ReadingContextLimits.afterRange, step: 400, id: "contextAfter")
                     }
                     let limit = configuration.contextLimits.characters.formatted()
-                    Text(configuration.harness == .agent
-                         ? "Sending shares your question, up to \(limit) characters of selected or visible text, nearby text, book details, approximate reading progress and recent discussion. The AI can also ask for passages it searches in the book up to your reading position, and earlier discussion it searches for. Book text is prepared on this device. Images and entire books are not uploaded. Disable this to send questions and chat text only; book search is then off."
-                         : "Sending shares your question, up to \(limit) characters of selected or visible text, nearby text and relevant earlier book passages, plus book details, approximate reading progress and recent or relevant earlier discussion. Character reminders look up earlier mentions locally. Images and entire books are not uploaded. Disable this to send questions and chat text only.")
+                    Text("Sending shares your question, up to \(limit) characters of selected or visible text, nearby text, book details, approximate reading progress and recent discussion. The AI can also ask for passages it searches in your books up to where you stopped reading, your highlights and notes, and earlier discussion it searches for. Book text is prepared on this device. Images and entire books are not uploaded. Disable this to send questions and chat text only; book search, highlight text and notes are then off. Catalog, bestseller and library lists are available to every chat.")
                         .font(.footnote).foregroundStyle(.secondary)
                     if configuration.sharePage {
                         Text("Nearby text stays within the current chapter, and text after a selection stops at the end of the visible page. Larger limits give the AI more to work with but use more of your plan.")

@@ -279,8 +279,8 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(long.bounded(ReadingContextLimits()).text.count, 12000)
     }
     func testConfiguredReadingContextLimitsTrimRequestsAndClampSavedValues() throws {
-        func sent(_ context: ReadingChatContext, _ limits: ReadingContextLimits, harness: ReadingChatHarness = .evidence) throws -> [String: Any] {
-            let content = try XCTUnwrap(ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Why?", context: context)], harness: harness, limits: limits).turns.last?.content)
+        func sent(_ context: ReadingChatContext, _ limits: ReadingContextLimits, bookTools: Bool = false) throws -> [String: Any] {
+            let content = try XCTUnwrap(ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Why?", context: context)], bookTools: bookTools, limits: limits).turns.last?.content)
             let start = try XCTUnwrap(content.range(of: "\n")).upperBound, end = try XCTUnwrap(content.range(of: "\n\nReader question:")).lowerBound
             return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(content[start..<end].utf8)) as? [String: Any])
         }
@@ -289,7 +289,7 @@ final class ChatTests: XCTestCase {
             precedingText: String(repeating: "前", count: 9000), followingText: String(repeating: "后", count: 9000), progress: 0.3).bounded()
         XCTAssertEqual(counts(try sent(context, ReadingContextLimits())), [10000, 2000, 0], "Default: 12,000 in all, before ahead of after")
         XCTAssertEqual(counts(try sent(context, ReadingContextLimits(characters: 20000, before: 6000, after: 3000))), [10000, 6000, 3000])
-        XCTAssertEqual(counts(try sent(context, ReadingContextLimits(characters: 4000, before: 0, after: 0), harness: .agent)), [4000, 0, 0])
+        XCTAssertEqual(counts(try sent(context, ReadingContextLimits(characters: 4000, before: 0, after: 0), bookTools: true)), [4000, 0, 0])
         let largest = ReadingContextLimits.capture
         XCTAssertEqual(counts(try sent(context, largest)), [10000, 8000, 4000])
         let escaped = ReadingChatContext(title: "T", author: "", chapter: "", text: String(repeating: "\u{0001}", count: 24000), source: "page", locator: "")
@@ -365,46 +365,23 @@ final class ChatTests: XCTestCase {
     func testCharacterLookupSkipsGenericSelectionsAndQuestionsWithoutAName() {
         for text in ["a", "the", "he", "这个"] {
             let selected = ReadingChatContext(title: "Book", author: "", chapter: "C", text: text, source: "selection", locator: "")
-            XCTAssertNil(ReadingBookRecall.lookupTerm(question: "Who is being discussed here?", context: selected))
-            XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "Who is Lin?", context: selected), "Lin")
+            XCTAssertNil(ReadingAgentToolbox.followUpTerm(question: "Who is being discussed here?", context: selected))
+            XCTAssertEqual(ReadingAgentToolbox.followUpTerm(question: "Who is Lin?", context: selected), "Lin")
         }
         let page = ReadingChatContext(title: "Book", author: "", chapter: "C", text: "A passage with several characters.", source: "page", locator: "")
-        XCTAssertNil(ReadingBookRecall.lookupTerm(question: "Who is he?", context: page))
-        XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "我忘了“白虎”的身份", context: page), "白虎")
+        XCTAssertNil(ReadingAgentToolbox.followUpTerm(question: "Who is he?", context: page))
+        XCTAssertEqual(ReadingAgentToolbox.followUpTerm(question: "我忘了“白虎”的身份", context: page), "白虎")
     }
     func testFollowUpPhrasingIsNotANameAndKeepsThePreviousSubject() {
         let page = ReadingChatContext(title: "十日终焉", author: "", chapter: "第408章", text: "接连死去的两个队友……", source: "page", locator: "")
         for question in ["再说一遍是谁", "所以他到底是谁", "那个人是谁", "她是谁"] {
-            XCTAssertNil(ReadingBookRecall.lookupTerm(question: question, context: page), question)
-            XCTAssertEqual(ReadingBookRecall.lookupTerm(question: question, context: page, previous: "林檎"), "林檎", question)
+            XCTAssertNil(ReadingAgentToolbox.followUpTerm(question: question, context: page), question)
+            XCTAssertEqual(ReadingAgentToolbox.followUpTerm(question: question, context: page, previous: "林檎"), "林檎", question)
         }
-        XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "再说一遍白虎是谁", context: page, previous: "林檎"), "白虎")
-        XCTAssertEqual(ReadingBookRecall.lookupTerm(question: "林檎是谁", context: page, previous: "白虎"), "林檎")
+        XCTAssertEqual(ReadingAgentToolbox.followUpTerm(question: "再说一遍白虎是谁", context: page, previous: "林檎"), "白虎")
+        XCTAssertEqual(ReadingAgentToolbox.followUpTerm(question: "林檎是谁", context: page, previous: "白虎"), "林檎")
         let earlier = ReaderChatMessage(isUser: true, text: "这是谁", context: ReadingChatContext(title: "", author: "", chapter: "", text: "林檎", source: "selection", locator: ""))
         XCTAssertEqual(ReaderChatSession.previousSubject([earlier, ReaderChatMessage(isUser: false, text: "心理咨询师")]), "林檎")
-    }
-    func testEvidenceFollowUpLooksUpThePreviousSubjectNotThePhrase() async throws {
-        let provider = ControlledChatProvider(), (settings, _, _) = settings(provider)
-        let session = ReaderChatSession()
-        session.attachSelection(ReadingChatContext(title: "测试", author: "", chapter: "第三章", text: "林檎", source: "selection", locator: "a", progress: 0.4))
-        session.draft = "这是谁"
-        var terms: [String] = []
-        let recall: @MainActor (String, ReadingChatContext) async throws -> ReadingBookRecall? = { term, _ in
-            terms.append(term)
-            return ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "林檎是心理咨询师。")], scannedSections: 2, totalSections: 2, complete: true)
-        }
-        session.send(settings: settings, recall: recall) { nil }
-        try await eventually { provider.requests.count == 1 }
-        provider.continuations[0].yield(.text("心理咨询师。")); provider.continuations[0].yield(.finished(truncated: false)); provider.continuations[0].finish()
-        try await eventually { !session.isSending }
-        session.draft = "再说一遍是谁"
-        session.send(settings: settings, recall: recall) {
-            ReadingChatContext(title: "测试", author: "", chapter: "第三章", text: "接连死去的两个队友。", source: "page", locator: "b", progress: 0.4)
-        }
-        try await eventually { provider.requests.count == 2 }
-        XCTAssertEqual(terms, ["林檎", "林檎"])
-        XCTAssertTrue(provider.requests[1].turns.last?.content.contains("林檎是心理咨询师。") == true)
-        session.stop()
     }
     func testMovingBackInBookOmitsRecentDiscussionBeyondCurrentPosition() {
         var later = context; later.progress = 0.9
@@ -416,41 +393,10 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(request.turns.count, 1)
         XCTAssertFalse(request.turns.map(\.content).joined().contains("FUTURE SECRET"))
     }
-    func testBaihuReminderUsesEarlierBookEvidenceAndKeepsCoverageAndBudgetHonest() throws {
-        let question = "我有点忘了这个角色了，帮我回忆一下"
-        var selected = ReadingChatContext(title: "测试故事", author: "测试作者", chapter: "第三章", text: "白虎", source: "selection", locator: "private-cfi", progress: 0.4)
-        XCTAssertEqual(ReadingBookRecall.lookupTerm(question: question, context: selected), "白虎")
-        XCTAssertNil(ReadingBookRecall.lookupTerm(question: "Translate this sentence", context: selected))
-        selected.bookRecall = ReadingBookRecall(term: "白虎", excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "白虎是测试故事中的城门守卫。")], scannedSections: 3, totalSections: 10, complete: false)
-        let decoded = try JSONDecoder().decode(ReadingChatContext.self, from: JSONEncoder().encode(selected))
-        XCTAssertEqual(decoded, selected)
-        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: question, context: selected)])
-        let content = try XCTUnwrap(request.turns.last?.content)
-        XCTAssertTrue(content.contains("白虎是测试故事中的城门守卫。")); XCTAssertTrue(content.contains("earlier_book_passages"))
-        XCTAssertTrue(content.contains("\"complete\":false")); XCTAssertTrue(content.hasSuffix(question))
-        XCTAssertFalse(content.contains("private-cfi")); XCTAssertTrue(request.system.contains("Lead with the character's supported identity"))
-        selected.bookRecall = ReadingBookRecall(term: "白虎", excerpts: (0..<20).map { _ in ReadingBookExcerpt(chapter: String(repeating: "章", count: 800), text: String(repeating: "\u{0001}", count: 12000)) }, scannedSections: 512, totalSections: 1000, complete: false)
-        let bounded = selected.bounded(ReadingContextLimits())
-        XCTAssertLessThanOrEqual(bounded.text.count + (bounded.precedingText?.count ?? 0) + (bounded.followingText?.count ?? 0) + (bounded.bookRecall?.excerpts.reduce(0) { $0 + $1.text.count } ?? 0), 12000)
-        XCTAssertEqual(ChatRequest.conversation([ReaderChatMessage(isUser: true, text: question, context: bounded)]).turns.count, 1)
-    }
-    func testCharacterRecallUsesFrozenSelectionAndRetryKeepsOriginalEvidence() async throws {
-        let provider = ControlledChatProvider(), (settings, _, _) = settings(provider)
-        let session = ReaderChatSession(); session.retryPolicy.delays = []
-        let selected = ReadingChatContext(title: "测试故事", author: "", chapter: "第三章", text: "白虎", source: "selection", locator: "snapshot-location", progress: 0.4)
-        session.attachSelection(selected); session.draft = "我忘了这个角色，帮我回忆一下"
-        var lookups = 0
-        session.send(settings: settings, recall: { term, context in
-            lookups += 1; XCTAssertEqual(term, "白虎"); XCTAssertEqual(context.locator, "snapshot-location")
-            return ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "白虎守着测试城门。")], scannedSections: 3, totalSections: 3, complete: true)
-        }) { XCTFail("Attached selection is already captured"); return nil }
-        try await eventually { provider.requests.count == 1 }
-        XCTAssertTrue(provider.requests[0].turns.last?.content.contains("白虎守着测试城门。") == true)
-        provider.continuations[0].finish(throwing: ChatError.interrupted)
-        try await eventually { !session.isSending }
-        session.retry(settings: settings); try await eventually { provider.requests.count == 2 }
-        XCTAssertEqual(lookups, 1); XCTAssertEqual(provider.requests[0].turns, provider.requests[1].turns)
-        session.stop()
+    func testReminderQuestionsSeedTheHighlightedName() {
+        let selected = ReadingChatContext(title: "测试故事", author: "测试作者", chapter: "第三章", text: "白虎", source: "selection", locator: "private-cfi", progress: 0.4)
+        XCTAssertEqual(ReadingAgentToolbox.followUpTerm(question: "我有点忘了这个角色了，帮我回忆一下", context: selected), "白虎")
+        XCTAssertNil(ReadingAgentToolbox.followUpTerm(question: "Translate this sentence", context: selected))
     }
     /// Holds the page capture open until the test releases it.
     private final class ContextGate: @unchecked Sendable {
@@ -508,7 +454,7 @@ final class ChatTests: XCTestCase {
         let session = ReaderChatSession()
         session.attachSelection(ReadingChatContext(title: "Book", author: "", chapter: "C", text: "白虎", source: "selection", locator: "private"))
         session.draft = "帮我回忆这个人物"
-        session.send(settings: settings, recall: { _, _ in XCTFail("Sharing off must skip local book lookup"); return nil }) { XCTFail("Sharing off must skip passage capture"); return nil }
+        session.send(settings: settings, agentBook: { _ in XCTFail("Sharing off must not search the book"); return nil }) { XCTFail("Sharing off must skip passage capture"); return nil }
         try await eventually { provider.requests.count == 1 }
         XCTAssertFalse(provider.requests[0].turns.last?.content.contains("reading_context") == true)
         session.stop()

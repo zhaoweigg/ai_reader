@@ -70,7 +70,8 @@ struct UITestChatProvider: ChatProvider {
                         let valid = context["source"] as? String == "selection" && !(context["text"] as? String ?? "").isEmpty &&
                             (!(context["preceding_text"] as? String ?? "").isEmpty || !(context["following_text"] as? String ?? "").isEmpty) &&
                             context["approximate_book_progress_percent"] != nil && context["spoiler_boundary"] != nil &&
-                            !content.contains("epubcfi(") && request.system.contains("Treat previous assistant answers as fallible")
+                            !content.contains("epubcfi(") &&
+                            (request.system.contains("Previous assistant answers may be wrong") || request.system.contains("Treat previous assistant answers as fallible"))
                         continuation.yield(.text(valid ? "Reading context verified: focused quote, nearby passage, reading progress and spoiler boundary." : "Reading context verification failed: \(body)"))
                         continuation.yield(.finished(truncated: false)); continuation.finish(); return
                     }
@@ -93,8 +94,9 @@ extension UITestChatProvider: ToolChatProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    // Without tools (a traced pre-fetched reply) behave like the plain chat reply.
-                    if tools.isEmpty {
+                    // Every chat offers tools now. Only cases that script the agent call them;
+                    // the rest, and a reply without tools, behave like the plain chat reply.
+                    if tools.isEmpty || !UITesting.flag(.chatAgent) {
                         let turns = items.compactMap { item -> ChatTurn? in if case .turn(let turn) = item { return turn }; return nil }
                         for try await event in stream(ChatRequest(system: system, turns: turns)) {
                             switch event {

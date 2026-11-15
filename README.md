@@ -210,10 +210,10 @@ flowchart TB
     Session --> Ctx{"Include current passage?"}
     Ctx -->|yes| Snap["Snapshot: selection, visible range<br/>or PDF page · ≤12,000 chars"]
     Ctx -->|no| NoCtx["Metadata only"]
-    Snap & NoCtx --> Harness{"Book context setting"}
-    Harness -->|"Pre-fetched evidence (Sam)"| Evidence["BookTextIndex lookup<br/>before the request"]
-    Harness -->|"Book search agent (Claude)"| Tools["Model calls tools:<br/>search_book · read_passage · list_chapters<br/>search_conversation · get_current_view · get_item_details"]
-    Evidence & Tools --> Provider["ChatProvider"]
+    Snap & NoCtx --> Agent["Leaf agent<br/>ReadingAgentRunner"]
+    Agent -->|"provider has tools"| Tools["Model calls read-only tools<br/>(table below)"]
+    Agent -->|"provider or model has none"| Plain["One request without tools<br/>passage · earlier discussion · screen list as text"]
+    Tools & Plain --> Provider["ChatProvider"]
     Provider --> Anthropic["Anthropic Messages<br/>API key"]
     Provider --> OpenAICompat["Chat Completions compatible<br/>any HTTPS endpoint + key"]
     Provider --> ChatGPT["ChatGPT subscription<br/>OAuth · Responses API · can draw pictures"]
@@ -221,6 +221,32 @@ flowchart TB
     Stream --> Panel["Markdown reply, 80 ms batches<br/>history follows unless you scroll"]
     Stream --> HistoryDB["SQLite history per book<br/>24-message pages · pictures beside it"]
 ```
+
+### What the agent can read
+
+Every Ask Leaf chat, in a book or on a tab, offers the same read-only tools. They read the stores directly when they run, so a question works even if that screen was never opened this launch (a feed or chart is fetched then and kept for the screen).
+
+| Tools | Reads | Where |
+| --- | --- | --- |
+| `search_book` · `read_passage` · `list_chapters` | the open book, only up to the reading position | reader chat |
+| `get_current_view` · `get_item_details` | the screen the chat floats over, as it is now | Discover, Bookmarks, Library |
+| `get_catalog_feed` · `search_catalog` · `get_catalog_book` | Z-Library popular / recommended lists, search, one book's details | every chat |
+| `get_bestsellers` | Indie or NYT hardcover fiction / nonfiction chart | every chat |
+| `list_library` · `search_saved` | your books with progress; bookmarks, highlights and notes | every chat |
+| `search_my_books` | other books' text, each only up to where you stopped | every chat, passage sharing on |
+| `search_conversation` | older messages in this chat | every chat |
+
+```mermaid
+flowchart LR
+    Open["Ask Leaf opened<br/>while reading"] --> Warm["warmBookText<br/>sections to the reading position"]
+    Warm --> Disk["ChatIndex/‹fingerprint›/v1<br/>section JSON + position.json"]
+    Disk --> Other["search_my_books from any chat"]
+    Other --> Check{"saved position still behind<br/>the book's current place?"}
+    Check -->|yes| Hits["passages up to that position"]
+    Check -->|"no (reader went back)"| Skip["listed as not searchable"]
+```
+
+Highlight text, notes and book passages follow the **Include current passage** switch; titles, authors, progress and catalog listings do not. The tools never download, add or change anything.
 
 ### What happens to one request
 
@@ -256,7 +282,7 @@ Recent context is capped at 12 turns and 48,000 characters; opaque locators neve
 | Chat Completions compatible | API key per endpoint | `HTTPChatProvider` | Full HTTPS endpoint and model ID; legacy `max_tokens` switch |
 | ChatGPT subscription | OAuth via `ASWebAuthenticationSession`, loopback callback on 127.0.0.1 | `ChatGPTSubscriptionProvider`, `POST /v1/responses` with `store: false` | Account-specific model list; RS256 ID-token verification; image generation tool |
 
-Keys and tokens are stored `WhenUnlockedThisDeviceOnly` and are not synced. Requests require HTTPS, refuse redirects and disable caching and cookies. Raw provider error bodies are never shown or logged. Each reply shows which harness answered it; the agent's steps can be inspected in the on-device trace (Settings → Diagnostics).
+Keys and tokens are stored `WhenUnlockedThisDeviceOnly` and are not synced. Requests require HTTPS, refuse redirects and disable caching and cookies. Raw provider error bodies are never shown or logged. Each reply's caption says whether the agent used tools; its steps can be inspected in the on-device trace (Settings → Diagnostics).
 
 ## Discover
 

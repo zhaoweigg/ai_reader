@@ -81,6 +81,9 @@ struct LibraryChatOverlay: View {
     let onChoose: () -> Void
     @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var settings: AISettingsStore
+    @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var catalog: ZLibraryStore
+    @EnvironmentObject private var bestsellers: BestsellerStore
     @State private var panel: Panel?
     private enum Panel: String, Identifiable { case settings, button; var id: String { rawValue } }
 
@@ -89,7 +92,7 @@ struct LibraryChatOverlay: View {
             context: book == nil ? .general : .libraryBook, onChooseConversation: onChoose,
             onClose: onClose, onSettings: { session.stop(); panel = .settings }, onButtonSettings: { panel = .button },
             onSend: {
-                session.send(settings: settings, missingContextNotice: nil, screen: screen?()) {
+                session.send(settings: settings, missingContextNotice: nil, app: ChatAppData(catalog: catalog, bestsellers: bestsellers, library: library), screen: screen?()) {
                     // A quoted draft already has its own snapshot. Otherwise only
                     // the selected book's metadata is sent, never an unseen passage.
                     book.map { ReadingChatContext(title: $0.title, author: $0.author, chapter: "", text: "", source: "library_metadata", locator: "") }

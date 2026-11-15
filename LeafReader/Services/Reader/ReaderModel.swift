@@ -154,67 +154,17 @@ final class ReaderModel: NSObject, ObservableObject {
         guard let boundary = try await bookBoundary(for: context.locator.isEmpty ? locator : context.locator) else { return nil }
         return ReadingAgentBook(index: bookText, boundary: boundary)
     }
-    /// Prepares text up to the reading position while the chat is open, so the
-    /// agent's first search does not wait for the whole book.
+    /// Prepares text up to the reading position, so the agent's first search does
+    /// not wait for the whole book, and records that position so Ask Leaf can search
+    /// this book from other chats without reading past it.
     func warmBookText() async {
-        guard isReady, !isLocked, error == nil, let boundary = try? await bookBoundary(for: locator) else { return }
-        _ = try? await bookText.prepare(through: boundary, deadline: Date().addingTimeInterval(120))
+        let position = locator, progress = fraction
+        guard isReady, !isLocked, error == nil, !position.isEmpty, let boundary = try? await bookBoundary(for: position) else { return }
+        let coverage = try? await bookText.prepare(through: boundary, deadline: Date().addingTimeInterval(120))
+        guard !Task.isCancelled, coverage != nil, locator == position else { return }
+        bookText.savePosition(locator: position, progress: progress, boundary: boundary)
     }
 
-    func recallBookContext(term: String, context: ReadingChatContext) async throws -> ReadingBookRecall? {
-        try Task.checkCancellation()
-        guard isReady, !isLocked, error == nil, (2...40).contains(term.count) else { return nil }
-        let epoch = reloadID
-        if let web = webView {
-            let id = UUID().uuidString
-            return try await withTaskCancellationHandler(operation: {
-                let value = try await web.callAsyncJavaScript("return await window.Leaf.recallBook({term,locator,id,selection});",
-                    arguments: ["term": term, "locator": context.locator, "id": id, "selection": context.source == "selection"], in: nil, contentWorld: .page)
-                try Task.checkCancellation(); guard epoch == reloadID, webView === web else { throw CancellationError() }
-                guard let value, JSONSerialization.isValidJSONObject(value),
-                      let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
-                return try JSONDecoder().decode(ReadingBookRecall.self, from: data).bounded()
-            }, onCancel: { [weak web] in
-                Task { @MainActor in
-                    _ = try? await web?.callAsyncJavaScript("window.Leaf.cancelRecall({id});", arguments: ["id": id], in: nil, contentWorld: .page)
-                }
-            })
-        }
-        guard let view = pdfView, let doc = view.document else { return nil }
-        let cursor = PDFLocator.cursor(context.locator)
-        let boundaryPage = cursor?.page ?? view.currentPage.map(doc.index(for:)) ?? 0
-        guard boundaryPage >= 0, boundaryPage < doc.pageCount else { return nil }
-        let total = min(doc.pageCount, boundaryPage + 1), deadline = Date().addingTimeInterval(8)
-        var excerpts: [(page: Int, offset: Int, text: String)] = [], scanned = 0, characters = 0
-        var partial = false, visited = Set<Int>()
-        let indices = Array(0..<min(total, 32)) + Array((max(0, total - 96)..<total).reversed()) + Array(0..<total)
-        for index in indices where visited.insert(index).inserted {
-            try Task.checkCancellation(); guard epoch == reloadID else { throw CancellationError() }
-            if Date() >= deadline || scanned >= 512 || characters >= 4000000 { break }
-            let text = autoreleasepool { () -> NSString in
-                let value = (doc.page(at: index)?.string ?? "") as NSString
-                let cutoff = index == boundaryPage && context.locator.split(separator: ":").count > 2 ? cursor?.offset ?? value.length : value.length
-                if cutoff > 250000 { partial = true }
-                return value.substring(to: min(250000, min(max(0, cutoff), value.length))) as NSString
-            }
-            characters += text.length
-            var range = NSRange(location: 0, length: text.length), matches = 0
-            while range.length > 0, matches < 200 {
-                let found = text.range(of: term, options: [.caseInsensitive], range: range)
-                if found.location == NSNotFound { break }; matches += 1
-                let start = max(0, found.location - 170), length = min(500, text.length - start)
-                if !excerpts.contains(where: { $0.page == index && abs($0.offset - found.location) < 180 }) {
-                    excerpts.append((index, found.location, text.substring(with: NSRange(location: start, length: length))))
-                    excerpts.sort { $0.page == $1.page ? $0.offset < $1.offset : $0.page < $1.page }
-                    if excerpts.count > 6 { excerpts.remove(at: 1) }
-                }
-                let next = NSMaxRange(found); range = NSRange(location: next, length: text.length - next)
-            }
-            if matches >= 200 { partial = true }
-            scanned += 1; await Task.yield()
-        }
-        return ReadingBookRecall(term: term, excerpts: excerpts.map { ReadingBookExcerpt(chapter: "Page \($0.page + 1)", text: $0.text) }, scannedSections: scanned, totalSections: total, complete: scanned == total && !partial).bounded()
-    }
     func refreshSelectedWebContext() async {
         guard isReady, let view = webView else { return }
         let epoch = reloadID

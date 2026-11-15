@@ -71,7 +71,9 @@ struct AgentTrace: Codable, Identifiable, Equatable {
     }
     var id = UUID()
     var date = Date()
-    var harness: ReadingChatHarness
+    /// "agent" for a reply that could use tools and "plain" for one sent without
+    /// them; traces saved before pre-fetched evidence was retired may say "evidence".
+    var harness = "agent"
     var provider: String
     var model: String
     var bookTitle: String
@@ -108,13 +110,8 @@ final class AgentTraceRecorder {
         let payload = "SYSTEM\n\(system)\n\n" + turns.map { "\($0.role.uppercased())\n\($0.content)" }.joined(separator: "\n\n")
         append(.init(kind: .context, title: "Request context", detail: detail + " · \(sent.formatted()) chars", payload: payload, payloadTitle: "System prompt and messages"))
     }
-    /// Pre-fetched evidence: the local lookup attached before sending.
-    func lookup(_ recall: ReadingBookRecall) {
-        let payload = recall.excerpts.map { "[\($0.chapter)]\n\($0.text)" }.joined(separator: "\n\n")
-        append(.init(kind: .lookup, title: "Lookup “\(recall.term)”",
-                     detail: "\(recall.excerpts.count) excerpts · \(recall.scannedSections)/\(recall.totalSections) sections\(recall.complete ? "" : " · partial")",
-                     payload: payload, payloadTitle: "Excerpts", seconds: elapsed()))
-    }
+    /// The reply went out without tools: the provider or model has none.
+    func withoutTools() { trace.harness = "plain"; trace.limits = nil }
     func tool(_ call: AgentToolCall, output: String, seed: Bool) {
         let summary = Self.summary(of: output, name: call.name)
         append(.init(kind: seed ? .seed : .tool, title: seed ? "Leaf search (seed) · \(call.name)" : "Tool result · \(call.name)",
