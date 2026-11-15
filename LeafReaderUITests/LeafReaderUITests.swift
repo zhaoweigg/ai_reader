@@ -2533,7 +2533,8 @@ final class LeafReaderUITests: XCTestCase {
         app.terminate(); app.launch(); openBook(); app.buttons["openReaderChat"].tap()
         XCTAssertEqual(passage.label, quote); XCTAssertEqual(input.value as? String, "Who is being discussed here?")
         app.buttons["sendReaderChat"].tap()
-        let reply = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Reading context verified:")).firstMatch
+        // Replies are selectable text views, not static texts.
+        let reply = app.textViews.containing(NSPredicate(format: "label CONTAINS %@", "Reading context verified:")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 10), app.debugDescription)
         capture(flow + " enriched prompt verified after reopening")
     }
@@ -2544,11 +2545,13 @@ final class LeafReaderUITests: XCTestCase {
         app.selectTab("Settings")
         revealSettingsRow(app.buttons["openAISettings"], app: app)
         app.buttons["openAISettings"].tap()
-        let calls = app.descendants(matching: .any)["agentMaxToolCalls"].firstMatch
-        for _ in 0..<6 where !(calls.exists && calls.isHittable) { app.swipeUp() }
-        app.buttons["agentMaxToolCalls-Increment"].tap()
+        // Geometry, not isHittable: iOS 27.2 reports visible Form rows as unhittable,
+        // so swiping until hittable scrolls past the agent section.
+        let increment = app.buttons["agentMaxToolCalls-Increment"]
+        revealSettingsRow(increment, app: app)
+        increment.tap()
         let conversationTool = app.switches["agentTool-search_conversation"]
-        for _ in 0..<4 where !(conversationTool.exists && conversationTool.isHittable) { app.swipeUp() }
+        revealSettingsRow(conversationTool, app: app)
         conversationTool.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(conversationTool.value as? String, "0")
         capture("Agent limits in AI settings")
