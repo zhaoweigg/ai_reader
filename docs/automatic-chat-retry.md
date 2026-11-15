@@ -2,7 +2,7 @@
 
 Leaf retries transient connection errors, incomplete streams, HTTP 408/409/429/5xx,
 and known temporary provider failures. One answer has **two extra model requests**
-shared across every agent round and the evidence fallback. Authentication,
+shared across every agent round and the no-tools fallback. Authentication,
 permissions, subscription allowance, malformed responses, size limits and user
 cancellation do not trigger recovery. Manual Retry remains available after failure.
 

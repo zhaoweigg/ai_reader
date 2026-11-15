@@ -47,6 +47,50 @@ final class BookTextIndex {
     init(source: any BookTextSource, directory: URL?) {
         self.source = source; self.directory = directory
     }
+    /// Text saved on this device for a book that is not open: only sections
+    /// already prepared can be read, and nothing is extracted.
+    init(savedIn directory: URL) {
+        self.source = nil; self.directory = directory
+    }
+
+    /// The reading position the saved text was last prepared for. Searching a book
+    /// that is not open trusts it only while the reader has not gone back before it.
+    struct SavedPosition: Codable, Equatable {
+        let locator: String
+        let section: Int
+        let offset: Int
+        /// The book's progress then, 0...1, to tell whether its saved place is later.
+        let progress: Double
+        var boundary: BookTextBoundary { BookTextBoundary(section: section, offset: offset) }
+        /// Whether searching up to this position stays within what the reader has
+        /// read, given where the book is saved now.
+        func covers(locator current: String, progress now: Double) -> Bool {
+            current == locator || now + 0.0005 >= progress
+        }
+    }
+    static func savedPosition(in directory: URL) -> SavedPosition? {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent("position.json")) else { return nil }
+        return try? JSONDecoder().decode(SavedPosition.self, from: data)
+    }
+    func savePosition(locator: String, progress: Double, boundary: BookTextBoundary) {
+        guard let directory, !locator.isEmpty else { return }
+        let position = SavedPosition(locator: locator, section: boundary.section, offset: boundary.offset, progress: min(1, max(0, progress)))
+        guard Self.savedPosition(in: directory) != position, let data = try? JSONEncoder().encode(position) else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        try? data.write(to: directory.appendingPathComponent("position.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+    /// Loads the saved sections up to `boundary` without the book. Sections never
+    /// prepared on this device are missing from the coverage.
+    func loadSaved(through boundary: BookTextBoundary) -> Coverage {
+        guard boundary.section >= 0 else { return Coverage(indexed: 0, eligible: 0) }
+        var indexed = 0
+        for index in 0...boundary.section {
+            if sections[index] == nil, characters < Self.characterLimit, let saved = load(index) { remember(saved, at: index) }
+            if sections[index] != nil { indexed += 1 }
+        }
+        return Coverage(indexed: indexed, eligible: boundary.section + 1)
+    }
 
     /// Loads sections 0...boundary.section from memory, disk or the book, until the deadline.
     func prepare(through boundary: BookTextBoundary, deadline: Date, progress: ((Int, Int) -> Void)? = nil) async throws -> Coverage {

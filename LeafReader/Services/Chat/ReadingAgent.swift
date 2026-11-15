@@ -106,6 +106,8 @@ struct ReadingAgentBook {
 final class ReadingAgentToolbox {
     let book: ReadingAgentBook?
     let screen: ChatScreen?
+    /// The rest of the app, read by the app-wide tools.
+    let app: AppChatTools?
     /// Whether passages and notes from the screen may leave the device.
     var sharePassages = true
     private let conversation: ([String]) -> String
@@ -114,14 +116,15 @@ final class ReadingAgentToolbox {
     var limits = AgentLimits()
     var indexDeadline: TimeInterval { TimeInterval(limits.preparationSeconds) }
 
-    init(book: ReadingAgentBook?, screen: ChatScreen? = nil, conversation: @escaping ([String]) -> String) {
-        self.book = book; self.screen = screen; self.conversation = conversation
+    init(book: ReadingAgentBook?, screen: ChatScreen? = nil, app: ChatAppData? = nil, conversation: @escaping ([String]) -> String) {
+        self.book = book; self.screen = screen; self.app = app.map(AppChatTools.init); self.conversation = conversation
     }
     /// The tools this chat can use: the book's when one is open, the screen's when
-    /// the chat was opened from one, and earlier discussion always.
+    /// the chat was opened from one, the rest of the app's, and earlier discussion always.
     var tools: [AgentTool] {
         let reading = book == nil ? AgentTool.all.filter { $0.name == "search_conversation" } : AgentTool.all
-        return (reading + (screen == nil ? [] : AgentTool.view)).filter { !limits.disabledTools.contains($0.name) }
+        let everywhere = app == nil ? [] : AppChatTools.tools(sharePassages: sharePassages)
+        return (reading + (screen == nil ? [] : AgentTool.view) + everywhere).filter { !limits.disabledTools.contains($0.name) }
     }
 
     /// Runs one call and returns JSON for the model. Bad arguments become an
@@ -140,7 +143,11 @@ final class ReadingAgentToolbox {
             guard !terms.isEmpty else { return Self.json(["error": "Provide at least one term."]) }
             activity?("Searching earlier discussion…"); steps.append("searched earlier chat")
             return conversation(terms)
-        default: return Self.json(["error": "Unknown tool \(call.name.prefix(40))."])
+        default:
+            if let app, let result = try await app.run(call.name, arguments, sharePassages: sharePassages, activity: activity) {
+                steps.append(result.step); return result.output
+            }
+            return Self.json(["error": "Unknown tool \(call.name.prefix(40))."])
         }
     }
 
@@ -151,6 +158,29 @@ final class ReadingAgentToolbox {
         guard (2...40).contains(value.count), !pronouns.contains(value.lowercased()),
               !value.contains(where: { "。！？!?\n".contains($0) }) else { return nil }
         return value
+    }
+    /// The name a reminder question asks about, which Leaf searches before the model
+    /// answers. `previous` is the subject of the reader's last question, kept for
+    /// follow-ups such as “再说一遍是谁”.
+    nonisolated static func followUpTerm(question: String, context: ReadingChatContext, previous: String? = nil) -> String? {
+        let recall = question.range(of: "回忆|忘|角色|人物|是谁|谁是|前情|之前|以前|身份|来历|关系|remind|remember|forgot|character|relationship|backstory|who (?:is|was)|earlier|recap", options: [.regularExpression, .caseInsensitive]) != nil
+        guard recall else { return nil }
+        let selected = context.text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "“”「」『』\"'，,：:、")))
+        let generic: Set<String> = ["a", "an", "the", "he", "she", "it", "they", "him", "her", "them", "this", "that", "他", "她", "它", "他们", "她们", "这个", "那个",
+                                    "这人", "那人", "此人", "这个人", "那个人", "这位", "那位", "对方", "他是", "她是"]
+        if context.source == "selection", (2...40).contains(selected.count), !generic.contains(selected.lowercased()), !selected.contains(where: { "。！？!?\n".contains($0) }) { return selected }
+        for pattern in ["[“「『\"]([^”」』\"]{2,40})[”」』\"]", "([\\p{Han}]{2,8})(?:是谁|的身份)", "(?i:who (?:is|was)) ([A-Z][a-z]+(?: [A-Z][a-z]+)?)"] {
+            guard let regex = try? NSRegularExpression(pattern: pattern), let match = regex.firstMatch(in: question, range: NSRange(question.startIndex..., in: question)),
+                  let range = Range(match.range(at: 1), in: question) else { continue }
+            var candidate = String(question[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Words before “是谁” are often phrasing, not a name: “再说一遍是谁”, “所以他到底是谁”.
+            for filler in ["再说一遍", "再说一次", "再讲一遍", "再讲一次", "说一下", "请问", "所以", "那么", "刚才", "到底", "究竟", "这个", "那个", "他", "她", "它"] {
+                while candidate.hasPrefix(filler) { candidate.removeFirst(filler.count) }
+                while candidate.hasSuffix(filler) { candidate.removeLast(filler.count) }
+            }
+            if candidate.count >= 2, !generic.contains(candidate.lowercased()) { return candidate }
+        }
+        return previous
     }
     /// Leaf's own first search, for a highlighted name or a follow-up's subject,
     /// presented to the model as an earlier tool call it can build on.

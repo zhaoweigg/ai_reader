@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, chatImage: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", chatRecovery: Bool = false, recoveryAgent: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, chatImage: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", chatRecovery: Bool = false, recoveryAgent: Bool = false, scriptedAgent: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -19,6 +19,8 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_ZLIB_MOCK"] = "1"
         app.launchEnvironment["LEAF_UI_CHAT_RECOVERY"] = chatRecovery ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_RECOVERY_AGENT"] = recoveryAgent ? "1" : "0"
+        // The mock model calls tools only when a case scripts the agent.
+        app.launchEnvironment["LEAF_UI_CHAT_AGENT"] = scriptedAgent ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_MOCK"] = mockChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SLOW"] = slowChat ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_CONTEXT_PROBE"] = contextProbe ? "1" : "0"
@@ -2536,27 +2538,9 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " enriched prompt verified after reopening")
     }
 
-    @MainActor private func chooseChatHarness(_ title: String, app: XCUIApplication) {
-        app.selectTab("Settings")
-        revealSettingsRow(app.buttons["openAISettings"], app: app)
-        app.buttons["openAISettings"].tap()
-        let option = app.buttons[title]
-        XCTAssertTrue(option.waitForExistence(timeout: 5))
-        revealSettingsRow(option, app: app)
-        option.tap()
-        let save = app.buttons["saveAISettings"]
-        revealSettingsRow(save, app: app)
-        save.tap()
-        XCTAssertTrue(app.staticTexts["AI settings saved"].waitForExistence(timeout: 5))
-        // Return to the Settings list so the next visit starts from it.
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.buttons["openAISettings"].waitForExistence(timeout: 5))
-        app.selectTab("Library")
-    }
     @MainActor func testAgentLimitsApplyAndTraceViewerShowsStepsAndTokens() {
         continueAfterFailure = false
-        let app = launchApp()
-        chooseChatHarness("Book search agent (Claude)", app: app)
+        let app = launchApp(scriptedAgent: true)
         app.selectTab("Settings")
         revealSettingsRow(app.buttons["openAISettings"], app: app)
         app.buttons["openAISettings"].tap()
@@ -2619,13 +2603,12 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(roundsWithUsage.count, 2, "\(roundsWithUsage)")
         capture("Agent trace detail steps")
     }
-    @MainActor func testBookSearchAgentInPagesComparedWithPrefetchedEvidence() { verifyBookSearchAgent(flow: "Pages") }
+    @MainActor func testBookSearchAgentInPages() { verifyBookSearchAgent(flow: "Pages") }
     @MainActor func testBookSearchAgentInScrollNightLandscape() { verifyBookSearchAgent(flow: "Scroll") }
     @MainActor func testBookSearchAgentInPDF() { verifyBookSearchAgent(flow: "PDF") }
     @MainActor private func verifyBookSearchAgent(flow: String) {
         continueAfterFailure = false
-        let app = launchApp()
-        chooseChatHarness("Book search agent (Claude)", app: app)
+        let app = launchApp(scriptedAgent: true)
         func openBook() {
             if flow == "PDF" {
                 let search = app.textFields["librarySearch"]
@@ -2667,26 +2650,13 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(reply.label.contains("Let me look"), "Preamble before tool calls is withdrawn")
         let trace = app.descendants(matching: .any)["chatReplyTrace"].firstMatch
         XCTAssertTrue(trace.waitForExistence(timeout: 5))
-        XCTAssertTrue(trace.label.contains("Book search agent · searched “\(term)”"), trace.label)
+        XCTAssertTrue(trace.label.contains("Leaf agent · searched “\(term)”"), trace.label)
         capture(flow + " agent reply with search trace")
         if flow == "Scroll" {
             orient(.portrait)
             XCTAssertEqual(readingSurface(app).frame.size.height, frame.height, accuracy: 2)
             capture("Scroll agent reply portrait")
         }
-        guard flow == "Pages" else { return }
-        // Same question with the other harness, for side-by-side comparison in one conversation.
-        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
-        app.buttons["closeReaderChat"].tap(); showReaderControls(app); app.buttons["closeBook"].tap()
-        chooseChatHarness("Pre-fetched evidence (Sam)", app: app)
-        openBook(); app.buttons["openReaderChat"].tap()
-        input.tap(); input.typeText("Remind me about \(term)")
-        app.buttons["sendReaderChat"].tap()
-        let traces = app.descendants(matching: .any).matching(identifier: "chatReplyTrace")
-        expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: traces); waitForExpectations(timeout: 15)
-        XCTAssertTrue(traces.element(boundBy: 1).label.hasPrefix("Pre-fetched evidence"), traces.element(boundBy: 1).label)
-        XCTAssertTrue(traces.element(boundBy: 0).label.hasPrefix("Book search agent"))
-        capture("Pages harness comparison in one conversation")
     }
 
     @MainActor private func verifyAutomaticQuote(flow:String) {

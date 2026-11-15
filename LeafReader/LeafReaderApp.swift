@@ -33,10 +33,6 @@ struct LeafReaderApp: App {
             }
             if UITesting.flag(.chatRecovery) { chatProvider = UITestRecoveryChatProvider() }
             defaults = UITesting.defaults
-            if UITesting.flag(.chatRecoveryAgent) || UITesting.flag(.chatAgent) {
-                var configuration = ChatConfiguration(); configuration.harness = .agent
-                defaults.set(try? JSONEncoder().encode(configuration), forKey: "ai.configuration")
-            }
             if UITesting.flag(.syncFixture), let root {
                 syncFolder = UITestSyncFixture.seed(next: root)
                 defaults.set(false, forKey: ICloudSync.Keys.keepBooks)

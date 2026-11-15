@@ -127,7 +127,7 @@ final class ReadingAgentTests: XCTestCase {
         let provider = ScriptedAgentProvider([[.text("Let me check."), .toolCall(call), .finished(truncated: false)],
                                               [.text("白虎是守门的统领（第一章）。"), .finished(truncated: false)]])
         var text = "", withdrawn = 0
-        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "白虎是谁？")], harness: .agent)
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "白虎是谁？")], bookTools: true)
         _ = try await ReadingAgentRunner.run(provider: provider, request: request, toolbox: toolbox,
                                              onText: { text += $0 }, onWithdraw: { withdrawn += 1; text = "" })
         XCTAssertEqual(text, "白虎是守门的统领（第一章）。"); XCTAssertEqual(withdrawn, 1)
@@ -145,7 +145,7 @@ final class ReadingAgentTests: XCTestCase {
     func testToolRejectionIsDistinctOnlyBeforeAnyOutput() async throws {
         let sections = book(), index = BookTextIndex(source: retain(FixtureBookSource(sections)), directory: nil)
         let toolbox = ReadingAgentToolbox(book: ReadingAgentBook(index: index, boundary: boundary(sections))) { _ in "{}" }
-        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Who?")], harness: .agent)
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Who?")], bookTools: true)
         do {
             _ = try await ReadingAgentRunner.run(provider: ScriptedAgentProvider([], failure: ChatError.http(400)), request: request,
                                                  toolbox: toolbox, onText: { _ in }, onWithdraw: {})
@@ -217,20 +217,24 @@ final class ReadingAgentTests: XCTestCase {
                        [.toolCall(AgentToolCall(id: "fc_1", name: "list_chapters", arguments: "{}"))])
     }
 
-    func testSavedSettingsWithoutHarnessKeepTheirValuesAndDefaultToEvidence() throws {
-        let old = #"{"provider":"chatGPT","profiles":{"chatGPT":{"endpoint":"https://api.openai.com/v1/responses","model":"m","maxOutputTokens":2048,"legacyTokenLimit":false}},"sharePage":false}"#
+    func testSettingsAndRepliesSavedWithPrefetchedEvidenceStillLoad() throws {
+        let old = #"{"provider":"chatGPT","profiles":{"chatGPT":{"endpoint":"https://api.openai.com/v1/responses","model":"m","maxOutputTokens":2048,"legacyTokenLimit":false}},"sharePage":false,"harness":"evidence"}"#
         let decoded = try JSONDecoder().decode(ChatConfiguration.self, from: Data(old.utf8))
-        XCTAssertEqual(decoded.provider, .chatGPT); XCTAssertFalse(decoded.sharePage); XCTAssertEqual(decoded.harness, .evidence)
-        var agent = decoded; agent.harness = .agent
-        XCTAssertEqual(try JSONDecoder().decode(ChatConfiguration.self, from: JSONEncoder().encode(agent)).harness, .agent)
+        XCTAssertEqual(decoded.provider, .chatGPT); XCTAssertFalse(decoded.sharePage)
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("harness"))
+        let reply = try JSONDecoder().decode(ChatTrace.self, from: Data(#"{"steps":["looked up “白虎” (1)"],"fellBack":false,"harness":"evidence"}"#.utf8))
+        XCTAssertEqual(reply.caption, "Pre-fetched evidence · looked up “白虎” (1)"); XCTAssertFalse(reply.usedTools)
+        let agent = try JSONDecoder().decode(ChatTrace.self, from: Data(#"{"steps":["searched “白虎” (2)"],"fellBack":false,"harness":"agent"}"#.utf8))
+        XCTAssertEqual(agent.caption, "Leaf agent · searched “白虎” (2)"); XCTAssertTrue(agent.usedTools)
+        XCTAssertEqual(try JSONDecoder().decode(ChatTrace.self, from: JSONEncoder().encode(ChatTrace(steps: ["x"]))), ChatTrace(steps: ["x"]))
+        let trace = try JSONDecoder().decode(AgentTrace.self, from: Data(#"{"id":"6F1C5C1E-1111-4444-8888-000000000001","date":0,"harness":"evidence","provider":"p","model":"m","bookTitle":"b","chapter":"c","question":"q","steps":[],"outcome":"complete","totalSeconds":1,"charactersSent":2}"#.utf8))
+        XCTAssertEqual(trace.harness, "evidence")
     }
 
-    private func settings(_ provider: any ChatProvider, harness: ReadingChatHarness) throws -> AISettingsStore {
+    private func settings(_ provider: any ChatProvider) throws -> AISettingsStore {
         let name = "LeafAgentTests.\(UUID())", defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
         let settings = AISettingsStore(defaults: defaults, credentials: KeychainChatCredentials(service: "com.leafreader.tests.\(UUID())"), providerOverride: provider)
-        var configuration = settings.configuration; configuration.harness = harness
-        try settings.save(configuration, replacementKey: nil)
         return settings
     }
     func testSessionRecordsAgentStepsAndFallsBackWhenToolsAreRejected() async throws {
@@ -240,36 +244,24 @@ final class ReadingAgentTests: XCTestCase {
         let agent = ScriptedAgentProvider([[.toolCall(call), .finished(truncated: false)], [.text("守门统领。"), .finished(truncated: false)]])
         let session = ReaderChatSession()
         session.attachSelection(context); session.draft = "白虎是谁"
-        var recalls = 0
-        session.send(settings: try settings(agent, harness: .agent), recall: { _, _ in recalls += 1; return nil },
-                     agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) }) { nil }
+        session.send(settings: try settings(agent), agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) }) { nil }
         try await eventually { !session.isSending && session.messages.count == 2 }
         XCTAssertEqual(session.messages.last?.text, "守门统领。")
-        XCTAssertEqual(session.messages.last?.trace?.harness, .agent)
+        XCTAssertEqual(session.messages.last?.trace?.usedTools, true)
         XCTAssertTrue(session.messages.last?.trace?.caption.contains("searched “白虎”, “老白”") == true)
-        XCTAssertEqual(recalls, 0, "The agent does not pre-fetch")
         XCTAssertNil(session.activity)
 
+        // A model that refuses tools is asked once more without them; nothing is pre-fetched.
         let rejecting = ScriptedAgentProvider([], failure: ChatError.http(400))
         let fallback = ReaderChatSession()
         fallback.attachSelection(context); fallback.draft = "我忘了这个角色"
-        fallback.send(settings: try settings(rejecting, harness: .agent), recall: { term, _ in
-            recalls += 1
-            return ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "白虎是统领。")], scannedSections: 4, totalSections: 4, complete: true)
-        }, agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) }) { nil }
+        fallback.send(settings: try settings(rejecting), agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) }) { nil }
         try await eventually { !fallback.isSending && fallback.messages.count == 2 }
         XCTAssertEqual(fallback.messages.last?.text, "Evidence answer.")
         XCTAssertEqual(fallback.messages.last?.trace?.fellBack, true)
-        XCTAssertEqual(recalls, 1)
-        XCTAssertTrue(rejecting.plainRequests.first?.turns.last?.content.contains("白虎是统领。") == true)
-
-        let evidence = ReaderChatSession()
-        evidence.attachSelection(context); evidence.draft = "白虎是谁"
-        evidence.send(settings: try settings(rejecting, harness: .evidence), recall: { term, _ in
-            ReadingBookRecall(term: term, excerpts: [ReadingBookExcerpt(chapter: "第一章", text: "白虎是统领。")], scannedSections: 4, totalSections: 4, complete: true)
-        }) { nil }
-        try await eventually { !evidence.isSending && evidence.messages.count == 2 }
-        XCTAssertEqual(evidence.messages.last?.trace?.caption, "Pre-fetched evidence · looked up “白虎” (1)")
+        XCTAssertEqual(fallback.messages.last?.trace?.caption, "Answered without tools (the provider has none)")
+        let plain = try XCTUnwrap(rejecting.plainRequests.first?.turns.last?.content)
+        XCTAssertTrue(plain.contains("reading_context") && plain.contains("白虎") && !plain.contains("earlier_book_passages"))
     }
 
     func testHighlightedNameAndFollowUpsAreSearchedBeforeTheModelAnswers() async throws {
@@ -277,7 +269,7 @@ final class ReadingAgentTests: XCTestCase {
         let agentBook: @MainActor (ReadingChatContext) async throws -> ReadingAgentBook? = { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) }
         // A model that answers at once, without calling tools itself.
         let quiet = ScriptedAgentProvider([[.text("守门统领。"), .finished(truncated: false)], [.text("还是守门统领。"), .finished(truncated: false)]])
-        let settings = try settings(quiet, harness: .agent)
+        let settings = try settings(quiet)
         let session = ReaderChatSession()
         session.attachSelection(ReadingChatContext(title: "测试", author: "", chapter: "第四章", text: "白虎", source: "selection", locator: "here", progress: 0.6))
         session.draft = "这是谁"
@@ -306,7 +298,7 @@ final class ReadingAgentTests: XCTestCase {
         toolbox.limits = limits
         let search = AgentToolCall(id: "a", name: "search_book", arguments: #"{"terms":["白虎"]}"#)
         let provider = ScriptedAgentProvider([[.toolCall(search), .toolCall(search), .finished(truncated: false)], [.text("答。"), .finished(truncated: false)]])
-        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "白虎是谁？")], harness: .agent)
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "白虎是谁？")], bookTools: true)
         _ = try await ReadingAgentRunner.run(provider: provider, request: request, toolbox: toolbox, limits: limits, onText: { _ in }, onWithdraw: {})
         XCTAssertEqual(provider.requests.map(\.allowTools), [true, false])
         XCTAssertEqual(provider.offered.first, ["search_book", "read_passage"])
@@ -371,7 +363,7 @@ final class ReadingAgentTests: XCTestCase {
         let session = ReaderChatSession()
         session.attachSelection(ReadingChatContext(title: "测试", author: "", chapter: "第四章", text: "白虎", source: "selection", locator: "here", progress: 0.6))
         session.draft = "这是谁"
-        session.send(settings: try settings(provider, harness: .agent), agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) },
+        session.send(settings: try settings(provider), agentBook: { _ in ReadingAgentBook(index: index, boundary: self.boundary(sections)) },
                      traces: store) { nil }
         try await eventually { !session.isSending && store.traces.count == 1 }
         let trace = try XCTUnwrap(store.traces.first)
@@ -514,7 +506,7 @@ final class ReadingAgentTests: XCTestCase {
                                            [.text("1. Book 1 — a summary."), .finished(truncated: false)]])
         let session = ReaderChatSession()
         session.draft = "Summarize the top 5 recommendations"
-        session.send(settings: try settings(agent, harness: .agent), missingContextNotice: nil,
+        session.send(settings: try settings(agent), missingContextNotice: nil,
                      screen: screen(books, details: ["rank": 1, "title": "Book 1", "description": "A described book."])) { nil }
         try await eventually { !session.isSending && session.messages.count == 2 }
         XCTAssertEqual(session.messages.last?.text, "1. Book 1 — a summary.")
@@ -527,11 +519,11 @@ final class ReadingAgentTests: XCTestCase {
         XCTAssertTrue(described[0].output.contains("A described book."))
         XCTAssertEqual(session.messages.last?.trace?.steps, ["read the Discover screen (5)", "details for #1"])
 
-        // The pre-fetched harness has no tools, so the list goes with the question.
-        let plain = ScriptedAgentProvider([])
+        // A model without tools gets the list with the question.
+        let plain = ScriptedAgentProvider([], failure: ChatError.http(400))
         let evidence = ReaderChatSession()
         evidence.draft = "Summarize the top 5 recommendations"
-        evidence.send(settings: try settings(plain, harness: .evidence), missingContextNotice: nil, screen: screen(books)) { nil }
+        evidence.send(settings: try settings(plain), missingContextNotice: nil, screen: screen(books)) { nil }
         try await eventually { !evidence.isSending && evidence.messages.count == 2 }
         let request = try XCTUnwrap(plain.plainRequests.first)
         XCTAssertTrue(request.system.contains("comes with current_screen"))

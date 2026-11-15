@@ -319,7 +319,7 @@ final class ChatRetryTests: XCTestCase {
         let provider = ChatGPTSubscriptionProvider(accounts: accounts, accountID: account.id, model: "fixture-model", transport: transport)
         let source = RetryBookSource(), toolbox = ReadingAgentToolbox(book: .init(index: BookTextIndex(source: source, directory: nil), boundary: .init(section: 0, offset: 18))) { _ in "{}" }
         var text = ""
-        _ = try await ReadingAgentRunner.run(provider: provider, request: .conversation([.init(isUser: true, text: "Remind me", context: context)], harness: .agent),
+        _ = try await ReadingAgentRunner.run(provider: provider, request: .conversation([.init(isUser: true, text: "Remind me", context: context)], bookTools: true),
                                              toolbox: toolbox, recovery: ChatRetryBudget(policy: immediate), onText: { text += $0 }, onWithdraw: { text = "" })
         XCTAssertEqual(transport.requests.count, 3)
         XCTAssertEqual(transport.requests[1].httpBody, transport.requests[2].httpBody)
@@ -335,8 +335,8 @@ final class ChatRetryTests: XCTestCase {
         provider.replies = [.init(error: URLError(.networkConnectionLost)), .init(events: [.toolCall(completed), .finished(truncated: false)]),
                             .init(events: [.text("Abandoned answer"), .toolCall(abandoned)], error: ChatError.interrupted),
                             .init(events: [.text("Recovered answer"), .finished(truncated: false)])]
-        let recorder = AgentTraceRecorder(trace: .init(harness: .agent, provider: "fixture", model: "fixture", bookTitle: "Book", chapter: "Chapter 1", question: "Who?"))
-        let request = ChatRequest.conversation([.init(isUser: true, text: "Who?", context: context)], harness: .agent)
+        let recorder = AgentTraceRecorder(trace: .init(provider: "fixture", model: "fixture", bookTitle: "Book", chapter: "Chapter 1", question: "Who?"))
+        let request = ChatRequest.conversation([.init(isUser: true, text: "Who?", context: context)], bookTools: true)
         let budget = ChatRetryBudget(policy: immediate); var text = ""
         _ = try await ReadingAgentRunner.run(provider: provider, request: request, toolbox: toolbox, recorder: recorder, recovery: budget,
                                              onText: { text += $0 }, onWithdraw: { text = "" })
