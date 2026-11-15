@@ -107,7 +107,7 @@ final class LibraryChatUITests: XCTestCase {
         XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 15))
         XCTAssertEqual(app.buttons["openReaderChat"].frame.minX, readerPosition.minX, accuracy: 1)
     }
-    @MainActor func testLibraryLauncherAlwaysOpensSeparateGeneralChat() {
+    @MainActor func testLibraryLauncherResumesChosenConversationAndKeepsGeneralSeparate() {
         let app = launch()
         app.buttons["openLibraryChat"].tap()
         XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "General chat")
@@ -120,11 +120,17 @@ final class LibraryChatUITests: XCTestCase {
         input(app).tap(); input(app).typeText("Separate book draft")
         app.buttons["closeReaderChat"].tap()
         app.buttons["openLibraryChat"].tap()
+        XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "The Art of Noticing")
+        XCTAssertEqual(input(app).value as? String, "Separate book draft")
+        XCTAssertTrue(app.textViews["My book conversation"].exists)
+        XCTAssertFalse(app.textViews["My general conversation"].exists)
+        hideKeyboard(app)
+        app.buttons["chooseLibraryConversation"].tap(); app.buttons["chatGeneral"].tap()
         XCTAssertEqual(app.buttons["chooseLibraryConversation"].value as? String, "General chat")
         XCTAssertEqual(input(app).value as? String, "General draft")
         XCTAssertTrue(app.textViews["My general conversation"].exists)
         XCTAssertFalse(app.textViews["My book conversation"].exists)
-        capture("Library launcher returns to separate General chat")
+        capture("Resumed book and General conversations stay separate")
         chooseBook(app)
         XCTAssertEqual(input(app).value as? String, "Separate book draft")
         XCTAssertTrue(app.textViews["My book conversation"].exists)
