@@ -140,6 +140,37 @@ final class ChatRetryTests: XCTestCase {
         XCTAssertNil(session.error); XCTAssertEqual(provider.plainRequests.count, 4)
     }
 
+    func testHiddenReplySurvivesForegroundRetryHandoffWithoutAViewOwner() async throws {
+        let provider = RetryProvider()
+        provider.replies = Array(repeating: .init(error: socketAbort), count: 3)
+            + [.init(events: [.text("Completed while hidden"), .finished(truncated: false)])]
+        let directory = try temporaryFolder("ForegroundHandoffTests"), id = "hidden-foreground"
+        let history = try ChatHistoryStore(directory: directory, conversation: id)
+        let settings = try settings(provider)
+        var presented: ReaderChatSession? = .conversation(directory: directory, id: id)
+        presented?.retryPolicy = immediate
+        // Leaf already returned by the time its suspended connection reports failure.
+        presented?.appInBackground = { false }
+        presented?.draft = "Keep answering while hidden"
+        presented?.send(settings: settings) { self.context }
+        presented?.appDidEnterBackground()
+        presented?.close(); presented = nil
+        // Observe only the provider/database: keeping a session reference here
+        // would hide a lost owner between failure and the queued restart.
+        do { try await eventually(interval: 0.005) { provider.plainRequests.count == 4 } }
+        catch {
+            let saved = try history.page(before: nil, after: nil, limit: 24)
+            XCTFail("Hidden foreground restart was lost: requests=\(provider.plainRequests.count), saved reply=\(String(describing: saved.messages.last?.state))")
+            return
+        }
+        try await eventually(interval: 0.005) {
+            (try? history.page(before: nil, after: nil, limit: 24))?.messages.last?.state == .complete
+        }
+        let saved = try history.page(before: nil, after: nil, limit: 24)
+        XCTAssertEqual(saved.messages.count, 2); XCTAssertEqual(saved.messages.last?.text, "Completed while hidden")
+        XCTAssertEqual(provider.plainRequests.first?.turns, provider.plainRequests.last?.turns)
+    }
+
     func testOtherFailuresStillShowAndStoppingCancelsAPendingContinue() async throws {
         // A refusal is not caused by leaving the screen.
         let refused = RetryProvider(); refused.replies = [.init(error: ChatError.http(401))]
