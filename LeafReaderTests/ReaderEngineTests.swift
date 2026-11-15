@@ -1987,7 +1987,20 @@ final class ReaderEngineTests: XCTestCase {
         gate.begin(at: CGPoint(x: 300, y: 300))
         XCTAssertFalse(gate.scrolled(to: CGPoint(x: 303, y: 304)), "A new touch measures from its own landing point")
         let recognizer = ReaderTapRecognizer()
-        XCTAssertTrue(recognizer.delaysTouchesEnded, "The reader tap keeps UIKit's tap timing; only the movement rule is stricter")
+        XCTAssertTrue(recognizer.delaysTouchesEnded, "The reader keeps native tap delivery while filtering scrolls and selection holds")
+    }
+
+    func testReaderTapRejectsStationarySelectionHoldsAndAllowsTheNextShortTap() {
+        var gate = TapMovementGate()
+        XCTAssertFalse(gate.isLongPress(endingAt: 10), "An unstarted gesture has no duration")
+        gate.begin(at: CGPoint(x: 120, y: 300), timestamp: 10)
+        XCTAssertFalse(gate.scrolled(to: CGPoint(x: 120, y: 300)), "A stationary selection never crosses the movement threshold")
+        XCTAssertFalse(gate.isLongPress(endingAt: 10.2), "A normal short book tap is allowed")
+        XCTAssertTrue(gate.isLongPress(endingAt: 11.2), "The real selection gesture must not toggle reader controls")
+        gate.begin(at: CGPoint(x: 120, y: 300), timestamp: 12)
+        XCTAssertFalse(gate.isLongPress(endingAt: 12.1), "Selecting text must not suppress a later intentional short tap")
+        gate.begin(at: .zero, timestamp: 0)
+        XCTAssertTrue(gate.isLongPress(endingAt: TapMovementGate.selectionDuration))
     }
 
     func testStoppingScrollTapDoesNotToggleControlsAfterInertiaEndsInBothFlows() async throws {

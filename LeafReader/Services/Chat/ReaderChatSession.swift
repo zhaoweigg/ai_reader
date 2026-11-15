@@ -474,11 +474,14 @@ final class ReaderChatSession: ObservableObject {
                 // Not the reader's or the provider's fault: continue on return instead of showing an error.
                 recorder?.failed("Interrupted while Leaf was in the background.", outcome: .failed)
                 if let recorder { traceStore?.add(recorder.finish(outcome: .failed)) }
+                // Keep an owner until either the foreground notification or the
+                // queued foreground continuation takes over. Close may have
+                // already removed every view; Stop clears this pending flag.
+                resumeOnForeground = true
                 if appInBackground() {
-                    resumeOnForeground = true
                     notice = "Leaf left the screen during this reply. It continues when you come back."
                 } else {
-                    Task { @MainActor [weak self] in self?.resumeInterruptedReply() }
+                    Task { @MainActor [weak self] in self?.appWillEnterForeground() }
                 }
                 activeRecorder = nil; activity = nil; isSending = false; task = nil; flush(); refreshLatest()
                 return
