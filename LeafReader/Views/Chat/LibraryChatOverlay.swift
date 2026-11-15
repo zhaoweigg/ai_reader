@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Ask Leaf on one of the app's tabs: the general conversation or a book's,
-/// opened from the floating button. Each tab owns one; it closes when the tab does.
+/// opened from the floating button. Each tab owns its presentation; the live
+/// conversation is shared with other tabs and the reader.
 @MainActor final class TabChat: ObservableObject {
     @Published private(set) var session: ReaderChatSession?
     @Published private(set) var book: Book?
@@ -9,13 +10,18 @@ import SwiftUI
     @Published var choosingConversation = false
     var conversation: String { book?.fingerprint ?? "general" }
     func open(_ book: Book?, directory: URL?) {
-        // Close the previous owner before creating a second session for its database.
+        // Checkpoint before switching; the shared owner keeps any reply running.
         guard session?.flush() != false else { return }
         session?.close()
         self.book = book
-        session = ReaderChatSession(directory: directory, conversation: book?.fingerprint ?? "leaf.library.general.v1")
+        session = ReaderChatSession.conversation(directory: directory, id: book?.fingerprint ?? "leaf.library.general.v1")
     }
-    func close() { session?.close(); session = nil; book = nil }
+    func close() { session?.close(); session = nil }
+    func booksChanged(_ fingerprints: [String], directory: URL?) {
+        guard let book, !fingerprints.contains(book.fingerprint) else { return }
+        if session != nil { open(nil, directory: directory) }
+        else { self.book = nil }
+    }
 }
 
 /// The floating Ask Leaf button and panel over a tab, whose screen the chat can read.
@@ -52,7 +58,7 @@ struct TabChatHost: ViewModifier {
                             .accessibilityAction { chat.isMoving = false }
                     }
                     ReaderChatLauncher(isMoving: $chat.isMoving, location: .library) {
-                        onOpen(); chat.open(nil, directory: directory)
+                        onOpen(); chat.open(chat.book, directory: directory)
                     }
                 }
             }
@@ -64,7 +70,7 @@ struct TabChatHost: ViewModifier {
                 if phase != .active { chat.isMoving = false; chat.session?.flush() }
             }
             .onChange(of: library.books.map(\.fingerprint)) { _, fingerprints in
-                if let book = chat.book, !fingerprints.contains(book.fingerprint) { chat.open(nil, directory: directory) }
+                chat.booksChanged(fingerprints, directory: directory)
             }
             .onDisappear { chat.close(); chat.isMoving = false }
     }

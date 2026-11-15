@@ -320,7 +320,7 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertEqual(checkpoint.messages.last?.text, "Partial reply")
         XCTAssertEqual(checkpoint.messages.last?.state, .stopped)
         XCTAssertTrue(checkpoint.canRetry); XCTAssertFalse(checkpoint.isSending)
-        session.close()
+        session.stop()
         let restored = ReaderChatSession(directory: directory, conversation: "book-a")
         restored.retry(settings: settings)
         try await eventually { provider.requests.count == 2 }
@@ -328,6 +328,62 @@ private final class HistoryProvider: ChatProvider {
         complete(provider, "Completed on retry"); try await eventually { !restored.isSending }
         let final = ReaderChatSession(directory: directory, conversation: "book-a")
         XCTAssertEqual(final.messages.count, 2); XCTAssertEqual(final.messages.last?.text, "Completed on retry")
+    }
+    func testClosingBeforeFirstTokenRetainsTheRequestAndReopensWithoutRetry() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        var presented: ReaderChatSession? = .conversation(directory: directory, id: "leaf.library.general.v1")
+        weak var live = presented
+        presented?.draft = "Hello"
+        presented?.send(settings: settings, missingContextNotice: nil) { nil }
+        // Close in the same actor turn, before even the send task starts.
+        presented?.close(); presented = nil
+        XCTAssertNotNil(live, "The reply must outlive the last visible panel")
+        try await eventually { provider.requests.count == 1 }
+        let reopened = ReaderChatSession.conversation(directory: directory, id: "leaf.library.general.v1")
+        XCTAssertTrue(reopened === live); XCTAssertTrue(reopened.isSending); XCTAssertFalse(reopened.canRetry)
+        XCTAssertNil(reopened.notice); XCTAssertNil(reopened.error)
+        provider.continuations[0].yield(.text("Still answering"))
+        try await eventually { reopened.messages.last?.text == "Still answering" }
+        reopened.draft = "My next question"; reopened.close()
+        complete(provider, " and finished")
+        try await eventually { !reopened.isSending }
+        XCTAssertEqual(provider.requests.count, 1); XCTAssertEqual(reopened.messages.count, 2)
+        XCTAssertEqual(reopened.messages.last?.state, .complete)
+        let saved = ReaderChatSession(directory: directory, conversation: "leaf.library.general.v1")
+        XCTAssertEqual(saved.messages.last?.text, "Still answering and finished")
+        XCTAssertEqual(saved.messages.last?.state, .complete); XCTAssertEqual(saved.draft, "My next question")
+    }
+    func testLibraryDiscoverAndReaderShareTheActiveBookConversation() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        let book = Book(id: UUID(), title: "A Book", author: "Author", fileName: "book.txt", format: .txt, fingerprint: "shared-book")
+        let library = TabChat(); library.open(book, directory: directory)
+        let original = try XCTUnwrap(library.session)
+        original.attachSelection(context); original.draft = "Explain this quote"
+        original.send(settings: settings) { XCTFail("Reuse the attached quote"); return nil }
+        try await eventually { provider.requests.count == 1 }
+        provider.continuations[0].yield(.text("Partial"))
+        try await eventually { original.messages.last?.text == "Partial" }
+        library.close()
+        let discover = TabChat(); discover.open(book, directory: directory)
+        let reader = ReaderChatSession.conversation(directory: directory, id: book.fingerprint)
+        XCTAssertTrue(discover.session === original && reader === original)
+        XCTAssertTrue(reader.isSending); XCTAssertFalse(reader.canRetry)
+        complete(provider, " answer"); try await eventually { !reader.isSending }
+        XCTAssertEqual(provider.requests.count, 1); XCTAssertEqual(reader.messages.count, 2)
+        XCTAssertEqual(reader.messages.first?.context, context); XCTAssertEqual(reader.messages.last?.text, "Partial answer")
+    }
+    func testClosingKeepsTheChosenBookAndRemovingItDoesNotOpenChat() throws {
+        let directory = try directory()
+        let book = Book(id: UUID(), title: "A Book", author: "Author", fileName: "book.txt", format: .txt, fingerprint: "chosen-book")
+        let chat = TabChat(); chat.open(book, directory: directory)
+        chat.session?.draft = "Saved book draft"; chat.close()
+        XCTAssertNil(chat.session); XCTAssertEqual(chat.book?.fingerprint, book.fingerprint)
+        chat.open(chat.book, directory: directory)
+        XCTAssertEqual(chat.session?.draft, "Saved book draft")
+        chat.close(); chat.booksChanged([], directory: directory)
+        XCTAssertNil(chat.session); XCTAssertNil(chat.book)
+        chat.open(chat.book, directory: directory)
+        XCTAssertEqual(chat.conversation, "general"); XCTAssertEqual(chat.session?.draft, "")
     }
     func testClearCannotBeUndoneByLateReplyOrPendingDraftCheckpoint() async throws {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)

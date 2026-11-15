@@ -28,12 +28,22 @@ extension ReaderModel {
     private var gate = TapMovementGate()
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
-        if let point = touches.first?.location(in: nil) { gate.begin(at: point) }
+        if let touch = touches.first { gate.begin(at: touch.location(in: nil), timestamp: touch.timestamp) }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesMoved(touches, with: event)
         guard let point = touches.first?.location(in: nil), gate.scrolled(to: point), state == .possible else { return }
         state = .failed
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        // Native selection can finish before the delayed reader tap fires.
+        // Reject its long press from the touch itself, without relying on a
+        // selection menu's transient state or suppressing the next short tap.
+        if let touch = touches.first, state == .possible, gate.isLongPress(endingAt: touch.timestamp) {
+            state = .failed
+            return
+        }
+        super.touchesEnded(touches, with: event)
     }
 }
 
@@ -41,11 +51,17 @@ extension ReaderModel {
 /// takes to begin. The start is replaced by the next touch-down, never cleared.
 struct TapMovementGate {
     static let allowedMovement: CGFloat = 10
+    static let selectionDuration: TimeInterval = 0.45
     private var start: CGPoint?
-    mutating func begin(at point: CGPoint) { start = point }
+    private var beganAt: TimeInterval?
+    mutating func begin(at point: CGPoint, timestamp: TimeInterval? = nil) { start = point; beganAt = timestamp }
     mutating func scrolled(to point: CGPoint) -> Bool {
         guard let start else { return false }
         return hypot(point.x - start.x, point.y - start.y) > Self.allowedMovement
+    }
+    func isLongPress(endingAt timestamp: TimeInterval) -> Bool {
+        guard let beganAt else { return false }
+        return timestamp - beganAt >= Self.selectionDuration
     }
 }
 

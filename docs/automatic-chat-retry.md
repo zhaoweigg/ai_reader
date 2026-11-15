@@ -10,7 +10,17 @@ Backoff is 0.6 / 1.2 seconds with 20% jitter. A valid `Retry-After` overrides th
 delay. Recovery waits at most 8 seconds at once and 10 seconds total; a larger
 provider delay is deferred to manual Retry, never shortened. Each active network
 request retains the transport's existing 60-second request / 180-second resource
-timeouts. Stop and Close cancel streaming and backoff immediately.
+timeouts. Stop and Clear cancel streaming and backoff immediately. Closing the
+panel only saves its draft and passage: the existing reply and any bounded retry
+keep running. Reopening Library, another tab or the reader attaches to the same
+live conversation without sending the question again. Each tab also remembers
+its selected conversation while the panel is closed.
+
+The conversation registry retains active replies (including replies waiting for
+foreground recovery) and holds idle sessions weakly. Completed hidden sessions
+are released and later reload their saved history. A terminated app cannot keep
+a network stream alive; restoration after termination still offers manual Retry
+for an unfinished reply. Explicit Stop never schedules an automatic continuation.
 
 Recovery reuses the original question, captured passage and transcript. A failed
 attempt's displayed text is withdrawn before the replacement starts; the existing
@@ -36,3 +46,8 @@ Verification is intentionally scoped to deterministic recovery/agent tests,
 affected provider and manual-Retry regressions, and one actual-book UI scenario
 each in Pages, Scroll (agent) and PDF. UI fixtures inject a disconnection into the
 production recovery path; they do not claim live provider or physical-network QA.
+
+`python3 scripts/test_chat_session_registry.py` runs the production ownership
+registry and its shared XCTest cases on macOS without starting a simulator. This
+checks identity, lifetime and conversation/library isolation; app-hosted stream,
+history and rendered UI regressions remain separate checks.

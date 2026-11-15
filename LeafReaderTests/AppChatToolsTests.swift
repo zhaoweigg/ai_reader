@@ -21,6 +21,20 @@ private actor ChartService: BestsellerServing {
     }
 }
 
+private final class HeldAppReplyProvider: ToolChatProvider {
+    var rounds: [[AgentItem]] = []
+    var offeredTools: [[String]] = []
+    var replies: [AsyncThrowingStream<AgentEvent, Error>.Continuation] = []
+    func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
+        XCTFail("The app tools reply must stay in the agent")
+        return AsyncThrowingStream { $0.finish() }
+    }
+    func streamAgent(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool) -> AsyncThrowingStream<AgentEvent, Error> {
+        rounds.append(items); offeredTools.append(tools.map(\.name))
+        return AsyncThrowingStream { replies.append($0) }
+    }
+}
+
 @MainActor final class AppChatToolsTests: XCTestCase {
     private func defaults() -> UserDefaults {
         let name = "LeafAppTools.\(UUID())", d = UserDefaults(suiteName: name)!
@@ -120,6 +134,46 @@ private actor ChartService: BestsellerServing {
         XCTAssertEqual(calls, 1, "A list loaded once is reused")
         let unknown = try await toolbox.run(AgentToolCall(id: "3", name: "get_catalog_book", arguments: #"{"book_id":"nope"}"#))
         XCTAssertTrue(unknown.contains("Unknown book_id"))
+    }
+
+    func testHiddenConversationContinuesItsAppToolRoundWithoutStartingOver() async throws {
+        let (data, _, _) = try await app(), provider = HeldAppReplyProvider()
+        let directory = try XCTUnwrap(data.library.disk).root.appendingPathComponent("ChatHistory", isDirectory: true)
+        let settings = AISettingsStore(defaults: defaults(), credentials: credentials(), providerOverride: provider)
+        var panel: ReaderChatSession? = .conversation(directory: directory, id: "hidden-app-tools")
+        weak var live = panel
+        panel?.draft = "Which books am I reading?"
+        panel?.send(settings: settings, app: data) { nil }
+        await waitUntil { provider.rounds.count == 1 }
+        XCTAssertTrue(provider.offeredTools.first?.contains("list_library") == true)
+        panel?.close(); panel = nil
+        XCTAssertNotNil(live)
+        let first = try XCTUnwrap(provider.replies.first)
+        first.yield(.toolCall(AgentToolCall(id: "library-1", name: "list_library", arguments: #"{"status":"reading"}"#)))
+        first.yield(.finished(truncated: false)); first.finish()
+        await waitUntil { provider.rounds.count == 2 }
+        let results = try XCTUnwrap(provider.rounds.last?.compactMap { item -> [AgentToolResult]? in
+            if case .toolResults(let results) = item { return results }; return nil
+        }.last)
+        XCTAssertEqual(results.count, 1); XCTAssertEqual(results.first?.name, "list_library")
+        XCTAssertTrue(results.first?.output.contains("Read") == true)
+        let reopened = ReaderChatSession.conversation(directory: directory, id: "hidden-app-tools")
+        XCTAssertTrue(reopened === live); XCTAssertTrue(reopened.isSending); XCTAssertFalse(reopened.canRetry)
+        let second = try XCTUnwrap(provider.replies.last)
+        second.yield(.text("Here are your reading books.")); second.yield(.finished(truncated: false)); second.finish()
+        await waitUntil { !reopened.isSending }
+        XCTAssertEqual(provider.rounds.count, 2); XCTAssertEqual(reopened.messages.count, 2)
+        XCTAssertEqual(reopened.messages.last?.state, .complete)
+        let saved = ReaderChatSession(directory: directory, conversation: "hidden-app-tools")
+        XCTAssertEqual(saved.messages.last?.text, "Here are your reading books.")
+        XCTAssertEqual(saved.messages.last?.state, .complete)
+    }
+    private func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0..<400 {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTFail("The app tools reply did not reach the expected round")
     }
 
     func testEveryChatOffersAppToolsAndDescribesThem() async throws {
