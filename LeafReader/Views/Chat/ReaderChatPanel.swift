@@ -615,7 +615,7 @@ private struct ReaderChatMessageBubble: View, Equatable {
             }
             // Which reading-context design produced this reply, for comparison.
             if !message.isUser, message.state != .streaming, let trace = message.trace {
-                Label(trace.caption, systemImage: trace.harness == .agent ? "magnifyingglass" : "text.book.closed")
+                Label(trace.caption, systemImage: trace.usedTools ? "magnifyingglass" : "text.book.closed")
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(3)
                     .accessibilityElement(children: .ignore).accessibilityLabel(trace.caption)
                     .accessibilityIdentifier("chatReplyTrace")

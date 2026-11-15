@@ -29,7 +29,8 @@ final class UITestRecoveryChatProvider: @MainActor ToolChatProvider {
             if case .turn(let turn) = item, turn.role == "user" { return turn.content }; return nil
         }.last ?? ""
         let hasResults = items.contains { if case .toolResults = $0 { return true }; return false }
-        if !tools.isEmpty, !hasResults {
+        // Every chat now offers tools; only the agent recovery case scripts a tool round.
+        if UITesting.flag(.chatRecoveryAgent), tools.contains(where: { $0.name == "list_chapters" }), !hasResults {
             return AsyncThrowingStream {
                 $0.yield(.toolCall(.init(id: "recovery_chapters", name: "list_chapters", arguments: "{}")))
                 $0.yield(.finished(truncated: false)); $0.finish()

@@ -16,7 +16,7 @@ struct AgentLimitsSection: View {
             Toggle("Search highlighted name first", isOn: $configuration.agentLimits.seedSearch).accessibilityIdentifier("agentSeedSearch")
         } header: { Text("Agent limits") }
         Section {
-            ForEach((AgentTool.all + AgentTool.view).map(\.name), id: \.self) { name in
+            ForEach((AgentTool.all + AgentTool.view + AgentTool.app).map(\.name), id: \.self) { name in
                 Toggle(name, isOn: Binding(get: { !configuration.agentLimits.disabledTools.contains(name) }, set: { on in
                     if on { configuration.agentLimits.disabledTools.remove(name) } else { configuration.agentLimits.disabledTools.insert(name) }
                 })).font(.system(.body, design: .monospaced)).accessibilityIdentifier("agentTool-\(name)")
@@ -53,15 +53,15 @@ struct AgentTroubleshootingSection: View {
 struct AgentTracesView: View {
     @Environment(\.leafTheme) private var theme
     @EnvironmentObject private var traces: AgentTraceStore
-    private enum Filter: String, CaseIterable { case all = "All", agent = "Agent", evidence = "Pre-fetched", failed = "Failed" }
+    private enum Filter: String, CaseIterable { case all = "All", agent = "Agent", plain = "No tools", failed = "Failed" }
     @State private var filter = Filter.all
     @State private var confirmClear = false
     private var visible: [AgentTrace] {
         traces.traces.filter { trace in
             switch filter {
             case .all: return true
-            case .agent: return trace.harness == .agent
-            case .evidence: return trace.harness == .evidence
+            case .agent: return trace.harness == "agent"
+            case .plain: return trace.harness != "agent"
             case .failed: return trace.outcome == .failed
             }
         }
@@ -100,7 +100,7 @@ private struct AgentTraceRow: View {
                 Text(trace.date, style: .time)
             }.font(.caption).foregroundStyle(.secondary)
             Text(trace.headline).font(.subheadline.weight(.semibold)).lineLimit(2)
-            Text(trace.metrics).font(.caption).foregroundStyle(trace.harness == .agent && trace.modelToolCalls == 0 && trace.outcome != .failed ? .orange : .secondary).lineLimit(2)
+            Text(trace.metrics).font(.caption).foregroundStyle(trace.harness == "agent" && trace.modelToolCalls == 0 && trace.outcome != .failed ? .orange : .secondary).lineLimit(2)
         }.padding(.vertical, 2)
     }
 }
@@ -108,7 +108,7 @@ private struct AgentTraceRow: View {
 private struct TraceBadge: View {
     let trace: AgentTrace
     var body: some View {
-        let (title, color): (String, Color) = trace.outcome == .failed ? ("Failed", .orange) : trace.harness == .agent ? ("Agent", .teal) : ("Pre-fetched", .gray)
+        let (title, color): (String, Color) = trace.outcome == .failed ? ("Failed", .orange) : trace.harness == "agent" ? ("Agent", .teal) : trace.harness == "evidence" ? ("Pre-fetched", .gray) : ("No tools", .gray)
         Text(title).font(.caption2.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2)
             .background(color.opacity(0.15), in: Capsule()).foregroundStyle(color)
     }
@@ -230,7 +230,7 @@ extension AgentTrace {
     var metrics: String {
         if outcome == .failed { return [model, error ?? "failed"].filter { !$0.isEmpty }.joined(separator: " · ") }
         var parts = [model]
-        if harness == .agent { parts += ["\(rounds) \(rounds == 1 ? "round" : "rounds")", "\(modelToolCalls) \(modelToolCalls == 1 ? "tool" : "tools")"] }
+        if harness == "agent" { parts += ["\(rounds) \(rounds == 1 ? "round" : "rounds")", "\(modelToolCalls) \(modelToolCalls == 1 ? "tool" : "tools")"] }
         else if let lookup = steps.first(where: { $0.kind == .lookup }) { parts.append(lookup.title.lowercased()) }
         parts.append(String(format: "%.1f s", totalSeconds))
         if let input = usage.input, let output = usage.output { parts.append("\(AgentTraceDetailView.compact(input)) / \(AgentTraceDetailView.compact(output)) tokens") }

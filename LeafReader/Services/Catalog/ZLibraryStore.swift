@@ -456,6 +456,56 @@ final class ZLibraryStore: ObservableObject {
             return token == generation ? page.books : []
         } catch { return [] }
     }
+    // MARK: Ask Leaf
+
+    /// A feed for Ask Leaf, read without changing what Discover shows. A list loaded
+    /// earlier this launch is reused unless `refresh`; a fetched one is kept, so
+    /// Discover opens with it. `cached` is true when nothing was requested.
+    func chatFeed(_ feed: ZLibraryFeed, refresh: Bool = false) async throws -> (books: [ZLibraryBook], cached: Bool) {
+        let key = CatalogKey("", searchOrder, feed: feed)
+        if !refresh {
+            if let listed = snapshots[key] { return (listed.books, true) }
+            if shelfFeed == feed, !shelf.isEmpty, feed == .popular || hasCurrentRecommendations { return (shelf, true) }
+        }
+        let token = generation, source = origin
+        if session == nil { session = try savedSession(for: source); websiteUserAgent = session?.userAgent }
+        let saved = session
+        if feed == .recommended, saved == nil { throw ZLibraryError.signInRequired }
+        try await prepareCatalogWebsiteContext(request: UUID())
+        try Task.checkCancellation(); guard token == generation else { throw CancellationError() }
+        let rows: [ZLibraryBook]
+        if feed == .recommended, let saved { rows = try await client.recommended(origin: source, session: saved) }
+        else { rows = try await client.popular(origin: source, session: saved) }
+        try Task.checkCancellation(); guard token == generation else { throw CancellationError() }
+        let books = rows.map { book in detailCache[book.id].map { book.fillingMissingDetails(from: $0) } ?? book }
+        snapshots[key] = CatalogSnapshot(books: books, page: 0, canLoadMore: false, limitReached: false)
+        return (books, false)
+    }
+    /// First-page search results for Ask Leaf, without replacing Discover's search.
+    func chatSearch(_ query: String, order: ZLibrarySearchOrder) async throws -> [ZLibraryBook] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = CatalogKey(query, order, feed: .popular)
+        if let listed = snapshots[key] { return listed.books }
+        let token = generation, source = origin
+        if session == nil { session = try savedSession(for: source); websiteUserAgent = session?.userAgent }
+        try await prepareCatalogWebsiteContext(request: UUID())
+        try Task.checkCancellation(); guard token == generation else { throw CancellationError() }
+        let page = try await client.search(query, page: 1, order: order, origin: source, session: session)
+        try Task.checkCancellation(); guard token == generation else { throw CancellationError() }
+        let books = page.books.map { book in detailCache[book.id].map { book.fillingMissingDetails(from: $0) } ?? book }
+        snapshots[key] = CatalogSnapshot(books: books, page: 1, canLoadMore: page.hasMore, limitReached: false)
+        touch(key)
+        return books
+    }
+    /// What Ask Leaf tells the reader when a catalog read fails.
+    nonisolated static func chatErrorMessage(_ error: Error) -> String {
+        switch ZLibraryRequestFailure.issue(error) {
+        case .signInRequired: return "Z-Library is not connected. The reader can connect it in Discover with the account button."
+        case .challenge, .accessCheck: return "Z-Library asked for a website check. The reader can open Discover, use Open website, then ask again."
+        default: return String(error.localizedDescription.prefix(240))
+        }
+    }
+
     func reload() async {
         detailFailures.removeAll(); detailRefresh += 1
         await loadCatalog(query: activeQuery, refresh: true)

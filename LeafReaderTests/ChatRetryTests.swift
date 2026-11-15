@@ -33,11 +33,13 @@ private final class RetryProvider: ToolChatProvider {
     var replies: [Reply] = []
     var requests: [[AgentItem]] = []
     var plainRequests: [ChatRequest] = []
-    var held: AsyncThrowingStream<ChatEvent, Error>.Continuation?
+    /// Every model request, with or without tools. A chat whose provider supports
+    /// tools always goes through the agent, so most session tests count these.
+    var sent: [ChatRequest] = []
+    var held: AsyncThrowingStream<AgentEvent, Error>.Continuation?
     var hold = false
     func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
-        plainRequests.append(request)
-        if hold { return AsyncThrowingStream { held = $0 } }
+        plainRequests.append(request); sent.append(request)
         let reply = replies.removeFirst()
         return AsyncThrowingStream { continuation in
             for event in reply.events {
@@ -55,6 +57,8 @@ private final class RetryProvider: ToolChatProvider {
     }
     func streamAgent(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool) -> AsyncThrowingStream<AgentEvent, Error> {
         requests.append(items)
+        sent.append(ChatRequest(system: system, turns: items.compactMap { if case .turn(let turn) = $0 { return turn }; return nil }))
+        if hold { return AsyncThrowingStream { held = $0 } }
         let reply = replies.removeFirst()
         return AsyncThrowingStream { continuation in
             reply.events.forEach { continuation.yield($0) }; continuation.finish(throwing: reply.error)
@@ -118,12 +122,12 @@ final class ChatRetryTests: XCTestCase {
         XCTAssertNil(session.error, "No error for a reply cut off by leaving the screen")
         XCTAssertTrue(session.notice?.contains("continues when you come back") == true)
         XCTAssertEqual(session.messages.last?.state, .failed)
-        XCTAssertEqual(provider.plainRequests.count, 3)
+        XCTAssertEqual(provider.sent.count, 3)
 
         background = false; session.appWillEnterForeground()
         try await eventually(interval: 0.005) { session.messages.last?.text == "Whole answer" && !session.isSending }
-        XCTAssertEqual(provider.plainRequests.count, 4)
-        XCTAssertEqual(provider.plainRequests.last?.turns.last?.content, provider.plainRequests.first?.turns.last?.content, "The same question is asked again")
+        XCTAssertEqual(provider.sent.count, 4)
+        XCTAssertEqual(provider.sent.last?.turns.last?.content, provider.sent.first?.turns.last?.content, "The same question is asked again")
         XCTAssertEqual(session.messages.count, 2, "The cut-off reply is replaced, not kept beside the new one")
         XCTAssertEqual(session.notice, ReaderChatSession.resumedNotice); XCTAssertNil(session.error)
     }
@@ -137,7 +141,7 @@ final class ChatRetryTests: XCTestCase {
         session.send(settings: try settings(provider)) { self.context }
         session.appDidEnterBackground()
         try await eventually(interval: 0.005) { session.messages.last?.text == "Continued" && !session.isSending }
-        XCTAssertNil(session.error); XCTAssertEqual(provider.plainRequests.count, 4)
+        XCTAssertNil(session.error); XCTAssertEqual(provider.sent.count, 4)
     }
 
     func testHiddenReplySurvivesForegroundRetryHandoffWithoutAViewOwner() async throws {
@@ -157,10 +161,10 @@ final class ChatRetryTests: XCTestCase {
         presented?.close(); presented = nil
         // Observe only the provider/database: keeping a session reference here
         // would hide a lost owner between failure and the queued restart.
-        do { try await eventually(interval: 0.005) { provider.plainRequests.count == 4 } }
+        do { try await eventually(interval: 0.005) { provider.sent.count == 4 } }
         catch {
             let saved = try history.page(before: nil, after: nil, limit: 24)
-            XCTFail("Hidden foreground restart was lost: requests=\(provider.plainRequests.count), saved reply=\(String(describing: saved.messages.last?.state))")
+            XCTFail("Hidden foreground restart was lost: requests=\(provider.sent.count), saved reply=\(String(describing: saved.messages.last?.state))")
             return
         }
         try await eventually(interval: 0.005) {
@@ -168,7 +172,7 @@ final class ChatRetryTests: XCTestCase {
         }
         let saved = try history.page(before: nil, after: nil, limit: 24)
         XCTAssertEqual(saved.messages.count, 2); XCTAssertEqual(saved.messages.last?.text, "Completed while hidden")
-        XCTAssertEqual(provider.plainRequests.first?.turns, provider.plainRequests.last?.turns)
+        XCTAssertEqual(provider.sent.first?.turns, provider.sent.last?.turns)
     }
 
     func testOtherFailuresStillShowAndStoppingCancelsAPendingContinue() async throws {
@@ -182,7 +186,7 @@ final class ChatRetryTests: XCTestCase {
         try await eventually(interval: 0.005) { !session.isSending }
         XCTAssertNotNil(session.error)
         background = false; session.appWillEnterForeground()
-        XCTAssertEqual(refused.plainRequests.count, 1)
+        XCTAssertEqual(refused.sent.count, 1)
 
         // Without leaving the screen, an exhausted network failure is reported as before.
         let offline = RetryProvider(); offline.replies = Array(repeating: .init(error: socketAbort), count: 3)
@@ -202,7 +206,7 @@ final class ChatRetryTests: XCTestCase {
         try await eventually(interval: 0.005) { !closing.isSending }
         closing.stop()
         away = false; closing.appWillEnterForeground()
-        XCTAssertFalse(closing.isSending); XCTAssertEqual(dropped.plainRequests.count, 3)
+        XCTAssertFalse(closing.isSending); XCTAssertEqual(dropped.sent.count, 3)
     }
 
     func testInitialTransportDropRecoversWithIdenticalRequest() async throws {
@@ -236,7 +240,7 @@ final class ChatRetryTests: XCTestCase {
         }
         session.send(settings: settings) { XCTFail("Must reuse attached selection"); return nil }
         try await eventually(interval: 0.005) { !session.isSending }
-        XCTAssertEqual(provider.plainRequests[0].turns, provider.plainRequests[1].turns)
+        XCTAssertEqual(provider.sent[0].turns, provider.sent[1].turns)
         XCTAssertEqual(session.messages.count, 2); XCTAssertEqual(session.messages.last?.text, "Replacement answer")
         XCTAssertEqual(replyIDs, [session.messages.last!.id]); XCTAssertEqual(session.draft, "New unsent draft")
         XCTAssertEqual(session.selectedContext?.text, "New selection")
@@ -254,11 +258,11 @@ final class ChatRetryTests: XCTestCase {
         let settings = try settings(provider)
         session.send(settings: settings) { self.context }
         try await eventually(interval: 0.005) { !session.isSending }
-        XCTAssertEqual(provider.plainRequests.count, 3); XCTAssertEqual(session.messages.last?.text, "Partial 3")
+        XCTAssertEqual(provider.sent.count, 3); XCTAssertEqual(session.messages.last?.text, "Partial 3")
         XCTAssertTrue(session.canRetry); XCTAssertNotNil(session.error)
         session.retry(settings: settings); try await eventually(interval: 0.005) { !session.isSending }
         XCTAssertEqual(session.messages.count, 2); XCTAssertEqual(session.messages.last?.text, "Manual recovery")
-        XCTAssertEqual(provider.plainRequests[0].turns, provider.plainRequests[3].turns)
+        XCTAssertEqual(provider.sent[0].turns, provider.sent[3].turns)
     }
 
     func testClosingDuringBackoffKeepsTheRetryAndOriginalQuestion() async throws {
@@ -272,8 +276,8 @@ final class ChatRetryTests: XCTestCase {
         session.close()
         XCTAssertTrue(session.isSending)
         try await eventually(interval: 0.005) { !session.isSending }
-        XCTAssertEqual(provider.plainRequests.count, 2); XCTAssertEqual(session.messages.count, 2)
-        XCTAssertEqual(provider.plainRequests.first?.turns, provider.plainRequests.last?.turns)
+        XCTAssertEqual(provider.sent.count, 2); XCTAssertEqual(session.messages.count, 2)
+        XCTAssertEqual(provider.sent.first?.turns, provider.sent.last?.turns)
         XCTAssertEqual(session.messages.last?.text, "Completed"); XCTAssertEqual(session.messages.last?.state, .complete)
     }
     func testClosingPanelKeepsAReplyWaitingForForegroundResume() async throws {
@@ -288,7 +292,7 @@ final class ChatRetryTests: XCTestCase {
         session.close()
         background = false; session.appWillEnterForeground()
         try await eventually(interval: 0.005) { session.messages.last?.text == "Resumed" && !session.isSending }
-        XCTAssertEqual(provider.plainRequests.count, 4); XCTAssertEqual(session.messages.count, 2)
+        XCTAssertEqual(provider.sent.count, 4); XCTAssertEqual(session.messages.count, 2)
         XCTAssertNil(session.error)
     }
     func testStopCancelsBackoffWithoutStartingAnotherRequest() async throws {
@@ -317,7 +321,7 @@ final class ChatRetryTests: XCTestCase {
         provider.held?.yield(.text("Before stop")); try await eventually(interval: 0.005) { session.messages.last?.text == "Before stop" }
         session.stop(); provider.held?.yield(.text("Late")); provider.held?.finish(throwing: URLError(.networkConnectionLost))
         await Task.yield()
-        XCTAssertEqual(provider.plainRequests.count, 1); XCTAssertEqual(session.messages.last?.text, "Before stop")
+        XCTAssertEqual(provider.sent.count, 1); XCTAssertEqual(session.messages.last?.text, "Before stop")
         XCTAssertEqual(session.messages.last?.state, .stopped)
     }
 
@@ -378,7 +382,7 @@ final class ChatRetryTests: XCTestCase {
         let provider = ChatGPTSubscriptionProvider(accounts: accounts, accountID: account.id, model: "fixture-model", transport: transport)
         let source = RetryBookSource(), toolbox = ReadingAgentToolbox(book: .init(index: BookTextIndex(source: source, directory: nil), boundary: .init(section: 0, offset: 18))) { _ in "{}" }
         var text = ""
-        _ = try await ReadingAgentRunner.run(provider: provider, request: .conversation([.init(isUser: true, text: "Remind me", context: context)], harness: .agent),
+        _ = try await ReadingAgentRunner.run(provider: provider, request: .conversation([.init(isUser: true, text: "Remind me", context: context)], bookTools: true),
                                              toolbox: toolbox, recovery: ChatRetryBudget(policy: immediate), onText: { text += $0 }, onWithdraw: { text = "" })
         XCTAssertEqual(transport.requests.count, 3)
         XCTAssertEqual(transport.requests[1].httpBody, transport.requests[2].httpBody)
@@ -394,8 +398,8 @@ final class ChatRetryTests: XCTestCase {
         provider.replies = [.init(error: URLError(.networkConnectionLost)), .init(events: [.toolCall(completed), .finished(truncated: false)]),
                             .init(events: [.text("Abandoned answer"), .toolCall(abandoned)], error: ChatError.interrupted),
                             .init(events: [.text("Recovered answer"), .finished(truncated: false)])]
-        let recorder = AgentTraceRecorder(trace: .init(harness: .agent, provider: "fixture", model: "fixture", bookTitle: "Book", chapter: "Chapter 1", question: "Who?"))
-        let request = ChatRequest.conversation([.init(isUser: true, text: "Who?", context: context)], harness: .agent)
+        let recorder = AgentTraceRecorder(trace: .init(provider: "fixture", model: "fixture", bookTitle: "Book", chapter: "Chapter 1", question: "Who?"))
+        let request = ChatRequest.conversation([.init(isUser: true, text: "Who?", context: context)], bookTools: true)
         let budget = ChatRetryBudget(policy: immediate); var text = ""
         _ = try await ReadingAgentRunner.run(provider: provider, request: request, toolbox: toolbox, recorder: recorder, recovery: budget,
                                              onText: { text += $0 }, onWithdraw: { text = "" })
