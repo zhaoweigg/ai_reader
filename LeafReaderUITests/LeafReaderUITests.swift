@@ -1405,6 +1405,60 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testSelectingAnotherWordBringsThePaletteBackInPages() { verifyPaletteFollowsNewSelection(flow: "Pages") }
     @MainActor func testSelectingAnotherWordBringsThePaletteBackInScroll() { verifyPaletteFollowsNewSelection(flow: "Scroll") }
     @MainActor func testSelectingAnotherWordBringsThePaletteBackInPDF() { verifyPaletteFollowsNewSelection(flow: "PDF") }
+    @MainActor func testDraggingOutASelectionShowsThePaletteInPages() { verifyPaletteAfterDraggedSelection(flow: "Pages") }
+    @MainActor func testDraggingOutASelectionShowsThePaletteInScroll() { verifyPaletteAfterDraggedSelection(flow: "Scroll") }
+    @MainActor func testDraggingOutASelectionShowsThePaletteInPDF() { verifyPaletteAfterDraggedSelection(flow: "PDF") }
+    /// A long press that goes on to drag out a longer passage ends well away from where
+    /// it began, like a grip caught off-centre. The palette must appear when the finger
+    /// lifts, both with no palette on screen and with an earlier one showing.
+    @MainActor private func verifyPaletteAfterDraggedSelection(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(); openSelectionFixture(flow, app: app)
+        let menu = app.scrollViews["expandedSelectionMenu"]
+        let pdf = flow == "PDF", book = readingSurface(app).frame
+        let paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", pdf ? "Before the town" : "Attention is a way")).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
+        let frame = paragraph.frame.intersection(book)
+        XCTAssertFalse(frame.isNull, "The fixture paragraph is on screen")
+        // The paragraph's first line; both drags stay on it.
+        let line = frame.minY + frame.height * (pdf ? 0.25 : 0.1)
+        func dragOutSelection(from start: CGFloat, to end: CGFloat, _ stage: String) {
+            let points = [start, end].map { CGPoint(x: frame.minX + frame.width * $0, y: line) }
+            for id in ["selection-start-geometry", "selection-end-geometry"] {
+                let grip = app.descendants(matching: .any)[id].firstMatch
+                if grip.exists { XCTAssertFalse(grip.frame.insetBy(dx: -24, dy: -24).contains(points[0]), "The press starts clear of the native grips") }
+            }
+            if menu.exists { XCTAssertFalse(menu.frame.insetBy(dx: -12, dy: -12).contains(points[0]), "The press starts clear of the palette") }
+            let coordinates = points.map { app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: $0.x - app.frame.minX, dy: $0.y - app.frame.minY)) }
+            let proof = XCTAttachment(string: "Paragraph: \(frame); press at \(points[0]), drag to \(points[1]); screen points: \(coordinates.map(\.screenPoint))")
+            proof.name = flow + " dragged selection gesture, " + stage; proof.lifetime = .keepAlways; add(proof)
+            // One touch: hold until the word is selected, drag on without lifting, then lift.
+            coordinates[0].press(forDuration: 1.0, thenDragTo: coordinates[1], withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        dragOutSelection(from: 0.12, to: 0.45, "no palette showing")
+        if !menu.waitForExistence(timeout: 6) {
+            capture(flow + " no palette after dragging out a selection")
+            XCTFail("The palette did not appear after dragging out a selection in " + flow); return
+        }
+        let first = menu.value as? String ?? ""
+        XCTAssertTrue(first.contains(" "), "The drag selected more than the pressed word: " + first)
+        assertActionRibbon(app)
+        capture(flow + " palette after dragging out a selection")
+
+        dragOutSelection(from: 0.62, to: 0.84, "palette showing")
+        expectation(for: NSPredicate { _, _ in menu.exists && !(menu.value as? String ?? "").isEmpty && menu.value as? String != first }, evaluatedWith: menu)
+        waitForExpectations(timeout: 6)
+        let second = menu.value as? String ?? ""
+        XCTAssertTrue(second.contains(" "), "The second drag selected more than the pressed word: " + second)
+        assertActionRibbon(app)
+        capture(flow + " palette follows a second dragged selection")
+
+        // An ordinary tap away still closes it and nothing brings it back.
+        tapBookOutsideSelectionPalette(app)
+        let late = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
+        late.isInverted = true; waitForExpectations(timeout: 0.6)
+        app.terminate()
+    }
     /// With the palette already showing, a long press on another word must bring the
     /// palette back for that word. The press ends where a tap would, and the palette's
     /// own tap-away observer used to cancel the palette it had just asked for.
