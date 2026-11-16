@@ -216,6 +216,37 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertEqual(restored.messages.first?.context, context)
         complete(provider); try await eventually { !restored.isSending }
     }
+    func testTranslateRequestIsSentAtOnceOnlyWhenNothingElseIsWaiting() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        let request = "请把这段文字翻译成简体中文。"
+        let session = ReaderChatSession(directory: directory, conversation: "translate")
+        XCTAssertFalse(session.attachSelection(context, sending: .ask), "Ask Leaf has no request of its own")
+        XCTAssertNil(session.selectedContext)
+        XCTAssertTrue(session.attachSelection(context, sending: .translate))
+        XCTAssertEqual(session.draft, request); XCTAssertEqual(session.selectedContext, context)
+        XCTAssertTrue(provider.requests.isEmpty, "Attaching sends nothing by itself")
+        session.send(settings: settings) { XCTFail("Use the selected passage"); return nil }
+        try await eventually { provider.requests.count == 1 }
+        XCTAssertEqual(session.messages.first?.text, request); XCTAssertEqual(session.messages.first?.context, context)
+        XCTAssertEqual(session.draft, ""); XCTAssertNil(session.selectedContext)
+        XCTAssertTrue(provider.requests[0].turns.last?.content.contains("The door stayed shut.") == true, "The passage travels with the request")
+        // A reply is still arriving: the next request waits as a draft.
+        XCTAssertFalse(session.attachSelection(context, sending: .translate))
+        XCTAssertEqual(session.draft, request); XCTAssertEqual(provider.requests.count, 1)
+        complete(provider, "门一直关着。"); try await eventually { !session.isSending }
+        // A prepared shortcut is replaced; the reader's own words are kept and never sent for them.
+        session.prepareSelectionPrompt(.explain)
+        XCTAssertEqual(session.draft, "Explain this passage.")
+        XCTAssertTrue(session.attachSelection(context, sending: .translate))
+        XCTAssertEqual(session.draft, request)
+        session.draft = "Why did they leave?"
+        XCTAssertFalse(session.attachSelection(context, sending: .translate))
+        XCTAssertEqual(session.draft, "Why did they leave?\n\n" + request)
+        let chinese = ReadingChatContext(title: "书", author: "作者", chapter: "第一章", text: "门一直关着。", source: "selection", locator: "private-locator")
+        session.draft = ""
+        XCTAssertTrue(session.attachSelection(chinese, sending: .translate))
+        XCTAssertEqual(session.draft, "Translate this passage into English.")
+    }
     func testSelectionShortcutsPreserveCustomQuestionWithoutAccumulatingPrompts() throws {
         let session = ReaderChatSession(directory: try directory(), conversation: "custom")
         session.draft = "Why did they leave?\nI think this is a clue."
@@ -259,6 +290,8 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertEqual(ReaderSelectionIntent.explain.prompt(for: "选中文字"), "请解释这段文字。")
         XCTAssertEqual(ReaderSelectionIntent.summarize.prompt(for: "选中文字"), "请总结这段文字。")
         XCTAssertEqual(ReaderSelectionIntent.summarize.prompt(for: "A passage"), "Summarize this passage.")
+        XCTAssertEqual(ReaderSelectionIntent.translate.prompt(for: "A passage"), "请把这段文字翻译成简体中文。")
+        XCTAssertEqual(ReaderSelectionIntent.translate.prompt(for: "选中文字"), "Translate this passage into English.")
     }
     func testCompletedConversationAndDraftRestoreAfterClosingAndRecreatingStore() async throws {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)

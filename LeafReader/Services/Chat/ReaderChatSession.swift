@@ -173,6 +173,16 @@ final class ReaderChatSession: ObservableObject {
         if !prompt.isEmpty { draft = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? prompt : draft + "\n\n" + prompt }
         flush()
     }
+    /// Attaches a passage with a request that is complete in itself, such as Translate.
+    /// True when that request is the whole draft and no reply is in flight, so the
+    /// caller can send it; otherwise it stays a draft beside what the reader wrote.
+    func attachSelection(_ context: ReadingChatContext, sending intent: ReaderSelectionIntent) -> Bool {
+        guard !context.isEmpty, intent != .ask else { return false }
+        let passage = context.bounded()
+        selectedContext = passage; selectionDirty = true
+        prepareSelectionPrompt(intent)
+        return !isSending && draft.trimmingCharacters(in: .whitespacesAndNewlines) == intent.prompt(for: passage.text)
+    }
     func attachLiveSelection(_ context: ReadingChatContext?, chatIsPresented: Bool) {
         guard chatIsPresented, let context, !context.isEmpty else { return }
         let bounded = context.bounded()
@@ -188,7 +198,7 @@ final class ReaderChatSession: ObservableObject {
         guard let selection = selectedContext, intent != .ask else { return }
         let prompt = intent.prompt(for: selection.text)
         let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let presets = [ReaderSelectionIntent.explain, .summarize].map { $0.prompt(for: selection.text) }
+        let presets = [ReaderSelectionIntent.explain, .summarize, .translate].map { $0.prompt(for: selection.text) }
         if current.isEmpty || presets.contains(current) { draft = prompt }
         else if let previous = presets.first(where: { current.hasSuffix("\n\n" + $0) }) {
             draft = String(current.dropLast(previous.count)) + prompt
