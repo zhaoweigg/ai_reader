@@ -14,7 +14,8 @@ extension ReaderModel {
             annotation: { [weak self] in self?.selectedAnnotationSelection() },
             annotate: { [weak self] intent, snapshot in self?.annotateSelection(intent, selection: snapshot) },
             listeningPosition: { [weak self] in self?.listeningSelectionPosition() },
-            listen: { [weak self] locator in self?.listeningRequest = ReaderListeningRequest(locator: locator) })
+            listen: { [weak self] locator in self?.listeningRequest = ReaderListeningRequest(locator: locator) },
+            translate: { [weak self] passage in self?.translationRequest = ReaderTranslationRequest(text: passage) })
     }
 }
 

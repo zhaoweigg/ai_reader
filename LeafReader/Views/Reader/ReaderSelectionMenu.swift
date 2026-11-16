@@ -42,6 +42,7 @@ struct ReaderSelectionHooks {
     var annotate: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?
     var listeningPosition: () -> String? = { nil }
     var listen: ((String) -> Void)?
+    var translate: ((String) -> Void)?
 }
 
 @MainActor private func showSelectionMenu(on view: UIView, presenter: ReaderSelectionMenuPresenter, hooks: ReaderSelectionHooks) {
@@ -62,6 +63,14 @@ struct ReaderSelectionHooks {
     }
     let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view
+    // The native range is the whole selection; the chat snapshot can be shortened.
+    if ReaderTranslation.isAvailable, let translate = hooks.translate, let passage = ReaderTranslation.passage(copiedText ?? context.text) {
+        actions.append(ReaderSelectionAction(title: "Translate", image: ReaderTranslation.symbol, id: "translate") { [weak presenter] in
+            translate(passage)
+            // Like Copy, the sheet leaves the native range and its grips in place.
+            presenter?.observeCopiedSelection()
+        })
+    }
     actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder, weak presenter, weak view] in
         #if DEBUG
         readerSelectionMenuTrace("copyInvokedWithMatchingSnapshot", source: view, context: copiedText == context.text)
@@ -156,6 +165,33 @@ extension UIView {
             return handles.contains { convert($0.bounds, from: $0).insetBy(dx: -10, dy: -10).contains(point) }
         }
         return selectionHandles.contains { $0.contains(point) } && !selectionRectangles.contains { $0.contains(point) }
+    }
+}
+
+/// How the palette's single row shares its width among the actions.
+enum ReaderSelectionRow {
+    /// The smallest comfortable touch target.
+    static let minimum: CGFloat = 44
+    /// Equal shares while every label fits its share, which keeps a short row
+    /// even. Once a label would be squeezed, short labels give up their spare
+    /// width to long ones; only a row too narrow for all of them shrinks labels.
+    static func widths(fitting natural: [CGFloat], in row: CGFloat) -> [CGFloat] {
+        guard !natural.isEmpty, row > 0 else { return natural.map { _ in 0 } }
+        let share = row / CGFloat(natural.count)
+        if natural.allSatisfy({ $0 <= share }) { return natural.map { _ in share } }
+        let wanted = natural.map { max(minimum, $0) }
+        let total = wanted.reduce(0, +)
+        if total <= row {
+            let spare = (row - total) / CGFloat(natural.count)
+            return wanted.map { $0 + spare }
+        }
+        // Too narrow for every label: keep touch targets where the row allows,
+        // and take the shortfall from the labels that are wider than a target.
+        let floor = min(minimum, share)
+        let flexible = wanted.map { $0 - floor }.reduce(0, +)
+        guard flexible > 0 else { return natural.map { _ in share } }
+        let scale = (row - floor * CGFloat(natural.count)) / flexible
+        return wanted.map { floor + ($0 - floor) * scale }
     }
 }
 
@@ -616,13 +652,14 @@ private final class ReaderSelectionOverlayView: UIView {
         material.frame = overlay.card.bounds
         scrollView.frame = overlay.card.bounds.insetBy(dx: 6, dy: 6)
         let rowWidth = scrollView.bounds.width
-        let buttonWidth = rowWidth / CGFloat(max(1, buttons.count))
-        for (index, button) in buttons.enumerated() {
-            button.frame = CGRect(x: CGFloat(index) * buttonWidth, y: 0, width: buttonWidth, height: contentHeight)
+        let widths = ReaderSelectionRow.widths(fitting: buttons.map { $0.intrinsicContentSize.width }, in: rowWidth)
+        var x: CGFloat = 0
+        for (button, width) in zip(buttons, widths) {
+            button.frame = CGRect(x: x, y: 0, width: width, height: contentHeight); x += width
         }
         // Quiet separation for the reading companion; every action remains
         // visible in the same row, including at compact phone widths.
-        dividers.first?.frame = CGRect(x: buttonWidth, y: 6, width: 1, height: max(0, contentHeight - 12))
+        dividers.first?.frame = CGRect(x: widths.first ?? 0, y: 6, width: 1, height: max(0, contentHeight - 12))
         scrollView.contentSize = CGSize(width: rowWidth, height: contentHeight)
         scrollView.isScrollEnabled = contentHeight > scrollView.bounds.height
         scrollView.contentOffset = .zero

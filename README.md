@@ -186,7 +186,7 @@ Speech is entirely on device; no book text leaves the phone. Playback continues 
 
 ## Highlights, notes and voice notes
 
-Select text and choose **Highlight**, **Note** or **Voice Note** from the compact selection toolbar (Ask Leaf, Listen, Highlight, Note, Copy, More).
+Select text and choose **Highlight**, **Note** or **Voice Note** from the compact selection toolbar (Ask Leaf, Listen, Highlight, Note, Voice, Translate, Copy). **Translate** opens Apple's translation sheet for the selected passage on iOS 17.4 and later; it translates on the device and never changes the book.
 
 ```mermaid
 flowchart LR

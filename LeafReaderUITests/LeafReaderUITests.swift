@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, chatImage: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", chatRecovery: Bool = false, recoveryAgent: Bool = false, scriptedAgent: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, chatImage: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", chatRecovery: Bool = false, recoveryAgent: Bool = false, scriptedAgent: Bool = false, translationProbe: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -44,6 +44,8 @@ final class LeafReaderUITests: XCTestCase {
         if appleSpeech { app.launchEnvironment["LEAF_UI_APPLE_SPEECH"] = "1" }
         if backgroundAudio { app.launchEnvironment["LEAF_UI_BACKGROUND_AUDIO"] = "1" }
         if nowPlayingProbe { app.launchEnvironment["LEAF_UI_NOW_PLAYING"] = "1" }
+        // The simulator's system translation sheet is not dependable; the probe reports the request instead.
+        app.launchEnvironment["LEAF_UI_TRANSLATION_PROBE"] = translationProbe ? "1" : "0"
         app.launch()
         geometryApp = app
         orient(.portrait)
@@ -1315,8 +1317,8 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor private func assertActionRibbon(_ app: XCUIApplication) {
         let menu = app.scrollViews["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
-        let identifiers = ["ask", "listen", "highlight", "note", "voiceNote", "copy"]
-        XCTAssertEqual(menu.buttons.count, identifiers.count, "Exactly the six approved actions appear, without overflow")
+        let identifiers = ["ask", "listen", "highlight", "note", "voiceNote", "translate", "copy"]
+        XCTAssertEqual(menu.buttons.count, identifiers.count, "Exactly the seven approved actions appear, without overflow")
         let row = app.buttons["selection-ask"].frame, bounds = menu.frame
         for id in identifiers {
             let button = app.buttons["selection-" + id]
@@ -1329,7 +1331,7 @@ final class LeafReaderUITests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(bounds.height, 44)
         XCTAssertLessThanOrEqual(bounds.height, 84, "Keep the reference design's compact single row")
-        for id in ["system", "more", "lookup", "translate", "share", "back"] {
+        for id in ["system", "more", "lookup", "share", "back"] {
             XCTAssertFalse(app.buttons["selection-" + id].exists, "No overflow or unapproved action: " + id)
         }
         XCTAssertEqual(app.menuItems.count, 0, "The reader never presents the stock selection toolbar")
@@ -1611,6 +1613,74 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
         XCTAssertEqual(input.value as? String, copiedSelection, "Copy must retain the actual current native selection")
         capture(flow + " copied selection pasted into chat")
+        app.terminate()
+    }
+    @MainActor func testTranslateSelectionInPages() { verifyTranslateSelection("Pages") }
+    @MainActor func testTranslateSelectionInScroll() { verifyTranslateSelection("Scroll") }
+    @MainActor func testTranslateSelectionInPDF() { verifyTranslateSelection("PDF") }
+    /// Translate hands the selected passage to the system sheet, with Ask Leaf
+    /// open and closed, and neither opens the chat nor disturbs its quote.
+    @MainActor private func verifyTranslateSelection(_ flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(translationProbe: true); openSelectionFixture(flow, app: app)
+        let menu = app.scrollViews["expandedSelectionMenu"], probe = app.buttons["readerTranslationProbe"]
+        func translateSelection(_ stage: String) -> String {
+            selectFixturePassage(flow, app: app)
+            XCTAssertTrue(menu.waitForExistence(timeout: 6), "Selection menu in " + flow + ", " + stage)
+            let selected = menu.value as? String ?? ""
+            XCTAssertFalse(selected.isEmpty)
+            let button = revealSelectionAction("translate", app: app)
+            XCTAssertEqual(button.label, "Translate")
+            capture(flow + " selection menu with Translate, " + stage)
+            button.tap()
+            XCTAssertTrue(probe.waitForExistence(timeout: 5), "Translate asks the system for a translation")
+            XCTAssertEqual(probe.value as? String, selected.split(whereSeparator: \.isWhitespace).joined(separator: " "), "The sheet receives the selected passage")
+            XCTAssertTrue(menu.waitForNonExistence(timeout: 3), "Choosing Translate closes the palette")
+            capture(flow + " translation requested, " + stage)
+            return selected
+        }
+        app.buttons["openReaderChat"].tap()
+        let quoted = translateSelection("chat open")
+        let passage = app.staticTexts["chatSelectedPassage"]
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Translate keeps Ask Leaf open")
+        XCTAssertTrue(passage.waitForExistence(timeout: 5))
+        XCTAssertEqual(passage.label, quoted, "Translate leaves the attached quote alone")
+        probe.tap()
+        XCTAssertTrue(probe.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Closing the translation keeps Ask Leaf open")
+        XCTAssertEqual(passage.label, quoted)
+        // Closing the chat also ends the native selection, so the next one starts clean.
+        app.buttons["closeReaderChat"].tap()
+        XCTAssertTrue(app.buttons["openReaderChat"].waitForExistence(timeout: 5))
+        _ = translateSelection("chat closed")
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists, "Translate does not open Ask Leaf")
+        probe.tap()
+        XCTAssertTrue(probe.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(readingSurface(app).exists)
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists)
+        app.terminate()
+    }
+    /// The real sheet belongs to the system and the simulator may not translate,
+    /// so this records what appears and checks only Leaf's side of the hand-off.
+    @MainActor func testTranslateSelectionPresentsSystemTranslationInPages() {
+        continueAfterFailure = false
+        let app = launchApp(); openSelectionFixture("Pages", app: app)
+        selectFixturePassage("Pages", app: app)
+        let menu = app.scrollViews["expandedSelectionMenu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 6))
+        revealSelectionAction("translate", app: app).tap()
+        XCTAssertTrue(menu.waitForNonExistence(timeout: 3), "Choosing Translate closes the palette")
+        XCTAssertFalse(app.buttons["readerTranslationProbe"].exists, "Without the probe flag the system sheet is used")
+        // Poll past the system's presentation and any first-use language prompt.
+        _ = app.buttons["Done"].waitForExistence(timeout: 6)
+        capture("Pages system translation sheet")
+        let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.name = "System translation sheet hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
+        XCTAssertEqual(app.state, .runningForeground, "Presenting the system sheet keeps Leaf running")
+        if app.buttons["Done"].exists { app.buttons["Done"].tap() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)), withVelocity: .fast, thenHoldForDuration: 0) }
+        XCTAssertTrue(readingSurface(app).waitForExistence(timeout: 5), "The book is still there behind the sheet")
+        XCTAssertFalse(app.buttons["closeReaderChat"].exists, "Translate does not open Ask Leaf")
+        capture("Pages after system translation sheet")
         app.terminate()
     }
     @MainActor func testSelectionActionsReceiveTapsKeepComposerFocusAndLeaveNoWindowAfterClosing() {
