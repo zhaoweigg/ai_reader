@@ -50,6 +50,9 @@ def build_units(build):
                             if ack.is_file() and not message.is_symlink() and not ack.is_symlink():
                                 yield message
                                 yield ack
+                        for ack in (worker / "acks" / acknowledger).glob("*.json"):
+                            if not (worker / origin / ack.name).exists() and not ack.is_symlink():
+                                yield ack
                 continue
             if child.name == "worktree-archives":
                 for archived in child.glob("*/*/checkout/build"):
@@ -59,13 +62,16 @@ def build_units(build):
             if child.name.startswith("retained-worktree-evidence-"):
                 for entry in sorted(child.iterdir()):
                     if entry.is_dir() and not entry.is_symlink():
-                        if (entry / "build").is_dir():
+                        if (entry / "build").is_dir() and not (entry / "build").is_symlink():
                             yield from build_units(entry / "build")
                     elif not source_or_asset(entry):
                         yield entry
                 continue
-            if child.name.endswith("-archive") and (child / "build").is_dir():
+            if child.name.endswith("-archive") and (child / "build").is_dir() and not (child / "build").is_symlink():
                 yield from build_units(child / "build")
+                for metadata in child.iterdir():
+                    if not metadata.is_dir() and not source_or_asset(metadata):
+                        yield metadata
                 continue
         yield child
 
