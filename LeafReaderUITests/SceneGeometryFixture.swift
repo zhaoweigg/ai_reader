@@ -9,6 +9,9 @@ extension XCTestCase {
         visibleFrame(of: card, in: app)
     }
     @MainActor func tapVisibleLibraryCard(_ card: XCUIElement, app: XCUIApplication) {
+        // The library grid is lazy: on a large screen a second-row card starts far
+        // enough below the fold that it does not exist until the grid is scrolled.
+        for _ in 0..<3 where !card.waitForExistence(timeout: 5) { app.scrollViews.firstMatch.swipeUp() }
         XCTAssertTrue(card.waitForExistence(timeout: 10))
         for _ in 0..<6 {
             let frame = visibleLibraryCardFrame(card, app: app)
