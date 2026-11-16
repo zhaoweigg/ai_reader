@@ -453,7 +453,9 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
     private func installOutsideObservers(on window: UIWindow) {
         guard observers.isEmpty else { return }
         self.window = window
-        let tap = UITapGestureRecognizer(target: self, action: #selector(outsideGesture(_:)))
+        // A long press that selects another passage ends in place, as a tap does. Counting it
+        // as a tap away cancelled the palette that the new selection had just asked for.
+        let tap = ReaderTapRecognizer(target: self, action: #selector(outsideGesture(_:)))
         let pan = UIPanGestureRecognizer(target: self, action: #selector(outsideGesture(_:)))
         observers = [tap, pan]
         for observer in observers {
