@@ -261,6 +261,8 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         let start: CGPoint
         let timestamp: TimeInterval
         let beganOnHandle: Bool
+        /// What was selected when the finger came down.
+        let selection: String?
         var distance: CGFloat = 0
         var selectionChanged = false
     }
@@ -392,7 +394,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         switch phase {
         case .began:
             completedSelectionTouchUntil = 0
-            bookTouch = BookTouch(start: point, timestamp: timestamp, beganOnHandle: source.selectionHandleContains(point))
+            bookTouch = BookTouch(start: point, timestamp: timestamp, beganOnHandle: source.selectionHandleContains(point), selection: source.selectionText)
             #if DEBUG
             readerSelectionMenuTrace("bookTouchBegan", source: source, context: bookTouch?.beganOnHandle, point: point)
             #endif
@@ -407,7 +409,7 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
             guard let touch = bookTouch else { return }
             bookTouch = nil
             let longPress = timestamp - touch.timestamp >= 0.45 && touch.distance <= 20
-            let adjusted = touch.beganOnHandle && (touch.selectionChanged || touch.distance > 3)
+            let adjusted = touch.beganOnHandle && (touch.selectionChanged || touch.distance > 3) || reselected(by: touch)
             // The reader's single tap waits for double-tap failure and can arrive
             // >350ms later. A fresh book touch clears this grace immediately.
             if longPress || adjusted { completedSelectionTouchUntil = ProcessInfo.processInfo.systemUptime + 0.6 }
@@ -424,6 +426,13 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
             #endif
             bookTouch = nil; dismiss()
         }
+    }
+    /// Whether the touch left a different passage selected. UIKit lets a finger catch a
+    /// grip well outside the grip's own frame, and a long press can go on to drag out a
+    /// longer passage, so where a touch began does not say whether it selected.
+    private func reselected(by touch: BookTouch) -> Bool {
+        guard let selected = source?.selectionText, !selected.isEmpty else { return false }
+        return touch.selectionChanged || selected != touch.selection
     }
     func schedule(on source: UIView, actions: [ReaderSelectionAction], theme: ReadingTheme, selectedText: String) {
         guard !Task.isCancelled, let window = source.window, let scene = window.windowScene, scene.activationState == .foregroundActive else { return }
@@ -479,23 +488,30 @@ private final class ReaderSelectionTouchObserver: UIGestureRecognizer {
         UIMenuSystem.context.setNeedsRebuild()
     }
     @objc private func outsideGesture(_ gesture: UIGestureRecognizer) {
-        if gesture is UIPanGestureRecognizer && adjustingSelectionHandle {
-            if gesture.state == .began { dismiss(keepingHandleObserver: true) }
-            if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
-                let completed = gesture.state == .ended
-                dismiss()
-                let expectedRevision = revision
-                if completed {
-                    Task { @MainActor [weak self] in
-                        await Task.yield()
-                        guard let self, self.revision == expectedRevision else { return }
-                        self.requestCurrentMenu()
-                    }
-                }
-            }
+        guard gesture is UIPanGestureRecognizer else {
+            if gesture.state == .ended || gesture.state == .began { dismiss() }
             return
         }
-        if gesture.state == .ended || gesture.state == .began { dismiss() }
+        switch gesture.state {
+        case .began:
+            // A drag on the book may be changing the selection: a web page reports that
+            // only after the drag has begun. Hide the actions but keep following the
+            // touch, so that its end can bring them back.
+            dismiss(keepingHandleObserver: adjustingSelectionHandle || bookTouch != nil)
+        case .ended, .cancelled, .failed:
+            // The touch's own end and this one arrive in either order.
+            let selected = gesture.state == .ended && (adjustingSelectionHandle || bookTouch.map(reselected(by:)) == true
+                || ProcessInfo.processInfo.systemUptime < completedSelectionTouchUntil)
+            dismiss()
+            guard selected else { return }
+            let expectedRevision = revision
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, self.revision == expectedRevision else { return }
+                self.requestCurrentMenu()
+            }
+        default: break
+        }
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard let source, let view = touch.view else { return false }
