@@ -4,6 +4,17 @@
 - Never push directly to remote `main`.
 - Agents may merge their pull requests after the required checks pass; no additional user confirmation is needed.
 
+# Worktree lifecycle
+
+The user requires at most one worktree per worker.
+
+- Reuse the worker's assigned worktree for subsequent feature branches. Do not accumulate separate feature, QA, baseline, dashboard, or reconciliation checkouts for the same worker.
+- Before starting work or creating a checkout, inspect the existing Git worktrees and chat attachments and reuse the assigned path. Independent DerivedData and result directories belong inside that worktree; parallel test jobs do not require additional source checkouts.
+- The coordinator maintains the worker-to-worktree ownership map. The coordinator and release QA may use the shared main checkout for their existing roles without creating additional release or reconciliation worktrees.
+- Preserve uncommitted source, unpushed commits, and needed ignored files before changing branches or retiring a checkout. Use managed archival for app-managed worktrees, retaining recoverable source and verified evidence copies with old-to-new path mappings.
+- Retire obsolete auxiliary and baseline checkouts after all consuming jobs have actually exited and the coordinator acknowledges cleanup. Preserve current frozen source and Products while those jobs run, then complete consolidation.
+- An additional worktree requires the user's explicit authorization for that specific exception. Completed features alone are not a reason to retain another checkout.
+
 # Simulator coordination
 
 The user requests three simulator test slots running in parallel to reduce waiting.
