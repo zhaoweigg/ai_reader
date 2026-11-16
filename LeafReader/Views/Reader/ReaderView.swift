@@ -239,7 +239,9 @@ struct ReaderContent: View {
             audio.start(at: request.locator)
             model.clearNativeSelection(); model.hideControls(); panel = nil
         }
-        .onChange(of: model.reloadID) { _, _ in audio.stop() }
+        .onChange(of: model.reloadID) { _, _ in audio.stop(); model.translationRequest = nil }
+        .onChange(of: model.translationRequest) { _, request in if request != nil { model.hideControls() } }
+        .modifier(ReaderTranslationSheet(request: $model.translationRequest))
         .onChange(of: model.selectionRequest) { _, request in
             guard let request else { return }
             chatButtonIsMoving = false

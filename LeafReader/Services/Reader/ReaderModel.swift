@@ -19,6 +19,7 @@ final class ReaderModel: NSObject, ObservableObject {
     @Published var controlsVisible = false
     @Published var selectionRequest: ReaderSelectionRequest?
     @Published var listeningRequest: ReaderListeningRequest?
+    @Published var translationRequest: ReaderTranslationRequest?
     @Published var annotationDraft: BookAnnotation?
     var annotationStartsWithVoice = false
     @Published var annotationError: String?
