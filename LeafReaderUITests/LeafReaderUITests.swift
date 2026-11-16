@@ -1402,6 +1402,59 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testSelectionPaletteHandlesInScroll() { verifyPaletteSelectionHandles(flow: "Scroll") }
     @MainActor func testSelectionPaletteHandlesInPDF() { verifyPaletteSelectionHandles(flow: "PDF") }
     @MainActor func testSelectionPaletteHandlesInScrollWithSceneGeometryFixture() { verifyPaletteSelectionHandles(flow: "Scroll", geometryFixture: true) }
+    @MainActor func testSelectingAnotherWordBringsThePaletteBackInPages() { verifyPaletteFollowsNewSelection(flow: "Pages") }
+    @MainActor func testSelectingAnotherWordBringsThePaletteBackInScroll() { verifyPaletteFollowsNewSelection(flow: "Scroll") }
+    @MainActor func testSelectingAnotherWordBringsThePaletteBackInPDF() { verifyPaletteFollowsNewSelection(flow: "PDF") }
+    /// With the palette already showing, a long press on another word must bring the
+    /// palette back for that word. The press ends where a tap would, and the palette's
+    /// own tap-away observer used to cancel the palette it had just asked for.
+    @MainActor private func verifyPaletteFollowsNewSelection(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(); openSelectionFixture(flow, app: app)
+        selectFixturePassage(flow, app: app)
+        let menu = app.scrollViews["expandedSelectionMenu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 6))
+        assertActionRibbon(app)
+        let first = menu.value as? String ?? "", firstLocator = app.buttons["selection-ask"].value as? String ?? ""
+        XCTAssertFalse(first.isEmpty); XCTAssertFalse(firstLocator.isEmpty)
+        capture(flow + " palette for the first selection")
+
+        // Another word of the same paragraph, clear of the palette and the native grips.
+        let pdf = flow == "PDF", book = readingSurface(app).frame
+        let paragraph = readingSurface(app).staticTexts.containing(NSPredicate(format: "label CONTAINS %@", pdf ? "Before the town" : "Attention is a way")).firstMatch
+        let frame = paragraph.frame.intersection(book)
+        var excluded = [menu.frame.insetBy(dx: -12, dy: -12)]
+        for id in ["selection-start-geometry", "selection-end-geometry"] {
+            let grip = app.descendants(matching: .any)[id].firstMatch
+            if grip.exists { excluded.append(grip.frame.insetBy(dx: -24, dy: -24)) }
+        }
+        let height: CGFloat = pdf ? 0.25 : 0.1
+        let candidates = [0.7, 0.55, 0.85].map { CGPoint(x: frame.minX + frame.width * $0, y: frame.minY + frame.height * height) }
+        guard let point = candidates.first(where: { point in book.contains(point) && !excluded.contains { $0.contains(point) } }) else {
+            XCTFail("A second word outside the palette and native handles is required"); return
+        }
+        let target = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: point.x - app.frame.minX, dy: point.y - app.frame.minY))
+        let proof = XCTAttachment(string: "Paragraph: \(frame); exclusions: \(excluded); intended point: \(point); actual screen point: \(target.screenPoint)")
+        proof.name = flow + " second selection gesture target"; proof.lifetime = .keepAlways; add(proof)
+        // A hold just past the native long press, released in place like a finger does.
+        target.press(forDuration: 0.7)
+        expectation(for: NSPredicate { _, _ in menu.exists && !(menu.value as? String ?? "").isEmpty && menu.value as? String != first }, evaluatedWith: menu)
+        waitForExpectations(timeout: 6)
+        assertActionRibbon(app)
+        XCTAssertNotEqual(app.buttons["selection-ask"].value as? String, firstLocator, "Actions must act on the newly selected word")
+        capture(flow + " palette follows the second selection")
+
+        // A third selection, then an ordinary tap away: neither is disturbed by the fix.
+        let second = menu.value as? String ?? ""
+        selectFixturePassage(flow, app: app)
+        expectation(for: NSPredicate { _, _ in menu.exists && !(menu.value as? String ?? "").isEmpty && menu.value as? String != second }, evaluatedWith: menu)
+        waitForExpectations(timeout: 6)
+        tapBookOutsideSelectionPalette(app)
+        let late = expectation(for: NSPredicate(format: "exists == true"), evaluatedWith: menu)
+        late.isInverted = true; waitForExpectations(timeout: 0.6)
+        app.terminate()
+    }
     @MainActor private func verifyPaletteSelectionHandles(flow: String, geometryFixture: Bool = true) {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
