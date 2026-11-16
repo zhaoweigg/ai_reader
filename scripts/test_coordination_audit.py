@@ -82,6 +82,48 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(result["actions"][0]["action"], "verify_worker_evidence")
         self.assertTrue(result["errors"])
 
+    def installed_phone(self):
+        self.registry["phone"].update({"installed_main_commit": "shipped", "installed_build": "147",
+            "installed_binary_sha256": "digest", "state": "installed_launched_version_verified"})
+
+    def expire_summary(self):
+        self.summary.unlink()
+        build = self.root / "build"
+        build.mkdir(exist_ok=True)
+        (build / "artifact-retention-latest.json").write_text(json.dumps({"apply": True, "cutoff": 100,
+            "expired": [{"path": str(self.summary), "newest": 99}]}))
+
+    def test_expired_shipped_proof_is_reported_without_requeue_or_green_test(self):
+        self.installed_phone()
+        self.expire_summary()
+        report = self.run_audit()
+        self.assertEqual(report["errors"], [])
+        self.assertEqual(report["actions"], [])
+        missing = report["unavailable_historical_evidence"][0]
+        self.assertEqual(missing["status"], "expired")
+        self.assertIn("No such file", missing["error"])
+        self.assertFalse(missing["verification_revalidated"])
+
+    def test_expired_unshipped_proof_still_blocks_delivery(self):
+        self.installed_phone()
+        self.expire_summary()
+        report = self.run_audit(ancestor=lambda a, b: b != "shipped")
+        self.assertTrue(report["errors"])
+        self.assertEqual(report["actions"][0]["action"], "verify_worker_evidence")
+
+    def test_shipped_missing_proof_stays_explicit_after_cleanup_receipt_replaced(self):
+        self.installed_phone()
+        self.summary.unlink()
+        report = self.run_audit()
+        self.assertEqual(report["errors"], [])
+        self.assertEqual(report["unavailable_historical_evidence"][0]["status"], "unavailable")
+
+    def test_incomplete_install_state_cannot_hide_missing_active_evidence(self):
+        self.installed_phone()
+        self.expire_summary()
+        self.registry["phone"]["state"] = "installation_pending"
+        self.assertTrue(self.run_audit()["errors"])
+
     def test_stale_ready_flag_cannot_override_failure_or_wrong_commit(self):
         for change in ({"unresolved_failures": ["failure"]}, {"merge_commit": "different"},
                        {"screenshots_reviewed": False}, {"distinct_cases_passed": 0}):
