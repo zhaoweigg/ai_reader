@@ -4,13 +4,16 @@ import WebKit
 import PDFKit
 
 enum ReaderSelectionIntent: String, CaseIterable {
-    case ask, explain, summarize
+    case ask, explain, summarize, translate
     var title: String {
-        switch self { case .ask: return "Ask a question"; case .explain: return "Explain selection"; case .summarize: return "Summarize selection" }
+        switch self {
+        case .ask: return "Ask a question"; case .explain: return "Explain selection"
+        case .summarize: return "Summarize selection"; case .translate: return "Translate selection"
+        }
     }
     /// The label of the chat shortcut that prepares this intent's draft.
     var shortTitle: String {
-        switch self { case .ask: return "Ask Leaf"; case .explain: return "Explain"; case .summarize: return "Summarize" }
+        switch self { case .ask: return "Ask Leaf"; case .explain: return "Explain"; case .summarize: return "Summarize"; case .translate: return "Translate" }
     }
     func prompt(for text: String) -> String {
         let chinese = ReaderChatMessage.usesChinese(text)
@@ -18,6 +21,8 @@ enum ReaderSelectionIntent: String, CaseIterable {
         case .ask: return ""
         case .explain: return chinese ? "请解释这段文字。" : "Explain this passage."
         case .summarize: return chinese ? "请总结这段文字。" : "Summarize this passage."
+        // Written in the language the reader wants back: Chinese text goes to English, anything else to Chinese.
+        case .translate: return chinese ? "Translate this passage into English." : "请把这段文字翻译成简体中文。"
         }
     }
 }
@@ -42,7 +47,6 @@ struct ReaderSelectionHooks {
     var annotate: ((ReaderAnnotationIntent, BookAnnotationSelection) -> Void)?
     var listeningPosition: () -> String? = { nil }
     var listen: ((String) -> Void)?
-    var translate: ((String) -> Void)?
 }
 
 @MainActor private func showSelectionMenu(on view: UIView, presenter: ReaderSelectionMenuPresenter, hooks: ReaderSelectionHooks) {
@@ -63,14 +67,10 @@ struct ReaderSelectionHooks {
     }
     let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view
-    // The native range is the whole selection; the chat snapshot can be shortened.
-    if ReaderTranslation.isAvailable, let translate = hooks.translate, let passage = ReaderTranslation.passage(copiedText ?? context.text) {
-        actions.append(ReaderSelectionAction(title: "Translate", image: ReaderTranslation.symbol, id: "translate") { [weak presenter] in
-            translate(passage)
-            // Like Copy, the sheet leaves the native range and its grips in place.
-            presenter?.observeCopiedSelection()
-        })
-    }
+    // Ask Leaf translates: the passage is quoted in the chat and the request is sent at once.
+    actions.append(ReaderSelectionAction(title: "Translate", image: UIImage(systemName: "translate") == nil ? "character.bubble" : "translate", id: "translate") {
+        action(.translate, context)
+    })
     actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder, weak presenter, weak view] in
         #if DEBUG
         readerSelectionMenuTrace("copyInvokedWithMatchingSnapshot", source: view, context: copiedText == context.text)

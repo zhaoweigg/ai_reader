@@ -178,11 +178,7 @@ struct ReaderContent: View {
                     panel = .aiSettings
                 }, onButtonSettings: {
                     panel = .buttonAppearance
-                }, onSend: {
-                    chat.send(settings: aiSettings, app: ChatAppData(catalog: catalog, bestsellers: bestsellers, library: library, openBook: book.id), agentBook: { context in
-                        try await model.readingAgentBook(for: context)
-                    }, traces: agentTraces) { try await model.readingChatContext() }
-                })
+                }, onSend: sendChat)
                 // Dock the chat into the bottom container inset while still
                 // following the keyboard. This overlay never resizes the book.
                 .ignoresSafeArea(.container, edges: .bottom)
@@ -239,15 +235,19 @@ struct ReaderContent: View {
             audio.start(at: request.locator)
             model.clearNativeSelection(); model.hideControls(); panel = nil
         }
-        .onChange(of: model.reloadID) { _, _ in audio.stop(); model.translationRequest = nil }
-        .onChange(of: model.translationRequest) { _, request in if request != nil { model.hideControls() } }
-        .modifier(ReaderTranslationSheet(request: $model.translationRequest))
+        .onChange(of: model.reloadID) { _, _ in audio.stop() }
         .onChange(of: model.selectionRequest) { _, request in
             guard let request else { return }
             chatButtonIsMoving = false
-            chat.attachSelection(request.context, prompt: request.intent.prompt(for: request.context.text))
             model.hideControls()
             chatIsPresented = true
+            if request.intent == .translate {
+                // Translate is a whole request, so it goes out at once. A question the
+                // reader was already writing is kept as a draft and never sent for them.
+                if chat.attachSelection(request.context, sending: .translate) { sendChat() }
+            } else {
+                chat.attachSelection(request.context, prompt: request.intent.prompt(for: request.context.text))
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { chatButtonIsMoving = false; chat.flush() }
@@ -313,6 +313,11 @@ struct ReaderContent: View {
         // there instead. Its measured top includes controls and rotation.
         model.spokenBottomClearance = ReaderClearance.height(book: bookViewportFrame,
             chat: chatIsPresented ? chatFrame : audioPlayerFrame)
+    }
+    private func sendChat() {
+        chat.send(settings: aiSettings, app: ChatAppData(catalog: catalog, bestsellers: bestsellers, library: library, openBook: book.id), agentBook: { context in
+            try await model.readingAgentBook(for: context)
+        }, traces: agentTraces) { try await model.readingChatContext() }
     }
     private func handleBookTap() -> Bool {
         guard chatIsPresented else { return false }
