@@ -68,6 +68,22 @@ class RetentionTests(unittest.TestCase):
         self.assertFalse(ack.exists())
         self.assertTrue(unread.exists())
 
+    def test_later_mailbox_ack_expires_on_subsequent_sweep(self):
+        message = self.file("agent-mailbox/v1/worker/from-worker/done.json")
+        ack = self.file("agent-mailbox/v1/worker/acks/by-coordinator/done.json", -1)
+        sweep([self.build], now=self.now, apply=True)
+        self.assertFalse(message.exists())
+        self.assertTrue(ack.exists())
+        sweep([self.build], now=self.now + 2, apply=True)
+        self.assertFalse(ack.exists())
+
+    def test_archived_build_proofs_also_expire(self):
+        output = self.file("baseline-archive/build/Test.xcresult/output")
+        proof = self.file("baseline-archive/manifest.json")
+        sweep([self.build], now=self.now, apply=True)
+        self.assertFalse(output.exists())
+        self.assertFalse(proof.exists())
+
     def test_source_recovery_survives_but_its_old_test_output_expires(self):
         source = self.file("worktree-archives/qa-date/worker/checkout/LeafReader/source.swift")
         evidence = self.file("worktree-archives/qa-date/worker/checkout/build/Test.xcresult/output")
