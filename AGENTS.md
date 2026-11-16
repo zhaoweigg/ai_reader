@@ -15,6 +15,16 @@ The user requires at most one worktree per worker.
 - Retire obsolete auxiliary and baseline checkouts after all consuming jobs have actually exited and the coordinator acknowledges cleanup. Preserve current frozen source and Products while those jobs run, then complete consolidation.
 - An additional worktree requires the user's explicit authorization for that specific exception. Completed features alone are not a reason to retain another checkout.
 
+# Generated artifact retention
+
+The user requires generated test data, proofs and artifacts to expire after 72 hours.
+
+- Apply this limit to all workers and archived outputs: test results, screenshots/videos, logs, exported attachments, build products, compiler caches and generated verification/proof records. Retention follows original output timestamps; moving or copying old evidence does not renew its age. Do not create replacement local archives or Trash copies to evade expiry.
+- Before cleanup, read current simulator/phone state and check actual processes. Obtain a fresh, exact active-path inventory from the coordinator. Temporarily protect only files still consumed by a running job, actionable handoff or pending installation, then expire them when that use ends. Historical references or failures do not create perpetual retention holds.
+- Preserve application source, Git history/source recovery bundles, reusable model/license assets, user books, credentials and live control state. Completed acknowledged mailbox messages may expire; unread/actionable messages remain live. Do not blanket-protect historical mailbox directories.
+- Use `scripts/artifact_retention.py` (dry-run by default). Applying requires a keep file collected within 15 minutes. Inspect the plan, delete complete expired artifact units, and keep one replaceable cleanup receipt. Do not mutate canonical simulator or phone ownership as part of cleanup; tell the coordinator which historical references expired.
+- Run retention checks hourly while this Mac and Codex are available, and before/after generating new test/build artifacts. Expiry takes precedence over earlier historical-proof preservation instructions.
+
 # Simulator coordination
 
 The user requests three simulator test slots running in parallel to reduce waiting.

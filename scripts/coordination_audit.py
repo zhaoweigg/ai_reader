@@ -34,6 +34,21 @@ def summary_path(record):
     return None
 
 
+def expired_evidence(root, path):
+    """A cleanup receipt describes expiry, never a passed verification or an approval."""
+    try:
+        receipt = read_object(root / "build/artifact-retention-latest.json")
+        if receipt.get("apply") is not True:
+            return False
+        for entry in receipt.get("expired", []):
+            deleted = Path(entry["path"])
+            if (path == deleted or deleted in path.parents) and entry["newest"] < receipt["cutoff"]:
+                return True
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return False
+
+
 def audit(root, registry, handoffs, is_ancestor):
     phone = registry.get("phone", {})
     candidates = {}
@@ -54,7 +69,7 @@ def audit(root, registry, handoffs, is_ancestor):
             item["sources"].append(source)
             item["records"].append(record)
 
-    actions, covered = [], []
+    actions, covered, unavailable = [], [], []
     for merge, item in sorted(candidates.items()):
         if not is_ancestor(merge, "origin/main"):
             actions.append({"action": "verify_merge", "merge_commit": merge, "sources": item["sources"]})
@@ -75,6 +90,26 @@ def audit(root, registry, handoffs, is_ancestor):
             if artifact.get("decision") is None:
                 actions.append({"action": "offer_verified_build", "build": artifact["build"],
                                 "merge_commit": merge})
+            continue
+
+        # Canonical installed source is live delivery state. Expired historical proof
+        # must not requeue an already shipped feature or become a new green test result.
+        installed = phone.get("installed_main_commit")
+        if (installed and phone.get("installed_build") and phone.get("installed_binary_sha256")
+                and phone.get("state") == "installed_launched_version_verified"
+                and is_ancestor(merge, installed)):
+            covered.append({"merge_commit": merge, "build": phone["installed_build"],
+                            "decision": "already_installed", "verification_revalidated": False})
+            for record in item["records"]:
+                path = summary_path(record)
+                if path is not None:
+                    try:
+                        read_object(path)
+                    except (OSError, ValueError) as exc:
+                        unavailable.append({"merge_commit": merge, "path": str(path),
+                            "status": "expired" if expired_evidence(root, path) else "unavailable",
+                            "error": str(exc), "verification_revalidated": False,
+                            "limit": "Historical verification cannot be rechecked; source is already installed."})
             continue
 
         summaries = []
@@ -116,6 +151,7 @@ def audit(root, registry, handoffs, is_ancestor):
             actions.append({"action": "coordinate_slot_handoff", "slot": request.get("requested_slot"),
                             "owner_thread": request.get("owner_thread")})
     return {"actions": actions, "covered_handoffs": covered, "errors": errors,
+            "unavailable_historical_evidence": unavailable,
             "note": "Read-only audit; reverify source/evidence/artifact before acting. No install authorization inferred."}
 
 
