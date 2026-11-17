@@ -470,11 +470,24 @@ private struct ZLibrarySignInWebView: UIViewRepresentable {
         guard let url = book.coverURL else { return nil }
         return loaded?.url == url ? loaded?.image : images.cachedImage(url)
     }
+    /// Width over height of every cover tile, whatever shape the artwork is.
+    static let shape: CGFloat = 0.68
     var body: some View {
-        ZStack {
-            if let image { Image(uiImage:image).resizable().scaledToFit() }
-            else { BookCover(book:book.placeholder) }
-        }.aspectRatio(0.68,contentMode:.fit).clipShape(.rect(cornerRadius:8))
+        // Covers come in many shapes. Sizing the tile to the artwork made each one a different
+        // size and moved the card when its cover arrived, so the tile is always this box: the
+        // whole cover is fitted inside it and a blurred copy of the cover fills what is left.
+        Color.clear.aspectRatio(Self.shape,contentMode:.fit)
+            .overlay {
+                if let image, abs(image.size.width / max(image.size.height, 1) / Self.shape - 1) > 0.005 {
+                    Image(uiImage:image).resizable().scaledToFill().scaleEffect(1.3).blur(radius:12)
+                        .overlay(Color.black.opacity(0.1))
+                }
+            }
+            .overlay {
+                if let image { Image(uiImage:image).resizable().scaledToFit() }
+                else { BookCover(book:book.placeholder) }
+            }
+            .clipShape(.rect(cornerRadius:8))
             .task(id: book.coverURL) {
                 guard let url = book.coverURL else { loaded = nil; return }
                 guard loaded?.url != url else { return }
