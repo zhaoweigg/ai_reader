@@ -609,17 +609,22 @@ final class LeafReaderUITests: XCTestCase {
             return area
         }
         /// The book text on screen and where it is, read from one snapshot of the web view.
+        /// A page holding a single paragraph is not offered as a static text, so any labelled
+        /// part of the page counts; a very long label is a container reading out its contents.
+        /// Pages mounts one chapter at a time, so there everything it offers is the open chapter.
         func texts() -> [(label: String, frame: CGRect)] {
             guard let root = try? surface.snapshot() else { return [] }
             let area = area()
             var found: [(label: String, frame: CGRect)] = []
             func walk(_ node: XCUIElementSnapshot) {
-                let rect = node.frame
-                if node.elementType == .staticText, !node.label.isEmpty, rect.minX.isFinite, rect.minY.isFinite,
-                   rect.width > 0, rect.height > 0, rect.intersects(area) { found.append((node.label, rect)) }
+                let rect = node.frame, text = node.label.isEmpty ? (node.value as? String ?? "") : node.label
+                let placed = rect.minX.isFinite && rect.minY.isFinite
+                if !text.isEmpty, text.count <= 400, placed, flow == "Pages" || (rect.width > 0 && rect.height > 0 && rect.intersects(area)) {
+                    found.append((text, rect))
+                }
                 node.children.forEach(walk)
             }
-            walk(root)
+            root.children.forEach(walk)
             return found
         }
         func showing(_ text: String) -> Bool { texts().contains { $0.label.contains(text) } }
@@ -628,7 +633,10 @@ final class LeafReaderUITests: XCTestCase {
             texts.map { "\($0.label.prefix(28)) @\(Int($0.frame.minX.rounded())),\(Int($0.frame.minY.rounded()))" }.sorted()
         }
         func record(_ name: String) {
-            let note = XCTAttachment(string: lines(texts()).joined(separator: "\n")); note.name = name; note.lifetime = .keepAlways; add(note)
+            let now = lines(texts())
+            // With nothing read, keep what the web view did offer.
+            let note = XCTAttachment(string: now.isEmpty ? "No text read. Web view:\n" + surface.debugDescription : now.joined(separator: "\n"))
+            note.name = name; note.lifetime = .keepAlways; add(note)
         }
         // A slow drag released without a hold: about half a screen in Scroll, one page in Pages.
         func drag(_ forward: Bool) {
@@ -679,16 +687,16 @@ final class LeafReaderUITests: XCTestCase {
         /// In Pages the picture has the page to itself. In Scroll the title page follows below
         /// it, and on its side the picture can be taller than the screen, with its words out of view.
         func assertAtTheCover(_ message: String) {
-            let now = texts(), shown = lines(now), words = Set(now.map { $0.label })
+            let now = texts(), shown = lines(now)
             let picture = now.filter { $0.label == "Short" || $0.label == "Chapters" }
             if flow == "Pages" {
-                XCTAssertTrue(!picture.isEmpty && words.isSubset(of: ["Short", "Chapters"]), "\(message): only the cover picture should be on screen, but found \(shown)")
+                XCTAssertTrue(!picture.isEmpty && marked(pages + [final], in: now).isEmpty, "\(message): only the cover picture should be on the page, but found \(shown)")
             } else if surface.frame.height > surface.frame.width {
                 let below = now.first { $0.label.contains(pages[0]) }?.frame.minY ?? -1
                 XCTAssertFalse(picture.isEmpty, "\(message): the cover picture should be on screen; found \(shown)")
                 XCTAssertGreaterThan(below, picture.map { $0.frame.maxY }.max() ?? .infinity, "\(message): the title page should follow below the cover picture; found \(shown)")
             } else {
-                XCTAssertTrue(shown.isEmpty || !picture.isEmpty, "\(message): the cover picture should fill the screen; found \(shown)")
+                XCTAssertTrue(marked(pages + [final], in: now).isEmpty || !picture.isEmpty, "\(message): the cover picture should fill the screen; found \(shown)")
             }
         }
         // A page turn can cross a long chapter's first or last page without resting on it;
@@ -707,7 +715,12 @@ final class LeafReaderUITests: XCTestCase {
 
         // The place on a short last page survives closing and reopening the book.
         showReaderControls(app)
-        app.buttons["closeBook"].tap(); tapVisibleLibraryCard(card, app: app); waitForBook(app)
+        app.buttons["closeBook"].tap()
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        // The book just read moves to the front of the grid, which can leave its card above the screen.
+        for _ in 0..<6 where card.frame.minY < 120 { app.scrollViews.firstMatch.swipeDown() }
+        tapVisibleLibraryCard(card, app: app); waitForBook(app)
+        record(flow + " lines after reopening")
         XCTAssertTrue(showing(final), "The saved place on the last page must come back")
         let up = backToTheBeginning(limit: 80, marks: pages)
         record(flow + " lines back at the cover"); capture(flow + " short chapters back at the cover")
