@@ -543,7 +543,8 @@ final class LeafReaderUITests: XCTestCase {
                 else { if forward { surface.swipeLeft(velocity: .fast) } else { surface.swipeRight(velocity: .fast) } }
             } else {
                 let panel = app.otherElements["readerChatPanel"].frame
-                let top = surface.frame.minY + 30, bottom = panel.minY - 16
+                // In landscape a drag that starts 30 pt from the top edge pulls Notification Center down.
+                let top = surface.frame.minY + (surface.frame.width > surface.frame.height ? 80 : 30), bottom = panel.minY - 16
                 XCTAssertGreaterThan(bottom - top, 40)
                 let origin = app.coordinate(withNormalizedOffset: .zero)
                 let start = flow == "Scroll" ? CGPoint(x: surface.frame.midX, y: forward ? bottom : top)
@@ -593,23 +594,37 @@ final class LeafReaderUITests: XCTestCase {
         dismissAppearance(app)
         let surface = readingSurface(app)
         if app.buttons["closeBook"].exists { surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        let pages = ["A title page of three lines.", "For everyone who reads on a phone.", "Chapter One paragraph 1.", "Part Two",
+                     "Chapter Two paragraph 1.", "The end of chapter two."]
+        let final = "Colophon: the last page."
         func area() -> CGRect {
             var area = surface.frame.insetBy(dx: 8, dy: 40)
             let panel = app.otherElements["readerChatPanel"]
             if panel.exists { area.size.height = max(1, panel.frame.minY - area.minY - 12) }
             return area
         }
-        func onScreen(_ elements: [XCUIElement]) -> Bool {
+        /// The book text on screen and where it is, read from one snapshot of the web view.
+        func texts() -> [(label: String, frame: CGRect)] {
+            guard let root = try? surface.snapshot() else { return [] }
             let area = area()
-            return elements.contains { element in
-                let rect = element.frame
-                return rect.minX.isFinite && rect.minY.isFinite && rect.width > 0 && rect.height > 0 && rect.intersects(area)
+            var found: [(label: String, frame: CGRect)] = []
+            func walk(_ node: XCUIElementSnapshot) {
+                let rect = node.frame
+                if node.elementType == .staticText, !node.label.isEmpty, rect.minX.isFinite, rect.minY.isFinite,
+                   rect.width > 0, rect.height > 0, rect.intersects(area) { found.append((node.label, rect)) }
+                node.children.forEach(walk)
             }
+            walk(root)
+            return found
         }
-        func showing(_ text: String) -> Bool {
-            onScreen(surface.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).allElementsBoundByIndex)
+        func showing(_ text: String) -> Bool { texts().contains { $0.label.contains(text) } }
+        /// What changes when the book moves: each line of text with its position.
+        func lines(_ texts: [(label: String, frame: CGRect)]) -> [String] {
+            texts.map { "\($0.label.prefix(28)) @\(Int($0.frame.minX.rounded())),\(Int($0.frame.minY.rounded()))" }.sorted()
         }
-        func showingCover() -> Bool { onScreen(surface.images.allElementsBoundByIndex) }
+        func record(_ name: String) {
+            let note = XCTAttachment(string: lines(texts()).joined(separator: "\n")); note.name = name; note.lifetime = .keepAlways; add(note)
+        }
         // A slow drag released without a hold: about half a screen in Scroll, one page in Pages.
         func drag(_ forward: Bool) {
             let area = area(), origin = app.coordinate(withNormalizedOffset: .zero)
@@ -625,24 +640,55 @@ final class LeafReaderUITests: XCTestCase {
                 thenDragTo: origin.withOffset(CGVector(dx: end.x, dy: end.y)), withVelocity: .slow, thenHoldForDuration: 0)
             XCTAssertFalse(app.otherElements["readerError"].exists)
         }
-        /// Drags until `reached`, noting which of `marks` came on screen on the way.
-        func read(_ forward: Bool, limit: Int, marks: [String] = [], until reached: () -> Bool) -> Set<String> {
-            var seen = Set(marks.filter(showing))
-            for _ in 0..<limit where !reached() { drag(forward); seen.formUnion(marks.filter(showing)) }
+        func marked(_ marks: [String], in texts: [(label: String, frame: CGRect)]) -> Set<String> {
+            Set(marks.filter { mark in texts.contains { $0.label.contains(mark) } })
+        }
+        /// Drags forward until `goal` is on screen, noting which of `marks` came on screen on the way.
+        func readOn(to goal: String, limit: Int, marks: [String] = []) -> Set<String> {
+            var seen = Set<String>()
+            for step in 0...limit {
+                let now = texts()
+                seen.formUnion(marked(marks, in: now))
+                if step == limit || now.contains(where: { $0.label.contains(goal) }) { break }
+                drag(true)
+            }
             return seen
         }
-        let pages = ["A title page of three lines.", "For everyone who reads on a phone.", "Chapter One paragraph 1.", "Part Two",
-                     "Chapter Two paragraph 1.", "The end of chapter two."]
-        let final = "Colophon: the last page."
+        /// Drags back until the book no longer moves: its first page. The cover is a picture,
+        /// which the web view does not offer as an element, so a screen with no text needs
+        /// more unchanged drags before it counts (the cover can be taller than the screen).
+        func backToTheBeginning(limit: Int, marks: [String] = []) -> Set<String> {
+            var now = texts(), seen = marked(marks, in: now), still = 0
+            for _ in 0..<limit {
+                if still >= (now.isEmpty ? 8 : 3) { break }
+                drag(false)
+                let next = texts()
+                seen.formUnion(marked(marks, in: next))
+                still = lines(next) == lines(now) ? still + 1 : 0
+                now = next
+            }
+            return seen
+        }
+        /// On the first page. In Pages the cover picture has the page to itself. In Scroll the
+        /// title page follows below the picture, or is off screen when the picture fills it.
+        func assertAtTheCover(_ message: String) {
+            let now = texts(), shown = lines(now), upright = surface.frame.height > surface.frame.width
+            guard flow == "Scroll", !(shown.isEmpty && !upright) else {
+                XCTAssertTrue(shown.isEmpty, "\(message): only the cover picture should be on screen, but found \(shown)"); return
+            }
+            let title = now.first { $0.label.contains(pages[0]) }?.frame.minY ?? -1
+            XCTAssertGreaterThan(title, area().minY + (upright ? 250 : 120), "\(message): the cover picture should be above the title page; on screen: \(shown)")
+        }
         // A page turn can cross a long chapter's first or last page without resting on it;
         // a short chapter is a page of its own and always rests on screen.
         let expected: Set<String> = flow == "Scroll" ? Set(pages) : [pages[0], pages[1], pages[3]]
 
         // Back to the very beginning, then on through every short page to the end of the book.
-        _ = read(false, limit: 6) { showingCover() }
-        XCTAssertTrue(showingCover(), "The cover must be reachable from the title page")
-        capture(flow + " short chapters at the cover")
-        let down = read(true, limit: 60, marks: pages) { showing(final) }
+        _ = backToTheBeginning(limit: 16)
+        record(flow + " lines at the cover"); capture(flow + " short chapters at the cover")
+        assertAtTheCover("From the title page")
+        let down = readOn(to: final, limit: 60, marks: pages)
+        record(flow + " lines at the end of the book")
         XCTAssertTrue(showing(final), "Stopped before the end of the book; saw \(down.sorted())")
         XCTAssertTrue(expected.isSubset(of: down), "Pages missed on the way down: \(expected.subtracting(down).sorted())")
         capture(flow + " short chapters at the end of the book")
@@ -651,15 +697,15 @@ final class LeafReaderUITests: XCTestCase {
         showReaderControls(app)
         app.buttons["closeBook"].tap(); app.buttons["book-Contents Location"].tap(); waitForBook(app)
         XCTAssertTrue(showing(final), "The saved place on the last page must come back")
-        let up = read(false, limit: 60, marks: pages) { showingCover() }
-        XCTAssertTrue(showingCover(), "Stopped before the cover on the way back; saw \(up.sorted())")
+        let up = backToTheBeginning(limit: 80, marks: pages)
+        record(flow + " lines back at the cover"); capture(flow + " short chapters back at the cover")
+        assertAtTheCover("After reading back from the end; saw \(up.sorted())")
         XCTAssertTrue(expected.isSubset(of: up), "Pages missed on the way back: \(expected.subtracting(up).sorted())")
-        capture(flow + " short chapters back at the cover")
 
         // With Ask Leaf open, drags over the book still pass the short pages and keep the chat.
         app.buttons["openReaderChat"].tap()
         XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
-        let withChat = read(true, limit: 30, marks: Array(pages.prefix(2))) { showing(pages[2]) }
+        let withChat = readOn(to: pages[2], limit: 30, marks: Array(pages.prefix(2)))
         XCTAssertTrue(showing(pages[2]), "Stopped before chapter one with Ask Leaf open; saw \(withChat.sorted())")
         XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Ask Leaf must stay open while the book moves")
         capture(flow + " short chapters with Ask Leaf open")
@@ -667,9 +713,10 @@ final class LeafReaderUITests: XCTestCase {
 
         // On its side the screen is shorter, so more pages count as short.
         orient(.landscapeLeft)
-        _ = read(false, limit: 30) { showingCover() }
-        XCTAssertTrue(showingCover(), "The cover must be reachable in landscape")
-        let sideways = read(true, limit: 40, marks: Array(pages.prefix(3))) { showing(pages[3]) }
+        _ = backToTheBeginning(limit: 50)
+        record(flow + " lines at the cover in landscape")
+        assertAtTheCover("In landscape")
+        let sideways = readOn(to: pages[3], limit: 40, marks: Array(pages.prefix(3)))
         XCTAssertTrue(showing(pages[3]), "Stopped before Part Two in landscape; saw \(sideways.sorted())")
         capture(flow + " short chapters in landscape")
         orient(.portrait)
