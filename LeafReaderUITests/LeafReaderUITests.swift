@@ -1315,7 +1315,7 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor private func assertActionRibbon(_ app: XCUIApplication) {
         let menu = app.scrollViews["expandedSelectionMenu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 6))
-        let identifiers = ["ask", "listen", "highlight", "note", "voiceNote", "translate", "copy"]
+        let identifiers = ["ask", "listen", "translate", "highlight", "note", "voiceNote", "copy"]
         XCTAssertEqual(menu.buttons.count, identifiers.count, "Exactly the seven approved actions appear, without overflow")
         let row = app.buttons["selection-ask"].frame, bounds = menu.frame
         for id in identifiers {
@@ -1327,6 +1327,8 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(frame.height, 44)
             XCTAssertEqual(frame.midY, row.midY, accuracy: 1, "Every action belongs to the same row")
         }
+        let order = identifiers.map { app.buttons["selection-" + $0].frame.minX }
+        XCTAssertEqual(order, order.sorted(), "Actions read left to right as Ask Leaf, Listen, Translate, Highlight, Note, Voice, Copy")
         XCTAssertGreaterThanOrEqual(bounds.height, 44)
         XCTAssertLessThanOrEqual(bounds.height, 84, "Keep the reference design's compact single row")
         for id in ["system", "more", "lookup", "share", "back"] {

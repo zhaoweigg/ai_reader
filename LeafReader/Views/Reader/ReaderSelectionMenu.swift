@@ -60,6 +60,10 @@ struct ReaderSelectionHooks {
     if let position = hooks.listeningPosition(), let listen = hooks.listen {
         actions.append(ReaderSelectionAction(title: "Listen from here", compactTitle: "Listen", image: "headphones", id: "listen") { listen(position) })
     }
+    // Ask Leaf translates: the passage is quoted in the chat and the request is sent at once.
+    actions.append(ReaderSelectionAction(title: "Translate", image: UIImage(systemName: "translate") == nil ? "character.bubble" : "translate", id: "translate") {
+        action(.translate, context)
+    })
     if let annotation, let annotate = hooks.annotate {
         actions.append(ReaderSelectionAction(title: "Highlight", image: "highlighter", id: "highlight") { annotate(.highlight, annotation) })
         actions.append(ReaderSelectionAction(title: "Add Note", compactTitle: "Note", image: "square.and.pencil", id: "note") { annotate(.note, annotation) })
@@ -67,10 +71,6 @@ struct ReaderSelectionHooks {
     }
     let copiedText = view.selectionText
     let responder = view.selectionFirstResponder ?? view
-    // Ask Leaf translates: the passage is quoted in the chat and the request is sent at once.
-    actions.append(ReaderSelectionAction(title: "Translate", image: UIImage(systemName: "translate") == nil ? "character.bubble" : "translate", id: "translate") {
-        action(.translate, context)
-    })
     actions.append(ReaderSelectionAction(title: "Copy", image: "doc.on.doc", id: "copy") { [weak responder, weak presenter, weak view] in
         #if DEBUG
         readerSelectionMenuTrace("copyInvokedWithMatchingSnapshot", source: view, context: copiedText == context.text)
