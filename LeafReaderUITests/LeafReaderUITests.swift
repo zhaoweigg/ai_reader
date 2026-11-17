@@ -619,7 +619,8 @@ final class LeafReaderUITests: XCTestCase {
             func walk(_ node: XCUIElementSnapshot) {
                 let rect = node.frame, text = node.label.isEmpty ? (node.value as? String ?? "") : node.label
                 let placed = rect.minX.isFinite && rect.minY.isFinite
-                if !text.isEmpty, text.count <= 400, placed, flow == "Pages" || (rect.width > 0 && rect.height > 0 && rect.intersects(area)) {
+                if !text.isEmpty, text.count <= 400, !text.contains("scroll bar"), placed,
+                   flow == "Pages" || (rect.width > 0 && rect.height > 0 && rect.intersects(area)) {
                     found.append((text, rect))
                 }
                 node.children.forEach(walk)
@@ -627,13 +628,21 @@ final class LeafReaderUITests: XCTestCase {
             root.children.forEach(walk)
             return found
         }
-        func showing(_ text: String) -> Bool { texts().contains { $0.label.contains(text) } }
+        /// The web view fills in a newly shown page's text a moment after the page appears,
+        /// so after a drag: pause, and read again while nothing has been offered yet.
+        func settled() -> [(label: String, frame: CGRect)] {
+            Thread.sleep(forTimeInterval: 0.5)
+            var now = texts()
+            for _ in 0..<5 where now.isEmpty { Thread.sleep(forTimeInterval: 0.4); now = texts() }
+            return now
+        }
+        func showing(_ text: String) -> Bool { settled().contains { $0.label.contains(text) } }
         /// What changes when the book moves: each line of text with its position.
         func lines(_ texts: [(label: String, frame: CGRect)]) -> [String] {
             texts.map { "\($0.label.prefix(28)) @\(Int($0.frame.minX.rounded())),\(Int($0.frame.minY.rounded()))" }.sorted()
         }
         func record(_ name: String) {
-            let now = lines(texts())
+            let now = lines(settled())
             // With nothing read, keep what the web view did offer.
             let note = XCTAttachment(string: now.isEmpty ? "No text read. Web view:\n" + surface.debugDescription : now.joined(separator: "\n"))
             note.name = name; note.lifetime = .keepAlways; add(note)
@@ -657,25 +666,25 @@ final class LeafReaderUITests: XCTestCase {
             Set(marks.filter { mark in texts.contains { $0.label.contains(mark) } })
         }
         /// Drags forward until `goal` is on screen, noting which of `marks` came on screen on the way.
-        func readOn(to goal: String, limit: Int, marks: [String] = []) -> Set<String> {
+        func readOn(to goal: String, limit: Int, marks: [String] = []) -> (seen: Set<String>, reached: Bool) {
             var seen = Set<String>()
             for step in 0...limit {
-                let now = texts()
+                let now = settled()
                 seen.formUnion(marked(marks, in: now))
-                if step == limit || now.contains(where: { $0.label.contains(goal) }) { break }
-                drag(true)
+                if now.contains(where: { $0.label.contains(goal) }) { return (seen, true) }
+                if step < limit { drag(true) }
             }
-            return seen
+            return (seen, false)
         }
         /// Drags back until the book no longer moves: its first page. The cover is a picture,
         /// which the web view does not offer as an element, so a screen with no text needs
         /// more unchanged drags before it counts (the cover can be taller than the screen).
         func backToTheBeginning(limit: Int, marks: [String] = []) -> Set<String> {
-            var now = texts(), seen = marked(marks, in: now), still = 0
+            var now = settled(), seen = marked(marks, in: now), still = 0
             for _ in 0..<limit {
                 if still >= (now.isEmpty ? 8 : 3) { break }
                 drag(false)
-                let next = texts()
+                let next = settled()
                 seen.formUnion(marked(marks, in: next))
                 still = lines(next) == lines(now) ? still + 1 : 0
                 now = next
@@ -687,7 +696,7 @@ final class LeafReaderUITests: XCTestCase {
         /// In Pages the picture has the page to itself. In Scroll the title page follows below
         /// it, and on its side the picture can be taller than the screen, with its words out of view.
         func assertAtTheCover(_ message: String) {
-            let now = texts(), shown = lines(now)
+            let now = settled(), shown = lines(now)
             let picture = now.filter { $0.label == "Short" || $0.label == "Chapters" }
             if flow == "Pages" {
                 XCTAssertTrue(!picture.isEmpty && marked(pages + [final], in: now).isEmpty, "\(message): only the cover picture should be on the page, but found \(shown)")
@@ -709,8 +718,8 @@ final class LeafReaderUITests: XCTestCase {
         assertAtTheCover("From the title page")
         let down = readOn(to: final, limit: 60, marks: pages)
         record(flow + " lines at the end of the book")
-        XCTAssertTrue(showing(final), "Stopped before the end of the book; saw \(down.sorted())")
-        XCTAssertTrue(expected.isSubset(of: down), "Pages missed on the way down: \(expected.subtracting(down).sorted())")
+        XCTAssertTrue(down.reached, "Stopped before the end of the book; saw \(down.seen.sorted())")
+        XCTAssertTrue(expected.isSubset(of: down.seen), "Pages missed on the way down: \(expected.subtracting(down.seen).sorted())")
         capture(flow + " short chapters at the end of the book")
 
         // The place on a short last page survives closing and reopening the book.
@@ -731,7 +740,7 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["openReaderChat"].tap()
         XCTAssertTrue(app.buttons["closeReaderChat"].waitForExistence(timeout: 5))
         let withChat = readOn(to: pages[2], limit: 30, marks: Array(pages.prefix(2)))
-        XCTAssertTrue(showing(pages[2]), "Stopped before chapter one with Ask Leaf open; saw \(withChat.sorted())")
+        XCTAssertTrue(withChat.reached, "Stopped before chapter one with Ask Leaf open; saw \(withChat.seen.sorted())")
         XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Ask Leaf must stay open while the book moves")
         capture(flow + " short chapters with Ask Leaf open")
         app.buttons["closeReaderChat"].tap()
@@ -742,7 +751,8 @@ final class LeafReaderUITests: XCTestCase {
         record(flow + " lines at the cover in landscape")
         assertAtTheCover("In landscape")
         let sideways = readOn(to: pages[3], limit: 40, marks: Array(pages.prefix(3)))
-        XCTAssertTrue(showing(pages[3]), "Stopped before Part Two in landscape; saw \(sideways.sorted())")
+        record(flow + " lines at Part Two in landscape")
+        XCTAssertTrue(sideways.reached, "Stopped before Part Two in landscape; saw \(sideways.seen.sorted())")
         capture(flow + " short chapters in landscape")
         orient(.portrait)
     }
