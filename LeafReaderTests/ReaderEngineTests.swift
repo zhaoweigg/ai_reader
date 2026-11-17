@@ -1401,18 +1401,19 @@ final class ReaderEngineTests: XCTestCase {
             try await waitUntil { reopened.isReady || reopened.error != nil }
             XCTAssertNil(reopened.error)
             let again = try XCTUnwrap(reopened.webView)
-            let encoded = String(decoding: try JSONEncoder().encode(locator), as: UTF8.self)
-            let visible = try await again.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
-            if visible != true {
-                let state = try await again.callAsyncJavaScript(travel + """
-                    const target=view.resolveCFI(saved),doc=r.getContents().find(c=>c.index===target.index)?.doc,range=doc&&target.anchor(doc),current=view.lastLocation?.range;
-                    const box=value=>{const rect=value?.getBoundingClientRect?.();return rect&&{top:Math.round(rect.top),bottom:Math.round(rect.bottom)};};
-                    return JSON.stringify({saved,current:view.lastLocation?.cfi,targetIndex:target.index,place:place(),start:r.start,savedBox:box(range),currentBox:box(current),
-                        frameTop:Math.round(doc?.defaultView.frameElement.getBoundingClientRect().top??-1)});
-                    """, arguments: ["scrolling": scrolling, "saved": locator], in: nil, contentWorld: .page) as? String
-                let note = XCTAttachment(string: state ?? "No reopened state"); note.name = "Reopened place not visible \(context)"; note.lifetime = .keepAlways; add(note)
-            }
-            XCTAssertEqual(visible, true, "\(context), locator=\(locator)")
+            // Restored means the saved line is on screen. A place saved by a chapter jump can
+            // start at the heading element itself, which the text-range comparison in
+            // isLocationVisible places just before the visible text, so Scroll is also measured.
+            let shown = try await again.callAsyncJavaScript(travel + """
+                const target=view.resolveCFI(saved),doc=r.getContents().find(c=>c.index===target.index)?.doc,range=doc&&target.anchor(doc);
+                const line=range&&[...range.getClientRects()].find(rect=>rect.height>0),frame=doc?.defaultView.frameElement.getBoundingClientRect(),host=container().getBoundingClientRect();
+                return {strict:window.Leaf.isLocationVisible(saved)===true,current:view.lastLocation?.cfi??null,index:active()??-1,screen:Math.round(host.height),
+                    top:line&&frame?Math.round(frame.top+line.top-host.top):-1,bottom:line&&frame?Math.round(frame.top+line.bottom-host.top):-1};
+                """, arguments: ["scrolling": scrolling, "saved": locator], in: nil, contentWorld: .page) as? [String: Any]
+            let restored = try XCTUnwrap(shown), top = restored["top"] as? Double ?? -1, bottom = restored["bottom"] as? Double ?? -1
+            let onScreen = scrolling && top >= 0 && bottom > top && bottom <= (restored["screen"] as? Double ?? 0)
+            XCTAssertTrue(restored["strict"] as? Bool == true || onScreen, "Saved place is not on screen: \(context), locator=\(locator), \(restored)")
+            XCTAssertEqual(restored["index"] as? Int, 4, "Reopened in another chapter: \(context), \(restored)")
             let onward = try await again.callAsyncJavaScript(travel + "const opened=active(),forward=await travel(1);return {opened,forward,last};",
                 arguments: ["scrolling": scrolling], in: nil, contentWorld: .page) as? [String: Any]
             let rest = try XCTUnwrap(onward)
