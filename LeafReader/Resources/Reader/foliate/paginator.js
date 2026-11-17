@@ -932,7 +932,23 @@ export class Paginator extends HTMLElement {
         if (record.index < this.#index && Math.abs(delta) > 0.5) this.#absorbAbove(delta)
     }
     #wantedScrollIndexes() {
-        return new Set([this.#index, this.#adjacentIndex(1), this.#adjacentIndex(-1)].filter(x => x != null))
+        const wanted = new Set([this.#index, this.#adjacentIndex(1), this.#adjacentIndex(-1)].filter(x => x != null))
+        // A chapter becomes the current one only when the chapter before it has
+        // left the top of the screen. Chapters shorter than the screen (a title
+        // page after a cover) cannot push it there, so the window would never
+        // move on and the book would end at them. Mount one more chapter for as
+        // long as those after the current one cannot fill the screen.
+        let room = this.size
+        for (let index = this.#adjacentIndex(1), extra = 0; index != null && extra < 16; extra++) {
+            const record = this.#scrollViews.get(index)
+            // Not mounted yet: its height decides, so look again when it is.
+            if (!record) break
+            room -= this.#scrollRecordExtent(record)
+            if (room <= 0) break
+            index = this.#linearIndex(index, 1)
+            if (index != null) wanted.add(index)
+        }
+        return wanted
     }
     #warmScrollWindow() {
         if (!this.#continuous) return
@@ -1034,7 +1050,11 @@ export class Paginator extends HTMLElement {
             } finally {
                 if (this.#scrollLoads.get(index) === record) this.#scrollLoads.delete(index)
                 if (this.#scrollViews.get(index) !== record) this.#releaseScrollRecord(record)
-                else this.#activateScrolledView()
+                else {
+                    this.#activateScrolledView()
+                    // A short chapter leaves room on screen for the one after it.
+                    if (!this.#scrollNavigating) this.#warmScrollWindow()
+                }
             }
         })
         this.#scrollLoadQueue = record.promise.catch(() => {})
@@ -1167,6 +1187,8 @@ export class Paginator extends HTMLElement {
         if (this.#continuous) this.#updateScrollEndSpace()
         this.#scrollToAnchor(this.#anchor)
         this.#startScrollWindow()
+        // A new text size or screen shape changes which chapters are short.
+        this.#warmScrollWindow()
     }
     get scrolled() {
         return this.getAttribute('flow') === 'scrolled'
@@ -1571,7 +1593,10 @@ export class Paginator extends HTMLElement {
         return this.#adjacentIndex(1) == null && this.page >= this.pages - 2
     }
     #adjacentIndex(dir) {
-        for (let index = this.#index + dir; this.#canGoToIndex(index); index += dir)
+        return this.#linearIndex(this.#index, dir)
+    }
+    #linearIndex(from, dir) {
+        for (let index = from + dir; this.#canGoToIndex(index); index += dir)
             if (this.sections[index]?.linear !== 'no') return index
     }
     async #turnPage(dir, distance) {

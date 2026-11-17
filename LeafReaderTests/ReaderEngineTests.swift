@@ -1403,6 +1403,15 @@ final class ReaderEngineTests: XCTestCase {
             let again = try XCTUnwrap(reopened.webView)
             let encoded = String(decoding: try JSONEncoder().encode(locator), as: UTF8.self)
             let visible = try await again.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
+            if visible != true {
+                let state = try await again.callAsyncJavaScript(travel + """
+                    const target=view.resolveCFI(saved),doc=r.getContents().find(c=>c.index===target.index)?.doc,range=doc&&target.anchor(doc),current=view.lastLocation?.range;
+                    const box=value=>{const rect=value?.getBoundingClientRect?.();return rect&&{top:Math.round(rect.top),bottom:Math.round(rect.bottom)};};
+                    return JSON.stringify({saved,current:view.lastLocation?.cfi,targetIndex:target.index,place:place(),start:r.start,savedBox:box(range),currentBox:box(current),
+                        frameTop:Math.round(doc?.defaultView.frameElement.getBoundingClientRect().top??-1)});
+                    """, arguments: ["scrolling": scrolling, "saved": locator], in: nil, contentWorld: .page) as? String
+                let note = XCTAttachment(string: state ?? "No reopened state"); note.name = "Reopened place not visible \(context)"; note.lifetime = .keepAlways; add(note)
+            }
             XCTAssertEqual(visible, true, "\(context), locator=\(locator)")
             let onward = try await again.callAsyncJavaScript(travel + "const opened=active(),forward=await travel(1);return {opened,forward,last};",
                 arguments: ["scrolling": scrolling], in: nil, contentWorld: .page) as? [String: Any]
