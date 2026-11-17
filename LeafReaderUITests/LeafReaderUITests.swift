@@ -530,7 +530,10 @@ final class LeafReaderUITests: XCTestCase {
             var area = surface.frame.insetBy(dx: 10, dy: 20)
             let panel = app.otherElements["readerChatPanel"]
             if panel.exists { area.size.height = max(1, panel.frame.minY - area.minY - 12) }
-            let texts = surface.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "这是第")).allElementsBoundByIndex
+            // The web view offers no element for a picture, only the words drawn in it:
+            // the chapter banner reads "A quiet place to read".
+            let book = NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "这是第", "A quiet place to read")
+            let texts = surface.staticTexts.containing(book).allElementsBoundByIndex + surface.staticTexts.matching(book).allElementsBoundByIndex
             let content = texts + surface.images.allElementsBoundByIndex
             XCTAssertTrue(content.contains { element in
                 let rect = element.frame
@@ -585,9 +588,11 @@ final class LeafReaderUITests: XCTestCase {
         continueAfterFailure = false
         // Opens on the title page: the cover is a picture only, and setup waits for text.
         let app = launchApp(contentsFixture: true, contentsBook: "ShortChapters", contentsLocator: "section:1")
-        let search = app.textFields["librarySearch"]
-        XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Contents Location")
-        app.buttons["book-Contents Location"].tap()
+        // Opening the book replaces the fixture's library title with the book's own, so the
+        // card is found under either, and without the search field (its keyboard would return).
+        let card = app.buttons.matching(NSPredicate(format: "identifier IN %@", ["book-Short Chapters", "book-Contents Location"])).firstMatch
+        XCTAssertTrue(app.textFields["librarySearch"].waitForExistence(timeout: 10))
+        tapVisibleLibraryCard(card, app: app)
         openAppearance(app)
         app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
         app.segmentedControls["readingFlow"].buttons[flow].tap()
@@ -669,15 +674,22 @@ final class LeafReaderUITests: XCTestCase {
             }
             return seen
         }
-        /// On the first page. In Pages the cover picture has the page to itself. In Scroll the
-        /// title page follows below the picture, or is off screen when the picture fills it.
+        /// On the first page. The web view reads out the two words drawn in the cover picture,
+        /// "Short" and "Chapters", each on its own; the title page says "Short Chapters" as one.
+        /// In Pages the picture has the page to itself. In Scroll the title page follows below
+        /// it, and on its side the picture can be taller than the screen, with its words out of view.
         func assertAtTheCover(_ message: String) {
-            let now = texts(), shown = lines(now), upright = surface.frame.height > surface.frame.width
-            guard flow == "Scroll", !(shown.isEmpty && !upright) else {
-                XCTAssertTrue(shown.isEmpty, "\(message): only the cover picture should be on screen, but found \(shown)"); return
+            let now = texts(), shown = lines(now), words = Set(now.map { $0.label })
+            let picture = now.filter { $0.label == "Short" || $0.label == "Chapters" }
+            if flow == "Pages" {
+                XCTAssertTrue(!picture.isEmpty && words.isSubset(of: ["Short", "Chapters"]), "\(message): only the cover picture should be on screen, but found \(shown)")
+            } else if surface.frame.height > surface.frame.width {
+                let below = now.first { $0.label.contains(pages[0]) }?.frame.minY ?? -1
+                XCTAssertFalse(picture.isEmpty, "\(message): the cover picture should be on screen; found \(shown)")
+                XCTAssertGreaterThan(below, picture.map { $0.frame.maxY }.max() ?? .infinity, "\(message): the title page should follow below the cover picture; found \(shown)")
+            } else {
+                XCTAssertTrue(shown.isEmpty || !picture.isEmpty, "\(message): the cover picture should fill the screen; found \(shown)")
             }
-            let title = now.first { $0.label.contains(pages[0]) }?.frame.minY ?? -1
-            XCTAssertGreaterThan(title, area().minY + (upright ? 250 : 120), "\(message): the cover picture should be above the title page; on screen: \(shown)")
         }
         // A page turn can cross a long chapter's first or last page without resting on it;
         // a short chapter is a page of its own and always rests on screen.
@@ -695,7 +707,7 @@ final class LeafReaderUITests: XCTestCase {
 
         // The place on a short last page survives closing and reopening the book.
         showReaderControls(app)
-        app.buttons["closeBook"].tap(); app.buttons["book-Contents Location"].tap(); waitForBook(app)
+        app.buttons["closeBook"].tap(); tapVisibleLibraryCard(card, app: app); waitForBook(app)
         XCTAssertTrue(showing(final), "The saved place on the last page must come back")
         let up = backToTheBeginning(limit: 80, marks: pages)
         record(flow + " lines back at the cover"); capture(flow + " short chapters back at the cover")
