@@ -148,7 +148,9 @@ final class LibraryStore: ObservableObject {
             defer { try? FileManager.default.removeItem(at: fixture) }
             var book = try disk.prepareImport(fixture, existing: Set(books.map(\.fingerprint)))
             book.title = "Contents Location"
-            book.locator = "section:23"; book.progress = 0.65
+            // The usual fixture opens deep in a long book; a case can ask for another place.
+            let start = UITesting.value(.contentsLocator)
+            book.locator = start ?? "section:23"; book.progress = start == nil ? 0.65 : 0
             books.append(book)
         }
         #endif

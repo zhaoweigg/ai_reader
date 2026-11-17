@@ -19,7 +19,9 @@ final class ReaderEngineTests: XCTestCase {
         let source = fixtures
             ? Bundle(for: type(of: self)).url(forResource: name, withExtension: nil, subdirectory: "Fixtures")
             : Bundle.main.url(forResource: name, withExtension: nil, subdirectory: "Samples")
-        let url = try XCTUnwrap(source, "Missing test book: \(name)")
+        return try prepare(file: try XCTUnwrap(source, "Missing test book: \(name)"), directory: directory, disk: disk)
+    }
+    private func prepare(file url: URL, directory: URL, disk: LibraryDisk) throws -> (Book, URL) {
         let book = try disk.prepareImport(url, existing: [])
         try disk.save([book])
         store = LibraryStore(root: directory, seedSamples: false)
@@ -1285,6 +1287,137 @@ final class ReaderEngineTests: XCTestCase {
             }
             XCTAssertEqual(visible, true, "scrolling=\(scrolling), locator=\(locator)")
             XCTAssertTrue(store?.book(book.id)?.bookmarks.contains { $0.locator == locator } == true)
+            reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
+        }
+    }
+    /// Moves through a book the way a reader does. In Scroll only the scroll position
+    /// changes, `stride` of a screen at a time, never by a page or chapter command.
+    /// `travel(direction, goal)` stops at chapter `goal`, or when nothing moves any more.
+    private static let readThrough = """
+        const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+        const last=view.book.sections.length-1,active=()=>r.getContents()[0]?.index;
+        const container=()=>r.getContents()[0].doc.defaultView.frameElement.parentElement.parentElement;
+        let seen=[active()],documents=r.getContents().length;
+        const note=()=>{const index=active();if(seen.at(-1)!==index)seen.push(index);documents=Math.max(documents,r.getContents().length);};
+        const place=()=>{const c=container();return {index:active(),top:Math.round(c.scrollTop),furthest:Math.round(c.scrollHeight-c.clientHeight),screen:Math.round(c.clientHeight),
+            mounted:r.getContents().map(x=>({index:x.index,height:Math.round(x.doc.defaultView.frameElement.parentElement.getBoundingClientRect().height)})).sort((a,b)=>a.index-b.index)};};
+        const travel=async(direction,goal=null)=>{
+            seen=[active()];
+            const stride=Math.round(container().clientHeight*(typeof step==='number'?step:1/3));
+            for(let count=0,idle=0;count<2500&&idle<(scrolling?25:6);count++){
+                if(goal!=null&&(direction>0?active()>=goal:active()<=goal))break;
+                const before=scrolling?container().scrollTop:`${active()}:${r.start}`;
+                if(scrolling)container().scrollTop=before+direction*stride;
+                else await (direction>0?r.next():r.prev());
+                await sleep(60);note();
+                const after=scrolling?container().scrollTop:`${active()}:${r.start}`;
+                idle=(scrolling?Math.abs(after-before)<1:after===before)?idle+1:0;
+            }
+            return {index:active(),seen:[...seen],text:(r.getContents()[0]?.doc?.body?.innerText||'').slice(0,400),start:r.start,place:place()};
+        };
+        """
+    /// Developer probe for a real book, skipped unless a file is placed at
+    /// build/local-probe/ScrollProbe.epub in this checkout (ignored by Git, never committed).
+    /// On a phone-sized screen it reads from the first page to the tenth chapter in Scroll.
+    func testLocalBookCanBeReadThroughFromItsFirstPageInScroll() async throws {
+        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("build/local-probe/ScrollProbe.epub")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: source.path), "No local book at \(source.path)")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        root = directory
+        let (book, url) = try prepare(file: source, directory: directory, disk: try LibraryDisk(root: directory))
+        var prefs = preferences; prefs.scrolling = true
+        let model = try show(book, url: url, locator: "section:0", readerPreferences: prefs)
+        window?.frame.size = CGSize(width: 402, height: 874)
+        try await waitUntil({ model.isReady || model.error != nil }, timeout: 60)
+        XCTAssertNil(model.error)
+        let web = try XCTUnwrap(model.webView)
+        try await Task.sleep(for: .milliseconds(500))
+        func snapshot(_ name: String) async {
+            let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, _ in continuation.resume(returning: image) } }
+            if let image { let shot = XCTAttachment(image: image); shot.name = name; shot.lifetime = .keepAlways; add(shot) }
+        }
+        let forward = try await web.callAsyncJavaScript(Self.readThrough + """
+            const sections=view.book.sections.length,goal=Math.min(9,last),opened=place(),forward=await travel(1,goal);
+            return {sections,goal,opened,forward,documents};
+            """, arguments: ["scrolling": true, "step": 0.6], in: nil, contentWorld: .page) as? [String: Any]
+        let down = try XCTUnwrap(forward), goal = try XCTUnwrap(down["goal"] as? Int)
+        let trace = XCTAttachment(data: try JSONSerialization.data(withJSONObject: down, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        trace.name = "Local book forward trace"; trace.lifetime = .keepAlways; add(trace)
+        await snapshot("Local book where forward reading ended")
+        let reached = (down["forward"] as? [String: Any])?["index"] as? Int ?? -1
+        XCTAssertGreaterThanOrEqual(reached, goal, "Scroll stopped at chapter \(reached) of \(down["sections"] ?? "?"): \(down["forward"] ?? "")")
+        let backward = try await web.callAsyncJavaScript(Self.readThrough + "const backward=await travel(-1);return {backward,documents};",
+            arguments: ["scrolling": true, "step": 0.6], in: nil, contentWorld: .page) as? [String: Any]
+        let up = try XCTUnwrap(backward)
+        let back = XCTAttachment(data: try JSONSerialization.data(withJSONObject: up, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        back.name = "Local book backward trace"; back.lifetime = .keepAlways; add(back)
+        await snapshot("Local book back at its first page")
+        XCTAssertEqual((up["backward"] as? [String: Any])?["index"] as? Int, 0, "Did not get back to the first page: \(up)")
+    }
+
+    /// A cover followed by pages shorter than the screen (title page, dedication, a part
+    /// title). Moving a part of a screen at a time, as a finger does, must carry the reader
+    /// through every one of them to the end of the book and back to the cover.
+    func testChaptersShorterThanTheScreenCanBeReadThroughAndBackInBothFlows() async throws {
+        let (book, url) = try prepare("ShortChapters.epub", format: .epub, fixtures: true)
+        let travel = Self.readThrough
+        for (scrolling, size) in [(true, 19.0), (true, 12.0), (true, 32.0), (false, 19.0)] {
+            var prefs = preferences; prefs.scrolling = scrolling; prefs.fontSize = size
+            let model = try show(book, url: url, locator: "section:0", readerPreferences: prefs)
+            try await waitUntil { model.isReady || model.error != nil }
+            XCTAssertNil(model.error)
+            let web = try XCTUnwrap(model.webView), context = "scrolling=\(scrolling), size=\(size)"
+            let result = try await web.callAsyncJavaScript(travel + """
+                const opened=active(),forward=await travel(1),backward=await travel(-1);
+                return {opened,forward,backward,last,documents};
+                """, arguments: ["scrolling": scrolling], in: nil, contentWorld: .page) as? [String: Any]
+            let metrics = try XCTUnwrap(result), last = try XCTUnwrap(metrics["last"] as? Int)
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: metrics), uniformTypeIdentifier: "public.json")
+            attachment.name = "Short chapters trace \(context)"; attachment.lifetime = .keepAlways; add(attachment)
+            let forward = try XCTUnwrap(metrics["forward"] as? [String: Any]), backward = try XCTUnwrap(metrics["backward"] as? [String: Any])
+            XCTAssertEqual(metrics["opened"] as? Int, 0, context)
+            XCTAssertEqual(forward["index"] as? Int, last, "Stopped before the end of the book: \(context), \(metrics)")
+            XCTAssertTrue((forward["text"] as? String)?.contains("Colophon: the last page.") == true, "\(context), \(forward)")
+            let down = try XCTUnwrap(forward["seen"] as? [Int]), up = try XCTUnwrap(backward["seen"] as? [Int])
+            XCTAssertEqual(down, down.sorted(), "Went back while moving forward: \(context)")
+            XCTAssertEqual(Set(down).count, down.count, context)
+            XCTAssertEqual(backward["index"] as? Int, 0, "Stopped before the cover: \(context), \(metrics)")
+            if scrolling { XCTAssertEqual(backward["start"] as? Double ?? -1, 0, accuracy: 1, "Not at the top of the cover: \(context)") }
+            XCTAssertEqual(up, up.sorted(by: >), "Went forward while moving back: \(context)")
+            // Short chapters may bring one more chapter along; the book is still never loaded whole.
+            XCTAssertLessThanOrEqual(metrics["documents"] as? Int ?? 99, scrolling ? 5 : 1, context)
+            XCTAssertLessThan(metrics["documents"] as? Int ?? 99, last + 1, context)
+            let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, _ in continuation.resume(returning: image) } }
+            if let image { let shot = XCTAttachment(image: image); shot.name = "Short chapters back at the cover \(context)"; shot.lifetime = .keepAlways; add(shot) }
+            // Save a place inside a short chapter, reopen there, and read on to the end.
+            let before = model.locator
+            _ = try await web.callAsyncJavaScript("await document.querySelector('foliate-view').goTo(4)", arguments: [:], in: nil, contentWorld: .page)
+            try await waitUntil { model.locator != before }
+            try await Task.sleep(for: .milliseconds(400))
+            let locator = model.locator
+            model.webView?.stopLoading(); window?.isHidden = true; window = nil
+            let reopened = try show(book, url: url, locator: locator, readerPreferences: prefs)
+            try await waitUntil { reopened.isReady || reopened.error != nil }
+            XCTAssertNil(reopened.error)
+            let again = try XCTUnwrap(reopened.webView)
+            // Restored means the saved line is on screen. A place saved by a chapter jump can
+            // start at the heading element itself, which the text-range comparison in
+            // isLocationVisible places just before the visible text, so Scroll is also measured.
+            let shown = try await again.callAsyncJavaScript(travel + """
+                const target=view.resolveCFI(saved),doc=r.getContents().find(c=>c.index===target.index)?.doc,range=doc&&target.anchor(doc);
+                const line=range&&[...range.getClientRects()].find(rect=>rect.height>0),frame=doc?.defaultView.frameElement.getBoundingClientRect(),host=container().getBoundingClientRect();
+                return {strict:window.Leaf.isLocationVisible(saved)===true,current:view.lastLocation?.cfi??null,index:active()??-1,screen:Math.round(host.height),
+                    top:line&&frame?Math.round(frame.top+line.top-host.top):-1,bottom:line&&frame?Math.round(frame.top+line.bottom-host.top):-1};
+                """, arguments: ["scrolling": scrolling, "saved": locator], in: nil, contentWorld: .page) as? [String: Any]
+            let restored = try XCTUnwrap(shown), top = restored["top"] as? Double ?? -1, bottom = restored["bottom"] as? Double ?? -1
+            let onScreen = scrolling && top >= 0 && bottom > top && bottom <= (restored["screen"] as? Double ?? 0)
+            XCTAssertTrue(restored["strict"] as? Bool == true || onScreen, "Saved place is not on screen: \(context), locator=\(locator), \(restored)")
+            XCTAssertEqual(restored["index"] as? Int, 4, "Reopened in another chapter: \(context), \(restored)")
+            let onward = try await again.callAsyncJavaScript(travel + "const opened=active(),forward=await travel(1);return {opened,forward,last};",
+                arguments: ["scrolling": scrolling], in: nil, contentWorld: .page) as? [String: Any]
+            let rest = try XCTUnwrap(onward)
+            XCTAssertEqual((rest["forward"] as? [String: Any])?["index"] as? Int, last, "Reopened in a short chapter and stopped early: \(context), \(rest)")
             reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
         }
     }
