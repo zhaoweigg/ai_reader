@@ -1288,6 +1288,80 @@ final class ReaderEngineTests: XCTestCase {
             reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
         }
     }
+    /// A cover followed by pages shorter than the screen (title page, dedication, a part
+    /// title). Moving a part of a screen at a time, as a finger does, must carry the reader
+    /// through every one of them to the end of the book and back to the cover.
+    func testChaptersShorterThanTheScreenCanBeReadThroughAndBackInBothFlows() async throws {
+        let (book, url) = try prepare("ShortChapters.epub", format: .epub, fixtures: true)
+        let travel = """
+            const view=document.querySelector('foliate-view'),r=view.renderer,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            const last=view.book.sections.length-1,active=()=>r.getContents()[0]?.index;
+            const container=()=>r.getContents()[0].doc.defaultView.frameElement.parentElement.parentElement;
+            let seen=[active()],documents=r.getContents().length;
+            const note=()=>{const index=active();if(seen.at(-1)!==index)seen.push(index);documents=Math.max(documents,r.getContents().length);};
+            // No page or chapter command in Scroll: only the scroll position moves, a third of a screen at a time.
+            const travel=async direction=>{
+                seen=[active()];
+                for(let step=0,idle=0;step<600&&idle<(scrolling?25:6);step++){
+                    const before=scrolling?container().scrollTop:`${active()}:${r.start}`;
+                    if(scrolling)container().scrollTop=before+direction*240;
+                    else await (direction>0?r.next():r.prev());
+                    await sleep(60);note();
+                    const after=scrolling?container().scrollTop:`${active()}:${r.start}`;
+                    idle=(scrolling?Math.abs(after-before)<1:after===before)?idle+1:0;
+                }
+                return {index:active(),seen:[...seen],text:window.Leaf.visibleText(),start:r.start};
+            };
+            """
+        for (scrolling, size) in [(true, 19.0), (true, 12.0), (true, 32.0), (false, 19.0)] {
+            var prefs = preferences; prefs.scrolling = scrolling; prefs.fontSize = size
+            let model = try show(book, url: url, locator: "section:0", readerPreferences: prefs)
+            try await waitUntil { model.isReady || model.error != nil }
+            XCTAssertNil(model.error)
+            let web = try XCTUnwrap(model.webView), context = "scrolling=\(scrolling), size=\(size)"
+            let result = try await web.callAsyncJavaScript(travel + """
+                const opened=active(),forward=await travel(1),backward=await travel(-1);
+                return {opened,forward,backward,last,documents};
+                """, arguments: ["scrolling": scrolling], in: nil, contentWorld: .page) as? [String: Any]
+            let metrics = try XCTUnwrap(result), last = try XCTUnwrap(metrics["last"] as? Int)
+            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: metrics), uniformTypeIdentifier: "public.json")
+            attachment.name = "Short chapters trace \(context)"; attachment.lifetime = .keepAlways; add(attachment)
+            let forward = try XCTUnwrap(metrics["forward"] as? [String: Any]), backward = try XCTUnwrap(metrics["backward"] as? [String: Any])
+            XCTAssertEqual(metrics["opened"] as? Int, 0, context)
+            XCTAssertEqual(forward["index"] as? Int, last, "Stopped before the end of the book: \(context), \(metrics)")
+            XCTAssertTrue((forward["text"] as? String)?.contains("Colophon: the last page.") == true, "\(context), \(forward)")
+            let down = try XCTUnwrap(forward["seen"] as? [Int]), up = try XCTUnwrap(backward["seen"] as? [Int])
+            XCTAssertEqual(down, down.sorted(), "Went back while moving forward: \(context)")
+            XCTAssertEqual(Set(down).count, down.count, context)
+            XCTAssertEqual(backward["index"] as? Int, 0, "Stopped before the cover: \(context), \(metrics)")
+            if scrolling { XCTAssertEqual(backward["start"] as? Double ?? -1, 0, accuracy: 1, "Not at the top of the cover: \(context)") }
+            XCTAssertEqual(up, up.sorted(by: >), "Went forward while moving back: \(context)")
+            // Short chapters may bring one more chapter along; the book is still never loaded whole.
+            XCTAssertLessThanOrEqual(metrics["documents"] as? Int ?? 99, scrolling ? 5 : 1, context)
+            XCTAssertLessThan(metrics["documents"] as? Int ?? 99, last + 1, context)
+            let image: UIImage? = await withCheckedContinuation { continuation in web.takeSnapshot(with: nil) { image, _ in continuation.resume(returning: image) } }
+            if let image { let shot = XCTAttachment(image: image); shot.name = "Short chapters back at the cover \(context)"; shot.lifetime = .keepAlways; add(shot) }
+            // Save a place inside a short chapter, reopen there, and read on to the end.
+            let before = model.locator
+            _ = try await web.callAsyncJavaScript("await document.querySelector('foliate-view').goTo(4)", arguments: [:], in: nil, contentWorld: .page)
+            try await waitUntil { model.locator != before }
+            try await Task.sleep(for: .milliseconds(400))
+            let locator = model.locator
+            model.webView?.stopLoading(); window?.isHidden = true; window = nil
+            let reopened = try show(book, url: url, locator: locator, readerPreferences: prefs)
+            try await waitUntil { reopened.isReady || reopened.error != nil }
+            XCTAssertNil(reopened.error)
+            let again = try XCTUnwrap(reopened.webView)
+            let encoded = String(decoding: try JSONEncoder().encode(locator), as: UTF8.self)
+            let visible = try await again.evaluateJavaScript("window.Leaf.isLocationVisible(\(encoded))") as? Bool
+            XCTAssertEqual(visible, true, "\(context), locator=\(locator)")
+            let onward = try await again.callAsyncJavaScript(travel + "const opened=active(),forward=await travel(1);return {opened,forward,last};",
+                arguments: ["scrolling": scrolling], in: nil, contentWorld: .page) as? [String: Any]
+            let rest = try XCTUnwrap(onward)
+            XCTAssertEqual((rest["forward"] as? [String: Any])?["index"] as? Int, last, "Reopened in a short chapter and stopped early: \(context), \(rest)")
+            reopened.webView?.stopLoading(); window?.isHidden = true; window = nil
+        }
+    }
     func testScrollRestoresCFIStartingAtAZeroWidthLineBreak() async throws {
         let (book,url)=try prepare("The Art of Noticing.epub",format:.epub)
         var prefs=preferences;prefs.scrolling=true

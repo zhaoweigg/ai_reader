@@ -90,6 +90,7 @@ enum UITestValue: String, CaseIterable {
     case testID = "LEAF_UI_TEST_ID"
     // Contents
     case contentsBook = "LEAF_UI_CONTENTS_BOOK"
+    case contentsLocator = "LEAF_UI_CONTENTS_LOCATOR"
     // Dictation
     case dictationNativeAudio = "LEAF_UI_DICTATION_NATIVE_AUDIO"
     // Voice
