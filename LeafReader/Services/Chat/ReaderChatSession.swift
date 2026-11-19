@@ -200,14 +200,14 @@ final class ReaderChatSession: ObservableObject {
         guard let selection = selectedContext, intent != .ask else { return }
         prepare(intent.prompt(for: selection.text), about: selection)
     }
-    /// Puts a quick prompt about the selected text in the draft. True when it is the
-    /// whole draft and no reply is in flight, so the caller can send it at once; what
-    /// the reader was writing is kept beside it and never sent for them.
+    /// Puts a quick prompt about the selected text in the draft, after anything the
+    /// reader has typed. True when no reply is in flight, so the caller can send the
+    /// draft at once; otherwise it waits there for the reader to send.
     func applyQuickPrompt(_ prompt: String) -> Bool {
         let prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let selection = selectedContext, !prompt.isEmpty else { return false }
         prepare(prompt, about: selection)
-        return !isSending && draft.trimmingCharacters(in: .whitespacesAndNewlines) == prompt
+        return !isSending
     }
     /// A prepared prompt replaces the one prepared before it instead of piling up.
     private func prepare(_ prompt: String, about selection: ReadingChatContext) {

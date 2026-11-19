@@ -247,7 +247,7 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertTrue(session.attachSelection(chinese, sending: .translate))
         XCTAssertEqual(session.draft, "Translate this passage into English.")
     }
-    func testQuickPromptIsSentAtOnceOnlyWhenItIsTheWholeDraft() async throws {
+    func testQuickPromptIsSentAtOnceWithWhatTheReaderTyped() async throws {
         let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
         let session = ReaderChatSession(directory: directory, conversation: "quick")
         XCTAssertFalse(session.applyQuickPrompt("List the hard words."), "No selection means no quick prompt")
@@ -272,12 +272,19 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertFalse(session.applyQuickPrompt("List the hard words."))
         XCTAssertEqual(session.draft, "List the hard words."); XCTAssertEqual(provider.requests.count, 1)
         complete(provider); try await eventually { !session.isSending }
-        // The reader's own words are kept and never sent for them.
+        // What the reader typed goes first, and the prompt is not added twice.
         session.draft = "Why did they leave?"
-        XCTAssertFalse(session.applyQuickPrompt("List the hard words."))
+        XCTAssertTrue(session.applyQuickPrompt("List the hard words."))
         XCTAssertEqual(session.draft, "Why did they leave?\n\nList the hard words.")
-        XCTAssertFalse(session.applyQuickPrompt("Who is speaking?"))
+        XCTAssertTrue(session.applyQuickPrompt("Who is speaking?"))
         XCTAssertEqual(session.draft, "Why did they leave?\n\nWho is speaking?")
+        XCTAssertTrue(session.applyQuickPrompt("Who is speaking?"))
+        XCTAssertEqual(session.draft, "Why did they leave?\n\nWho is speaking?")
+        session.send(settings: settings) { XCTFail("Use the selected passage"); return nil }
+        try await eventually { provider.requests.count == 2 }
+        XCTAssertEqual(session.messages.last(where: { $0.isUser })?.text, "Why did they leave?\n\nWho is speaking?")
+        XCTAssertEqual(session.draft, ""); XCTAssertNil(session.selectedContext)
+        complete(provider); try await eventually { !session.isSending }
     }
     func testQuickPromptsFollowThePassageLanguageUntilRewrittenAndAreSaved() throws {
         let suite = "ChatQuickPrompts.\(UUID())", defaults = UserDefaults(suiteName: suite)!

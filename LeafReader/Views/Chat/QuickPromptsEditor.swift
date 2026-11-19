@@ -27,7 +27,7 @@ struct QuickPromptsEditor: View {
                         .accessibilityIdentifier("addQuickPrompt")
                 }
             } footer: {
-                Text("Ask Leaf shows these when text is selected. Tapping one sends it with the passage. Swipe a prompt to delete it, or tap Edit to reorder.")
+                Text("Ask Leaf shows these when text is selected. Tapping one sends it with the passage, after anything you have typed. Swipe a prompt to delete it, or tap Edit to reorder.")
             }
             Section {
                 Button("Reset to defaults") { prompts = ChatQuickPrompt.defaults }

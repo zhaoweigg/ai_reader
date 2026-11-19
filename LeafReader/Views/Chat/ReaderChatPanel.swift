@@ -495,8 +495,9 @@ struct ReaderChatPanel: View {
         }
     }
 
-    /// The reader's quick prompts for the selected text. Tapping one sends it at once;
-    /// the pencil opens the editor. Extra prompts scroll sideways instead of wrapping.
+    /// The reader's quick prompts for the selected text. Tapping one sends it at once,
+    /// after anything already typed; the pencil opens the editor. Extra prompts scroll
+    /// sideways instead of wrapping.
     private func selectionActions(compact: Bool) -> some View {
         let row = quickPromptRow(compact: compact)
         return ViewThatFits(in: .horizontal) {
