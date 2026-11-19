@@ -247,6 +247,76 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertTrue(session.attachSelection(chinese, sending: .translate))
         XCTAssertEqual(session.draft, "Translate this passage into English.")
     }
+    func testQuickPromptIsSentAtOnceWithWhatTheReaderTyped() async throws {
+        let directory = try directory(), provider = HistoryProvider(), settings = settings(provider)
+        let session = ReaderChatSession(directory: directory, conversation: "quick")
+        XCTAssertFalse(session.applyQuickPrompt("List the hard words."), "No selection means no quick prompt")
+        XCTAssertEqual(session.draft, "")
+        session.attachSelection(context)
+        XCTAssertFalse(session.applyQuickPrompt("  \n"), "An empty prompt asks nothing")
+        XCTAssertTrue(session.applyQuickPrompt(" List the hard words. "))
+        XCTAssertEqual(session.draft, "List the hard words.")
+        XCTAssertTrue(provider.requests.isEmpty, "Preparing sends nothing by itself")
+        // Another prompt replaces the prepared one, built-in or the reader's own.
+        XCTAssertTrue(session.applyQuickPrompt("Who is speaking?"))
+        XCTAssertEqual(session.draft, "Who is speaking?")
+        session.prepareSelectionPrompt(.explain)
+        XCTAssertEqual(session.draft, "Explain this passage.")
+        XCTAssertTrue(session.applyQuickPrompt("Who is speaking?"))
+        session.send(settings: settings) { XCTFail("Use the selected passage"); return nil }
+        try await eventually { provider.requests.count == 1 }
+        XCTAssertEqual(session.messages.first?.text, "Who is speaking?"); XCTAssertEqual(session.messages.first?.context, context)
+        XCTAssertEqual(session.draft, ""); XCTAssertNil(session.selectedContext)
+        // While a reply is arriving the next prompt waits as a draft.
+        session.attachSelection(context)
+        XCTAssertFalse(session.applyQuickPrompt("List the hard words."))
+        XCTAssertEqual(session.draft, "List the hard words."); XCTAssertEqual(provider.requests.count, 1)
+        complete(provider); try await eventually { !session.isSending }
+        // What the reader typed goes first, and the prompt is not added twice.
+        session.draft = "Why did they leave?"
+        XCTAssertTrue(session.applyQuickPrompt("List the hard words."))
+        XCTAssertEqual(session.draft, "Why did they leave?\n\nList the hard words.")
+        XCTAssertTrue(session.applyQuickPrompt("Who is speaking?"))
+        XCTAssertEqual(session.draft, "Why did they leave?\n\nWho is speaking?")
+        XCTAssertTrue(session.applyQuickPrompt("Who is speaking?"))
+        XCTAssertEqual(session.draft, "Why did they leave?\n\nWho is speaking?")
+        session.send(settings: settings) { XCTFail("Use the selected passage"); return nil }
+        try await eventually { provider.requests.count == 2 }
+        XCTAssertEqual(session.messages.last(where: { $0.isUser })?.text, "Why did they leave?\n\nWho is speaking?")
+        XCTAssertEqual(session.draft, ""); XCTAssertNil(session.selectedContext)
+        complete(provider); try await eventually { !session.isSending }
+    }
+    func testQuickPromptsFollowThePassageLanguageUntilRewrittenAndAreSaved() throws {
+        let suite = "ChatQuickPrompts.\(UUID())", defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        func store() -> AISettingsStore { AISettingsStore(defaults: defaults, credentials: HistoryCredentials()) }
+        let settings = store()
+        XCTAssertEqual(settings.quickPrompts, ChatQuickPrompt.defaults)
+        XCTAssertEqual(settings.quickPrompts.map(\.label), ["Explain", "Summarize"])
+        XCTAssertEqual(settings.quickPrompts.map { $0.text(for: "A passage") }, ["Explain this passage.", "Summarize this passage."])
+        XCTAssertEqual(settings.quickPrompts.map { $0.text(for: "选中文字") }, ["请解释这段文字。", "请总结这段文字。"])
+        XCTAssertEqual(settings.quickPrompts.enumerated().map { $1.chipIdentifier(at: $0) }, ["explainChatSelection", "summarizeChatSelection"])
+
+        var explain = ChatQuickPrompt.defaults[0]
+        explain.title = "  解释  "; explain.prompt = " 用简单的话解释。 "
+        let words = ChatQuickPrompt(title: "Words", prompt: "List the hard words.")
+        let long = ChatQuickPrompt(title: String(repeating: "x", count: 40), prompt: String(repeating: "y", count: 600))
+        settings.saveQuickPrompts([words, ChatQuickPrompt(title: "", prompt: "No name"), ChatQuickPrompt(title: "No request"), explain, long])
+        XCTAssertEqual(settings.quickPrompts.map(\.label), ["Words", "解释", String(repeating: "x", count: 24)], "Unusable prompts are dropped; order and names are kept")
+        XCTAssertEqual(settings.quickPrompts[1].text(for: "A passage"), "用简单的话解释。", "A rewritten built-in sends the reader's words in any language")
+        XCTAssertEqual(settings.quickPrompts[1].chipIdentifier(at: 1), "explainChatSelection")
+        XCTAssertEqual(settings.quickPrompts[0].chipIdentifier(at: 0), "customChatSelection-0")
+        XCTAssertEqual(settings.quickPrompts[2].text(for: "A passage").count, 500)
+        XCTAssertEqual(store().quickPrompts, settings.quickPrompts, "Prompts survive a relaunch")
+
+        settings.saveQuickPrompts((0..<20).map { ChatQuickPrompt(title: "P\($0)", prompt: "Ask \($0)") })
+        XCTAssertEqual(settings.quickPrompts.count, ChatQuickPrompt.limit)
+        settings.saveQuickPrompts([])
+        XCTAssertTrue(store().quickPrompts.isEmpty, "Deleting every prompt is remembered")
+        settings.saveQuickPrompts(ChatQuickPrompt.defaults)
+        XCTAssertNil(defaults.data(forKey: "chat.quickPrompts"), "The default list stores nothing")
+        XCTAssertEqual(store().quickPrompts, ChatQuickPrompt.defaults)
+    }
     func testSelectionShortcutsPreserveCustomQuestionWithoutAccumulatingPrompts() throws {
         let session = ReaderChatSession(directory: try directory(), conversation: "custom")
         session.draft = "Why did they leave?\nI think this is a clue."

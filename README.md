@@ -186,7 +186,7 @@ Speech is entirely on device; no book text leaves the phone. Playback continues 
 
 ## Highlights, notes and voice notes
 
-Select text and choose **Highlight**, **Note** or **Voice Note** from the compact selection toolbar (Ask Leaf, Listen, Translate, Highlight, Note, Voice, Copy). **Translate** opens Ask Leaf with the passage quoted and asks your AI model to translate it: Chinese text into English, anything else into Simplified Chinese.
+Select text and choose **Highlight**, **Note** or **Voice Note** from the compact selection toolbar (Ask Leaf, Listen, Translate, Highlight, Note, Voice, Copy). **Translate** opens Ask Leaf with the passage quoted and asks your AI model to translate it: Chinese text into English, anything else into Simplified Chinese. With text selected, Ask Leaf also shows your **quick prompts** (Explain and Summarize to start with): tapping one sends it with the passage at once, after anything you had already typed. The pencil beside them, or **AI settings › Quick prompts**, lets you rename, rewrite, add, delete and reorder them.
 
 ```mermaid
 flowchart LR

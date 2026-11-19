@@ -1944,6 +1944,75 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(readingSurface(app).exists)
         app.terminate()
     }
+    @MainActor func testQuickPromptsSendAtOnceAndCanBeEditedInPages() { verifyQuickPrompts("Pages") }
+    @MainActor func testQuickPromptsSendAtOnceAndCanBeEditedInScroll() { verifyQuickPrompts("Scroll") }
+    @MainActor func testQuickPromptsSendAtOnceAndCanBeEditedInPDF() { verifyQuickPrompts("PDF") }
+    /// A quick prompt is sent with the selected passage on one tap, and the pencil
+    /// beside the prompts adds a prompt of the reader's own without losing the selection.
+    @MainActor private func verifyQuickPrompts(_ flow: String) {
+        continueAfterFailure = false
+        // The probe model answers only when the request carries the selected passage.
+        let app = launchApp(contextProbe: true); openSelectionFixture(flow, app: app)
+        let menu = app.scrollViews["expandedSelectionMenu"], passage = app.staticTexts["chatSelectedPassage"]
+        let replies = app.textViews.matching(identifier: "chatReply").matching(NSPredicate(format: "label BEGINSWITH %@", "Reading context verified"))
+        let quotes = app.buttons.matching(identifier: "toggleChatQuote")
+        func attachSelection(_ stage: String) -> String {
+            selectFixturePassage(flow, app: app)
+            XCTAssertTrue(menu.waitForExistence(timeout: 6), "Selection menu in " + flow + ", " + stage)
+            let selected = menu.value as? String ?? ""
+            XCTAssertFalse(selected.isEmpty)
+            revealSelectionAction("ask", app: app).tap()
+            XCTAssertTrue(passage.waitForExistence(timeout: 5), "Ask Leaf attaches the selection, " + stage)
+            XCTAssertEqual(passage.label, selected)
+            return selected
+        }
+        func assertSent(_ request: String, quoting selected: String, sent: Int, _ stage: String) {
+            let questions = app.textViews.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label == %@", request))
+            expectation(for: NSPredicate { _, _ in questions.count == 1 && replies.count == sent }, evaluatedWith: app)
+            waitForExpectations(timeout: 15)
+            XCTAssertEqual(quotes.count, sent, "Each request shows the passage it asks about")
+            XCTAssertEqual(quotes.element(boundBy: sent - 1).value as? String, selected, "The request quotes the selected passage")
+            XCTAssertFalse(passage.exists, "The passage went with the request; nothing is left waiting")
+            XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled, "The prompt was sent, not left as a draft")
+            capture(flow + " quick prompt answered, " + stage)
+        }
+        var selected = attachSelection("built-in prompt")
+        for id in ["explainChatSelection", "summarizeChatSelection", "editQuickPrompts"] {
+            XCTAssertTrue(app.buttons[id].isHittable, "Shown beside the selected text: " + id)
+        }
+        XCTAssertEqual(app.buttons["explainChatSelection"].label, "Explain")
+        capture(flow + " quick prompts beside the selected text")
+        app.buttons["explainChatSelection"].tap()
+        assertSent("Explain this passage.", quoting: selected, sent: 1, "built-in prompt")
+
+        selected = attachSelection("own prompt")
+        app.buttons["editQuickPrompts"].tap()
+        let add = app.buttons["addQuickPrompt"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5), "The pencil opens the quick prompt editor")
+        XCTAssertTrue(app.buttons["quickPrompt-Explain"].exists); XCTAssertTrue(app.buttons["quickPrompt-Summarize"].exists)
+        capture(flow + " quick prompt editor")
+        add.tap()
+        let name = app.textFields["quickPromptName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap(); name.typeText("Words")
+        let request = app.descendants(matching: .any).matching(identifier: "quickPromptRequest").firstMatch
+        request.tap(); request.typeText("List the hard words.")
+        capture(flow + " new quick prompt")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["quickPrompt-Words"].waitForExistence(timeout: 5), "A prompt with a name and a request joins the list")
+        capture(flow + " quick prompt editor with the new prompt")
+        app.buttons["closeQuickPrompts"].tap()
+        let chip = app.buttons["customChatSelection-2"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 5), "The new prompt appears beside the built-in ones")
+        XCTAssertEqual(chip.label, "Words")
+        XCTAssertTrue(passage.exists, "Editing prompts keeps the selected text attached")
+        XCTAssertEqual(passage.label, selected)
+        capture(flow + " own quick prompt beside the selected text")
+        chip.tap()
+        assertSent("List the hard words.", quoting: selected, sent: 2, "own prompt")
+        XCTAssertTrue(readingSurface(app).exists)
+        app.terminate()
+    }
     @MainActor func testSelectionActionsReceiveTapsKeepComposerFocusAndLeaveNoWindowAfterClosing() {
         continueAfterFailure = false
         let app = launchApp(); app.buttons["featuredBook"].tap(); waitForBook(app)
@@ -2327,14 +2396,10 @@ final class LeafReaderUITests: XCTestCase {
                 XCTAssertFalse(app.menuItems["Ask a question"].exists, "Ask Leaf must open chat directly")
                 XCTAssertFalse(app.buttons["Ask a question"].exists)
                 XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled)
-                for shortcut in ["explainChatSelection", "summarizeChatSelection"] {
+                for shortcut in ["explainChatSelection", "summarizeChatSelection", "editQuickPrompts"] {
                     XCTAssertTrue(app.buttons[shortcut].isHittable)
                 }
                 capture(flow + " direct chat with selection shortcuts")
-                let other = action == "explainChatSelection" ? "summarizeChatSelection" : "explainChatSelection"
-                app.buttons[other].tap(); app.buttons[action].tap()
-                XCTAssertEqual(input.value as? String, prompt, "Switching shortcuts replaces the prior preset")
-                XCTAssertFalse(app.textViews["chatQuestion"].exists, "A shortcut prepares an editable draft")
                 if flow == "Scroll" {
                     self.orient(.landscapeLeft)
 
@@ -2348,7 +2413,7 @@ final class LeafReaderUITests: XCTestCase {
                     expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                 }
-                input.tap(); input.typeText(" In context")
+                input.tap(); input.typeText("In context")
                 XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
                 XCTAssertTrue(passage.exists, "Keep the selected passage attached when the keyboard replaces the selection")
                 XCTAssertLessThanOrEqual(app.otherElements["readerChatPanel"].frame.maxY, app.keyboards.firstMatch.frame.minY + 2)
@@ -2369,9 +2434,18 @@ final class LeafReaderUITests: XCTestCase {
                     expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
                     waitForExpectations(timeout: 5)
                 }
-                app.buttons["removeChatSelection"].tap()
-                XCTAssertFalse(passage.exists)
                 app.buttons["Hide keyboard"].tap()
+                // A quick prompt sends what the reader typed with it, in one message.
+                XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5))
+                app.buttons[action].tap()
+                let sent = app.textViews.matching(identifier: "chatQuestion").matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", "In context", prompt))
+                XCTAssertTrue(sent.firstMatch.waitForExistence(timeout: 10), "The typed words and the prompt go out together")
+                XCTAssertEqual(app.textViews.matching(identifier: "chatQuestion").count, 1)
+                XCTAssertTrue(passage.waitForNonExistence(timeout: 5), "The passage went with the message")
+                XCTAssertEqual(app.buttons.matching(identifier: "toggleChatQuote").firstMatch.value as? String, selected)
+                XCTAssertTrue(app.textViews.matching(identifier: "chatReply").firstMatch.waitForExistence(timeout: 10))
+                XCTAssertFalse(app.buttons["sendReaderChat"].isEnabled, "Nothing is left in the draft")
+                capture(flow + " quick prompt sent with the reader's own words")
                 app.buttons["chatOptions"].tap()
                 app.buttons["requestClearConversation"].tap()
                 app.buttons["confirmClearConversation"].firstMatch.tap()
