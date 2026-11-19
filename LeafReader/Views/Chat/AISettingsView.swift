@@ -74,6 +74,15 @@ struct AISettingsView: View {
                     Text("Conversations and drafts are saved on this device for each book until you clear them. Provider retention follows that provider’s policy.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section {
+                    NavigationLink { QuickPromptsEditor(closes: false) } label: {
+                        HStack {
+                            Text("Quick prompts")
+                            Spacer()
+                            Text(settings.quickPrompts.map(\.label).joined(separator: ", ")).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }.accessibilityIdentifier("openQuickPrompts")
+                } footer: { Text("The buttons Ask Leaf shows for selected text. Changes to them are saved as you make them.") }
                 if configuration.provider != .chatGPT {
                     Section("Response length") {
                         Stepper("Maximum output: \(configuration.profile.maxOutputTokens) tokens", value: $configuration.profile.maxOutputTokens, in: 256...8192, step: 256)

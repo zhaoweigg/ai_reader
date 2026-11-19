@@ -44,6 +44,8 @@ struct KeychainChatCredentials: ChatCredentialStore {
 @MainActor
 final class AISettingsStore: ObservableObject {
     @Published private(set) var configuration: ChatConfiguration
+    /// The reader's quick prompts for selected text, in the order shown in Ask Leaf.
+    @Published private(set) var quickPrompts: [ChatQuickPrompt]
     private let defaults: UserDefaults
     private let credentials: any ChatCredentialStore
     let providerOverride: (any ChatProvider)?
@@ -53,6 +55,15 @@ final class AISettingsStore: ObservableObject {
         self.defaults = defaults; self.credentials = credentials; self.providerOverride = providerOverride
         chatGPT = chatGPTOverride ?? ChatGPTAccountStore(defaults: defaults, credentials: credentials)
         configuration = defaults.data(forKey: "ai.configuration").flatMap { try? JSONDecoder().decode(ChatConfiguration.self, from: $0) } ?? ChatConfiguration()
+        quickPrompts = defaults.data(forKey: "chat.quickPrompts").flatMap { try? JSONDecoder().decode([ChatQuickPrompt].self, from: $0) } ?? ChatQuickPrompt.defaults
+    }
+    /// Saves the prompts that can be shown; an unchanged default list stores nothing.
+    func saveQuickPrompts(_ prompts: [ChatQuickPrompt]) {
+        let kept = Array(prompts.filter(\.isUsable).map(\.normalized).prefix(ChatQuickPrompt.limit))
+        guard kept != quickPrompts else { return }
+        if kept == ChatQuickPrompt.defaults { defaults.removeObject(forKey: "chat.quickPrompts") }
+        else if let data = try? JSONEncoder().encode(kept) { defaults.set(data, forKey: "chat.quickPrompts") }
+        quickPrompts = kept
     }
     func key(for configuration: ChatConfiguration) throws -> String? { try credentials.read(account: configuration.credentialAccount) }
     func save(_ configuration: ChatConfiguration, replacementKey: String?) throws {

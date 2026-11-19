@@ -154,6 +154,7 @@ struct ReaderChatPanel: View {
     @State private var confirmsClear = false
     @State private var scrollFollowing = ChatScrollFollowing()
     @State private var selectedMessage: UUID?
+    @State private var editsQuickPrompts = false
 
     private var accent: Color { theme.accent }
     private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -199,7 +200,7 @@ struct ReaderChatPanel: View {
                             .accessibilityLabel(selection.text).accessibilityIdentifier("chatSelectedPassage")
                         Button { session.removeSelection() } label: { Image(systemName: "xmark.circle").frame(width: 44, height: 44) }
                             .accessibilityLabel("Remove selected text").accessibilityIdentifier("removeChatSelection")
-                        if !isComposing { selectionActions(compact: true) }
+                        if !isComposing { selectionActions(compact: true).layoutPriority(1) }
                     } else { Text("Ask Leaf").font(.subheadline.weight(.semibold)).foregroundStyle(accent).lineLimit(1) }
                     Spacer(minLength: 4)
                     Menu { dictationLanguagePicker } label: {
@@ -475,6 +476,10 @@ struct ReaderChatPanel: View {
                 .accessibilityIdentifier("confirmClearConversation")
             Button("Cancel", role: .cancel) {}
         } message: { Text(context == .general ? "This deletes the general chat’s saved messages and draft from this device. Book conversations are kept." : "This deletes this book’s saved messages and draft from this device.") }
+        .sheet(isPresented: $editsQuickPrompts) {
+            NavigationStack { QuickPromptsEditor(closes: true) }
+                .environment(\.leafTheme, theme).tint(theme.accent)
+        }
     }
 
     private var dictationLanguagePicker: some View {
@@ -490,20 +495,41 @@ struct ReaderChatPanel: View {
         }
     }
 
+    /// The reader's quick prompts for the selected text. Tapping one sends it at once;
+    /// the pencil opens the editor. Extra prompts scroll sideways instead of wrapping.
     private func selectionActions(compact: Bool) -> some View {
-        HStack(spacing: compact ? 4 : 8) {
-            ForEach([ReaderSelectionIntent.explain, .summarize], id: \.rawValue) { intent in
-                Button { session.prepareSelectionPrompt(intent) } label: {
-                    Text(intent.shortTitle)
-                        .font(.caption.weight(.medium)).lineLimit(1).fixedSize()
-                        .foregroundStyle(accent).padding(.horizontal, compact ? 10 : 14).frame(height: 44)
-                        .background(accent.opacity(0.08), in: Capsule())
-                        .overlay(Capsule().stroke(accent.opacity(0.2), lineWidth: 0.75))
+        let row = quickPromptRow(compact: compact)
+        return ViewThatFits(in: .horizontal) {
+            row
+            ScrollView(.horizontal, showsIndicators: false) { row }
+        }
+    }
+    private func quickPromptRow(compact: Bool) -> some View {
+        let passage = session.selectedContext?.text ?? ""
+        return HStack(spacing: compact ? 4 : 8) {
+            ForEach(Array(settings.quickPrompts.enumerated()), id: \.element.id) { index, prompt in
+                Button {
+                    if session.applyQuickPrompt(prompt.text(for: passage)) { send() }
+                } label: {
+                    quickPromptChip(compact: compact) { Text(prompt.label).font(.caption.weight(.medium)).lineLimit(1).fixedSize() }
                 }
-                .buttonStyle(.plain).accessibilityLabel(intent.title)
-                .accessibilityIdentifier("\(intent.rawValue)ChatSelection")
+                .buttonStyle(.plain).accessibilityLabel(prompt.label).accessibilityHint("Asks this about the selected text")
+                .accessibilityIdentifier(prompt.chipIdentifier(at: index))
+            }
+            if !compact {
+                Button { editsQuickPrompts = true } label: {
+                    quickPromptChip(compact: false) { Image(systemName: "pencil").font(.caption.weight(.semibold)) }
+                }
+                .buttonStyle(.plain).accessibilityLabel("Edit quick prompts").accessibilityIdentifier("editQuickPrompts")
             }
         }
+    }
+    private func quickPromptChip(compact: Bool, @ViewBuilder label: () -> some View) -> some View {
+        label()
+            .foregroundStyle(accent).padding(.horizontal, compact ? 10 : 14).frame(minWidth: 44).frame(height: 44)
+            .background(accent.opacity(0.08), in: Capsule())
+            .overlay(Capsule().stroke(accent.opacity(0.2), lineWidth: 0.75))
+            .contentShape(Capsule())
     }
 
     private var dismissDrag: some Gesture {

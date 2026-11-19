@@ -44,6 +44,8 @@ final class ReaderChatSession: ObservableObject {
     private var restoring = false
     private var draftDirty = false
     private var selectionDirty = false
+    /// The prompt last put in the draft for the reader, so the next one can replace it.
+    private var preparedPrompt: String?
     private var pendingMessageIDs = Set<UUID>()
     private var checkpoint: Task<Void, Never>?
     private var generation = UUID()
@@ -196,14 +198,27 @@ final class ReaderChatSession: ObservableObject {
 
     func prepareSelectionPrompt(_ intent: ReaderSelectionIntent) {
         guard let selection = selectedContext, intent != .ask else { return }
-        let prompt = intent.prompt(for: selection.text)
+        prepare(intent.prompt(for: selection.text), about: selection)
+    }
+    /// Puts a quick prompt about the selected text in the draft. True when it is the
+    /// whole draft and no reply is in flight, so the caller can send it at once; what
+    /// the reader was writing is kept beside it and never sent for them.
+    func applyQuickPrompt(_ prompt: String) -> Bool {
+        let prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let selection = selectedContext, !prompt.isEmpty else { return false }
+        prepare(prompt, about: selection)
+        return !isSending && draft.trimmingCharacters(in: .whitespacesAndNewlines) == prompt
+    }
+    /// A prepared prompt replaces the one prepared before it instead of piling up.
+    private func prepare(_ prompt: String, about selection: ReadingChatContext) {
         let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let presets = [ReaderSelectionIntent.explain, .summarize, .translate].map { $0.prompt(for: selection.text) }
+        let presets = ([preparedPrompt].compactMap { $0 } + [ReaderSelectionIntent.explain, .summarize, .translate].map { $0.prompt(for: selection.text) }).filter { !$0.isEmpty }
         if current.isEmpty || presets.contains(current) { draft = prompt }
         else if let previous = presets.first(where: { current.hasSuffix("\n\n" + $0) }) {
             draft = String(current.dropLast(previous.count)) + prompt
         }
         else if !current.hasSuffix(prompt) { draft += "\n\n" + prompt }
+        preparedPrompt = prompt
         flush()
     }
 

@@ -11,10 +11,6 @@ enum ReaderSelectionIntent: String, CaseIterable {
         case .summarize: return "Summarize selection"; case .translate: return "Translate selection"
         }
     }
-    /// The label of the chat shortcut that prepares this intent's draft.
-    var shortTitle: String {
-        switch self { case .ask: return "Ask Leaf"; case .explain: return "Explain"; case .summarize: return "Summarize"; case .translate: return "Translate" }
-    }
     func prompt(for text: String) -> String {
         let chinese = ReaderChatMessage.usesChinese(text)
         switch self {
