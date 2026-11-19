@@ -47,6 +47,8 @@ struct QuickPromptsEditor: View {
         .navigationDestination(isPresented: $adds) { QuickPromptForm(prompt: added, onChange: update).id(added.id) }
         .onAppear { if prompts.isEmpty { prompts = settings.quickPrompts } }
         .onChange(of: prompts) { _, prompts in settings.saveQuickPrompts(prompts) }
+        // Its own saves come back equal to what the list keeps; anything else was synced from another device.
+        .onChange(of: settings.quickPrompts) { _, saved in if saved != ChatQuickPrompt.shown(prompts) { prompts = saved } }
     }
 
     private func row(_ prompt: ChatQuickPrompt) -> some View {
