@@ -8,6 +8,11 @@ struct ChatQuickPrompt: Codable, Identifiable, Equatable {
         ChatQuickPrompt(id: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!, title: "Summarize", builtIn: ReaderSelectionIntent.summarize.rawValue),
     ]
 
+    /// What Ask Leaf keeps of an edited list: the usable prompts, tidied, up to the limit.
+    static func shown(_ prompts: [ChatQuickPrompt]) -> [ChatQuickPrompt] {
+        Array(prompts.filter(\.isUsable).map(\.normalized).prefix(limit))
+    }
+
     var id = UUID()
     var title = ""
     /// What is sent. A built-in prompt left empty asks in the language of the passage.

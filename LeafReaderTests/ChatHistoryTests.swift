@@ -292,6 +292,8 @@ private final class HistoryProvider: ChatProvider {
         func store() -> AISettingsStore { AISettingsStore(defaults: defaults, credentials: HistoryCredentials()) }
         let settings = store()
         XCTAssertEqual(settings.quickPrompts, ChatQuickPrompt.defaults)
+        settings.saveQuickPrompts(ChatQuickPrompt.defaults)
+        XCTAssertNil(defaults.object(forKey: "chat.quickPrompts"), "A list that was never edited stores nothing")
         XCTAssertEqual(settings.quickPrompts.map(\.label), ["Explain", "Summarize"])
         XCTAssertEqual(settings.quickPrompts.map { $0.text(for: "A passage") }, ["Explain this passage.", "Summarize this passage."])
         XCTAssertEqual(settings.quickPrompts.map { $0.text(for: "选中文字") }, ["请解释这段文字。", "请总结这段文字。"])
@@ -314,7 +316,7 @@ private final class HistoryProvider: ChatProvider {
         settings.saveQuickPrompts([])
         XCTAssertTrue(store().quickPrompts.isEmpty, "Deleting every prompt is remembered")
         settings.saveQuickPrompts(ChatQuickPrompt.defaults)
-        XCTAssertNil(defaults.data(forKey: "chat.quickPrompts"), "The default list stores nothing")
+        XCTAssertEqual(defaults.data(forKey: "chat.quickPrompts"), Data(), "A reset is stored, so that sync can carry it to other devices")
         XCTAssertEqual(store().quickPrompts, ChatQuickPrompt.defaults)
     }
     func testSelectionShortcutsPreserveCustomQuestionWithoutAccumulatingPrompts() throws {

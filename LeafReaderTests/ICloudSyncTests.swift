@@ -2,6 +2,11 @@ import XCTest
 import SwiftUI
 @testable import LeafReader
 
+private struct NoCredentials: ChatCredentialStore {
+    func read(account: String) throws -> String? { nil }
+    func write(_ key: String?, account: String) throws {}
+}
+
 /// Two simulated devices share one folder standing in for iCloud Drive.
 @MainActor
 final class ICloudSyncTests: XCTestCase {
@@ -306,6 +311,30 @@ final class ICloudSyncTests: XCTestCase {
         XCTAssertEqual(phone.defaults.double(forKey: "reader.fontSize"), 24)
         XCTAssertFalse(phone.defaults.bool(forKey: "reader.boldText"))
         XCTAssertEqual(phone.defaults.string(forKey: "reader.theme"), "night", "An unchanged setting is not overwritten")
+    }
+
+    func testQuickPromptsEditedOnOneDeviceAppearOnTheOtherAndAResetFollows() async throws {
+        let phone = try device(), tablet = try device()
+        let onPhone = AISettingsStore(defaults: phone.defaults, credentials: NoCredentials())
+        let onTablet = AISettingsStore(defaults: tablet.defaults, credentials: NoCredentials())
+        let words = ChatQuickPrompt(title: "Words", prompt: "List the hard words.")
+        onPhone.saveQuickPrompts(ChatQuickPrompt.defaults + [words])
+        await phone.sync.syncNow(); await tablet.sync.syncNow()
+        XCTAssertEqual(onTablet.quickPrompts.map(\.label), ["Explain", "Summarize", "Words"], "The open app shows them without a relaunch")
+        XCTAssertEqual(onTablet.quickPrompts, onPhone.quickPrompts)
+        XCTAssertEqual(AISettingsStore(defaults: tablet.defaults, credentials: NoCredentials()).quickPrompts, onPhone.quickPrompts)
+
+        try await Task.sleep(for: .milliseconds(20))
+        onTablet.saveQuickPrompts([words])
+        await tablet.sync.syncNow(); await phone.sync.syncNow()
+        XCTAssertEqual(onPhone.quickPrompts, [words], "The newer edit wins, deletions included")
+
+        try await Task.sleep(for: .milliseconds(20))
+        onPhone.saveQuickPrompts(ChatQuickPrompt.defaults)
+        await phone.sync.syncNow(); await tablet.sync.syncNow()
+        XCTAssertEqual(onTablet.quickPrompts, ChatQuickPrompt.defaults, "A reset reaches the other device")
+        await tablet.sync.syncNow(); await phone.sync.syncNow()
+        XCTAssertEqual(onPhone.quickPrompts, ChatQuickPrompt.defaults, "The other device's older list does not come back")
     }
 }
 

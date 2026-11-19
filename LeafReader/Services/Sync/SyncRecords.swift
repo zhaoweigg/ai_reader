@@ -136,7 +136,7 @@ struct SyncedSettings: Codable, Equatable {
     static let keys: Set<String> = [
         "reader.theme", "reader.font", "reader.boldText", "reader.fontSize", "reader.lineHeight", "reader.scrolling",
         "reader.horizontalMargin", "reader.verticalMargin", "reader.paragraphSpacing",
-        "reader.chatButtonTransparency", "chat.dictationLanguage",
+        "reader.chatButtonTransparency", "chat.dictationLanguage", "chat.quickPrompts",
         "audio.voice", "audio.followsText", "audio.speed",
         "audio.speed.system",
         "ai.configuration", "zlibrary.origin", "zlibrary.feed", "zlibrary.searchOrder"

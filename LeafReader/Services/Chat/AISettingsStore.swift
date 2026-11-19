@@ -55,15 +55,37 @@ final class AISettingsStore: ObservableObject {
         self.defaults = defaults; self.credentials = credentials; self.providerOverride = providerOverride
         chatGPT = chatGPTOverride ?? ChatGPTAccountStore(defaults: defaults, credentials: credentials)
         configuration = defaults.data(forKey: "ai.configuration").flatMap { try? JSONDecoder().decode(ChatConfiguration.self, from: $0) } ?? ChatConfiguration()
-        quickPrompts = defaults.data(forKey: "chat.quickPrompts").flatMap { try? JSONDecoder().decode([ChatQuickPrompt].self, from: $0) } ?? ChatQuickPrompt.defaults
+        let stored = defaults.data(forKey: Self.promptsKey)
+        storedPrompts = stored; quickPrompts = Self.prompts(from: stored)
+        // Prompts edited on another device arrive through iCloud Drive sync while the app is open.
+        promptsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: defaults, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadQuickPrompts() }
+        }
     }
-    /// Saves the prompts that can be shown; an unchanged default list stores nothing.
+    private static let promptsKey = "chat.quickPrompts"
+    private var storedPrompts: Data?
+    private var promptsObserver: NSObjectProtocol?
+    /// Nothing stored, or the empty value a reset leaves, means the default list.
+    private static func prompts(from data: Data?) -> [ChatQuickPrompt] {
+        data.flatMap { try? JSONDecoder().decode([ChatQuickPrompt].self, from: $0) } ?? ChatQuickPrompt.defaults
+    }
+    /// Runs on every defaults change, so it compares the stored bytes before decoding.
+    private func reloadQuickPrompts() {
+        let data = defaults.data(forKey: Self.promptsKey)
+        guard data != storedPrompts else { return }
+        storedPrompts = data
+        let prompts = Self.prompts(from: data)
+        if prompts != quickPrompts { quickPrompts = prompts }
+    }
+    /// Saves the prompts that can be shown. A list that was never edited stores
+    /// nothing; going back to the defaults stores an empty value rather than
+    /// removing it, so that the reset reaches the reader's other devices.
     func saveQuickPrompts(_ prompts: [ChatQuickPrompt]) {
-        let kept = Array(prompts.filter(\.isUsable).map(\.normalized).prefix(ChatQuickPrompt.limit))
-        guard kept != quickPrompts else { return }
-        if kept == ChatQuickPrompt.defaults { defaults.removeObject(forKey: "chat.quickPrompts") }
-        else if let data = try? JSONEncoder().encode(kept) { defaults.set(data, forKey: "chat.quickPrompts") }
-        quickPrompts = kept
+        let kept = ChatQuickPrompt.shown(prompts)
+        let encoded = kept == ChatQuickPrompt.defaults ? Data() : (try? JSONEncoder().encode(kept))
+        guard kept != quickPrompts, let data = encoded else { return }
+        quickPrompts = kept; storedPrompts = data
+        defaults.set(data, forKey: Self.promptsKey)
     }
     func key(for configuration: ChatConfiguration) throws -> String? { try credentials.read(account: configuration.credentialAccount) }
     func save(_ configuration: ChatConfiguration, replacementKey: String?) throws {
