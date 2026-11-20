@@ -3570,6 +3570,68 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " default opacity and position restored")
     }
 
+    /// Compare the two keyboard-dismissal journeys without changing animation
+    /// settings or treating a slow XCTest action as a product failure by itself.
+    @MainActor func testChatCloseKeyboardQuiescenceInPagesAndPDF() {
+        continueAfterFailure = false
+        var reports: [[String: Any]] = []
+        for flow in ["Pages", "PDF"] {
+            for hideFirst in [false, true] {
+                let condition = flow + (hideFirst ? " Hide keyboard then Close" : " direct Close")
+                let began = ProcessInfo.processInfo.systemUptime
+                let app = launchApp()
+                defer { app.terminate() }
+                openSelectionFixture(flow, app: app); waitForBook(app)
+                app.buttons["openReaderChat"].tap()
+                let panel = app.otherElements["readerChatPanel"]
+                XCTAssertTrue(panel.waitForExistence(timeout: 5))
+                let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+                input.tap(); input.typeText("Explain this passage")
+                XCTAssertEqual(input.value as? String, "Explain this passage")
+                let hide = app.buttons["Hide keyboard"], keyboard = app.keyboards.firstMatch
+                XCTAssertTrue(hide.waitForExistence(timeout: 5)); XCTAssertTrue(hide.isHittable)
+                XCTAssertTrue(keyboard.exists && keyboard.frame.intersects(app.frame), "The comparison must start with an on-screen keyboard")
+                capture(condition + " before dismissal", app: app)
+                let keyboardBefore = keyboard.frame
+                var hideSeconds: Double = 0
+                if hideFirst {
+                    let start = ProcessInfo.processInfo.systemUptime
+                    hide.tap()
+                    hideSeconds = ProcessInfo.processInfo.systemUptime - start
+                    let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                        !keyboard.exists || !keyboard.frame.intersects(app.frame)
+                    }, object: nil)
+                    XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
+                    XCTAssertTrue(panel.exists, "Hide keyboard must leave chat open before Close")
+                }
+                let closeStart = ProcessInfo.processInfo.systemUptime
+                app.buttons["closeReaderChat"].tap()
+                let closeSeconds = ProcessInfo.processInfo.systemUptime - closeStart
+                let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: panel)
+                let closeResult = XCTWaiter.wait(for: [closed], timeout: 5)
+                let launcher = app.buttons["openReaderChat"]
+                let launcherExists = launcher.waitForExistence(timeout: 5)
+                let launcherHittable = launcherExists && launcher.isHittable
+                let keyboardVisible = keyboard.exists && keyboard.frame.intersects(app.frame)
+                let report: [String: Any] = ["condition": condition, "flow": flow, "hideKeyboardFirst": hideFirst,
+                    "testID": app.launchEnvironment["LEAF_UI_TEST_ID"] ?? "", "sceneGeometryFixture": true,
+                    "audioStarted": false, "keyboardBefore": ["x": keyboardBefore.minX, "y": keyboardBefore.minY, "width": keyboardBefore.width, "height": keyboardBefore.height],
+                    "hideKeyboardActionSeconds": hideSeconds, "closeActionSeconds": closeSeconds,
+                    "elapsedSeconds": ProcessInfo.processInfo.systemUptime - began,
+                    "closeExpectationCompleted": closeResult == .completed,
+                    "chatPresentAfterClose": panel.exists, "keyboardVisibleAfterClose": keyboardVisible,
+                    "launcherHittableAfterClose": launcherHittable]
+                reports.append(report)
+                let attachment = XCTAttachment(data: try! JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+                attachment.name = condition + " action timing and state"; attachment.lifetime = .keepAlways; add(attachment)
+                capture(condition + " after Close", app: app)
+                XCTAssertEqual(closeResult, .completed)
+                XCTAssertTrue(launcherExists); XCTAssertTrue(launcherHittable)
+                XCTAssertFalse(keyboardVisible, "Closing chat must also remove its keyboard from the screen")
+            }
+        }
+    }
+
     @MainActor func testTranslucentChatLauncherInBothFlowsThemesAndRotation() {
         let app = launchApp()
         app.buttons["featuredBook"].tap()
