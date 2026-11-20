@@ -52,15 +52,17 @@ test('formats whole seconds, minute/hour rollover, zero and runs longer than a d
 
 test('ticks once per second without registry changes and renders any number of slots', async () => {
   const running = {state: 'testing', started_at: start};
-  const ui = await dashboard({A: running, B: running, C: running});
-  assert.equal(ui.elements.get('slot-summary').textContent, '3 devices, one owner per device.');
-  assert.deepEqual(ui.texts(), Array(3).fill('Job runtime 00:01:02'));
+  const ui = await dashboard({A: running, B: running, C: running, D: running, E: {...running, device_name: 'Leaf Slot E', runtime: 'iOS 27.2'}});
+  assert.equal(ui.elements.get('slot-summary').textContent, '5 devices, one owner per device.');
+  assert.deepEqual(ui.elements.get('slots').children.map(article => article.children[0].textContent), ['A', 'B', 'C', 'D', 'E']);
+  assert.match(ui.elements.get('slots').children.at(-1).textContent, /Leaf Slot E · iOS 27\.2/);
+  assert.deepEqual(ui.texts(), Array(5).fill('Job runtime 00:01:02'));
   assert.deepEqual(ui.intervals.map(timer => timer.delay), [1000]);
   ui.advance(1000);
-  assert.deepEqual(ui.texts(), Array(3).fill('Job runtime 00:01:03'));
+  assert.deepEqual(ui.texts(), Array(5).fill('Job runtime 00:01:03'));
   await ui.poll(); // Identical JSON must not stop the independent clock.
   ui.advance(1000);
-  assert.deepEqual(ui.texts(), Array(3).fill('Job runtime 00:01:04'));
+  assert.deepEqual(ui.texts(), Array(5).fill('Job runtime 00:01:04'));
   for (const article of ui.elements.get('slots').children) {
     assert.equal(article.children[1].children.find(child => child.className === 'runtime').attributes['aria-live'], 'off');
   }
@@ -125,4 +127,16 @@ test('registry failure retains last assignment and visibly reports disconnected 
   ui.advance(1000);
   assert.deepEqual(ui.texts(), ['Job runtime 00:01:03']);
   assert.ok(ui.timeouts.every(timer => timer.delay === 2000));
+});
+
+test('counts only waiting requests as queued', async () => {
+  const ui = await dashboard();
+  await ui.poll({slot_requests: [
+    {state: 'granted', purpose: 'Prior grant'},
+    {state: 'released', purpose: 'Completed job'},
+    {state: 'ready', purpose: 'Upcoming job', requested_slot: 'D'},
+  ]});
+  assert.equal(ui.elements.get('queue-count').textContent, '1 waiting');
+  assert.match(ui.elements.get('queue').textContent, /Upcoming job/);
+  assert.doesNotMatch(ui.elements.get('queue').textContent, /Prior grant|Completed job/);
 });
