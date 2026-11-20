@@ -336,7 +336,7 @@ flowchart LR
     Blobs --> Other
 ```
 
-Every read and write goes through `NSFileCoordinator`, so iCloud never sees a half-written file and cloud-only files are downloaded before use. Concurrent edits on two devices are merged record by record; explicit removals win over stale copies. API keys, sign-ins, voice packs, search caches and the floating button's position stay per device. **Stop Syncing** leaves the library on both the device and in iCloud Drive.
+Every read and write goes through `NSFileCoordinator`, so iCloud never sees a half-written file and cloud-only files are downloaded before use. Concurrent edits on two devices are merged record by record; explicit removals win over stale copies. AI settings and quick prompts changed on another device take effect in the open app as soon as they sync. API keys, sign-ins, voice packs, search caches and the floating button's position stay per device. **Stop Syncing** leaves the library on both the device and in iCloud Drive.
 
 ## Storage and privacy
 

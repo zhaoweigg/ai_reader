@@ -102,6 +102,8 @@ struct AISettingsView: View {
         .toolbarBackground(theme.canvas, for: .navigationBar)
         .navigationTitle("AI settings").navigationBarTitleDisplayMode(.inline)
         .onAppear { configuration = settings.configuration; refreshKey() }
+        // Settings synced from another device replace what is shown, unless the reader has unsaved changes here.
+        .onChange(of: settings.configuration) { old, new in if configuration == old { configuration = new; refreshKey() } }
         .onChange(of: configuration.provider) { _, _ in replacementKey = ""; saved = false; refreshKey() }
         .onChange(of: configuration.profile.endpoint) { _, _ in saved = false; refreshKey() }
     }

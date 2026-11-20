@@ -313,6 +313,28 @@ final class ICloudSyncTests: XCTestCase {
         XCTAssertEqual(phone.defaults.string(forKey: "reader.theme"), "night", "An unchanged setting is not overwritten")
     }
 
+    func testAISettingsChangedOnOneDeviceApplyOnTheOtherWithoutARelaunch() async throws {
+        let phone = try device(), tablet = try device()
+        let onPhone = AISettingsStore(defaults: phone.defaults, credentials: NoCredentials())
+        let onTablet = AISettingsStore(defaults: tablet.defaults, credentials: NoCredentials())
+        var changed = onPhone.configuration
+        changed.profile.model = "claude-haiku-4-5"; changed.sharePage = false
+        try onPhone.save(changed, replacementKey: nil)
+        XCTAssertNotEqual(onTablet.configuration, changed)
+        await phone.sync.syncNow(); await tablet.sync.syncNow()
+        XCTAssertEqual(onTablet.configuration, changed, "The open app uses the synced model and sharing choice at once")
+
+        try await Task.sleep(for: .milliseconds(20))
+        var newer = changed
+        newer.profile.maxOutputTokens = 4096; newer.sharePage = true
+        try onTablet.save(newer, replacementKey: nil)
+        await tablet.sync.syncNow(); await phone.sync.syncNow()
+        XCTAssertEqual(onPhone.configuration, newer, "The newer change wins on the device that made the older one")
+
+        tablet.defaults.set(Data("not settings".utf8), forKey: "ai.configuration")
+        XCTAssertEqual(onTablet.configuration, newer, "A value this version cannot read leaves the settings in use alone")
+    }
+
     func testQuickPromptsEditedOnOneDeviceAppearOnTheOtherAndAResetFollows() async throws {
         let phone = try device(), tablet = try device()
         let onPhone = AISettingsStore(defaults: phone.defaults, credentials: NoCredentials())

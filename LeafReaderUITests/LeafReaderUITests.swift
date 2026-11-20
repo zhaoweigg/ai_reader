@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, chatImage: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", contentsLocator: String? = nil, chatRecovery: Bool = false, recoveryAgent: Bool = false, scriptedAgent: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, chatImage: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, otherDeviceSettings: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", contentsLocator: String? = nil, chatRecovery: Bool = false, recoveryAgent: Bool = false, scriptedAgent: Bool = false) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -34,6 +34,7 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_FOLLOW"] = chatFollow ? "1" : "0"
         app.launchEnvironment["LEAF_UI_SCROLL_TOUCH_TRACE"] = scrollTouchTrace ? "1" : "0"
         if syncFixture { app.launchEnvironment["LEAF_UI_SYNC_FIXTURE"] = "1"; app.launchEnvironment["LEAF_UI_EMPTY_LIBRARY"] = "1" }
+        if otherDeviceSettings { app.launchEnvironment["LEAF_UI_SYNC_OTHER_DEVICE"] = "1" }
         app.launchEnvironment["LEAF_UI_DICTATION_MOCK"] = dictation ? "1" : "0"
         if nativeDictation {
             let audio = Bundle(for: LeafReaderUITests.self).url(forResource: "Mandarin", withExtension: "m4a")!
@@ -1016,6 +1017,52 @@ final class LeafReaderUITests: XCTestCase {
             }
             capture("iCloud settings settled \(orientation == .portrait ? "portrait" : "landscape")")
         }
+    }
+
+    /// Another device changes shared settings each time the app is in the background.
+    @MainActor func testOpenAISettingsShowSyncedChangesButKeepUnsavedEdits() {
+        continueAfterFailure = false
+        let app = launchApp(mockChat: false, syncFixture: true, otherDeviceSettings: true)
+        XCTAssertTrue(app.buttons["book-A Field Guide to Slow Days"].waitForExistence(timeout: 15), "The first sync has finished")
+        app.selectTab("Settings")
+        revealSettingsRow(app.buttons["openAISettings"], app: app)
+        app.buttons["openAISettings"].tap()
+        let model = app.textFields["aiModel"], sharing = app.switches["aiSharePage"], prompts = app.buttons["openQuickPrompts"]
+        XCTAssertTrue(model.waitForExistence(timeout: 5))
+        XCTAssertEqual(model.value as? String, "claude-haiku-5-5")
+        func leaveAndReturn() {
+            XCUIDevice.shared.press(.home)
+            _ = app.wait(for: .runningBackground, timeout: 5)
+            app.activate()
+            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        }
+        func waitUntil(_ message: String, _ condition: @escaping () -> Bool) {
+            let met = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [met], timeout: 20), .completed, message)
+        }
+
+        leaveAndReturn()
+        waitUntil("An untouched form shows the model chosen on the other device") { (model.value as? String) == "claude-haiku-4-5" }
+        capture("AI settings show the synced model")
+
+        revealSettingsRow(sharing, app: app)
+        XCTAssertEqual(sharing.value as? String, "1")
+        sharing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(sharing.value as? String, "0")
+        leaveAndReturn()
+        // The row below reads the saved prompts, so it shows when the second change has arrived.
+        // The other device's settings share passages; a replaced form would turn the switch back on.
+        revealSettingsRow(prompts, app: app)
+        waitUntil("The other device's prompts arrive while the form has an unsaved change") { prompts.label.contains("Words") }
+        revealSettingsRow(sharing, app: app)
+        XCTAssertEqual(sharing.value as? String, "0", "The form being edited is not replaced")
+        capture("AI settings keep an unsaved change through a sync")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        revealSettingsRow(app.buttons["openAISettings"], app: app)
+        app.buttons["openAISettings"].tap()
+        XCTAssertTrue(model.waitForExistence(timeout: 5))
+        XCTAssertEqual(model.value as? String, "claude-opus-5-5", "Leaving without saving shows what synced")
     }
 
     @MainActor func testANewDeviceListsASyncedBookAndDownloadsItWhenOpened() {
