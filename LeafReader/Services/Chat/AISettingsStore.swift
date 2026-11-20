@@ -54,17 +54,29 @@ final class AISettingsStore: ObservableObject {
          providerOverride: (any ChatProvider)? = nil, chatGPTOverride: ChatGPTAccountStore? = nil) {
         self.defaults = defaults; self.credentials = credentials; self.providerOverride = providerOverride
         chatGPT = chatGPTOverride ?? ChatGPTAccountStore(defaults: defaults, credentials: credentials)
-        configuration = defaults.data(forKey: "ai.configuration").flatMap { try? JSONDecoder().decode(ChatConfiguration.self, from: $0) } ?? ChatConfiguration()
+        let saved = defaults.data(forKey: Self.configurationKey)
+        storedConfiguration = saved
+        configuration = saved.flatMap { try? JSONDecoder().decode(ChatConfiguration.self, from: $0) } ?? ChatConfiguration()
         let stored = defaults.data(forKey: Self.promptsKey)
         storedPrompts = stored; quickPrompts = Self.prompts(from: stored)
-        // Prompts edited on another device arrive through iCloud Drive sync while the app is open.
-        promptsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: defaults, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reloadQuickPrompts() }
+        // Settings and prompts changed on another device arrive through iCloud Drive sync while the app is open.
+        syncObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: defaults, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadConfiguration(); self?.reloadQuickPrompts() }
         }
     }
-    private static let promptsKey = "chat.quickPrompts"
+    private static let configurationKey = "ai.configuration", promptsKey = "chat.quickPrompts"
+    private var storedConfiguration: Data?
     private var storedPrompts: Data?
-    private var promptsObserver: NSObjectProtocol?
+    private var syncObserver: NSObjectProtocol?
+    /// Runs on every defaults change, so it compares the stored bytes before decoding.
+    /// A value this version cannot read leaves the settings in use as they are.
+    private func reloadConfiguration() {
+        let data = defaults.data(forKey: Self.configurationKey)
+        guard data != storedConfiguration else { return }
+        storedConfiguration = data
+        guard let data, let saved = try? JSONDecoder().decode(ChatConfiguration.self, from: data), saved != configuration else { return }
+        configuration = saved
+    }
     /// Nothing stored, or the empty value a reset leaves, means the default list.
     private static func prompts(from data: Data?) -> [ChatQuickPrompt] {
         data.flatMap { try? JSONDecoder().decode([ChatQuickPrompt].self, from: $0) } ?? ChatQuickPrompt.defaults
@@ -96,7 +108,8 @@ final class AISettingsStore: ObservableObject {
             guard !key.contains(where: { $0.isWhitespace }) else { throw ChatError.configuration("The API key contains spaces or line breaks. Paste the key again.") }
             try credentials.write(key, account: configuration.credentialAccount)
         }
-        defaults.set(data, forKey: "ai.configuration")
+        storedConfiguration = data
+        defaults.set(data, forKey: Self.configurationKey)
         self.configuration = configuration
     }
     func removeKey(for configuration: ChatConfiguration) throws { try credentials.write(nil, account: configuration.credentialAccount); objectWillChange.send() }
