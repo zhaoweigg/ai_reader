@@ -70,15 +70,15 @@
     Object.entries(slots).sort(([a],[b])=>a.localeCompare(b)).forEach(([name,slot])=>{
       const article=node('article',undefined,'slot'),body=node('div',undefined,'slot-body'),top=node('div',undefined,'slot-top');
       article.append(node('div',name,'slot-letter'),body);top.append(node('h2','Slot '+name),node('span',({assigned:'Reserved',reserved:'Reserved',testing:'Testing',finalizing:'Finalizing',completed:'Completed',available:'Available',released:'Released'})[slot.state]||slot.state||'Unknown','status'));
-      const details=node('div',undefined,'details');details.append(node('span',worker(slot.owner_thread,agents)),node('span','iPhone 17 Pro · iOS 26.5'));
+      const details=node('div',undefined,'details');details.append(node('span',worker(slot.owner_thread,agents)),node('span',[slot.device_name,slot.runtime].filter(Boolean).join(' · ')));
       const runtime=node('p',undefined,'runtime'),label=node('span'),value=node('span',undefined,'runtime-value'),note=node('span');
       runtime.setAttribute('aria-live','off');runtime.append(label,value,note);runtimes.push({slot,label,value,note});
       body.append(top,node('p',slot.purpose||'Available for the next worker','purpose'),details,runtime,node('p',slot.device_uuid||'','device'));byId('slots').append(article);
     });
     updateRuntimes();
-    const queue=state.slot_requests||[];byId('queue-count').textContent=queue.length?queue.length+' waiting':'Empty';byId('queue').replaceChildren();
+    const queue=(state.slot_requests||[]).filter(item=>['queued','ready'].includes(item.state||'queued'));byId('queue-count').textContent=queue.length?queue.length+' waiting':'Empty';byId('queue').replaceChildren();
     if(!queue.length){const li=node('li','No workers waiting.','empty');li.style.display='block';byId('queue').append(li);}
-    queue.forEach((item,i)=>{const li=node('li'),content=node('div');content.append(node('p',item.purpose||'Waiting for a simulator','queue-purpose'),node('p',worker(item.requester,agents)+' · '+(item.slot||'Next available slot'),'muted small'));li.append(node('span',String(i+1),'queue-position'),content);byId('queue').append(li);});
+    queue.forEach((item,i)=>{const li=node('li'),content=node('div');content.append(node('p',item.purpose||'Waiting for a simulator','queue-purpose'),node('p',worker(item.owner_thread||item.requester,agents)+' · '+(item.requested_slot||item.slot||'Next available slot'),'muted small'));li.append(node('span',String(i+1),'queue-position'),content);byId('queue').append(li);});
     const date=new Date(state.updated_at);byId('updated').textContent=Number.isNaN(date.getTime())?'Assignment time unavailable':'Assignments updated '+date.toLocaleString('en-US',{timeZone:'America/Los_Angeles',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',second:'2-digit',timeZoneName:'short'});
   }
   async function refresh(){
