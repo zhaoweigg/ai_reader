@@ -65,6 +65,7 @@ enum UITestFlag: String, CaseIterable {
     case scrollTouchTrace = "LEAF_UI_SCROLL_TOUCH_TRACE"
     // Sync
     case syncFixture = "LEAF_UI_SYNC_FIXTURE"
+    case syncOtherDevice = "LEAF_UI_SYNC_OTHER_DEVICE"
     // Voice
     case voiceNotes = "LEAF_UI_VOICE_NOTES"
     // Zlib
