@@ -163,16 +163,19 @@ extension HTTPChatProvider: ToolChatProvider {
                         state.pending[index]?.arguments += part
                         return []
                     case "text_delta":
-                        state.blocks[index]?["text"] = (state.blocks[index]?["text"] as? String ?? "") + (delta["text"] as? String ?? "")
+                        let text = state.blocks[index]?["text"] as? String ?? ""
+                        state.blocks[index]?["text"] = text + (delta["text"] as? String ?? "")
                     case "thinking_delta":
-                        state.blocks[index]?["thinking"] = (state.blocks[index]?["thinking"] as? String ?? "") + (delta["thinking"] as? String ?? "")
+                        let thinking = state.blocks[index]?["thinking"] as? String ?? ""
+                        state.blocks[index]?["thinking"] = thinking + (delta["thinking"] as? String ?? "")
                         return []
                     case "signature_delta":
                         state.blocks[index]?["signature"] = delta["signature"] as? String ?? ""
                         return []
                     case "citations_delta":
                         if let citation = delta["citation"] as? [String: Any] {
-                            state.blocks[index]?["citations"] = (state.blocks[index]?["citations"] as? [Any] ?? []) + [citation]
+                            let citations = state.blocks[index]?["citations"] as? [Any] ?? []
+                            state.blocks[index]?["citations"] = citations + [citation]
                             if citation["type"] as? String == "web_search_result_location",
                                let source = WebSource(url: citation["url"] as? String, title: citation["title"] as? String),
                                !state.sources.contains(where: { $0.url == source.url }) { state.sources.append(source) }
