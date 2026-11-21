@@ -7,13 +7,19 @@ struct ZLibraryView: View {
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var discovery: BestsellerStore
-    private var bestsellersVisible: Bool { discovery.showingBestsellers && catalog.activeQuery.isEmpty }
+    @EnvironmentObject private var novels: WebNovelStore
+    /// Bestsellers and 网文 are public charts shown in place of the catalog grid.
+    private var showingCharts: Bool { discovery.showingBestsellers || novels.showing }
+    private var chartsVisible: Bool { showingCharts && catalog.activeQuery.isEmpty }
     private var section: Binding<DiscoverSection> {
-        Binding(get: { discovery.showingBestsellers ? .bestsellers : catalog.feed == .popular ? .popular : .recommended }, set: { value in
+        Binding(get: { novels.showing ? .webNovels : discovery.showingBestsellers ? .bestsellers : catalog.feed == .popular ? .popular : .recommended }, set: { value in
             searchFocused = false; searchText = ""
-            discovery.showingBestsellers = value == .bestsellers
-            if value == .bestsellers { catalog.show(catalog.feed); Task { await discovery.load() } }
-            else { Task { await catalog.browse(value == .popular ? .popular : .recommended) } }
+            discovery.showingBestsellers = value == .bestsellers; novels.showing = value == .webNovels
+            switch value {
+            case .bestsellers: catalog.show(catalog.feed); Task { await discovery.load() }
+            case .webNovels: catalog.show(catalog.feed); Task { await novels.load() }
+            case .popular, .recommended: Task { await catalog.browse(value == .popular ? .popular : .recommended) }
+            }
         })
     }
     private enum Sheet: String, Identifiable { case connection, website; var id: String { rawValue } }
@@ -32,7 +38,7 @@ struct ZLibraryView: View {
                     if !searchText.isEmpty {
                         Button("Clear search", systemImage: "xmark.circle.fill") {
                             searchText = ""; searchFocused = false
-                            if discovery.showingBestsellers { catalog.show(catalog.feed) }
+                            if showingCharts { catalog.show(catalog.feed) }
                             else { Task { await catalog.search("") } }
                         }.labelStyle(.iconOnly).foregroundStyle(.secondary).accessibilityIdentifier("zlibraryClearSearch")
                     }
@@ -43,7 +49,9 @@ struct ZLibraryView: View {
                 Picker("Browse books", selection: section) {
                     ForEach(DiscoverSection.allCases) { value in Text(value.title).tag(value) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("zlibraryFeedPicker")
-                if bestsellersVisible {
+                if chartsVisible, novels.showing {
+                    WebNovelCharts(close: close)
+                } else if chartsVisible {
                     BestsellerGrid(close: close)
                 } else {
                 if !catalog.activeQuery.isEmpty {
@@ -154,18 +162,21 @@ struct ZLibraryView: View {
                 }
             }.padding(24).frame(maxWidth:900,alignment:.leading).frame(maxWidth:.infinity)
         }
-        .background(theme.canvas).toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle(bestsellersVisible ? "Discover" : "Z-Library").navigationBarTitleDisplayMode(.inline)
+        .background(theme.canvas).toolbarBackground(theme.canvas, for: .navigationBar).navigationTitle(chartsVisible ? "Discover" : "Z-Library").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement:.topBarTrailing) { Button { sheet = .connection } label: { Image(systemName:"person.crop.circle") }.accessibilityLabel("Z-Library connection") } }
         .onAppear { searchText = catalog.activeQuery; catalog.traceCatalogLoad("view appeared") }
         .onChange(of: searchText) { _, value in
             if value.isEmpty && !catalog.activeQuery.isEmpty {
-                if discovery.showingBestsellers { catalog.show(catalog.feed) }
+                if showingCharts { catalog.show(catalog.feed) }
                 else { Task { await catalog.search("") } }
             }
         }
         .onDisappear { catalog.traceCatalogLoad("view disappeared"); catalog.cancelCatalogLoad("view disappeared") }
-        .task { if bestsellersVisible { await discovery.load() } else { await catalog.search(catalog.activeQuery) } }
-        .refreshable { if bestsellersVisible { await discovery.load(force: true) } else { catalog.traceCatalogLoad("pull to refresh"); await catalog.reload() } }
+        .task { if !chartsVisible { await catalog.search(catalog.activeQuery) } else if novels.showing { await novels.load() } else { await discovery.load() } }
+        .refreshable {
+            if !chartsVisible { catalog.traceCatalogLoad("pull to refresh"); await catalog.reload() }
+            else if novels.showing { await novels.load(force: true) } else { await discovery.load(force: true) }
+        }
         #if DEBUG
         .overlay(alignment: .bottomLeading) {
             if UITesting.flag(.zlibThumbnails) { ZLibraryImageDiagnostics() }

@@ -7,6 +7,28 @@ struct BestsellerEdition: Identifiable, Equatable {
     let confidence: Confidence
     var id: String { book.id }
     var canAdd: Bool { book.format != nil }
+    /// Surer matches first, then the formats Leaf reads best.
+    static func preferred(_ lhs: BestsellerEdition, _ rhs: BestsellerEdition) -> Bool {
+        if lhs.confidence.rawValue != rhs.confidence.rawValue { return lhs.confidence.rawValue > rhs.confidence.rawValue }
+        func order(_ b: ZLibraryBook) -> Int { b.format == .epub ? 0 : b.format == .pdf ? 1 : b.format != nil ? 2 : 3 }
+        return order(lhs.book) == order(rhs.book) ? lhs.id < rhs.id : order(lhs.book) < order(rhs.book)
+    }
+}
+
+/// A listed work to look up in the catalog: what to search for and how to judge the results.
+struct CatalogMatchQuery {
+    let id: String
+    let isbn: String?
+    let search: String
+    let rank: @Sendable ([ZLibraryBook]) -> [BestsellerEdition]
+    init(_ book: BestsellerBook) {
+        id = book.id; isbn = book.isbns.first; search = String((book.title + " " + book.author).prefix(500))
+        rank = { BestsellerMatching.rank(book, editions: $0) }
+    }
+    init(_ novel: WebNovel) {
+        id = novel.id; isbn = nil; search = String((novel.title + " " + novel.author).prefix(500))
+        rank = { WebNovelText.rank(novel, editions: $0) }
+    }
 }
 
 enum BestsellerMatchState: Equatable {
@@ -29,10 +51,17 @@ enum BestsellerMatchState: Equatable {
     }
     private var requests: [String: Request] = [:]
     func state(for book: BestsellerBook) -> BestsellerMatchState? { states[book.id] }
+    func state(for novel: WebNovel) -> BestsellerMatchState? { states[novel.id] }
     func invalidate() {
         requests.values.forEach { $0.task.cancel() }; requests.removeAll(); states.removeAll(); context = nil
     }
     func resolve(_ book: BestsellerBook, catalog: ZLibraryStore, force: Bool = false) async {
+        await resolve(CatalogMatchQuery(book), catalog: catalog, force: force)
+    }
+    func resolve(_ novel: WebNovel, catalog: ZLibraryStore, force: Bool = false) async {
+        await resolve(CatalogMatchQuery(novel), catalog: catalog, force: force)
+    }
+    private func resolve(_ book: CatalogMatchQuery, catalog: ZLibraryStore, force: Bool) async {
         if context != catalog.matchingContextID { invalidate(); context = catalog.matchingContextID }
         if !force, case .ready = states[book.id] { return }
         let key = book.id, reader = UUID(), token = catalog.matchingContextID
@@ -44,11 +73,11 @@ enum BestsellerMatchState: Equatable {
                 try await slots.acquire(); defer { slots.release() }
                 try Task.checkCancellation()
                 var rows: [ZLibraryBook] = []
-                if let isbn = book.isbns.first { rows = try await catalog.matchingSearch(isbn) }
-                var ranked = Self.rank(book, editions: rows)
+                if let isbn = book.isbn { rows = try await catalog.matchingSearch(isbn) }
+                var ranked = book.rank(rows)
                 if ranked.isEmpty {
-                    rows += try await catalog.matchingSearch(String((book.title + " " + book.author).prefix(500)))
-                    ranked = Self.rank(book, editions: rows)
+                    rows += try await catalog.matchingSearch(book.search)
+                    ranked = book.rank(rows)
                 }
                 // Sparse search entries still use the existing selected-edition loader.
                 // A failed detail lookup remains a candidate to inspect/retry, never a quick Add.
@@ -56,7 +85,7 @@ enum BestsellerMatchState: Equatable {
                 for candidate in ranked.prefix(15) {
                     try Task.checkCancellation()
                     if candidate.book.fileExtension.isEmpty, let full = try? await catalog.details(candidate.book) {
-                        result.append(contentsOf: Self.rank(book, editions: [full]))
+                        result.append(contentsOf: book.rank([full]))
                     } else { result.append(candidate) }
                 }
                 return result
@@ -98,10 +127,6 @@ enum BestsellerMatchState: Equatable {
             let relatedAuthor = candidateAuthor.isEmpty || (a.count >= 2 && (a.isSubset(of: b) || b.count >= 2 && b.isSubset(of: a)))
             guard exactISBN || sameTitle && (sameAuthor || relatedAuthor) else { return nil }
             return BestsellerEdition(book: book, confidence: exactISBN ? .isbn : sameAuthor && fullTitle ? .titleAndAuthor : .possible)
-        }.sorted {
-            if $0.confidence.rawValue != $1.confidence.rawValue { return $0.confidence.rawValue > $1.confidence.rawValue }
-            func order(_ b: ZLibraryBook) -> Int { b.format == .epub ? 0 : b.format == .pdf ? 1 : b.format != nil ? 2 : 3 }
-            return order($0.book) == order($1.book) ? $0.id < $1.id : order($0.book) < order($1.book)
-        }
+        }.sorted(by: BestsellerEdition.preferred)
     }
 }

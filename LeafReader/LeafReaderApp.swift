@@ -7,6 +7,7 @@ struct LeafReaderApp: App {
     @StateObject private var aiSettings: AISettingsStore
     @StateObject private var catalog: ZLibraryStore
     @StateObject private var bestsellers: BestsellerStore
+    @StateObject private var webNovels: WebNovelStore
     @StateObject private var agentTraces: AgentTraceStore
     @StateObject private var sync: ICloudSync
     private let readingDefaults: UserDefaults
@@ -22,6 +23,7 @@ struct LeafReaderApp: App {
         var catalogDiscovery = true
         var bestsellerService: (any BestsellerServing)?
         var bestsellerShelf = true
+        var webNovelService: (any WebNovelServing)?
         var syncFolder: URL?
         #if DEBUG
         if let id = UITesting.testID {
@@ -44,6 +46,7 @@ struct LeafReaderApp: App {
             catalogDiscovery = UITesting.flag(.zlibMock) && UITesting.flag(.zlibShelf)
             bestsellerShelf = UITesting.flag(.bestsellersMock)
             if bestsellerShelf { bestsellerService = UITestBestsellerClient(); catalogClient = UITestZLibraryClient() }
+            if UITesting.flag(.webNovelsMock) { webNovelService = UITestWebNovelClient(); catalogClient = UITestZLibraryClient() }
             if UITesting.flag(.zlibMock) {
                 catalogClient = UITestZLibraryClient()
                 if UITesting.flag(.zlibWebsiteFixture) {
@@ -70,7 +73,7 @@ struct LeafReaderApp: App {
         var catalogCredentials = chatCredentials
         catalogCredentials.service += ".zlibrary"
         #if DEBUG
-        if UITesting.flag(.bestsellersMock), !UITesting.flag(.bestsellersDisconnected) {
+        if UITesting.flag(.bestsellersMock) || UITesting.flag(.webNovelsMock), !UITesting.flag(.bestsellersDisconnected) {
             let value = ZLibrarySession(userID: "bestseller-preview", userKey: "fixture-only")
             try? catalogCredentials.write(String(decoding: JSONEncoder().encode(value), as: UTF8.self), account: defaults.string(forKey: "zlibrary.origin") ?? "https://z-library.sk")
         }
@@ -79,6 +82,7 @@ struct LeafReaderApp: App {
         var bestsellerCredentials = chatCredentials; bestsellerCredentials.service += ".nytbooks"
         _bestsellers = StateObject(wrappedValue: BestsellerStore(defaults: defaults, credentials: bestsellerCredentials,
             service: bestsellerService ?? BestsellerFeedClient(), allowsAutomaticShelf: bestsellerShelf))
+        _webNovels = StateObject(wrappedValue: WebNovelStore(defaults: defaults, service: webNovelService ?? QidianChartClient()))
         readingDefaults = defaults
         if root == nil, let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             Task.detached(priority: .utility) { try? RetiredVoicePackCleanup.removeDownloadedPack(applicationSupport: support) }
@@ -99,7 +103,7 @@ struct LeafReaderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(bestsellers).environmentObject(bestsellers.matching).environmentObject(agentTraces).environmentObject(sync).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
+            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(bestsellers).environmentObject(bestsellers.matching).environmentObject(webNovels).environmentObject(agentTraces).environmentObject(sync).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
                 #if DEBUG
                 .background(UITestSceneGeometryBridge())
                 .background(UITestScrollTouchProbe())
@@ -121,6 +125,7 @@ struct AppView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var bestsellers: BestsellerStore
+    @EnvironmentObject private var webNovels: WebNovelStore
     @EnvironmentObject private var sync: ICloudSync
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = AppTab.library
@@ -133,16 +138,16 @@ struct AppView: View {
     var body: some View {
         TabView(selection: $tab) {
             LibraryView(onImport: { importing = true }, onOpen: { open($0) },
-                        onDiscover: { bestsellers.showingBestsellers = false; catalog.show($0); tab = .discover },
-                        onSearchCatalog: { bestsellers.showingBestsellers = false; catalog.show(query: $0); tab = .discover },
-                        onBestsellers: { bestsellers.showingBestsellers = true; catalog.show(catalog.feed); tab = .discover })
+                        onDiscover: { showCharts(bestsellers: false); catalog.show($0); tab = .discover },
+                        onSearchCatalog: { showCharts(bestsellers: false); catalog.show(query: $0); tab = .discover },
+                        onBestsellers: { showCharts(bestsellers: true); catalog.show(catalog.feed); tab = .discover })
                 .tabItem { Label("Library", systemImage: "books.vertical") }.tag(AppTab.library)
             NavigationStack {
                 // Returning to the library also leaves the details of an added book.
                 ZLibraryView(close: { tab = .library; discoverStack = UUID() })
             }.id(discoverStack)
                 .modifier(TabChatHost(chat: discoverChat, finishMovingIdentifier: "finishMovingDiscoverChatButton",
-                                      screen: { ChatScreen.discover(catalog, library: library, bestsellers: bestsellers) }))
+                                      screen: { ChatScreen.discover(catalog, library: library, bestsellers: bestsellers, webNovels: webNovels) }))
                 .tabItem { Label("Discover", systemImage: "safari") }.tag(AppTab.discover)
             BookmarksView(onOpen: { id, locator in open(id, locator: locator) })
                 .tabItem { Label("Bookmarks", systemImage: "bookmark") }.tag(AppTab.bookmarks)
@@ -174,6 +179,8 @@ struct AppView: View {
         .toolbarBackground(theme.canvas, for: .tabBar)
     }
     /// A book synced from iCloud may not be on this device yet; download it first.
+    /// Leaving Library for the catalog or the bestseller lists takes Discover off the 网文 section.
+    private func showCharts(bestsellers show: Bool) { bestsellers.showingBestsellers = show; webNovels.showing = false }
     private func open(_ id: UUID, locator: String? = nil) {
         guard let book = library.book(id), !library.isDownloaded(book), sync.isConnected else {
             destination = ReadingDestination(id: id, locator: locator); return

@@ -90,6 +90,7 @@ struct LibraryChatOverlay: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var bestsellers: BestsellerStore
+    @EnvironmentObject private var webNovels: WebNovelStore
     @State private var panel: Panel?
     private enum Panel: String, Identifiable { case settings, button; var id: String { rawValue } }
 
@@ -98,7 +99,7 @@ struct LibraryChatOverlay: View {
             context: book == nil ? .general : .libraryBook, onChooseConversation: onChoose,
             onClose: onClose, onSettings: { session.stop(); panel = .settings }, onButtonSettings: { panel = .button },
             onSend: {
-                session.send(settings: settings, missingContextNotice: nil, app: ChatAppData(catalog: catalog, bestsellers: bestsellers, library: library), screen: screen?()) {
+                session.send(settings: settings, missingContextNotice: nil, app: ChatAppData(catalog: catalog, bestsellers: bestsellers, webNovels: webNovels, library: library), screen: screen?()) {
                     // A quoted draft already has its own snapshot. Otherwise only
                     // the selected book's metadata is sent, never an unseen passage.
                     book.map { ReadingChatContext(title: $0.title, author: $0.author, chapter: "", text: "", source: "library_metadata", locator: "") }
@@ -172,13 +173,40 @@ extension ChatScreen {
     // MARK: Discover
 
     /// Discover's books as its grid shows them, row by row from the top left.
-    @MainActor static func discover(_ catalog: ZLibraryStore, library: LibraryStore, bestsellers: BestsellerStore? = nil) -> ChatScreen {
+    /// A 起点 chart as Ask Leaf reads it, from the screen or from its own tool.
+    @MainActor static func webNovelChart(_ list: WebNovelList, library: LibraryStore, limit: Int, synopsis: Int) -> [String: Any] {
+        var chart: [String: Any] = [
+            "source": "起点中文网 (Qidian)", "chart": list.selection.caption, "ranked_by": list.selection.chart.meaning,
+            "retrieved": list.fetchedAt.formatted(date: .abbreviated, time: .shortened), "total_items": list.books.count,
+            "note": "Many of these books are still being serialized.",
+            "items": list.books.prefix(limit).map { book -> [String: Any] in
+                var item: [String: Any] = ["rank": book.rank, "title": book.title, "author": book.author, "category": book.category, "length": book.length]
+                if !book.figure.isEmpty { item["count"] = book.figure }
+                if synopsis > 0, !book.summary.isEmpty { item["synopsis"] = String(book.summary.prefix(synopsis)) }
+                if library.books.contains(where: { WebNovelText.same($0, as: book) }) { item["in_library"] = true }
+                return item
+            }]
+        if !list.published.isEmpty { chart["month"] = list.published }
+        return chart
+    }
+    @MainActor static func discover(_ catalog: ZLibraryStore, library: LibraryStore, bestsellers: BestsellerStore? = nil, webNovels: WebNovelStore? = nil) -> ChatScreen {
         ChatScreen(name: "Discover", view: { limit, _ in
             if let search = bestsellers?.catalogSearch, search.generation == catalog.matchingContextID, catalog.viewingBook == nil {
                 var view = catalogView(search.books, query: search.query, feed: catalog.feed, order: .bestMatch,
                     status: search.status, canLoadMore: false, owned: Set(library.books.compactMap(\.catalogSource)), limit: limit)
                 view["list"] = "Search results"
                 view["layout"] = "vertical list of editions; ranks run from top to bottom"
+                return view
+            }
+            if let webNovels, webNovels.showing, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
+                var view: [String: Any] = ["screen": "Discover", "list": "网文 (Chinese web novels)", "layout": "vertical list; ranks run from top to bottom"]
+                if let list = webNovels.selected { view.merge(webNovelChart(list, library: library, limit: limit, synopsis: 120)) { current, _ in current } }
+                else { view["chart"] = webNovels.selection.caption; view["total_items"] = 0; view["items"] = [[String: Any]]() }
+                if let book = webNovels.viewingBook {
+                    view["open_book"] = ["title": book.title, "author": book.author, "category": book.category, "length": book.length, "synopsis": book.summary]
+                    view["open_book_note"] = "The reader is on this web novel's details page; this book means open_book."
+                }
+                if webNovels.isLoading { view["status"] = "Loading the chart…" } else if let error = webNovels.error { view["status"] = error }
                 return view
             }
             if let bestsellers, bestsellers.showingBestsellers, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
@@ -202,6 +230,11 @@ extension ChatScreen {
                 var item = catalogItem(book, rank: rank, owned: library.books.contains { $0.catalogSource == book.sourceID })
                 item["description"] = book.summary ?? ""
                 return item
+            }
+            if let webNovels, webNovels.showing, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
+                guard let book = webNovels.books.first(where: { $0.rank == rank }) else { return nil }
+                return ["rank": rank, "title": book.title, "author": book.author, "category": book.category, "subcategory": book.subcategory,
+                        "length": book.length, "count": book.figure, "synopsis": book.summary, "source": "起点中文网", "chart": webNovels.selection.caption]
             }
             if let bestsellers, bestsellers.showingBestsellers, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
                 guard let book = bestsellers.books.first(where: { $0.rank == rank }) else { return nil }

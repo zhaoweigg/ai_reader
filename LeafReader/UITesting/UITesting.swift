@@ -68,6 +68,9 @@ enum UITestFlag: String, CaseIterable {
     case syncOtherDevice = "LEAF_UI_SYNC_OTHER_DEVICE"
     // Voice
     case voiceNotes = "LEAF_UI_VOICE_NOTES"
+    // Web novels
+    case webNovelsFeedFailure = "LEAF_UI_WEB_NOVELS_FEED_FAILURE"
+    case webNovelsMock = "LEAF_UI_WEB_NOVELS_MOCK"
     // Zlib
     case zlibAsyncDetails = "LEAF_UI_ZLIB_ASYNC_DETAILS"
     case zlibFeedFailure = "LEAF_UI_ZLIB_FEED_FAILURE"

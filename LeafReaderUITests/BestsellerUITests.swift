@@ -1,7 +1,8 @@
 import XCTest
 
 final class BestsellerUITests: XCTestCase {
-    @MainActor private func launch(_ flags: [String] = [], agent: Bool = false, catalogFlags: [String] = [], emptyLibrary: Bool = true) -> XCUIApplication {
+    @MainActor private func launch(_ flags: [String] = [], agent: Bool = false, catalogFlags: [String] = [], emptyLibrary: Bool = true,
+                                   webNovels: Bool = false, webNovelFeedFailure: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
@@ -11,6 +12,12 @@ final class BestsellerUITests: XCTestCase {
         for flag in catalogFlags { app.launchEnvironment["LEAF_UI_ZLIB_" + flag] = "1" }
         if !emptyLibrary { app.launchEnvironment.removeValue(forKey: "LEAF_UI_EMPTY_LIBRARY") }
         if agent { app.launchEnvironment["LEAF_UI_CHAT_AGENT"] = "1" }
+        if webNovels {
+            // The 网文 fixture brings its own catalog editions in place of the bestseller ones.
+            app.launchEnvironment.removeValue(forKey: "LEAF_UI_BESTSELLERS_MOCK"); app.launchEnvironment.removeValue(forKey: "LEAF_UI_ZLIB_SHELF")
+            app.launchEnvironment["LEAF_UI_WEB_NOVELS_MOCK"] = "1"
+            if webNovelFeedFailure { app.launchEnvironment["LEAF_UI_WEB_NOVELS_FEED_FAILURE"] = "1" }
+        }
         app.launch(); registerSceneGeometryCleanup(app: app); setReaderOrientation(.portrait, app: app)
         addTeardownBlock { @MainActor in app.terminate() }
         return app
@@ -22,10 +29,15 @@ final class BestsellerUITests: XCTestCase {
             if element.exists {
                 let frame = element.frame, viewport = app.leafContentViewport
                 let visible = frame.intersection(viewport)
+                // leafTapVisible aims at the middle of what is inside the window, so that
+                // point has to be clear of the tab bar too, not just a strip of the control.
+                let aim = frame.intersection(app.frame.insetBy(dx: 2, dy: 2))
                 if frame.width > 1 && frame.height > 1 && !visible.isNull,
-                   visible.width + 0.5 >= min(24, frame.width), visible.height + 0.5 >= min(24, frame.height) { return }
+                   visible.width + 0.5 >= min(24, frame.width), visible.height + 0.5 >= min(24, frame.height),
+                   !aim.isNull, viewport.contains(CGPoint(x: aim.midX, y: aim.midY)) { return }
                 let scroll = app.scrollViews.containing(.any, identifier: element.identifier).firstMatch
-                app.leafDragContent(up: frame.maxY > viewport.minY, in: scroll)
+                // Bring up what sits low or behind the tab bar; bring down what is behind the navigation bar.
+                app.leafDragContent(up: aim.isNull ? frame.maxY > viewport.minY : aim.midY >= viewport.minY, in: scroll)
             } else { app.leafDragContent(up: true) }
         }
         XCTContext.runActivity(named: "Unreachable discovery control") { activity in
@@ -140,7 +152,7 @@ final class BestsellerUITests: XCTestCase {
         app.buttons["zlibraryClearSearch"].leafTapVisible(in: app)
         XCTAssertTrue(app.buttons["bestsellerBook-nyt-nonfiction-1"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.segmentedControls["bestsellerSourcePicker"].buttons["New York Times"].isSelected)
-        app.segmentedControls["zlibraryFeedPicker"].buttons["Recommended"].leafTapVisible(in: app)
+        app.segmentedControls["zlibraryFeedPicker"].buttons["For you"].leafTapVisible(in: app)
         XCTAssertTrue(app.staticTexts["Recommended"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["catalogBook-best-nonfiction1"].waitForExistence(timeout: 10))
         app.segmentedControls["zlibraryFeedPicker"].buttons["Bestsellers"].leafTapVisible(in: app)
@@ -265,6 +277,129 @@ final class BestsellerUITests: XCTestCase {
         let answer = app.textViews.matching(NSPredicate(format: "identifier == 'chatReply' AND label BEGINSWITH %@", prefix)).firstMatch
         XCTAssertTrue(answer.waitForExistence(timeout: 15))
     }
+    // MARK: 网文
+
+    @MainActor private func openWebNovels(_ app: XCUIApplication) {
+        app.tabBars.buttons["Discover"].leafTapVisible(in: app)
+        XCTAssertTrue(app.tabBars.buttons["Discover"].isSelected)
+        let picker = app.segmentedControls["zlibraryFeedPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 8))
+        for title in ["Popular", "For you", "Bestsellers", "网文"] { XCTAssertTrue(picker.buttons[title].exists, "\(title) segment") }
+        picker.buttons["网文"].leafTapVisible(in: app)
+        XCTAssertTrue(app.staticTexts["webNovelsHeading"].waitForExistence(timeout: 8))
+        XCTAssertTrue(picker.buttons["网文"].isSelected)
+    }
+    @MainActor private func webNovelRow(_ rank: Int, has text: String, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let row = app.buttons["webNovelRow-\(rank)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), file: file, line: line)
+        expectation(for: NSPredicate(format: "label CONTAINS %@", text), evaluatedWith: row); waitForExpectations(timeout: 10)
+    }
+    /// The floating Ask Leaf button rests over the right edge, where each row's action is.
+    /// Scroll the row out from under it, as a reader would, before tapping the action.
+    @MainActor private func tapClearOfChatButton(_ element: XCUIElement, app: XCUIApplication) {
+        reveal(element, app: app)
+        let chat = app.buttons["openLibraryChat"], origin = app.coordinate(withNormalizedOffset: .zero)
+        for _ in 0..<4 where chat.exists && element.frame.intersects(chat.frame.insetBy(dx: -36, dy: -36)) {
+            let start = origin.withOffset(CGVector(dx: 90, dy: app.frame.midY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -150)), withVelocity: .slow, thenHoldForDuration: 0.15)
+        }
+        XCTAssertFalse(chat.exists && element.frame.intersects(chat.frame), "\(element.identifier) is still under the chat button")
+        element.leafTapVisible(in: app)
+    }
+    @MainActor func testWebNovelChartListsRowsWithSynopsisAndSwitchesChartPeriodAndCategory() {
+        let app = launch(webNovels: true); openWebNovels(app)
+        webNovelRow(1, has: "星海拾荒者, 青柠茶 · 科幻 · 128.5万字", app: app); webNovelRow(2, has: "长夜书局", app: app)
+        XCTAssertEqual(app.staticTexts["webNovelListDate"].label, "2026年11月")
+        // One book per row, the full width of the list; the row reads out its count and synopsis.
+        let first = app.buttons["webNovelRow-1"].frame, second = app.buttons["webNovelRow-2"].frame, window = app.windows.firstMatch.frame
+        XCTAssertLessThanOrEqual(first.maxY, second.minY); XCTAssertEqual(first.minX, second.minX, accuracy: 1)
+        XCTAssertGreaterThan(first.width, window.width * 0.7)
+        webNovelRow(1, has: "6.0万月票, 废土边缘的拾荒少年", app: app)
+        XCTAssertFalse(app.segmentedControls["webNovelPeriodPicker"].exists, "only 推荐票榜 has periods")
+        capture("网文 月票榜 rows with synopsis portrait")
+
+        app.segmentedControls["webNovelChartPicker"].buttons["推荐票"].leafTapVisible(in: app)
+        webNovelRow(1, has: "机械与花", app: app)
+        let period = app.segmentedControls["webNovelPeriodPicker"]; XCTAssertTrue(period.waitForExistence(timeout: 5))
+        period.buttons["总榜"].leafTapVisible(in: app)
+        webNovelRow(1, has: "都市烟火录", app: app)
+        XCTAssertTrue(app.staticTexts["webNovelListDate"].label.hasPrefix("Retrieved"))
+        app.buttons["webNovelCategory"].leafTapVisible(in: app)
+        let science = app.buttons["科幻"]; XCTAssertTrue(science.waitForExistence(timeout: 5)); science.tap()
+        webNovelRow(1, has: "星海拾荒者", app: app); webNovelRow(2, has: "机械与花", app: app)
+        XCTAssertFalse(app.buttons["webNovelRow-3"].exists)
+        XCTAssertTrue(app.buttons["webNovelCategory"].label.contains("科幻"))
+        capture("网文 推荐票榜 总榜 科幻")
+
+        // The chart, period and category are still chosen after leaving for another section.
+        app.segmentedControls["zlibraryFeedPicker"].buttons["Bestsellers"].leafTapVisible(in: app)
+        XCTAssertTrue(app.staticTexts["bestsellersHeading"].waitForExistence(timeout: 8))
+        app.segmentedControls["zlibraryFeedPicker"].buttons["网文"].leafTapVisible(in: app)
+        webNovelRow(1, has: "星海拾荒者", app: app)
+        XCTAssertTrue(app.segmentedControls["webNovelChartPicker"].buttons["推荐票"].isSelected)
+    }
+    @MainActor func testWebNovelRowsAddChooseOrFindByTheirCatalogMatch() {
+        let app = launch(webNovels: true); openWebNovels(app)
+        // An upload titled 《…》（精校版）作者：… is the same book and can be added at once.
+        let add = app.buttons["webNovelAdd-1"]; waitEnabled(add); add.leafTapVisible(in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["webNovelOwned-1"].firstMatch.waitForExistence(timeout: 15))
+        capture("网文 row added to the library")
+        // A sequel beside the book itself has to be chosen by the reader.
+        let choose = app.buttons["webNovelChoose-2"]; reveal(choose, app: app); XCTAssertEqual(choose.label, "Choose"); tapClearOfChatButton(choose, app: app)
+        XCTAssertTrue(app.staticTexts["webNovelDetailTitle"].waitForExistence(timeout: 8))
+        XCTAssertEqual(app.staticTexts["webNovelDetailTitle"].label, "长夜书局")
+        XCTAssertEqual(app.staticTexts["webNovelRanking"].label, "#2 · 月票榜 · 全站 · 5.1万月票")
+        let sequel = app.buttons["bestsellerEdition-novel-900000002-2"]; reveal(sequel, app: app)
+        XCTAssertTrue(app.buttons["bestsellerEdition-novel-900000002"].exists)
+        XCTAssertTrue(app.staticTexts["Confirm this is the right book"].exists); XCTAssertFalse(app.buttons["bestsellerDetailAdd"].exists)
+        capture("网文 book page with the book and its sequel to choose from")
+        app.navigationBars.buttons.firstMatch.leafTapVisible(in: app)
+        // Nothing in the catalog: the row offers a search instead.
+        let find = app.buttons["webNovelChoose-3"]; reveal(find, app: app); XCTAssertEqual(find.label, "Find"); tapClearOfChatButton(find, app: app)
+        XCTAssertTrue(app.staticTexts["webNovelDetailTitle"].waitForExistence(timeout: 8))
+        let search = app.buttons["bestsellerSearchCatalog"]; reveal(search, app: app)
+        XCTAssertTrue(app.staticTexts["No matching edition found yet."].exists)
+        app.navigationBars.buttons.firstMatch.leafTapVisible(in: app)
+        // The added book is recognised on its own page and opens from the library.
+        let row = app.buttons["webNovelRow-1"]; reveal(row, app: app); row.leafTapVisible(in: app)
+        let view = app.buttons["bestsellerViewLibrary"]; XCTAssertTrue(view.waitForExistence(timeout: 8)); view.leafTapVisible(in: app)
+        XCTAssertTrue(app.tabBars.buttons["Library"].isSelected)
+        let book = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'book-' AND identifier CONTAINS %@", "星海拾荒者")).firstMatch
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+    }
+    @MainActor func testWebNovelChartFailureIsReadableAndTryAgainLoadsIt() {
+        let app = launch(webNovels: true, webNovelFeedFailure: true); openWebNovels(app)
+        let error = app.staticTexts["webNovelFeedError"]; XCTAssertTrue(error.waitForExistence(timeout: 10))
+        XCTAssertTrue(error.label.contains("could not be loaded")); XCTAssertFalse(app.buttons["webNovelRow-1"].exists)
+        capture("网文 chart could not be loaded")
+        app.buttons["Try again"].leafTapVisible(in: app)
+        webNovelRow(1, has: "星海拾荒者", app: app); XCTAssertFalse(error.exists)
+    }
+    @MainActor func testWebNovelRowsInNightPortraitAndLandscape() {
+        let app = launch(webNovels: true); app.tabBars.buttons["Settings"].leafTapVisible(in: app)
+        XCTAssertTrue(app.tabBars.buttons["Settings"].isSelected)
+        app.buttons["Night theme"].leafTapVisible(in: app); openWebNovels(app)
+        webNovelRow(1, has: "星海拾荒者", app: app); capture("Night 网文 rows portrait")
+        setReaderOrientation(.landscapeLeft, app: app)
+        webNovelRow(1, has: "星海拾荒者", app: app); capture("Night 网文 rows landscape")
+        let row = app.buttons["webNovelRow-1"]; reveal(row, app: app); row.leafTapVisible(in: app)
+        XCTAssertTrue(app.staticTexts["webNovelSynopsis"].waitForExistence(timeout: 8)); capture("Night 网文 book page landscape")
+        setReaderOrientation(.portrait, app: app); capture("Night 网文 book page portrait")
+    }
+    @MainActor func testAskLeafReadsTheWebNovelChartAndTheOpenBook() {
+        let app = launch(agent: true, webNovels: true); openWebNovels(app)
+        webNovelRow(1, has: "星海拾荒者", app: app)
+        app.buttons["openLibraryChat"].leafTapVisible(in: app)
+        ask("Which of these should I read?", prefix: "Screen reply: 网文 (Chinese web novels) · 1. 星海拾荒者; 2. 长夜书局; 3. 山河旧梦", app: app)
+        app.buttons["closeReaderChat"].leafTapVisible(in: app)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["closeReaderChat"]); waitForExpectations(timeout: 8)
+        let row = app.buttons["webNovelRow-2"]; reveal(row, app: app); row.leafTapVisible(in: app)
+        XCTAssertTrue(app.staticTexts["webNovelDetailTitle"].waitForExistence(timeout: 8))
+        app.buttons["openLibraryChat"].leafTapVisible(in: app)
+        ask("What is this one about?", prefix: "Screen reply: open book 长夜书局", app: app)
+        capture("Ask Leaf reads the open 网文 book")
+    }
+
     @MainActor func testImportedBestsellerOpensAndRestoresInPages() { readImported(flow: "Pages") }
     @MainActor func testImportedBestsellerOpensAndRestoresInScroll() { readImported(flow: "Scroll") }
     @MainActor private func readImported(flow: String) {
