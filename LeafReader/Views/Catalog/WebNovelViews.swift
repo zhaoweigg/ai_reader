@@ -22,7 +22,7 @@ struct WebNovelCover: View {
     private var placeholder: some View { Image(systemName: "book.closed").font(.title3).foregroundStyle(theme.accent) }
 }
 
-/// Discover's 网文 section: one 起点 chart at a time, a row per book with its synopsis.
+/// Discover's 中文 section: one 起点 or 微信读书 chart at a time, a row per book with its synopsis.
 struct WebNovelCharts: View {
     @EnvironmentObject private var novels: WebNovelStore
     @EnvironmentObject private var matching: BestsellerMatching
@@ -32,31 +32,27 @@ struct WebNovelCharts: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("网文").font(.system(size: 32, design: .serif)).accessibilityIdentifier("webNovelsHeading")
+                Text("中文榜单").font(.system(size: 32, design: .serif)).accessibilityIdentifier("webNovelsHeading")
                 Spacer()
                 Button("Refresh chart", systemImage: "arrow.clockwise") { Task { await novels.load(force: true) } }
                     .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(novels.isLoading)
                     .accessibilityIdentifier("webNovelsRefresh")
             }
+            Picker("Site", selection: $novels.source) {
+                ForEach(WebNovelSource.allCases) { Text($0.title).tag($0) }
+            }.pickerStyle(.segmented).accessibilityIdentifier("webNovelSourcePicker")
             Picker("Chart", selection: $novels.chart) {
-                ForEach(WebNovelChart.allCases) { Text($0.shortTitle).tag($0) }
-            }.pickerStyle(.segmented).accessibilityIdentifier("webNovelChartPicker")
+                ForEach(novels.source.charts) { Text($0.shortTitle).tag($0) }
+            }.pickerStyle(.segmented).id(novels.source).accessibilityIdentifier("webNovelChartPicker")
             HStack(spacing: 12) {
-                Menu {
-                    Picker("Category", selection: $novels.category) {
-                        ForEach(WebNovelCategory.all) { Text($0.title).tag($0.id) }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(WebNovelCategory.titled(novels.category)); Image(systemName: "chevron.down").font(.caption)
-                    }.font(.subheadline.weight(.medium)).foregroundStyle(theme.accent).frame(minHeight: 32).contentShape(Rectangle())
-                }.accessibilityLabel("Category, " + WebNovelCategory.titled(novels.category)).accessibilityIdentifier("webNovelCategory")
+                if novels.source == .qidian { categoryMenu }
+                else { Text(novels.chart == .top ? "TOP 200" : novels.chart.title).font(.caption).foregroundStyle(.secondary) }
                 Spacer(minLength: 0)
                 if let list = novels.selected {
                     Text(list.published.isEmpty ? "Retrieved \(list.fetchedAt.formatted(date: .abbreviated, time: .omitted))" : list.published)
                         .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("webNovelListDate")
                 }
-            }
+            }.frame(minHeight: 32)
             if novels.chart.hasPeriods {
                 Picker("Period", selection: $novels.period) {
                     ForEach(WebNovelPeriod.allCases) { Text($0.title).tag($0) }
@@ -78,16 +74,32 @@ struct WebNovelCharts: View {
                     Divider()
                 }
             }.accessibilityIdentifier("webNovelList")
-            if novels.isLoading && !novels.books.isEmpty { ProgressView("Refreshing chart…").frame(maxWidth: .infinity) }
+            if novels.isLoading && !novels.books.isEmpty { ProgressView("Loading…").frame(maxWidth: .infinity) }
+            else if novels.canLoadMore {
+                Button("Load more") { Task { await novels.loadMore() } }.buttonStyle(.bordered).frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("webNovelLoadMore")
+            }
             if !novels.books.isEmpty {
-                Text("Top \(novels.books.count) of 起点中文网’s \(novels.selection.caption). Books still being written may be missing from Z-Library or incomplete there.")
+                Text("Top \(novels.books.count) of \(novels.source.fullName)’s \(novels.selection.caption)." + (novels.source == .qidian
+                     ? " Books still being written may be missing from Z-Library or incomplete there." : ""))
                     .font(.caption).foregroundStyle(.secondary)
-                Link("Chart on 起点", destination: novels.selection.url).font(.caption).accessibilityIdentifier("webNovelSource")
+                Link("Chart on \(novels.source.title)", destination: novels.selection.pageURL).font(.caption).accessibilityIdentifier("webNovelSource")
             }
         }
         .task(id: novels.selection) { await novels.load() }
         .onChange(of: catalog.matchingContextID) { _, _ in matching.invalidate() }
         .onChange(of: catalog.connected) { _, connected in if !connected { matching.invalidate() } }
+    }
+    private var categoryMenu: some View {
+        Menu {
+            Picker("Category", selection: $novels.category) {
+                ForEach(WebNovelCategory.all) { Text($0.title).tag($0.id) }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(WebNovelCategory.titled(novels.category)); Image(systemName: "chevron.down").font(.caption)
+            }.font(.subheadline.weight(.medium)).foregroundStyle(theme.accent).frame(minHeight: 32).contentShape(Rectangle())
+        }.accessibilityLabel("Category, " + WebNovelCategory.titled(novels.category)).accessibilityIdentifier("webNovelCategory")
     }
 }
 
@@ -187,9 +199,9 @@ struct WebNovelBookView: View {
                 }.font(.caption).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 10) {
                     Text("About this book").font(.headline)
-                    Text(novel.summary.isEmpty ? "起点 lists no synopsis for this book." : novel.summary).font(.subheadline).foregroundStyle(.secondary)
+                    Text(novel.summary.isEmpty ? "\(novel.source.title) lists no synopsis for this book." : novel.summary).font(.subheadline).foregroundStyle(.secondary)
                         .accessibilityIdentifier("webNovelSynopsis")
-                    Link("View on 起点", destination: novel.sourceURL).font(.caption)
+                    Link("View on \(novel.source.title)", destination: novel.sourceURL).font(.caption)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 ListedBookEditions(state: state, close: close, connect: { connection = true }, search: { search = true },
                                    retry: { Task { await matching.resolve(novel, catalog: catalog, force: true) } })

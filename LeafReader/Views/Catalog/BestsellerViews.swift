@@ -9,7 +9,7 @@ enum DiscoverSection: String, CaseIterable, Identifiable {
         case .popular: return "Popular"
         case .recommended: return "For you"
         case .bestsellers: return "Bestsellers"
-        case .webNovels: return "网文"
+        case .webNovels: return "中文"
         }
     }
 }
