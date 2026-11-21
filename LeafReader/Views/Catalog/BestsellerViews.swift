@@ -1,9 +1,17 @@
 import SwiftUI
 
 enum DiscoverSection: String, CaseIterable, Identifiable {
-    case popular, recommended, bestsellers
+    case popular, recommended, bestsellers, webNovels
     var id: String { rawValue }
-    var title: String { self == .popular ? "Most popular" : self == .recommended ? "Recommended" : "Bestsellers" }
+    /// Short enough for four segments on a narrow phone.
+    var title: String {
+        switch self {
+        case .popular: return "Popular"
+        case .recommended: return "For you"
+        case .bestsellers: return "Bestsellers"
+        case .webNovels: return "网文"
+        }
+    }
 }
 
 struct BestsellerCover: View {
@@ -175,54 +183,50 @@ struct BestsellerBookView: View {
                     Text(book.summary.isEmpty ? "No description supplied by the list provider." : book.summary).font(.subheadline).foregroundStyle(.secondary)
                     Link("View on \(book.source == .indie ? "IndieBound" : "The New York Times")", destination: book.sourceURL).font(.caption)
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Z-Library editions").font(.headline)
-                    editions
-                }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(theme.surface, in: .rect(cornerRadius: 16))
-                if let error = catalog.importError { Text(error).font(.subheadline).foregroundStyle(.red).accessibilityIdentifier("bestsellerImportError") }
+                ListedBookEditions(state: state, close: close, connect: { connection = true }, search: { search = true },
+                                   retry: { Task { await matching.resolve(book, catalog: catalog, force: true) } })
             }.padding(24).frame(maxWidth: 520).frame(maxWidth: .infinity)
         }
         .background(theme.canvas).navigationTitle("Book details").navigationBarTitleDisplayMode(.inline)
-        .safeAreaInset(edge: .bottom) {
-            if existing != nil {
-                VStack(spacing: 8) {
-                    Label("Added to your library", systemImage: "checkmark.circle.fill").font(.subheadline).foregroundStyle(theme.accent)
-                    Button("View in library", action: close).buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).accessibilityIdentifier("bestsellerViewLibrary")
-                }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
-            } else if let edition = state?.automatic {
-                VStack(spacing: 8) {
-                    Button { catalog.add(edition, library: library) } label: {
-                        Label(catalog.downloadingID == edition.id ? "Adding to library…" : "Add to library", systemImage: "plus").frame(maxWidth: .infinity)
-                    }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large)
-                        .disabled(catalog.downloadingID != nil || library.isImporting).accessibilityIdentifier("bestsellerDetailAdd")
-                    if catalog.downloadingID == edition.id {
-                        if let progress = catalog.progress { ProgressView(value: progress) } else { ProgressView("Preparing download…") }
-                        Button("Cancel download") { catalog.cancelDownload() }.accessibilityIdentifier("bestsellerCancelDownload")
-                    }
-                    Text("Saved on this device for offline reading").font(.caption).foregroundStyle(.secondary)
-                }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
-            }
-        }
+        .safeAreaInset(edge: .bottom) { ListedBookAddBar(owned: existing != nil, edition: state?.automatic, close: close) }
         .onAppear { discovery.viewingBook = book; catalog.resetImportResult() }
         .onDisappear { if discovery.viewingBook?.id == book.id { discovery.viewingBook = nil } }
         .task(id: "\(catalog.matchingContextID):\(catalog.connected)") { await matching.resolve(book, catalog: catalog) }
         .sheet(isPresented: $connection) { ZLibraryConnectionView() }
-        .navigationDestination(isPresented: $search) { BestsellerCatalogSearch(book: book, close: close) }
+        .navigationDestination(isPresented: $search) { BestsellerCatalogSearch(initialQuery: book.title + " " + book.author, close: close) }
+    }
+}
+
+/// The catalog editions found for a book from a public list, on the bestseller and web-novel pages alike.
+struct ListedBookEditions: View {
+    let state: BestsellerMatchState?
+    let close: () -> Void
+    let connect: () -> Void
+    let search: () -> Void
+    let retry: () -> Void
+    @EnvironmentObject private var catalog: ZLibraryStore
+    @Environment(\.leafTheme) private var theme
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Z-Library editions").font(.headline)
+            editions
+        }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(theme.surface, in: .rect(cornerRadius: 16))
+        if let error = catalog.importError { Text(error).font(.subheadline).foregroundStyle(.red).accessibilityIdentifier("bestsellerImportError") }
     }
     @ViewBuilder private var editions: some View {
         switch state {
         case .loading, .none: ProgressView("Checking matching editions…")
         case .connectionRequired:
             Text("Use your Z-Library connection to find editions and add books.").font(.subheadline).foregroundStyle(.secondary)
-            Button("Connect Z-Library") { connection = true }.buttonStyle(.bordered)
+            Button("Connect Z-Library", action: connect).buttonStyle(.bordered)
         case .failed(let message):
             Text(message).font(.subheadline).foregroundStyle(.secondary)
-            Button("Try again") { Task { await matching.resolve(book, catalog: catalog, force: true) } }
-            Button("Search Z-Library") { search = true }
+            Button("Try again", action: retry)
+            Button("Search Z-Library", action: search)
         case .ready(let choices):
             if choices.isEmpty {
                 Text("No matching edition found yet.").font(.subheadline).foregroundStyle(.secondary)
-                Button("Search Z-Library") { search = true }.accessibilityIdentifier("bestsellerSearchCatalog")
+                Button("Search Z-Library", action: search).accessibilityIdentifier("bestsellerSearchCatalog")
             } else {
                 Text(choices.count > 1 ? "Check the title, author, format, and language before adding." : "Matching edition from your Z-Library connection.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -240,14 +244,45 @@ struct BestsellerBookView: View {
                         }.padding(.vertical, 6)
                     }.accessibilityIdentifier("bestsellerEdition-" + choice.book.remoteID)
                 }
-                Button("Search other editions") { search = true }.font(.caption)
+                Button("Search other editions", action: search).font(.caption)
             }
         }
     }
 }
 
-private struct BestsellerCatalogSearch: View {
-    let book: BestsellerBook
+/// The bar under a listed book's page: add its one sure edition, or go to the copy already in the library.
+struct ListedBookAddBar: View {
+    let owned: Bool
+    let edition: ZLibraryBook?
+    let close: () -> Void
+    @EnvironmentObject private var catalog: ZLibraryStore
+    @EnvironmentObject private var library: LibraryStore
+    @Environment(\.leafTheme) private var theme
+    var body: some View {
+        if owned {
+            VStack(spacing: 8) {
+                Label("Added to your library", systemImage: "checkmark.circle.fill").font(.subheadline).foregroundStyle(theme.accent)
+                Button("View in library", action: close).buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).accessibilityIdentifier("bestsellerViewLibrary")
+            }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
+        } else if let edition {
+            VStack(spacing: 8) {
+                Button { catalog.add(edition, library: library) } label: {
+                    Label(catalog.downloadingID == edition.id ? "Adding to library…" : "Add to library", systemImage: "plus").frame(maxWidth: .infinity)
+                }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large)
+                    .disabled(catalog.downloadingID != nil || library.isImporting).accessibilityIdentifier("bestsellerDetailAdd")
+                if catalog.downloadingID == edition.id {
+                    if let progress = catalog.progress { ProgressView(value: progress) } else { ProgressView("Preparing download…") }
+                    Button("Cancel download") { catalog.cancelDownload() }.accessibilityIdentifier("bestsellerCancelDownload")
+                }
+                Text("Saved on this device for offline reading").font(.caption).foregroundStyle(.secondary)
+            }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
+        }
+    }
+}
+
+/// A catalog search opened from a listed book's page, starting from its title and author.
+struct BestsellerCatalogSearch: View {
+    let initialQuery: String
     let close: () -> Void
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var discovery: BestsellerStore
@@ -297,7 +332,7 @@ private struct BestsellerCatalogSearch: View {
                     hasSearched = false; loading = false; results = []; error = nil
                     searchContext = catalog.matchingContextID
                 }
-                if !hasSearched { if query.isEmpty { query = book.title + " " + book.author }; startSearch() }
+                if !hasSearched { if query.isEmpty { query = initialQuery }; startSearch() }
                 else { publishContext() }
             }
             .onDisappear {

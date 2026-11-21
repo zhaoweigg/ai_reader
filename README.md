@@ -1,6 +1,6 @@
 # Leaf for iOS
 
-A native ebook reader for iPhone and iPad: offline reading of EPUB, PDF and nine other formats, read-aloud with Apple voices, highlights and voice notes, a book catalog and bestseller charts, iCloud Drive sync, and an optional AI reading companion ("Ask Leaf") that works with your own API key or ChatGPT subscription. Built with SwiftUI, WebKit and PDFKit. Requires iOS 17 or later and Xcode 16 or later.
+A native ebook reader for iPhone and iPad: offline reading of EPUB, PDF and nine other formats, read-aloud with Apple voices, highlights and voice notes, a book catalog, bestseller charts and Chinese web-novel charts, iCloud Drive sync, and an optional AI reading companion ("Ask Leaf") that works with your own API key or ChatGPT subscription. Built with SwiftUI, WebKit and PDFKit. Requires iOS 17 or later and Xcode 16 or later.
 
 ```mermaid
 mindmap
@@ -26,6 +26,7 @@ mindmap
     Discover
       Z-Library catalog
       Indie and NYT bestsellers
+      起点 web-novel charts
     Sync
       iCloud Drive folder
       Library, places, notes, chats, settings
@@ -106,7 +107,7 @@ LeafReader/
 │   ├── Library/               LibraryStore, LibraryDisk, cover and metadata extraction
 │   ├── Reader/                ReaderModel, asset handler for leaf-reader://, scroll diagnostics
 │   ├── Chat/                  providers, ReaderChatSession, agent tools, history, retry, dictation
-│   ├── Catalog/               Z-Library client and browser session, bestseller feeds
+│   ├── Catalog/               Z-Library client and browser session, bestseller and web-novel feeds
 │   ├── Speech/                read-aloud session, Apple voice catalog, sentence splitter
 │   ├── Sync/                  ICloudSync, SyncFolder, synced record types
 │   └── VoiceNotes/            recorder and clip files
@@ -232,6 +233,7 @@ Every Ask Leaf chat, in a book or on a tab, offers the same read-only tools. The
 | `get_current_view` · `get_item_details` | the screen the chat floats over, as it is now | Discover, Bookmarks, Library |
 | `get_catalog_feed` · `search_catalog` · `get_catalog_book` | Z-Library popular / recommended lists, search, one book's details | every chat |
 | `get_bestsellers` | Indie or NYT hardcover fiction / nonfiction chart | every chat |
+| `get_web_novel_chart` | a 起点 chart of Chinese web novels, optionally one category | every chat |
 | `list_library` · `search_saved` | your books with progress; bookmarks, highlights and notes | every chat |
 | `search_my_books` | other books' text, each only up to where you stopped | every chat, passage sharing on |
 | `search_conversation` | older messages in this chat | every chat |
@@ -286,7 +288,9 @@ Keys and tokens are stored `WhenUnlockedThisDeviceOnly` and are not synced. Requ
 
 ## Discover
 
-The Discover tab shows Z-Library's **Most popular** and **Recommended** feeds, search with eight sort orders, book details, and a **Bestsellers** section with Indie and New York Times hardcover fiction and nonfiction charts. The Library tab has a cover shelf that opens the same screens.
+The Discover tab has four sections: Z-Library's most popular books (**Popular**), its recommendations for your account (**For you**), **Bestsellers** with Indie and New York Times hardcover fiction and nonfiction charts, and **网文** with 起点中文网's web-novel charts. The catalog sections have search with eight sort orders and book details. The Library tab has a cover shelf that opens the catalog and bestseller screens.
+
+网文 shows one 起点 chart at a time: 月票榜, 畅销榜, 阅读指数榜 or 推荐票榜 (by week, month or all time), for the whole site or one of fourteen categories. Each of the top 20 is a row with its cover, author, category, length, the chart's count and the start of its synopsis. A row offers **Add** when Z-Library has exactly one edition with the same title and author, and **Choose** or **Find** otherwise. Many charted books are still being written, so Z-Library may not have them yet or may have only part.
 
 ```mermaid
 flowchart LR
@@ -306,6 +310,10 @@ flowchart LR
         BStore --> NYT["NYT lists<br/>public relay, no key"]
         NYT -.->|"optional personal key"| NYTAPI["NYT Books API<br/>key in Keychain, sent only to api.nytimes.com"]
         BStore --> Match["BestsellerMatching<br/>finds editions in the catalog"]
+    end
+    subgraph Novels["网文 (public charts)"]
+        NStore["WebNovelStore<br/>6-hour cache, 8 charts"] --> Qidian["起点 mobile chart page<br/>no account"]
+        NStore --> Match
     end
     Client -->|"download ≤100 MB<br/>to a protected temp file"| Import["Library import"]
     Match --> Client

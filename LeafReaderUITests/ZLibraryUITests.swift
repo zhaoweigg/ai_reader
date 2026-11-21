@@ -429,7 +429,8 @@ final class ZLibraryUITests: XCTestCase {
         let picker = app.segmentedControls["zlibraryFeedPicker"]
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
         revealCatalogElement(picker, app: app)
-        picker.buttons[title].leafTapVisible(in: app)
+        // The segments carry short labels; the heading below keeps the feed's full name.
+        picker.buttons[title == "Recommended" ? "For you" : "Popular"].leafTapVisible(in: app)
         expectation(for: NSPredicate(format: "label == %@", title), evaluatedWith: app.staticTexts["zlibraryFeedTitle"])
         waitForExpectations(timeout: 5)
         waitForCatalogLoad(app)

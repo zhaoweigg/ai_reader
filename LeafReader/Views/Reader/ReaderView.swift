@@ -41,6 +41,7 @@ struct ReaderContent: View {
     // Read by Ask Leaf's app-wide tools.
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var bestsellers: BestsellerStore
+    @EnvironmentObject private var webNovels: WebNovelStore
     @State private var bookViewportHeight: CGFloat = 0
     @State private var bookViewportFrame: CGRect = .zero
     @State private var chatFrame: CGRect?
@@ -315,7 +316,7 @@ struct ReaderContent: View {
             chat: chatIsPresented ? chatFrame : audioPlayerFrame)
     }
     private func sendChat() {
-        chat.send(settings: aiSettings, app: ChatAppData(catalog: catalog, bestsellers: bestsellers, library: library, openBook: book.id), agentBook: { context in
+        chat.send(settings: aiSettings, app: ChatAppData(catalog: catalog, bestsellers: bestsellers, webNovels: webNovels, library: library, openBook: book.id), agentBook: { context in
             try await model.readingAgentBook(for: context)
         }, traces: agentTraces) { try await model.readingChatContext() }
     }

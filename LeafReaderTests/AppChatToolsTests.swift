@@ -79,7 +79,8 @@ private final class HeldAppReplyProvider: ToolChatProvider {
         let service = ChartService()
         let bestsellers = BestsellerStore(defaults: defaults(), credentials: credentials(), service: service, allowsAutomaticShelf: false)
         let catalog = ZLibraryStore(defaults: defaults(), credentials: credentials(), client: UITestZLibraryClient(), discoversFromLibrary: false)
-        return (ChatAppData(catalog: catalog, bestsellers: bestsellers, library: library, openBook: open.id), service, open)
+        let novels = WebNovelStore(defaults: defaults(), service: UITestWebNovelClient())
+        return (ChatAppData(catalog: catalog, bestsellers: bestsellers, webNovels: novels, library: library, openBook: open.id), service, open)
     }
 
     func testOtherBooksAreSearchedOnlyUpToWhereTheReaderStopped() async throws {

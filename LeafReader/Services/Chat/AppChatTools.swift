@@ -1,12 +1,13 @@
 import Foundation
 
 /// The parts of Leaf every Ask Leaf chat can read, wherever it was opened: the
-/// catalog, the bestseller lists, the library, saved places and the text of books
+/// catalog, the bestseller lists, the web-novel charts, the library, saved places and the text of books
 /// read so far. Each tool reads its store when it runs, loading what a screen
 /// has not loaded yet, and never changes what that screen shows.
 @MainActor struct ChatAppData {
     let catalog: ZLibraryStore
     let bestsellers: BestsellerStore
+    let webNovels: WebNovelStore
     let library: LibraryStore
     /// The book open in this chat's reader; search_book covers it, so
     /// search_my_books leaves it out.
@@ -38,6 +39,14 @@ extension AgentTool {
                     "source": ["type": "string", "enum": BestsellerSource.allCases.map(\.rawValue), "description": "indie (American Booksellers Association) or nyt (The New York Times). Default: the one the reader last viewed."],
                     "category": ["type": "string", "enum": BestsellerGenre.allCases.map(\.rawValue), "description": "Default: the one the reader last viewed."],
                     "max_items": ["type": "integer", "minimum": 1, "maximum": 30, "description": "Number of books to return (default 15)."]]]),
+        AgentTool(name: "get_web_novel_chart",
+                  description: "Read a current 起点中文网 (Qidian) chart of Chinese web novels with each book's rank, author, category, length and synopsis. Works even if the 网文 screen has not been opened.",
+                  parameters: ["type": "object", "additionalProperties": false, "properties": [
+                    "chart": ["type": "string", "enum": WebNovelChart.allCases.map(\.rawValue),
+                              "description": WebNovelChart.allCases.map { "\($0.rawValue): \($0.title), \($0.meaning)" }.joined(separator: "; ") + ". Default: the one the reader last viewed."],
+                    "category": ["type": "string", "enum": WebNovelCategory.all.map(\.title), "description": "全站 is every category. Default: the one the reader last viewed."],
+                    "period": ["type": "string", "enum": WebNovelPeriod.allCases.map(\.key), "description": "Only for rec. Default: the one the reader last viewed."],
+                    "max_items": ["type": "integer", "minimum": 1, "maximum": 20, "description": "Number of books to return (default 20)."]]]),
         AgentTool(name: "list_library",
                   description: "List the books in the reader's Leaf library with reading progress, status, favorites and counts of bookmarks and highlights.",
                   parameters: ["type": "object", "additionalProperties": false, "properties": [
@@ -88,6 +97,7 @@ extension AgentTool {
         case "search_catalog": return try await searchCatalog(arguments, activity: activity)
         case "get_catalog_book": return try await catalogBook(arguments, activity: activity)
         case "get_bestsellers": return await bestsellers(arguments, activity: activity)
+        case "get_web_novel_chart": return await webNovels(arguments, activity: activity)
         case "list_library": activity?("Looking at your library…"); return listLibrary(arguments)
         case "search_saved": activity?("Looking through your saved places…"); return searchSaved(arguments, sharePassages: sharePassages)
         case "search_my_books":
@@ -193,6 +203,26 @@ extension AgentTool {
             }]
         if let error = store.errors[source] { body["status"] = "Showing the list loaded earlier; refreshing failed: \(error)" }
         return (json(body), "read \(source.title) \(genre.title.lowercased()) bestsellers (\(min(limit, list.books.count)))")
+    }
+
+    // MARK: Web novels
+
+    private func webNovels(_ arguments: [String: Any], activity: ((String) -> Void)?) async -> (output: String, step: String) {
+        let store = data.webNovels
+        let selection = WebNovelSelection(
+            chart: (arguments["chart"] as? String).flatMap(WebNovelChart.init(rawValue:)) ?? store.chart,
+            category: (arguments["category"] as? String).flatMap { title in WebNovelCategory.all.first { $0.title == title }?.id } ?? store.category,
+            period: (arguments["period"] as? String).flatMap { key in WebNovelPeriod.allCases.first { $0.key == key } } ?? store.period)
+        let limit = Self.integer(arguments["max_items"], default: 20, in: 1...20)
+        activity?("Loading 起点’s \(selection.chart.title)…")
+        await store.load(selection)
+        guard let list = store.list(selection) else {
+            let reason = store.errors[selection] ?? "The chart is not available right now."
+            return (json(["error": reason, "source": "起点中文网", "chart": selection.caption]), "\(selection.chart.title) unavailable")
+        }
+        var body = ChatScreen.webNovelChart(list, library: data.library, limit: limit, synopsis: 600)
+        if let error = store.errors[selection] { body["status"] = "Showing the chart loaded earlier; refreshing failed: \(error)" }
+        return (json(body), "read 起点 \(selection.chart.title) (\(min(limit, list.books.count)))")
     }
 
     // MARK: Library and saved places

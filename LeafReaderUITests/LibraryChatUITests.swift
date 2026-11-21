@@ -375,7 +375,7 @@ final class LibraryChatUITests: XCTestCase {
         capture("Discover chat answers from the on-screen list")
 
         // The screen behind the open panel still works, and the next reply reads the list as it is now.
-        app.segmentedControls["zlibraryFeedPicker"].buttons["Recommended"].tap()
+        app.segmentedControls["zlibraryFeedPicker"].buttons["For you"].tap()
         XCTAssertTrue(app.buttons["closeReaderChat"].exists, "Changing the feed keeps Ask Leaf open")
         ask("And this list?", expecting: "Screen reply: Recommended", app: app)
         hideKeyboard(app)
