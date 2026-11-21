@@ -57,6 +57,8 @@ final class ReaderChatSession: ObservableObject {
     /// Set by the chat panel while the reader's finger or momentum moves the history, so
     /// new text waits instead of competing with the scroll for frames.
     var holdsStreamedText = false { didSet { if oldValue && !holdsStreamedText { flushPendingText() } } }
+    /// The reader has slid away from the newest text (set by the panel).
+    var keepsLoadedMessages = false
     static let streamBatchDelay: Duration = .milliseconds(80)
     static let streamHoldDelay: Duration = .milliseconds(1200)
     var canRetry: Bool { !isSending && !hasNewerMessages && messages.last?.isUser == false && messages.last?.state != .complete }
@@ -165,7 +167,10 @@ final class ReaderChatSession: ObservableObject {
     }
     private func refreshLatest() {
         guard let history, pendingMessageIDs.isEmpty else { return }
-        do { apply(try history.page(before: nil, after: nil, limit: 24)) }
+        // A page holds 24 messages, so a finished exchange drops the two oldest. That
+        // waits while the reader is on earlier text: taking rows away above them
+        // would slide what they are reading out from under them.
+        do { apply(try history.page(before: nil, after: nil, limit: keepsLoadedMessages ? max(24, messages.count) : 24)) }
         catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription }
     }
 

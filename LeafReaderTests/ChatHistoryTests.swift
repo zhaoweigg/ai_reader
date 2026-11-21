@@ -386,6 +386,22 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertTrue(provider.requests[1].turns[0].content.contains("为什么？"))
         complete(provider); try await eventually { !restored.isSending }
     }
+    func testAFinishedReplyKeepsTheLoadedPageWhileTheReaderIsOnEarlierText() async throws {
+        let directory = try directory(), store = try ChatHistoryStore(directory: directory, conversation: "book-a")
+        try store.save((0..<40).map { ReaderChatMessage(isUser: $0 % 2 == 0, text: "Message \($0)") }, draft: "Next question")
+        let provider = HistoryProvider(), settings = settings(provider), session = ReaderChatSession(history: store)
+        XCTAssertEqual(session.messages.first?.text, "Message 16")
+        session.keepsLoadedMessages = true
+        session.send(settings: settings) { nil }; try await eventually { !provider.requests.isEmpty }
+        complete(provider); try await eventually { !session.isSending }
+        XCTAssertEqual(session.messages.first?.text, "Message 16", "Rows must not leave from above the text being read")
+        XCTAssertEqual(session.messages.count, 26); XCTAssertTrue(session.hasEarlierMessages)
+        // Following again: the next finished reply brings the page back to its size.
+        session.keepsLoadedMessages = false; session.draft = "Another question"
+        session.send(settings: settings) { nil }; try await eventually { provider.requests.count == 2 }
+        complete(provider); try await eventually { !session.isSending }
+        XCTAssertEqual(session.messages.count, 24); XCTAssertEqual(session.messages.first?.text, "Message 20")
+    }
     func testLargeArchivePagesWithoutDroppingOlderHistoryAndBooksStaySeparate() throws {
         let directory = try directory(), store = try ChatHistoryStore(directory: directory, conversation: "book-a")
         let originals = (0..<1200).map { ReaderChatMessage(isUser: $0 % 2 == 0, text: "Message \($0)") }

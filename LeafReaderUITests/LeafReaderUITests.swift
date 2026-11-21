@@ -4284,16 +4284,20 @@ final class LeafReaderUITests: XCTestCase {
 
         // A slide to earlier text: the question that started this reply is the place to keep.
         ask("Explain then finish B")
+        // Read with the keyboard away, as the history is at its reading height then.
+        if app.buttons["Hide keyboard"].waitForExistence(timeout: 2) { app.buttons["Hide keyboard"].tap() }
         XCTAssertTrue(text("chatReply", containing: "Update B:").waitForExistence(timeout: 10))
         let question = text("chatQuestion", containing: "then finish B")
+        /// The first line of the question is inside the history's viewport.
         func questionInView() -> Bool {
             guard question.exists else { return false }
             let frame = question.frame, viewport = history.frame
-            return frame.height > 10 && frame.minY >= viewport.minY + 2 && frame.maxY <= viewport.maxY - 2
+            return frame.height > 10 && frame.minY >= viewport.minY - 1 && frame.minY <= viewport.maxY - 20
         }
-        for _ in 0..<6 where !questionInView() {
-            let start = history.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-            start.press(forDuration: 0.02, thenDragTo: start.withOffset(CGVector(dx: 0, dy: min(100, history.frame.height * 0.5))),
+        for _ in 0..<8 where !questionInView() {
+            // Each slide is shorter than the viewport, so the question cannot pass through unseen.
+            let start = history.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+            start.press(forDuration: 0.02, thenDragTo: start.withOffset(CGVector(dx: 0, dy: max(24, min(100, history.frame.height - 60)))),
                         withVelocity: .slow, thenHoldForDuration: 0.2)
         }
         XCTAssertTrue(questionInView(), "The question must be in view after sliding to earlier text")

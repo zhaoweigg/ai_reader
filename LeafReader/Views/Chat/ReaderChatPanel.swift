@@ -343,7 +343,9 @@ struct ReaderChatPanel: View {
                         // Streamed text waits while the history is being scrolled, so the
                         // scroll keeps its frames; releasing shows what arrived meanwhile.
                         .onChange(of: scrollFollowing.isScrolling) { _, scrolling in session.holdsStreamedText = scrolling }
-                        .onDisappear { session.holdsStreamedText = false }
+                        .onChange(of: scrollFollowing.followsLatest) { _, follows in session.keepsLoadedMessages = !follows }
+                        .onAppear { session.keepsLoadedMessages = !scrollFollowing.followsLatest }
+                        .onDisappear { session.holdsStreamedText = false; session.keepsLoadedMessages = false }
                         .modifier(ChatHistoryFollowsLatest(following: scrollFollowing.followsLatest, paused: selectedMessage != nil))
                         .onPreferenceChange(ChatHistoryAtBottom.self) { atBottom in
                             if !ChatHistoryInteraction.usesNativeTracking, let atBottom { scrollFollowing.updateAtBottom(atBottom) }
@@ -365,7 +367,7 @@ struct ReaderChatPanel: View {
                             }
                         }
                         .onChange(of: ObjectIdentifier(session)) { _, _ in
-                            scrollFollowing = ChatScrollFollowing()
+                            scrollFollowing = ChatScrollFollowing(); session.keepsLoadedMessages = false
                             if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
                         .onChange(of: inputFocused) { _, focused in
