@@ -293,10 +293,12 @@ final class ReadingAgentTests: XCTestCase {
             return events
         }
         let reason = "HTTP 400 · invalid_request_error"
-        XCTAssertEqual(try await run(), [.webSearchRefused(reason), .text("From the book."), .finished(truncated: false)])
+        let first = try await run()
+        XCTAssertEqual(first, [.webSearchRefused(reason), .text("From the book."), .finished(truncated: false)])
         XCTAssertEqual((transport.bodies[0]["tools"] as? [[String: Any]])?.last?["name"] as? String, "web_search")
         XCTAssertEqual((transport.bodies[1]["tools"] as? [[String: Any]])?.count, AgentTool.all.count, "Book tools stay; only web search goes")
-        XCTAssertEqual(try await run().first, .webSearchRefused(reason), "Later requests skip it and still say why")
+        let second = try await run()
+        XCTAssertEqual(second.first, .webSearchRefused(reason), "Later requests skip it and still say why")
         XCTAssertEqual(transport.bodies.count, 3); XCTAssertEqual((transport.bodies[2]["tools"] as? [[String: Any]])?.count, AgentTool.all.count)
 
         // Claude paused part way through its own searching: the reply goes back as it is,
