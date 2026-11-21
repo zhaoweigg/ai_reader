@@ -563,6 +563,108 @@ final class ChatGPTTests: XCTestCase {
         XCTAssertEqual(events.first, .imageToolRefused(reason), "…and still say why")
         XCTAssertEqual(ChatGPTSubscriptionProvider.refusalReason(Data(#"{"error":"bad\nvalue; DROP"}"#.utf8), status: 422), "HTTP 422 · badvalueDROP")
     }
+    func testSubscriptionOffersWebSearchOnlyWhileTheModelMayStillUseTools() throws {
+        let (store, _) = store()
+        let client = ChatGPTSubscriptionProvider(accounts: store, accountID: "test", model: "available-model")
+        func body(_ request: URLRequest) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+        }
+        func types(_ body: [String: Any]) -> [String] { (body["tools"] as? [[String: Any]] ?? []).compactMap { $0["type"] as? String } }
+        func names(_ body: [String: Any]) -> [String] { (body["tools"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String } }
+        let items = [AgentItem.turn(ChatTurn(role: "user", content: "搜索互联网提供更多简洁"))]
+        let tools = AgentTool.all + [AgentTool.webSearch]
+        let searching = try body(client.makeAgentRequest(system: "S", items: items, tools: tools, allowTools: true, accessToken: "t"))
+        XCTAssertEqual(types(searching), Array(repeating: "function", count: AgentTool.all.count) + ["web_search"])
+        XCTAssertFalse(names(searching).contains(AgentTool.webSearchName), "Web search is ChatGPT's own tool, never a function")
+        XCTAssertEqual(searching["tool_choice"] as? String, "auto"); XCTAssertEqual(searching["parallel_tool_calls"] as? Bool, true)
+        XCTAssertEqual(searching["instructions"] as? String, "S\n\n" + AgentTool.webSearchInstruction)
+        let both = try body(client.makeAgentRequest(system: "S", items: items, tools: tools, allowTools: true, accessToken: "t", images: true))
+        XCTAssertEqual(types(both).suffix(2), ["image_generation", "web_search"])
+        XCTAssertEqual(both["instructions"] as? String, "S\n\n" + ChatGPTSubscriptionProvider.drawingInstruction + "\n\n" + AgentTool.webSearchInstruction)
+        let closing = try body(client.makeAgentRequest(system: "S", items: items, tools: tools, allowTools: false, accessToken: "t"))
+        XCTAssertFalse(types(closing).contains("web_search")); XCTAssertEqual(closing["tool_choice"] as? String, "none")
+        XCTAssertEqual(closing["instructions"] as? String, "S", "No web instruction when search is not offered")
+        let refused = try body(client.makeAgentRequest(system: "S", items: items, tools: tools, allowTools: true, accessToken: "t", webSearch: false))
+        XCTAssertFalse(types(refused).contains("web_search")); XCTAssertEqual(refused["instructions"] as? String, "S")
+        let off = try body(client.makeAgentRequest(system: "S", items: items, tools: AgentTool.all, allowTools: true, accessToken: "t"))
+        XCTAssertFalse(types(off).contains("web_search"), "A chat that turned web search off never offers it")
+        // A reply that came back with its content keeps only the calls for ChatGPT.
+        let call = AgentToolCall(id: "c1", name: "search_book", arguments: "{}")
+        XCTAssertEqual(ChatGPTSubscriptionProvider.input([.providerContent(Data("[]".utf8), text: "x", calls: [call])]).first?["call_id"] as? String, "c1")
+    }
+    func testWebSearchEventsAndCitedPagesStayVisibleInTheAnswer() throws {
+        var state = ChatGPTSubscriptionProvider.ResponseState()
+        func decode(_ json: String) throws -> [AgentEvent] { try ChatGPTSubscriptionProvider.decodeAgent(json, state: &state) }
+        // Troubleshooting: the server's own list of accepted tools, and searches that did not complete.
+        XCTAssertEqual(try decode(#"{"type":"response.created","response":{"model":"gpt-6.1-sol","tools":[{"type":"function"},{"type":"function"},{"type":"web_search"}]}}"#),
+                       [.diagnostic(title: "Server accepted tools", detail: "model gpt-6.1-sol · function×2, web_search")])
+        XCTAssertEqual(try decode(#"{"type":"response.created","response":{"tools":[{"type":"function"}]}}"#), [], "Nothing to note without hosted tools")
+        XCTAssertEqual(try decode(#"{"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_0","status":"failed","action":{"type":"search","query":"x"}}}"#),
+                       [.diagnostic(title: "Web search call failed", detail: "action search")])
+        XCTAssertEqual(try decode(#"{"type":"response.output_item.added","item":{"type":"web_search_call","id":"ws_1","status":"in_progress"}}"#), [.webSearch(nil)])
+        XCTAssertEqual(try decode(#"{"type":"response.web_search_call.searching","item_id":"ws_1"}"#), [])
+        XCTAssertEqual(try decode(#"{"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":" 青山 会说话的肘子 "}}}"#), [.webSearch("青山 会说话的肘子")])
+        XCTAssertEqual(try decode(#"{"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_2","status":"completed","action":{"type":"open_page","url":"https://example.com"}}}"#), [], "Reading a page belongs to the search already shown")
+        XCTAssertEqual(try decode(#"{"type":"response.output_text.delta","delta":"《青山》讲述少年闯荡江湖"}"#), [.text("《青山》讲述少年闯荡江湖")])
+        XCTAssertEqual(try decode(#"{"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","url":"https://book.qidian.com/info/1","title":"青山_起点中文网","start_index":0,"end_index":4}}"#), [])
+        XCTAssertEqual(try decode(#"{"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","url":"javascript:alert(1)","title":"bad"}}"#), [], "Only web links are kept")
+        XCTAssertEqual(try decode(#"{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","annotations":[{"type":"url_citation","url":"https://book.qidian.com/info/1","title":"dup"},{"type":"url_citation","url":"https://zh.wikipedia.org/wiki/x_(y)","title":"[维基]"}]}]}}"#), [])
+        XCTAssertEqual(try decode(#"{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":2}}}"#),
+                       [.text("\n\n来源：\n- [青山_起点中文网](https://book.qidian.com/info/1)\n- [(维基)](https://zh.wikipedia.org/wiki/x_%28y%29)"),
+                        .usage(TokenUsage(input: 10, output: 2)), .finished(truncated: false)])
+        // An answer that already links its source gets no footnote.
+        var linked = ChatGPTSubscriptionProvider.ResponseState()
+        _ = try ChatGPTSubscriptionProvider.decodeAgent(#"{"type":"response.output_text.delta","delta":"See [Leaf](https://example.com/leaf)."}"#, state: &linked)
+        _ = try ChatGPTSubscriptionProvider.decodeAgent(#"{"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","url":"https://example.com/leaf","title":"Leaf"}}"#, state: &linked)
+        XCTAssertEqual(try ChatGPTSubscriptionProvider.decodeAgent(#"{"type":"response.completed"}"#, state: &linked), [.finished(truncated: false)])
+        XCTAssertEqual(WebSource.footnote([WebSource(url: "https://example.com/a", title: nil)!], after: "English answer."), "\n\nSources:\n- [example.com](https://example.com/a)")
+    }
+    func testWebSearchRefusedByThePlanIsAskedAgainWithoutItAndRemembered() async throws {
+        let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)
+        try store.accept(account())
+        let model = "search-model-\(UUID().uuidString)"
+        http.handler = { _ in (200, try self.json(["models": [["slug": model, "display_name": "Search", "visibility": "list"]]])) }
+        let key = "test-client|subject-a\n" + model
+        addTeardownBlock { @MainActor in
+            ChatGPTSubscriptionProvider.webSearchRejected.removeValue(forKey: key)
+            ChatGPTSubscriptionProvider.imageToolRejected.removeValue(forKey: key)
+        }
+        let rejected = (status: 400, lines: [#"{"error":{"code":"unsupported_tool","type":"invalid_request_error","param":"tools[5].type","message":"echo <secret>"}}"#])
+        let answered = (status: 200, lines: [#"{"type":"response.output_text.delta","delta":"From the book."}"#, #"{"type":"response.completed"}"#].flatMap { ["data: " + $0, ""] })
+        let items = [AgentItem.turn(ChatTurn(role: "user", content: "Search the web"))]
+        let tools = AgentTool.all + [AgentTool.webSearch]
+        func run(_ transport: SequencedResponsesStream, images: Bool) async throws -> [AgentEvent] {
+            var provider = ChatGPTSubscriptionProvider(accounts: store, accountID: "test-client|subject-a", model: model, transport: transport)
+            provider.imageGeneration = images
+            var events: [AgentEvent] = []
+            for try await event in provider.streamAgent(system: "Base", items: items, tools: tools, allowTools: true) { events.append(event) }
+            return events
+        }
+        func types(_ body: [String: Any]) -> [String] { (body["tools"] as? [[String: Any]] ?? []).compactMap { $0["type"] as? String } }
+        // Both hosted tools offered, both requests with a hosted tool refused: the picture
+        // tool is dropped first, so only web search, dropped last, is blamed.
+        let reason = "HTTP 400 · unsupported_tool · invalid_request_error · tools[5].type"
+        let transport = SequencedResponsesStream([rejected, rejected, answered, answered])
+        var events = try await run(transport, images: true)
+        XCTAssertEqual(transport.bodies.count, 3)
+        XCTAssertTrue(types(transport.bodies[0]).contains("image_generation")); XCTAssertTrue(types(transport.bodies[0]).contains("web_search"))
+        XCTAssertFalse(types(transport.bodies[1]).contains("image_generation")); XCTAssertTrue(types(transport.bodies[1]).contains("web_search"))
+        XCTAssertFalse(types(transport.bodies[2]).contains("web_search")); XCTAssertEqual(types(transport.bodies[2]).count, AgentTool.all.count, "The book tools stay")
+        XCTAssertEqual(events, [.webSearchRefused(reason), .diagnostic(title: "Hosted tools", detail: "web_search not sent: refused earlier this launch (\(reason)) · model \(model) · HTTP 200"),
+                                .text("From the book."), .finished(truncated: false)])
+        XCTAssertEqual(ChatGPTSubscriptionProvider.webSearchRejected[key], reason)
+        XCTAssertNil(ChatGPTSubscriptionProvider.imageToolRejected[key])
+        XCTAssertFalse(reason.contains("secret"), "Server message text is never reported")
+        // Later requests skip web search instead of being refused again, and still say why.
+        events = try await run(transport, images: false)
+        XCTAssertEqual(transport.bodies.count, 4); XCTAssertFalse(types(transport.bodies[3]).contains("web_search"))
+        XCTAssertEqual(events.first, .webSearchRefused(reason))
+        // A refusal that persists without web search is not blamed on it.
+        ChatGPTSubscriptionProvider.webSearchRejected.removeValue(forKey: key)
+        let failing = SequencedResponsesStream([rejected, rejected])
+        do { _ = try await run(failing, images: false); XCTFail("A persistent rejection must surface") } catch { }
+        XCTAssertEqual(failing.bodies.count, 2); XCTAssertNil(ChatGPTSubscriptionProvider.webSearchRejected[key])
+    }
     func testMissingHeaderDoesNotTurnMalformedOrInterruptedResponsesIntoSuccess() async throws {
         let http = ChatGPTTestHTTP(); let (store, _) = store(http: http)
         try store.accept(account())

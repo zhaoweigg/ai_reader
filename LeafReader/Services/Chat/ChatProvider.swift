@@ -94,7 +94,14 @@ struct HTTPChatProvider: ChatProvider {
     func makeRequest(_ conversation: ChatRequest) throws -> URLRequest {
         try makeRequest(system: conversation.system, messages: conversation.turns.map { ["role": $0.role, "content": $0.content] })
     }
-    func makeRequest(system: String, messages input: [[String: Any]], tools: [AgentTool]? = nil, allowTools: Bool = true) throws -> URLRequest {
+    /// The newer search tool (with filtering) needs Claude 4.6 or later; others get the basic one.
+    static func anthropicWebSearchType(_ model: String) -> String {
+        let id = model.lowercased()
+        let newer = ["claude-fable", "claude-mythos", "claude-opus-5", "claude-sonnet-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-4-6"]
+        return newer.contains { id.hasPrefix($0) } ? "web_search_20260209" : "web_search_20250305"
+    }
+    func makeRequest(system: String, messages input: [[String: Any]], tools: [AgentTool]? = nil, allowTools: Bool = true,
+                     webSearch: Bool = true) throws -> URLRequest {
         var request = URLRequest(url: try profile.validatedURL())
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ChatError.missingKey }
         guard !input.isEmpty else { throw ChatError.configuration("Write a question first.") }
@@ -111,8 +118,20 @@ struct HTTPChatProvider: ChatProvider {
             body["system"] = system
             body["max_tokens"] = profile.maxOutputTokens
             if let tools, !tools.isEmpty {
-                body["tools"] = tools.map { ["name": $0.name, "description": $0.description, "input_schema": $0.parameters] }
-                body["tool_choice"] = ["type": allowTools ? "auto" : "none"]
+                // Claude runs web search itself. The tool stays defined in the closing round
+                // (with tool_choice none), because earlier searches remain in the messages.
+                let searching = webSearch && tools.contains { $0.hosted }
+                var definitions: [[String: Any]] = tools.filter { !$0.hosted }
+                    .map { ["name": $0.name, "description": $0.description, "input_schema": $0.parameters] }
+                if searching {
+                    definitions.append(["type": Self.anthropicWebSearchType(profile.model), "name": AgentTool.webSearchName, "max_uses": 5])
+                    // Same instructions in every round, so the cached prompt prefix still matches.
+                    body["system"] = system + "\n\n" + AgentTool.webSearchInstruction
+                }
+                if !definitions.isEmpty {
+                    body["tools"] = definitions
+                    body["tool_choice"] = ["type": allowTools ? "auto" : "none"]
+                }
             }
             // Haiku 5.5 defaults to adaptive thinking. Keep short reading answers
             // responsive; older Haiku models also support disabled thinking.
@@ -121,8 +140,9 @@ struct HTTPChatProvider: ChatProvider {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             messages.insert(["role": "system", "content": system], at: 0)
             body[profile.legacyTokenLimit ? "max_tokens" : "max_completion_tokens"] = profile.maxOutputTokens
-            if let tools, !tools.isEmpty {
-                body["tools"] = tools.map { ["type": "function", "function": ["name": $0.name, "description": $0.description, "parameters": $0.parameters]] }
+            // These servers have no hosted web search: offer only the app's own tools.
+            if let functions = tools?.filter({ !$0.hosted }), !functions.isEmpty {
+                body["tools"] = functions.map { ["type": "function", "function": ["name": $0.name, "description": $0.description, "parameters": $0.parameters]] }
                 body["tool_choice"] = allowTools ? "auto" : "none"
             }
             // Ask OpenAI for token usage in traced agent requests; other servers may not know the option.

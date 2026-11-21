@@ -187,6 +187,155 @@ final class ReadingAgentTests: XCTestCase {
         XCTAssertNotNil((claude["tools"] as? [[String: Any]])?.first?["input_schema"])
     }
 
+    func testClaudeGetsItsOwnWebSearchToolAndOtherServersDoNot() throws {
+        let items = [AgentItem.turn(ChatTurn(role: "user", content: "Q"))]
+        let tools = AgentTool.all + [AgentTool.webSearch]
+        func body(_ provider: HTTPChatProvider, allowTools: Bool = true, webSearch: Bool = true, tools: [AgentTool]) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: provider.makeAgentRequest(system: "S", items: items, tools: tools, allowTools: allowTools, webSearch: webSearch).httpBody!) as? [String: Any])
+        }
+        var profile = ChatProviderKind.anthropic.defaultProfile; profile.model = "claude-haiku-5-5"
+        let haiku = HTTPChatProvider(kind: .anthropic, profile: profile, apiKey: "k")
+        let open = try body(haiku, tools: tools)
+        let definitions = try XCTUnwrap(open["tools"] as? [[String: Any]])
+        XCTAssertEqual(definitions.count, AgentTool.all.count + 1)
+        XCTAssertEqual(definitions.last?["type"] as? String, "web_search_20250305"); XCTAssertEqual(definitions.last?["name"] as? String, "web_search")
+        XCTAssertEqual(definitions.last?["max_uses"] as? Int, 5); XCTAssertNil(definitions.last?["input_schema"])
+        XCTAssertEqual(open["system"] as? String, "S\n\n" + AgentTool.webSearchInstruction)
+        // The closing round keeps the definition (earlier searches stay in the messages) and the same instructions.
+        let closing = try body(haiku, allowTools: false, tools: tools)
+        XCTAssertEqual((closing["tools"] as? [[String: Any]])?.last?["name"] as? String, "web_search")
+        XCTAssertEqual((closing["tool_choice"] as? [String: Any])?["type"] as? String, "none"); XCTAssertEqual(closing["system"] as? String, open["system"] as? String)
+        let refused = try body(haiku, webSearch: false, tools: tools)
+        XCTAssertEqual((refused["tools"] as? [[String: Any]])?.count, AgentTool.all.count); XCTAssertEqual(refused["system"] as? String, "S")
+        XCTAssertEqual(HTTPChatProvider.anthropicWebSearchType("claude-opus-5-5"), "web_search_20260209")
+        XCTAssertEqual(HTTPChatProvider.anthropicWebSearchType("claude-sonnet-4-6"), "web_search_20260209")
+        XCTAssertEqual(HTTPChatProvider.anthropicWebSearchType("claude-sonnet-4-5"), "web_search_20250305")
+        var other = ChatProviderKind.chatCompletions.defaultProfile; other.model = "test-model"
+        let completions = try body(HTTPChatProvider(kind: .chatCompletions, profile: other, apiKey: "k"), tools: tools)
+        let functions = (completions["tools"] as? [[String: Any]] ?? []).compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
+        XCTAssertEqual(functions, AgentTool.all.map(\.name), "Servers without hosted search never see a web_search function")
+        XCTAssertNil(try body(HTTPChatProvider(kind: .chatCompletions, profile: other, apiKey: "k"), tools: [AgentTool.webSearch])["tools"])
+    }
+
+    func testClaudeWebSearchStreamIsShownCitedAndSentBackUnchanged() async throws {
+        func line(_ json: String) -> [String] { ["data: " + json, ""] }
+        let anthropic = HTTPChatProvider(kind: .anthropic, profile: ChatProviderKind.anthropic.defaultProfile, apiKey: "k", transport: ScriptedTransport(lines: [
+            #"{"type":"message_start","message":{"usage":{"input_tokens":900,"output_tokens":1}}}"#,
+            #"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            #"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Let me look. "}}"#,
+            #"{"type":"content_block_stop","index":0}"#,
+            #"{"type":"content_block_start","index":1,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}"#,
+            #"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"query\": \"青山 会说"}}"#,
+            #"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"话的肘子\"}"}}"#,
+            #"{"type":"content_block_stop","index":1}"#,
+            #"{"type":"content_block_start","index":2,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_result","url":"https://book.qidian.com/info/1","title":"青山","encrypted_content":"enc"}]}}"#,
+            #"{"type":"content_block_stop","index":2}"#,
+            #"{"type":"content_block_start","index":3,"content_block":{"type":"text","text":""}}"#,
+            #"{"type":"content_block_delta","index":3,"delta":{"type":"citations_delta","citation":{"type":"web_search_result_location","url":"https://book.qidian.com/info/1","title":"青山","cited_text":"少年","encrypted_index":"ei"}}}"#,
+            #"{"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"少年骑马走向江湖。"}}"#,
+            #"{"type":"content_block_stop","index":3}"#,
+            #"{"type":"content_block_start","index":4,"content_block":{"type":"tool_use","id":"toolu_1","name":"search_book","input":{}}}"#,
+            #"{"type":"content_block_delta","index":4,"delta":{"type":"input_json_delta","partial_json":"{\"terms\":[\"青山\"]}"}}"#,
+            #"{"type":"content_block_stop","index":4}"#,
+            #"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":40}}"#,
+            #"{"type":"message_stop"}"#].flatMap(line)))
+        var events: [AgentEvent] = []
+        for try await event in anthropic.streamAgent(system: "S", items: [.turn(ChatTurn(role: "user", content: "Q"))],
+                                                     tools: AgentTool.all + [AgentTool.webSearch], allowTools: true) { events.append(event) }
+        XCTAssertEqual(events.first, .diagnostic(title: "Hosted tools", detail: "\(HTTPChatProvider.anthropicWebSearchType(ChatProviderKind.anthropic.defaultProfile.model)) sent · model \(ChatProviderKind.anthropic.defaultProfile.model) · HTTP 200"))
+        events = events.filter { if case .diagnostic = $0 { return false }; return true }
+        let call = AgentToolCall(id: "toolu_1", name: "search_book", arguments: #"{"terms":["青山"]}"#)
+        XCTAssertEqual(Array(events.prefix(6)), [.text("Let me look. "), .webSearch(nil), .webSearch("青山 会说话的肘子"), .text("少年骑马走向江湖。"), .toolCall(call),
+                                                 .text("\n\n来源：\n- [青山](https://book.qidian.com/info/1)")])
+        XCTAssertEqual(events.suffix(2), [.usage(TokenUsage(input: 900, output: 40)), .finished(truncated: false)])
+        guard case .providerContent(let data, let paused) = events[6] else { return XCTFail("Claude's content must come back: \(events)") }
+        XCTAssertFalse(paused)
+        let blocks = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        XCTAssertEqual(blocks.compactMap { $0["type"] as? String }, ["text", "server_tool_use", "web_search_tool_result", "text", "tool_use"])
+        XCTAssertEqual((blocks[1]["input"] as? [String: Any])?["query"] as? String, "青山 会说话的肘子")
+        XCTAssertEqual(((blocks[2]["content"] as? [[String: Any]])?.first)?["encrypted_content"] as? String, "enc")
+        XCTAssertEqual(blocks[3]["text"] as? String, "少年骑马走向江湖。")
+        XCTAssertEqual(((blocks[3]["citations"] as? [[String: Any]])?.first)?["encrypted_index"] as? String, "ei")
+        XCTAssertEqual((blocks[4]["input"] as? [String: Any])?["terms"] as? [String], ["青山"])
+        // The next request repeats that content as the assistant turn, before the tool results.
+        let next = HTTPChatProvider.anthropicMessages([.providerContent(data, text: "少年骑马走向江湖。", calls: [call]),
+                                                       .toolResults([AgentToolResult(id: "toolu_1", name: "search_book", output: "{}")])])
+        XCTAssertEqual(next[0]["role"] as? String, "assistant")
+        XCTAssertEqual((next[0]["content"] as? [[String: Any]])?.count, 5)
+        XCTAssertEqual(((next[1]["content"] as? [[String: Any]])?.first)?["tool_use_id"] as? String, "toolu_1")
+        // Without content (or unreadable content) a reply is rebuilt from its text and calls, as before.
+        XCTAssertEqual(((HTTPChatProvider.anthropicMessages([.providerContent(Data("x".utf8), text: "", calls: [call])])[0]["content"] as? [[String: Any]])?.first)?["type"] as? String, "tool_use")
+        // A reply that never searched sends nothing extra back.
+        let plain = HTTPChatProvider(kind: .anthropic, profile: ChatProviderKind.anthropic.defaultProfile, apiKey: "k", transport: ScriptedTransport(lines: [
+            #"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#, #"{"type":"message_stop"}"#].flatMap(line)))
+        var plainEvents: [AgentEvent] = []
+        for try await event in plain.streamAgent(system: "S", items: [.turn(ChatTurn(role: "user", content: "Q"))], tools: AgentTool.all + [AgentTool.webSearch], allowTools: true) { plainEvents.append(event) }
+        XCTAssertEqual(plainEvents.dropFirst(), [.text("Hi"), .diagnostic(title: "Web search not used", detail: "offered and accepted; the model answered without searching"), .finished(truncated: false)])
+        // A search Claude could not run comes back as an error object, logged for troubleshooting.
+        let failed = HTTPChatProvider(kind: .anthropic, profile: ChatProviderKind.anthropic.defaultProfile, apiKey: "k", transport: ScriptedTransport(lines: [
+            #"{"type":"content_block_start","index":0,"content_block":{"type":"web_search_tool_result","tool_use_id":"s","content":{"type":"web_search_tool_result_error","error_code":"unavailable"}}}"#,
+            #"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Offline."}}"#, #"{"type":"message_stop"}"#].flatMap(line)))
+        var failedEvents: [AgentEvent] = []
+        for try await event in failed.streamAgent(system: "S", items: [.turn(ChatTurn(role: "user", content: "Q"))], tools: AgentTool.all + [AgentTool.webSearch], allowTools: true) { failedEvents.append(event) }
+        XCTAssertTrue(failedEvents.contains(.diagnostic(title: "Web search error", detail: "unavailable")))
+    }
+
+    func testClaudeRefusingWebSearchIsAskedAgainWithoutItAndAPausedSearchGoesOn() async throws {
+        final class SearchSequence: ChatTransport, @unchecked Sendable {
+            var replies: [(Int, [String])]; var bodies: [[String: Any]] = []
+            init(_ replies: [(Int, [String])]) { self.replies = replies }
+            func open(_ request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<String, Error>) {
+                bodies.append((try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:])
+                let (status, lines) = replies.removeFirst()
+                return (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"])!,
+                        AsyncThrowingStream { continuation in lines.forEach { continuation.yield($0) }; continuation.finish() })
+            }
+        }
+        var profile = ChatProviderKind.anthropic.defaultProfile; profile.model = "claude-test-\(UUID().uuidString)"
+        let refused = (400, [#"{"type":"error","error":{"type":"invalid_request_error","message":"web search is disabled for <org>"}}"#])
+        let answered = (200, [#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"From the book."}}"#, "", #"data: {"type":"message_stop"}"#, ""])
+        let transport = SearchSequence([refused, answered, answered])
+        let provider = HTTPChatProvider(kind: .anthropic, profile: profile, apiKey: "k", transport: transport)
+        func run() async throws -> [AgentEvent] {
+            var events: [AgentEvent] = []
+            for try await event in provider.streamAgent(system: "S", items: [.turn(ChatTurn(role: "user", content: "Q"))], tools: AgentTool.all + [AgentTool.webSearch], allowTools: true) { events.append(event) }
+            return events
+        }
+        let reason = "HTTP 400 · invalid_request_error"
+        let first = try await run()
+        XCTAssertEqual(first, [.webSearchRefused(reason), .diagnostic(title: "Hosted tools", detail: "web_search not sent: refused earlier this launch (\(reason)) · model \(profile.model) · HTTP 200"),
+                               .text("From the book."), .finished(truncated: false)])
+        XCTAssertEqual((transport.bodies[0]["tools"] as? [[String: Any]])?.last?["name"] as? String, "web_search")
+        XCTAssertEqual((transport.bodies[1]["tools"] as? [[String: Any]])?.count, AgentTool.all.count, "Book tools stay; only web search goes")
+        let second = try await run()
+        XCTAssertEqual(second.first, .webSearchRefused(reason), "Later requests skip it and still say why")
+        XCTAssertEqual(transport.bodies.count, 3); XCTAssertEqual((transport.bodies[2]["tools"] as? [[String: Any]])?.count, AgentTool.all.count)
+
+        // Claude paused part way through its own searching: the reply goes back as it is,
+        // the runner asks again, and the searches are listed with the answer.
+        let content = Data(#"[{"type":"server_tool_use","id":"s1","name":"web_search","input":{"query":"q"}}]"#.utf8)
+        let scripted = ScriptedAgentProvider([[.webSearch(nil), .webSearch("Leaf reader"), .providerContent(content, paused: true), .finished(truncated: false)],
+                                              [.text("Answer."), .finished(truncated: false)]])
+        let toolbox = ReadingAgentToolbox(book: nil) { _ in "{}" }
+        toolbox.webSearch = true
+        XCTAssertEqual(toolbox.tools.map(\.name), ["search_conversation", "web_search"])
+        var activities: [String] = []
+        toolbox.activity = { activities.append($0) }
+        let recorder = AgentTraceRecorder(trace: AgentTrace(provider: "Test", model: "m", bookTitle: "", chapter: "", question: "Q", selection: nil, limits: AgentLimits()))
+        var text = ""
+        let request = ChatRequest.conversation([ReaderChatMessage(isUser: true, text: "Search the web for Leaf reader")])
+        _ = try await ReadingAgentRunner.run(provider: scripted, request: request, toolbox: toolbox, recorder: recorder, onText: { text += $0 }, onWithdraw: {})
+        XCTAssertEqual(text, "Answer.")
+        XCTAssertEqual(scripted.requests.count, 2)
+        XCTAssertEqual(scripted.requests[1].items.last, .providerContent(content, text: "", calls: []))
+        XCTAssertEqual(toolbox.steps, ["searched the web for “Leaf reader”"])
+        XCTAssertEqual(activities, ["Searching the web…", "Searched the web for “Leaf reader”…"])
+        XCTAssertTrue(recorder.trace.steps.contains { $0.title == "Web search" && $0.detail == "Leaf reader" })
+        // AI settings can turn it off like any other tool.
+        toolbox.limits.disabledTools = [AgentTool.webSearchName]
+        XCTAssertEqual(toolbox.tools.map(\.name), ["search_conversation"])
+    }
+
     func testStreamsDecodeFragmentedToolCalls() async throws {
         func collect(_ provider: HTTPChatProvider) async throws -> [AgentEvent] {
             var events: [AgentEvent] = []
@@ -510,7 +659,8 @@ final class ReadingAgentTests: XCTestCase {
                      screen: screen(books, details: ["rank": 1, "title": "Book 1", "description": "A described book."])) { nil }
         try await eventually { !session.isSending && session.messages.count == 2 }
         XCTAssertEqual(session.messages.last?.text, "1. Book 1 — a summary.")
-        XCTAssertEqual(agent.offered.first, ["search_conversation", "get_current_view", "get_item_details"])
+        // A chat session also offers the provider's web search, which the provider runs itself.
+        XCTAssertEqual(agent.offered.first, ["search_conversation", "get_current_view", "get_item_details", "web_search"])
         XCTAssertTrue(agent.requests[0].system.contains("from the Discover screen") && agent.requests[0].system.contains("call get_current_view first"))
         guard case .toolResults(let listed) = agent.requests[1].items.last, case .toolResults(let described) = agent.requests[2].items.last else {
             return XCTFail("Missing tool results")

@@ -2991,6 +2991,26 @@ final class LeafReaderUITests: XCTestCase {
         capture(flow + " enriched prompt verified after reopening")
     }
 
+    /// Asking to look something up online: the provider's own web search runs, the
+    /// reply names the search among its steps and keeps the cited page as a link.
+    @MainActor func testWebSearchIsListedWithTheReplyAndKeepsItsSourceLink() {
+        continueAfterFailure = false
+        let app = launchApp(scriptedAgent: true)
+        app.buttons["featuredBook"].tap(); waitForBook(app)
+        app.buttons["openReaderChat"].tap()
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap(); input.typeText("Search the web for this app")
+        app.buttons["sendReaderChat"].tap()
+        let reply = app.textViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Web reply")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 30))
+        XCTAssertTrue(reply.links["Leaf on the web"].exists || app.links["Leaf on the web"].exists, "The cited page stays a link")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "searched the web for “Leaf reader app”")).firstMatch.waitForExistence(timeout: 5),
+                      "The search is listed with the reply's steps")
+        if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+        capture("Web search reply with its step and source link")
+    }
+
     @MainActor func testAgentLimitsApplyAndTraceViewerShowsStepsAndTokens() {
         continueAfterFailure = false
         let app = launchApp(scriptedAgent: true)
@@ -3006,6 +3026,9 @@ final class LeafReaderUITests: XCTestCase {
         revealSettingsRow(conversationTool, app: app)
         conversationTool.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(conversationTool.value as? String, "0")
+        let webTool = app.switches["agentTool-web_search"]
+        revealSettingsRow(webTool, app: app)
+        XCTAssertEqual(webTool.value as? String, "1", "Web search is offered unless turned off")
         capture("Agent limits in AI settings")
         let decrement = app.buttons["contextCharacters-Decrement"]
         revealSettingsRow(decrement, app: app)

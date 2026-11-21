@@ -136,6 +136,19 @@ final class AgentTraceRecorder {
         }
         append(.init(kind: .request, title: "Request round \(round), attempt \(attempt)", detail: detail, seconds: elapsed()))
     }
+    /// A search the provider ran on the web; its results stay with the provider.
+    func webSearch(_ query: String) {
+        append(.init(kind: .tool, title: "Web search", detail: query.isEmpty ? "search ran by the provider" : query, seconds: 0))
+    }
+    /// A troubleshooting line from the provider, such as which hosted tools went out.
+    func note(_ title: String, detail: String) {
+        append(.init(kind: .request, title: title, detail: detail, seconds: 0))
+    }
+    /// The request went out without web search because the model or account refused it.
+    func webSearchRefused(_ reason: String) {
+        guard !trace.steps.contains(where: { $0.title == "Web search refused" }) else { return }
+        append(.init(kind: .request, title: "Web search refused", detail: reason + " · asked again without it", seconds: 0))
+    }
     /// The request went out without the image tool because the model or plan refused it.
     func imageToolRefused(_ reason: String) {
         guard !trace.steps.contains(where: { $0.title == "Image tool refused" }) else { return }
