@@ -155,8 +155,14 @@ struct ReaderChatPanel: View {
     @State private var scrollFollowing = ChatScrollFollowing()
     @State private var selectedMessage: UUID?
     @State private var editsQuickPrompts = false
+    /// A reply ended while the reader was on earlier messages.
+    @State private var unseenReply = false
+    @State private var historyWindow = ChatHistoryWindow.Handle()
 
     private var accent: Color { theme.accent }
+    /// The newest text is in view and stays in view as it grows. Not at the end of
+    /// loaded messages whose newest ones were let go: that is not the latest.
+    private var followsLatest: Bool { scrollFollowing.followsLatest && !session.hasNewerMessages }
     private var question: String { session.draft.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var spokenLocale: String {
         if dictation.isActive, let active = dictation.localeIdentifier { return active }
@@ -262,32 +268,40 @@ struct ReaderChatPanel: View {
             }
 
             Group {
-                if session.hasEarlierMessages || session.hasNewerMessages {
-                    HStack {
-                        Button("Earlier") { session.loadEarlier() }
-                            .disabled(!session.hasEarlierMessages || session.isSending)
-                            .accessibilityLabel("Earlier messages").accessibilityIdentifier("earlierChatMessages")
-                        Spacer()
-                        if session.hasNewerMessages {
-                            Button("Latest") { session.loadLatest() }.disabled(session.isSending)
-                                .accessibilityLabel("Latest messages").accessibilityIdentifier("latestChatMessages")
-                            Spacer()
-                        }
-                        Button("Newer") { session.loadNewer() }
-                            .disabled(!session.hasNewerMessages || session.isSending)
-                            .accessibilityLabel("Newer messages").accessibilityIdentifier("newerChatMessages")
-                    }.font(.caption)
-                }
                 ScrollViewReader { proxy in
                     GeometryReader { viewport in
                         ScrollView {
-                            // The history is paged (24 messages), so every row is laid out.
+                            // Only a stretch of the conversation is loaded (see
+                            // ChatHistoryWindow), so every row is laid out.
                             // A lazy stack estimated the rows it had not laid out yet: when
                             // the panel grew after sending from the keyboard it guessed the
                             // new question and placeholder at the height of the long reply
                             // above them, followed that phantom bottom, and showed a blank
                             // panel until the reply's first token re-laid the rows out.
                             VStack(alignment: .leading, spacing: 12) {
+                                if session.hasEarlierMessages {
+                                    // Older messages arrive before the reader reaches this row;
+                                    // it shows only when they outrun the loading, and loads by hand.
+                                    Button {
+                                        if !historyWindow.loadEarlier() { session.loadEarlier() }
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            ProgressView().controlSize(.small)
+                                            Text("Loading earlier messages")
+                                        }.font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 28)
+                                    }
+                                    .buttonStyle(.plain).accessibilityLabel("Load earlier messages")
+                                    .accessibilityIdentifier("loadEarlierChatMessages")
+                                } else if session.messages.count > ReaderChatSession.pageSize {
+                                    HStack(spacing: 8) {
+                                        Rectangle().fill(.secondary.opacity(0.3)).frame(width: 32, height: 0.75)
+                                        Text("Start of conversation")
+                                        Rectangle().fill(.secondary.opacity(0.3)).frame(width: 32, height: 0.75)
+                                    }
+                                    .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 28)
+                                    .accessibilityElement(children: .ignore).accessibilityLabel("Start of conversation")
+                                    .accessibilityIdentifier("chatHistoryStart")
+                                }
                                 ForEach(session.messages) { message in
                                     HStack {
                                         if message.isUser { Spacer(minLength: 32) }
@@ -310,10 +324,25 @@ struct ReaderChatPanel: View {
                                         Button("AI settings", action: onSettings).font(.subheadline)
                                     }
                                 }
+                                if session.hasNewerMessages {
+                                    HStack(spacing: 8) {
+                                        ProgressView().controlSize(.small)
+                                        Text("Loading newer messages")
+                                    }
+                                    .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 28)
+                                    .accessibilityElement(children: .ignore).accessibilityLabel("Loading newer messages")
+                                    .accessibilityIdentifier("loadNewerChatMessages")
+                                }
                             }.padding(.vertical, 2)
                                 // A short chat grows inside a viewport-tall, bottom-aligned
                                 // frame, so streaming does not move the scroll offset at all.
                                 .frame(minHeight: viewport.size.height, alignment: .bottom)
+                                .background {
+                                    ChatHistoryWindow(handle: historyWindow, hasEarlier: session.hasEarlierMessages, hasNewer: session.hasNewerMessages,
+                                        actions: .init(loadEarlier: { [session] in session.loadEarlier() }, loadNewer: { [session] in session.loadNewer() },
+                                                       releaseNewest: { [session] in session.releaseNewest() }, releaseOldest: { [session] in session.releaseOldest() }))
+                                        .frame(width: 0, height: 0).accessibilityHidden(true)
+                                }
                                 .background {
                                     if !ChatHistoryInteraction.usesNativeTracking {
                                         GeometryReader { content in
@@ -333,8 +362,8 @@ struct ReaderChatPanel: View {
                         .defaultScrollAnchor(.bottom)
                         .scrollDismissesKeyboard(isComposing ? .never : .interactively)
                         .accessibilityIdentifier("chatMessageHistory")
-                        .accessibilityValue(scrollFollowing.followsLatest ? "Following latest" : "Reading earlier")
-                        .modifier(ChatHistoryTestMeasurement(following: scrollFollowing.followsLatest, selected: selectedMessage != nil,
+                        .accessibilityValue(followsLatest ? "Following latest" : "Reading earlier")
+                        .modifier(ChatHistoryTestMeasurement(following: followsLatest, selected: selectedMessage != nil,
                                                              streamingText: session.messages.last.map { $0.state == .streaming && !$0.text.isEmpty } ?? false))
                         #if DEBUG
                         .modifier(ChatSwipeMeasurement())
@@ -344,11 +373,23 @@ struct ReaderChatPanel: View {
                         // scroll keeps its frames; releasing shows what arrived meanwhile.
                         .onChange(of: scrollFollowing.isScrolling) { _, scrolling in session.holdsStreamedText = scrolling }
                         .onChange(of: scrollFollowing.followsLatest) { _, follows in session.keepsLoadedMessages = !follows }
-                        .onAppear { session.keepsLoadedMessages = !scrollFollowing.followsLatest }
+                        .onChange(of: scrollFollowing.isAwayFromLatest) { _, away in if !away { unseenReply = false } }
+                        .onAppear {
+                            // A panel reopened after a long trip back starts at the latest again.
+                            if session.hasNewerMessages { session.loadLatest() }
+                            session.keepsLoadedMessages = !scrollFollowing.followsLatest
+                        }
                         .onDisappear { session.holdsStreamedText = false; session.keepsLoadedMessages = false }
-                        .modifier(ChatHistoryFollowsLatest(following: scrollFollowing.followsLatest, paused: selectedMessage != nil))
+                        .modifier(ChatHistoryFollowsLatest(following: followsLatest, paused: selectedMessage != nil))
                         .onPreferenceChange(ChatHistoryAtBottom.self) { atBottom in
-                            if !ChatHistoryInteraction.usesNativeTracking, let atBottom { scrollFollowing.updateAtBottom(atBottom) }
+                            if !ChatHistoryInteraction.usesNativeTracking, let atBottom {
+                                scrollFollowing.updateAtBottom(atBottom); scrollFollowing.updateAway(!atBottom)
+                            }
+                        }
+                        .overlay(alignment: .bottomTrailing) {
+                            if (scrollFollowing.isAwayFromLatest || session.hasNewerMessages), !compact, selectedMessage == nil {
+                                jumpToLatest(proxy)
+                            }
                         }
                         .onChange(of: session.messages.last?.text) { _, _ in
                             // iOS 18 follows actual content growth (ChatHistoryFollowing).
@@ -364,10 +405,11 @@ struct ReaderChatPanel: View {
                             if sending {
                                 scrollFollowing.resume()
                                 if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                            }
+                            } else if scrollFollowing.isAwayFromLatest { unseenReply = true }
                         }
                         .onChange(of: ObjectIdentifier(session)) { _, _ in
-                            scrollFollowing = ChatScrollFollowing(); session.keepsLoadedMessages = false
+                            scrollFollowing = ChatScrollFollowing(); session.keepsLoadedMessages = false; unseenReply = false
+                            if session.hasNewerMessages { session.loadLatest() }
                             if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
                         .onChange(of: inputFocused) { _, focused in
@@ -533,6 +575,31 @@ struct ReaderChatPanel: View {
             .background(accent.opacity(0.08), in: Capsule())
             .overlay(Capsule().stroke(accent.opacity(0.2), lineWidth: 0.75))
             .contentShape(Capsule())
+    }
+
+    /// The way back to the newest message from anywhere earlier in the conversation.
+    /// Its dot says a reply is printing or has finished down there.
+    private func jumpToLatest(_ proxy: ScrollViewProxy) -> some View {
+        let newReply = unseenReply || session.isSending
+        return Button {
+            if session.hasNewerMessages { session.loadLatest() }
+            scrollFollowing.resume(); unseenReply = false
+            // After the loaded messages are laid out, so the scroll lands on the real end.
+            DispatchQueue.main.async { if let last = session.messages.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+        } label: {
+            Image(systemName: "arrow.down").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
+                .frame(width: 36, height: 36)
+                .background(.regularMaterial, in: Circle())
+                .overlay(Circle().stroke(.secondary.opacity(0.3), lineWidth: 0.75))
+                .overlay(alignment: .topTrailing) {
+                    if newReply { Circle().fill(accent).frame(width: 10, height: 10) }
+                }
+                .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                .frame(width: 44, height: 44).contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Jump to latest message").accessibilityValue(newReply ? "New reply" : "")
+        .accessibilityIdentifier("jumpToLatestChat")
     }
 
     private var dismissDrag: some Gesture {

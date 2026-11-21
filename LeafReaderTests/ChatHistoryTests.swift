@@ -402,6 +402,62 @@ private final class HistoryProvider: ChatProvider {
         complete(provider); try await eventually { !session.isSending }
         XCTAssertEqual(session.messages.count, 24); XCTAssertEqual(session.messages.first?.text, "Message 20")
     }
+    func testScrollingBackAddsOlderMessagesAboveAndLetsGoOfTheFarEnd() throws {
+        let directory = try directory(), store = try ChatHistoryStore(directory: directory, conversation: "book-a")
+        try store.save((0..<200).map { ReaderChatMessage(isUser: $0 % 2 == 0, text: "Message \($0)") }, draft: nil)
+        let session = ReaderChatSession(history: store)
+        func numbers() -> [Int] { session.messages.compactMap { Int($0.text.dropFirst(8)) } }
+        func unbroken() -> Bool { let loaded = numbers(); return !loaded.isEmpty && loaded == Array(loaded[0]..<(loaded[0] + loaded.count)) }
+        XCTAssertEqual(numbers(), Array(176..<200))
+        // Older messages join above; nothing already loaded moves or repeats.
+        XCTAssertFalse(session.releaseNewest(), "Nothing is let go while few messages are loaded")
+        XCTAssertTrue(session.loadEarlier()); XCTAssertEqual(numbers(), Array(164..<200))
+        // All the way back: the loaded stretch stays within its limit by letting go of its newest end.
+        var most = 0
+        for _ in 0..<100 where session.hasEarlierMessages {
+            if !session.releaseNewest() { XCTAssertTrue(session.loadEarlier()) }
+            most = max(most, session.messages.count)
+            XCTAssertTrue(unbroken(), "The loaded messages are one unbroken stretch: \(numbers())")
+        }
+        XCTAssertEqual(most, ReaderChatSession.windowLimit)
+        XCTAssertEqual(numbers().first, 0); XCTAssertTrue(session.hasNewerMessages); XCTAssertFalse(session.canRetry)
+        XCTAssertFalse(session.loadEarlier(), "Nothing comes before the start of the conversation")
+        // And down again: newer messages join below while the oldest are let go.
+        for _ in 0..<100 where session.hasNewerMessages {
+            if !session.releaseOldest() { XCTAssertTrue(session.loadNewer()) }
+            XCTAssertLessThanOrEqual(session.messages.count, ReaderChatSession.windowLimit)
+            XCTAssertTrue(unbroken(), "The loaded messages are one unbroken stretch: \(numbers())")
+        }
+        XCTAssertEqual(numbers().last, 199); XCTAssertTrue(session.hasEarlierMessages)
+        XCTAssertFalse(session.loadNewer(), "Nothing comes after the latest message")
+        // From far back, the latest messages are one step away.
+        for _ in 0..<100 where session.hasEarlierMessages { if !session.releaseNewest() { XCTAssertTrue(session.loadEarlier()) } }
+        session.loadLatest()
+        XCTAssertEqual(numbers(), Array(176..<200)); XCTAssertFalse(session.hasNewerMessages)
+    }
+    func testAReplyThatEndsFarBackKeepsEveryLoadedMessageAndItsExchangeCanBeLetGoLater() async throws {
+        let directory = try directory(), store = try ChatHistoryStore(directory: directory, conversation: "book-a")
+        try store.save((0..<100).map { ReaderChatMessage(isUser: $0 % 2 == 0, text: "Message \($0)") }, draft: "Next question")
+        let provider = HistoryProvider(), settings = settings(provider), session = ReaderChatSession(history: store)
+        for _ in 0..<3 { XCTAssertTrue(session.loadEarlier()) }
+        XCTAssertEqual(session.messages.count, 60); XCTAssertEqual(session.messages.first?.text, "Message 40")
+        // The reader asks, then goes back to earlier text while the reply prints.
+        session.keepsLoadedMessages = true
+        session.send(settings: settings) { nil }; try await eventually { !provider.requests.isEmpty }
+        // Only the latest messages go to the model, however many are loaded.
+        XCTAssertLessThanOrEqual(provider.requests[0].turns.count, 12)
+        XCTAssertFalse(session.releaseNewest(), "A reply in flight stays loaded")
+        XCTAssertTrue(session.loadEarlier(), "Older messages still load while a reply prints")
+        complete(provider); try await eventually { !session.isSending }
+        XCTAssertEqual(session.messages.count, 74); XCTAssertEqual(session.messages.first?.text, "Message 28")
+        XCTAssertEqual(session.messages.last?.text, "An explanation")
+        // Further back, the newest end goes, and comes back whole on the way down.
+        XCTAssertTrue(session.releaseNewest())
+        XCTAssertEqual(session.messages.count, 60); XCTAssertEqual(session.messages.last?.text, "Message 87"); XCTAssertTrue(session.hasNewerMessages)
+        XCTAssertTrue(session.loadNewer()); XCTAssertEqual(session.messages.last?.text, "Message 99"); XCTAssertTrue(session.hasNewerMessages)
+        XCTAssertTrue(session.loadNewer()); XCTAssertEqual(session.messages.last?.text, "An explanation"); XCTAssertFalse(session.hasNewerMessages)
+        XCTAssertEqual(session.messages.suffix(2).first?.text, "Next question")
+    }
     func testLargeArchivePagesWithoutDroppingOlderHistoryAndBooksStaySeparate() throws {
         let directory = try directory(), store = try ChatHistoryStore(directory: directory, conversation: "book-a")
         let originals = (0..<1200).map { ReaderChatMessage(isUser: $0 % 2 == 0, text: "Message \($0)") }
@@ -412,10 +468,10 @@ private final class HistoryProvider: ChatProvider {
         XCTAssertEqual(session.messages.count, 24)
         XCTAssertEqual(session.messages.first?.text, "Message 1176")
         XCTAssertTrue(session.hasEarlierMessages); XCTAssertFalse(session.hasNewerMessages)
-        session.loadEarlier()
-        XCTAssertEqual(session.messages.count, 24); XCTAssertEqual(session.messages.first?.text, "Message 1152")
-        XCTAssertTrue(session.hasNewerMessages)
-        session.loadNewer(); XCTAssertEqual(session.messages.first?.text, "Message 1176")
+        // Older messages join above the loaded ones instead of replacing them.
+        XCTAssertTrue(session.loadEarlier())
+        XCTAssertEqual(session.messages.count, 36); XCTAssertEqual(session.messages.first?.text, "Message 1164")
+        XCTAssertEqual(session.messages.last?.text, "Message 1199"); XCTAssertFalse(session.hasNewerMessages)
         var all: [ReaderChatMessage] = [], cursor: Int64?
         repeat {
             let page = try store.page(before: cursor)
@@ -522,12 +578,14 @@ private final class HistoryProvider: ChatProvider {
     }
     func testSendingWhileBrowsingOlderMessagesUsesLatestConversation() async throws {
         let directory = try directory(), store = try ChatHistoryStore(directory: directory, conversation: "book-a")
-        try store.save((0..<60).map { ReaderChatMessage(isUser: $0 % 2 == 0, text: "Message \($0)") }, draft: nil)
+        try store.save((0..<120).map { ReaderChatMessage(isUser: $0 % 2 == 0, text: "Message \($0)") }, draft: nil)
         let provider = HistoryProvider(), settings = settings(provider), session = ReaderChatSession(history: store)
-        session.loadEarlier(); XCTAssertTrue(session.hasNewerMessages)
+        // Scrolled back to the start, far enough that the newest messages were let go.
+        for _ in 0..<100 where session.hasEarlierMessages { if !session.releaseNewest() { XCTAssertTrue(session.loadEarlier()) } }
+        XCTAssertTrue(session.hasNewerMessages); XCTAssertEqual(session.messages.first?.text, "Message 0")
         session.draft = "A followup"; session.send(settings: settings) { nil }
         try await eventually { provider.requests.count == 1 }
-        XCTAssertTrue(provider.requests[0].turns.contains(where: { $0.content == "Message 59" }))
+        XCTAssertTrue(provider.requests[0].turns.contains(where: { $0.content == "Message 119" }))
         XCTAssertFalse(provider.requests[0].turns.contains(where: { $0.content == "Message 20" }))
         XCTAssertLessThanOrEqual(provider.requests[0].turns.count, 12)
         complete(provider); try await eventually { !session.isSending }

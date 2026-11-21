@@ -220,8 +220,10 @@ flowchart TB
     Provider --> ChatGPT["ChatGPT subscription<br/>OAuth · Responses API · can draw pictures"]
     Anthropic & OpenAICompat & ChatGPT --> Stream["SSE stream → ChatEvent"]
     Stream --> Panel["Markdown reply, 80 ms batches<br/>history follows unless you scroll"]
-    Stream --> HistoryDB["SQLite history per book<br/>24-message pages · pictures beside it"]
+    Stream --> HistoryDB["SQLite history per book<br/>loaded as you scroll back · pictures beside it"]
 ```
+
+The history is one conversation you scroll through. It opens on the latest 24 messages; scrolling back brings older ones in twelve at a time, a screen ahead of where you are reading, and the text on screen stays where it is while they join above it (`ChatHistoryWindow`). At most 72 messages stay loaded: past that the far end is let go and loads again on the way back. A round **↓** button returns to the latest message from anywhere, and carries a dot while a reply is printing or has finished below.
 
 ### What the agent can read
 

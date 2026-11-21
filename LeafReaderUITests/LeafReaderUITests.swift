@@ -7,7 +7,7 @@ final class LeafReaderUITests: XCTestCase {
         if let app = geometryApp, app.state == .runningForeground { setReaderOrientation(direction, app: app) }
         else { XCUIDevice.shared.orientation = direction }
     }
-    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, chatImage: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, otherDeviceSettings: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", contentsLocator: String? = nil, chatRecovery: Bool = false, recoveryAgent: Bool = false, scriptedAgent: Bool = false) -> XCUIApplication {
+    @MainActor private func launchApp(mockChat: Bool = true, slowChat: Bool = false, chatGPTBrowser: Bool = false, chatGPTConnected: Bool = false, geometryFixture: Bool = true, appleSpeech: Bool = false, backgroundAudio: Bool = false, nowPlayingProbe: Bool = false, contextProbe: Bool = false, markdown: Bool = false, chatImage: Bool = false, dictation: Bool = false, nativeDictation: Bool = false, scrollStream: Bool = false, slowStart: Bool = false, legacyScroll: Bool = false, scrollPerformance: Bool = false, chatFollow: Bool = false, scrollTouchTrace: Bool = false, syncFixture: Bool = false, otherDeviceSettings: Bool = false, contentsFixture: Bool = false, contentsBook: String = "ContentsLocation", contentsLocator: String? = nil, chatRecovery: Bool = false, recoveryAgent: Bool = false, scriptedAgent: Bool = false, chatHistory: Int? = nil) -> XCUIApplication {
 
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -28,6 +28,8 @@ final class LeafReaderUITests: XCTestCase {
         app.launchEnvironment["LEAF_UI_CHAT_MARKDOWN"] = markdown ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_IMAGE"] = chatImage ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_STREAM"] = scrollStream ? "1" : "0"
+        // Each conversation opened starts with this many saved, numbered exchanges.
+        if let chatHistory { app.launchEnvironment["LEAF_UI_CHAT_HISTORY"] = String(chatHistory) }
         app.launchEnvironment["LEAF_UI_CHAT_SLOW_START"] = slowStart ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_LEGACY"] = legacyScroll ? "1" : "0"
         app.launchEnvironment["LEAF_UI_CHAT_SCROLL_PERF"] = scrollPerformance ? "1" : "0"
@@ -4263,7 +4265,7 @@ final class LeafReaderUITests: XCTestCase {
             expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
             waitForExpectations(timeout: 5)
         }
-        XCTAssertTrue(app.buttons["earlierChatMessages"].exists, "The conversation must be longer than one history page")
+        XCTAssertTrue(app.buttons["loadEarlierChatMessages"].exists, "The conversation must be longer than the messages a finished reply keeps loaded")
         XCTAssertTrue(geometry.waitForExistence(timeout: 5))
         continueAfterFailure = true // The timeline is attached even when a check fails.
         let began = Date()
@@ -4310,6 +4312,9 @@ final class LeafReaderUITests: XCTestCase {
         attach("slide to earlier text")
         XCTAssertEqual(question.frame.minY, place, accuracy: 3, "A finished reply must not move the text being read:\n" + samples.suffix(6).joined(separator: "\n"))
         XCTAssertEqual(history.value as? String, "Reading earlier")
+        let jump = app.buttons["jumpToLatestChat"]
+        XCTAssertTrue(jump.exists, "A way back to the latest message is offered while reading earlier text")
+        XCTAssertEqual(jump.value as? String, "New reply", "The finished reply below is announced on the button")
         capture(flow + " reply finished while reading earlier text")
 
         // The end is still one slide away, and following resumes there.
@@ -4319,7 +4324,161 @@ final class LeafReaderUITests: XCTestCase {
         }
         XCTAssertEqual(history.value as? String, "Following latest")
         XCTAssertLessThanOrEqual(gap(), 4, "Sliding back must reach the end of the finished reply")
+        XCTAssertFalse(jump.exists, "At the latest message there is nowhere to jump to")
         capture(flow + " end of the reply after sliding back")
+    }
+
+    @MainActor func testScrollingBackLoadsEarlierMessagesInPages() { verifyScrollBack(flow: "Pages") }
+    @MainActor func testScrollingBackLoadsEarlierMessagesInScroll() { verifyScrollBack(flow: "Scroll") }
+    @MainActor func testScrollingBackLoadsEarlierMessagesInPDF() { verifyScrollBack(flow: "PDF") }
+    @MainActor func testScrollingBackLoadsEarlierMessagesInLibrary() { verifyScrollBack(flow: "Library") }
+    @MainActor func testScrollingBackLoadsEarlierMessagesUsingLegacyTracking() { verifyScrollBack(flow: "Library", legacy: true) }
+
+    /// A long saved conversation is one history. Older messages load as the reader scrolls
+    /// back, and newer ones on the way down again; what is on screen stays where it is while
+    /// they do; the latest message is one tap away; and a question sent from far back lands
+    /// at the end of the conversation.
+    @MainActor private func verifyScrollBack(flow: String, legacy: Bool = false) {
+        continueAfterFailure = false
+        let exchanges = 60
+        let app = launchApp(scrollStream: true, legacyScroll: legacy, chatHistory: exchanges)
+        if flow == "Library" { app.buttons["openLibraryChat"].tap() }
+        else { openSelectionFixture(flow, app: app); waitForBook(app); app.buttons["openReaderChat"].tap() }
+        let history = app.scrollViews["chatMessageHistory"], send = app.buttons["sendReaderChat"], jump = app.buttons["jumpToLatestChat"]
+        let start = app.descendants(matching: .any)["chatHistoryStart"].firstMatch
+        func question(_ number: Int) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND label == %@", "chatQuestion", "Question \(number)")).firstMatch
+        }
+        func answer(_ number: Int) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND label BEGINSWITH %@", "chatReply", "Answer \(number):")).firstMatch
+        }
+        /// The whole element is inside the history's viewport.
+        func inView(_ element: XCUIElement) -> Bool {
+            guard element.exists else { return false }
+            let frame = element.frame, viewport = history.frame
+            return frame.height > 4 && frame.minY >= viewport.minY - 2 && frame.maxY <= viewport.maxY + 2
+        }
+        var samples: [String] = []
+        func attach(_ name: String) {
+            let trace = XCTAttachment(string: samples.joined(separator: "\n")); trace.name = flow + " " + name; trace.lifetime = .keepAlways; add(trace)
+        }
+        /// A held drag of the history by `distance` (down the screen when positive), with no fling.
+        func slide(_ distance: CGFloat) {
+            let from = history.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: distance > 0 ? 0.15 : 0.85))
+            from.press(forDuration: 0.02, thenDragTo: from.withOffset(CGVector(dx: 0, dy: distance)), withVelocity: .slow, thenHoldForDuration: 0.2)
+        }
+
+        // It opens on the latest messages, one page of them, with no paging controls.
+        XCTAssertTrue(answer(exchanges).waitForExistence(timeout: 10))
+        XCTAssertLessThanOrEqual(answer(exchanges).frame.maxY, history.frame.maxY + 2, "The conversation opens at its latest message")
+        XCTAssertEqual(history.value as? String, "Following latest")
+        XCTAssertFalse(app.buttons["earlierChatMessages"].exists); XCTAssertFalse(app.buttons["newerChatMessages"].exists)
+        XCTAssertFalse(jump.exists)
+        var oldest = exchanges - 11
+        XCTAssertTrue(question(oldest).exists); XCTAssertFalse(question(oldest - 1).exists, "Opening a long conversation loads one page of it")
+        /// The oldest question loaded, found from the last known one.
+        func oldestLoaded() -> Int {
+            while oldest > 1, question(oldest - 1).exists { oldest -= 1 }
+            while oldest < exchanges, !question(oldest).exists { oldest += 1 }
+            return oldest
+        }
+        let screen = app.frame
+        /// On the screen now, and still on it after moving by `distance`.
+        func hasRoom(_ element: XCUIElement, _ distance: CGFloat) -> Bool {
+            guard element.exists else { return false }
+            let frame = element.frame
+            return min(frame.minY, frame.minY + distance) > screen.minY + 20 && max(frame.maxY, frame.maxY + distance) < screen.maxY - 20
+        }
+        /// A loaded question to measure a drag against: the first of `numbers` with room to move.
+        /// The history clips it, but its place on the screen is still reported.
+        func landmark(_ numbers: StrideThrough<Int>, _ distance: CGFloat) -> XCUIElement? {
+            for number in numbers { let candidate = question(number); if hasRoom(candidate, distance) { return candidate } }
+            return nil
+        }
+        continueAfterFailure = true // The step timeline is attached even when a check fails.
+
+        // Back through the conversation a held drag at a time. Each drag moves a message
+        // already on the page by the drag's own distance, also when older messages joined
+        // above it during the drag.
+        let step = max(40, min(110, history.frame.height - 46))
+        history.swipeDown(velocity: .fast)
+        XCTAssertEqual(history.value as? String, "Reading earlier")
+        var loads = 0, known = oldestLoaded(), mark: XCUIElement?
+        for index in 0..<16 where loads < 1 {
+            if mark.map({ !hasRoom($0, step) }) ?? true { mark = landmark(stride(from: oldest, through: exchanges, by: 1), step) }
+            guard let target = mark else { XCTFail("No loaded question is on the screen to measure against"); break }
+            let before = target.frame.minY
+            slide(step)
+            let moved = target.frame.minY - before, now = oldestLoaded()
+            samples.append(String(format: "back %2d: %@ moved %.1f of %.1f, oldest question %d → %d", index, target.label, Double(moved), Double(step), known, now))
+            XCTAssertEqual(moved, step, accuracy: 30, "Messages joining above must not move the text being read:\n" + samples.suffix(4).joined(separator: "\n"))
+            if now < known { loads += 1 }
+            known = now
+        }
+        attach("scrolling back a drag at a time")
+        XCTAssertLessThan(oldest, exchanges - 11, "Older messages load while scrolling back")
+        XCTAssertGreaterThanOrEqual(loads, 1, "Older messages must join during a held drag:\n" + samples.joined(separator: "\n"))
+        XCTAssertTrue(jump.waitForExistence(timeout: 5), "A way back to the latest message is offered")
+        capture(flow + " earlier messages after scrolling back")
+
+        // All the way to the first message: the start is marked, and the newest messages,
+        // far below by now, are let go.
+        for _ in 0..<40 where !question(1).exists { history.swipeDown(velocity: .fast) }
+        XCTAssertTrue(question(1).exists, "Scrolling back reaches the first message")
+        for _ in 0..<6 where !inView(start) { history.swipeDown(velocity: .fast) }
+        XCTAssertTrue(inView(start), "The start of the conversation is marked")
+        XCTAssertFalse(app.buttons["loadEarlierChatMessages"].exists)
+        XCTAssertFalse(answer(exchanges).exists, "Far from the latest messages, they are no longer loaded")
+        XCTAssertEqual(history.value as? String, "Reading earlier")
+        capture(flow + " start of the conversation")
+
+        // Down again: newer messages join below while the oldest are let go above, and
+        // again nothing on the page moves by itself.
+        oldest = 1; known = 1
+        for _ in 0..<20 where oldestLoaded() == known { history.swipeUp(velocity: .fast) }
+        XCTAssertGreaterThan(oldest, known, "Scrolling down again lets go of the oldest messages")
+        XCTAssertFalse(question(1).exists)
+        XCTAssertEqual(history.value as? String, "Reading earlier", "The end of the loaded messages is not the latest message")
+        samples = []; known = oldest; mark = nil
+        var cycles = 0
+        for index in 0..<16 where cycles < 1 && !answer(exchanges).exists {
+            if mark.map({ !hasRoom($0, -step) }) ?? true { mark = landmark(stride(from: min(exchanges, oldest + 36), through: oldest, by: -1), -step) }
+            guard let target = mark else { XCTFail("No loaded question is on the screen to measure against"); break }
+            let before = target.frame.minY
+            slide(-step)
+            let moved = target.frame.minY - before, now = oldestLoaded()
+            samples.append(String(format: "down %2d: %@ moved %.1f of %.1f, oldest question %d → %d", index, target.label, Double(moved), Double(-step), known, now))
+            XCTAssertEqual(moved, -step, accuracy: 30, "Messages leaving above must not move the text being read:\n" + samples.suffix(4).joined(separator: "\n"))
+            if now > known { cycles += 1 }
+            known = now
+        }
+        attach("scrolling down a drag at a time")
+        XCTAssertGreaterThanOrEqual(cycles, 1, "The oldest messages must be let go during a held drag:\n" + samples.joined(separator: "\n"))
+        XCTAssertFalse(answer(exchanges).exists, "The latest messages are still far below")
+
+        // One tap returns to the latest message.
+        continueAfterFailure = false
+        jump.tap()
+        XCTAssertTrue(answer(exchanges).waitForExistence(timeout: 5))
+        expectation(for: NSPredicate(format: "value == %@", "Following latest"), evaluatedWith: history); waitForExpectations(timeout: 5)
+        XCTAssertLessThanOrEqual(answer(exchanges).frame.maxY, history.frame.maxY + 2, "The jump lands on the end of the latest reply")
+        XCTAssertGreaterThan(answer(exchanges).frame.maxY, history.frame.minY + 20, "The jump lands on the end of the latest reply")
+        XCTAssertFalse(question(oldest).exists); XCTAssertFalse(jump.exists)
+        capture(flow + " latest message after the jump")
+
+        // A question sent from far back lands after the latest saved message.
+        for _ in 0..<40 where answer(exchanges).exists { history.swipeDown(velocity: .fast) }
+        XCTAssertFalse(answer(exchanges).exists)
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        input.tap(); input.typeText("Short check"); send.tap()
+        let reply = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "chatReply", "Short check is done")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 10))
+        if app.buttons["Hide keyboard"].waitForExistence(timeout: 2) { app.buttons["Hide keyboard"].tap() }
+        expectation(for: NSPredicate(format: "value == %@", "Following latest"), evaluatedWith: history); waitForExpectations(timeout: 5)
+        XCTAssertTrue(answer(exchanges).exists, "The new question follows the latest saved exchange")
+        XCTAssertGreaterThan(reply.frame.minY, answer(exchanges).frame.minY)
+        XCTAssertFalse(jump.exists)
+        capture(flow + " question sent from far back")
     }
 
     @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInPages() { verifySendKeepsQuestionInView(flow: "Pages") }

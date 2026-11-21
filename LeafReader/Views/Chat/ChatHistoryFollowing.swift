@@ -7,6 +7,8 @@ struct ChatScrollFollowing: Equatable {
     private(set) var followsLatest = true
     private var dragging = false
     private var atBottom = true
+    /// Far enough from the newest text that a way back to it is offered.
+    private(set) var isAwayFromLatest = false
 
     /// The reader's finger or momentum is moving the history.
     var isScrolling: Bool { dragging }
@@ -22,7 +24,8 @@ struct ChatScrollFollowing: Equatable {
         // following; reaching the bottom again resumes it, including momentum.
         if !dragging, atBottom { followsLatest = true }
     }
-    mutating func resume() { followsLatest = true }
+    mutating func updateAway(_ away: Bool) { isAwayFromLatest = away }
+    mutating func resume() { followsLatest = true; isAwayFromLatest = false }
 }
 
 struct ChatHistoryAtBottom: PreferenceKey {
@@ -84,6 +87,10 @@ struct ChatHistoryInteraction: ViewModifier {
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height <= 4
                 } action: { _, atBottom in following.updateAtBottom(atBottom) }
+                // Past a few lines, not at the first pixel of a drag.
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height > 120
+                } action: { _, away in following.updateAway(away) }
                 .onScrollPhaseChange { _, phase, context in
                     switch phase {
                     case .tracking, .interacting, .decelerating: following.beginDragging()
