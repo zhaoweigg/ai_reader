@@ -4,6 +4,8 @@ import UIKit
 
 struct ChatHistoryPage {
     var messages: [ReaderChatMessage] = []
+    /// Where each message sits in the saved conversation, in the order of `messages`.
+    var sequences: [Int64] = []
     var oldest: Int64?
     var newest: Int64?
     var hasEarlier = false
@@ -134,7 +136,7 @@ final class ChatHistoryStore: ChatHistoryStorage {
             rows.append((sequence, message))
         }
         if !ascending { rows.reverse() }
-        var page = ChatHistoryPage(messages: rows.map(\.1), oldest: rows.first?.0, newest: rows.last?.0)
+        var page = ChatHistoryPage(messages: rows.map(\.1), sequences: rows.map(\.0), oldest: rows.first?.0, newest: rows.last?.0)
         if let oldest = page.oldest { page.hasEarlier = try exists("sequence < ?", cursor: oldest) }
         if let newest = page.newest { page.hasNewer = try exists("sequence > ?", cursor: newest) }
         return page

@@ -92,6 +92,8 @@ enum UITestFlag: String, CaseIterable {
 /// Launch environment keys whose value is read, not just checked for "1".
 enum UITestValue: String, CaseIterable {
     case testID = "LEAF_UI_TEST_ID"
+    // Chat
+    case chatHistory = "LEAF_UI_CHAT_HISTORY"
     // Contents
     case contentsBook = "LEAF_UI_CONTENTS_BOOK"
     case contentsLocator = "LEAF_UI_CONTENTS_LOCATOR"

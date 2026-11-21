@@ -15,7 +15,9 @@ final class ReaderChatSession: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var notice: String?
     @Published private(set) var historyError: String?
+    /// The conversation has saved messages before the oldest loaded one.
     @Published private(set) var hasEarlierMessages = false
+    /// The newest messages were let go while the reader was far back in the conversation.
     @Published private(set) var hasNewerMessages = false
     /// What the book search agent is doing, shown in place of “Thinking…”.
     @Published private(set) var activity: String?
@@ -41,6 +43,16 @@ final class ReaderChatSession: ObservableObject {
     private var historyReadable = true
     private var oldest: Int64?
     private var newest: Int64?
+    /// Where each loaded message sits in the saved conversation, once that is known.
+    private var sequences: [UUID: Int64] = [:]
+    /// A conversation opens on this many of its latest messages, and a reply that
+    /// finishes while the reader follows it brings the loaded messages back to it.
+    static let pageSize = 24
+    /// Messages added per step as the reader scrolls towards older or newer ones.
+    static let stepSize = 12
+    /// Most messages kept loaded. Every loaded message is laid out, so past this the
+    /// far end is let go and loads again when the reader scrolls back to it.
+    static let windowLimit = 72
     private var restoring = false
     private var draftDirty = false
     private var selectionDirty = false
@@ -57,7 +69,8 @@ final class ReaderChatSession: ObservableObject {
     /// Set by the chat panel while the reader's finger or momentum moves the history, so
     /// new text waits instead of competing with the scroll for frames.
     var holdsStreamedText = false { didSet { if oldValue && !holdsStreamedText { flushPendingText() } } }
-    /// The reader has slid away from the newest text (set by the panel).
+    /// The reader has slid away from the newest text (set by the panel): a finished
+    /// reply then leaves every loaded message where it is.
     var keepsLoadedMessages = false
     static let streamBatchDelay: Duration = .milliseconds(80)
     static let streamHoldDelay: Duration = .milliseconds(1200)
@@ -104,30 +117,90 @@ final class ReaderChatSession: ObservableObject {
             }
         ]
         if let history {
-            do { draft = try history.loadDraft(); selectedContext = try history.loadSelectedContext(); apply(try history.page(before: nil, after: nil, limit: 24)); restoredNotice() }
+            do { draft = try history.loadDraft(); selectedContext = try history.loadSelectedContext(); apply(try history.page(before: nil, after: nil, limit: Self.pageSize)); restoredNotice() }
             catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription }
         }
     }
     convenience init(directory: URL?, conversation: String) {
         do {
             guard let directory else { throw ChatHistoryError.unavailable }
-            self.init(history: try ChatHistoryStore(directory: directory, conversation: conversation),
-                      imageDirectory: directory.appendingPathComponent("Images", isDirectory: true))
+            let store = try ChatHistoryStore(directory: directory, conversation: conversation)
+            #if DEBUG
+            UITestChatHistory.seed(store)
+            #endif
+            self.init(history: store, imageDirectory: directory.appendingPathComponent("Images", isDirectory: true))
         } catch {
             self.init(); historyRequired = true; historyReadable = false; historyError = ChatHistoryError.unavailable.localizedDescription
         }
     }
-    func loadEarlier() { navigate(before: oldest, after: nil) }
-    func loadNewer() { navigate(before: nil, after: newest) }
-    func loadLatest() { navigate(before: nil, after: nil) }
-    private func navigate(before: Int64?, after: Int64?) {
+    // The history is one conversation the reader scrolls through. The loaded messages
+    // are a stretch of it: older ones join above as the reader scrolls back, and a
+    // stretch that grows past `windowLimit` lets go of its far end.
+
+    /// Adds the messages before the oldest loaded one above it. True when some were added.
+    @discardableResult func loadEarlier() -> Bool {
+        guard let history, historyReadable, hasEarlierMessages, let oldest else { return false }
+        do {
+            let page = try history.page(before: oldest, after: nil, limit: Self.stepSize)
+            let known = Set(messages.map(\.id)), added = page.messages.filter { !known.contains($0.id) }
+            remember(page)
+            self.oldest = page.oldest ?? oldest; hasEarlierMessages = page.hasEarlier
+            guard !added.isEmpty else { return false }
+            messages.insert(contentsOf: added, at: 0)
+            return true
+        } catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription; return false }
+    }
+    /// Adds the messages after the newest loaded one below it, after `releaseNewest`
+    /// let them go. True when some were added.
+    @discardableResult func loadNewer() -> Bool {
+        guard let history, historyReadable, hasNewerMessages, !isSending, let newest else { return false }
+        do {
+            let page = try history.page(before: nil, after: newest, limit: Self.stepSize)
+            let known = Set(messages.map(\.id)), added = page.messages.filter { !known.contains($0.id) }
+            remember(page)
+            self.newest = page.newest ?? newest; hasNewerMessages = page.hasNewer
+            messages.append(contentsOf: added)
+            // The end of the conversation is back, and with it an unfinished reply's Retry.
+            if !hasNewerMessages { restoredNotice() }
+            return !added.isEmpty
+        } catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription; return false }
+    }
+    /// Shows the conversation's latest messages again, wherever the reader had got to.
+    func loadLatest() {
         guard !isSending, flush(), let history else { return }
-        do { apply(try history.page(before: before, after: after, limit: 24)); restoredNotice() }
+        do { apply(try history.page(before: nil, after: nil, limit: Self.pageSize)); restoredNotice() }
         catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription }
     }
+    /// A reply in flight and anything not saved yet stay loaded.
+    private var canRelease: Bool {
+        history != nil && historyReadable && !isSending && !resumeOnForeground && pendingMessageIDs.isEmpty && pendingQuestion == nil
+    }
+    /// How many messages must go to leave room for the next step.
+    private var excess: Int { messages.count + Self.stepSize - Self.windowLimit }
+    /// Lets go of the newest loaded messages, far below a reader near the oldest ones.
+    @discardableResult func releaseNewest() -> Bool {
+        let count = excess
+        guard count > 0, count < messages.count, canRelease, let cursor = sequences[messages[messages.count - count - 1].id] else { return false }
+        for message in messages.suffix(count) { sequences[message.id] = nil }
+        messages.removeLast(count); newest = cursor; hasNewerMessages = true
+        restoredNotice()
+        return true
+    }
+    /// Lets go of the oldest loaded messages, far above a reader on the way back down.
+    @discardableResult func releaseOldest() -> Bool {
+        let count = excess
+        guard count > 0, count < messages.count, canRelease, let cursor = sequences[messages[count].id] else { return false }
+        for message in messages.prefix(count) { sequences[message.id] = nil }
+        messages.removeFirst(count); oldest = cursor; hasEarlierMessages = true
+        return true
+    }
     private func apply(_ page: ChatHistoryPage) {
+        sequences = [:]; remember(page)
         messages = page.messages; oldest = page.oldest; newest = page.newest
         hasEarlierMessages = page.hasEarlier; hasNewerMessages = page.hasNewer
+    }
+    private func remember(_ page: ChatHistoryPage) {
+        for (message, sequence) in zip(page.messages, page.sequences) { sequences[message.id] = sequence }
     }
     private func restoredNotice() {
         notice = canRetry ? "The previous reply did not finish. You can retry it." : nil
@@ -167,11 +240,15 @@ final class ReaderChatSession: ObservableObject {
     }
     private func refreshLatest() {
         guard let history, pendingMessageIDs.isEmpty else { return }
-        // A page holds 24 messages, so a finished exchange drops the two oldest. That
-        // waits while the reader is on earlier text: taking rows away above them
-        // would slide what they are reading out from under them.
-        do { apply(try history.page(before: nil, after: nil, limit: keepsLoadedMessages ? max(24, messages.count) : 24)) }
-        catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription }
+        do {
+            let page = try history.page(before: nil, after: nil, limit: Self.pageSize)
+            // While the reader is on earlier text nothing loaded is taken away: rows
+            // leaving above them would slide what they are reading out from under them.
+            // Only where the new exchange was saved is noted, so it can be let go later.
+            if keepsLoadedMessages, !hasNewerMessages, page.messages.last?.id == messages.last?.id { remember(page); newest = page.newest }
+            // Following the reply: the loaded messages go back to one page of the latest.
+            else { apply(page) }
+        } catch { historyReadable = false; historyError = ChatHistoryError.unreadable.localizedDescription }
     }
 
     func attachSelection(_ context: ReadingChatContext, prompt: String = "") {
@@ -367,7 +444,7 @@ final class ReaderChatSession: ObservableObject {
             ChatImageStore.remove(pictures, in: imageDirectory)
             pendingMessageIDs = []; setSavedDraft(""); selectedContext = nil; selectionDirty = false
             messages = []; error = nil; notice = nil; historyReadable = true; historyError = nil
-            oldest = nil; newest = nil; hasEarlierMessages = false; hasNewerMessages = false
+            oldest = nil; newest = nil; sequences = [:]; hasEarlierMessages = false; hasNewerMessages = false
         } catch { historyError = "The saved conversation could not be cleared. Your history has been kept. Try again." }
     }
     deinit {
@@ -383,7 +460,11 @@ final class ReaderChatSession: ObservableObject {
     }
     private func respond(provider: any ChatProvider, token: UUID, sharePage: Bool, replyID: UUID? = nil) async {
         let id = replyID ?? UUID()
-        var history = messages.filter { $0.id != id }
+        // The request is built from the latest messages, however far back the reader
+        // had scrolled and loaded before asking.
+        let loaded = messages.filter { $0.id != id }
+        var history = Array(loaded.suffix(Self.pageSize + 2))
+        let older = Array(loaded.dropLast(history.count))
         if !sharePage { for index in history.indices { history[index].context = nil } }
         if replyID == nil { messages.append(ReaderChatMessage(id: id, isUser: false, text: "", state: .streaming)) }
         changed(messages.last!)
@@ -415,7 +496,7 @@ final class ReaderChatSession: ObservableObject {
                 toolbox.limits = agentLimits; toolbox.sharePassages = sharePage; toolbox.webSearch = true
                 toolbox.activity = { [weak self] text in if self?.generation == token { self?.activity = text } }
                 do {
-                    let request = ChatRequest.conversation(history, earlierMessages: book == nil && app == nil ? loadEarlier(sharePage: sharePage) : [],
+                    let request = ChatRequest.conversation(history, earlierMessages: book == nil && app == nil ? earlierDiscussion(before: older, sharePage: sharePage) : [],
                                                            bookTools: book != nil, appTools: app != nil, screen: book == nil ? screen?.name : nil, limits: contextLimits)
                     var detail = book.map { Self.traceDetail(asked?.context?.bounded(contextLimits), boundary: $0.boundary, limits: agentLimits) }
                         ?? screen.map { "\($0.name) screen · limits \(agentLimits.maxToolCalls) calls / \(agentLimits.maxRounds) rounds" }
@@ -443,12 +524,12 @@ final class ReaderChatSession: ObservableObject {
                 } catch ReadingAgentError.toolsUnsupported {
                     // The model or provider refused tools: answer once without them.
                     trace.steps = []; trace.fellBack = true; recorder?.withoutTools()
-                    truncated = try await streamWithoutTools(provider: provider, history: history, id: id, token: token, trace: &trace,
+                    truncated = try await streamWithoutTools(provider: provider, history: history, older: older, id: id, token: token, trace: &trace,
                                                              recorder: recorder, recovery: recovery, sharePage: sharePage)
                 }
             } else {
                 trace.fellBack = true; recorder?.withoutTools()
-                truncated = try await streamWithoutTools(provider: provider, history: history, id: id, token: token, trace: &trace,
+                truncated = try await streamWithoutTools(provider: provider, history: history, older: older, id: id, token: token, trace: &trace,
                                                          recorder: recorder, recovery: recovery, sharePage: sharePage)
             }
             flushPendingText()
@@ -600,23 +681,22 @@ final class ReaderChatSession: ObservableObject {
             limit /= 2
         }
     }
-    /// Older messages for a request that cannot search them with a tool.
-    private func loadEarlier(sharePage: Bool) -> [ReaderChatMessage] {
-        guard let storage = history, let oldest, hasEarlierMessages else { return [] }
-        do {
-            var earlier = try storage.page(before: oldest, after: nil, limit: 48).messages
-            if !sharePage { for index in earlier.indices { earlier[index].context = nil } }
-            return earlier
-        } catch {
-            notice = "Earlier discussion could not be loaded; this reply uses recent messages."
-            return []
+    /// Older messages for a request that cannot search them with a tool: the 48 before
+    /// the request's own, from the loaded ones (`older`) and then the saved conversation.
+    private func earlierDiscussion(before older: [ReaderChatMessage], sharePage: Bool) -> [ReaderChatMessage] {
+        var earlier = Array(older.suffix(48))
+        if earlier.count < 48, let storage = history, let oldest, hasEarlierMessages {
+            do { earlier = try storage.page(before: oldest, after: nil, limit: 48 - earlier.count).messages + earlier }
+            catch { notice = "Earlier discussion could not be loaded; this reply uses recent messages." }
         }
+        if !sharePage { for index in earlier.indices { earlier[index].context = nil } }
+        return earlier
     }
     /// A reply from a provider or model without tool support: the question, its
     /// passage, earlier discussion and, from a screen, the screen's list as text.
-    private func streamWithoutTools(provider: any ChatProvider, history: [ReaderChatMessage], id: UUID, token: UUID, trace: inout ChatTrace,
+    private func streamWithoutTools(provider: any ChatProvider, history: [ReaderChatMessage], older: [ReaderChatMessage], id: UUID, token: UUID, trace: inout ChatTrace,
                                     recorder: AgentTraceRecorder? = nil, recovery: ChatRetryBudget, sharePage: Bool) async throws -> Bool {
-        let earlier = loadEarlier(sharePage: sharePage)
+        let earlier = earlierDiscussion(before: older, sharePage: sharePage)
         activity = nil
         try Task.checkCancellation()
         if let screen {
