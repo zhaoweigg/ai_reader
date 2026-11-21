@@ -29,10 +29,15 @@ final class BestsellerUITests: XCTestCase {
             if element.exists {
                 let frame = element.frame, viewport = app.leafContentViewport
                 let visible = frame.intersection(viewport)
+                // leafTapVisible aims at the middle of what is inside the window, so that
+                // point has to be clear of the tab bar too, not just a strip of the control.
+                let aim = frame.intersection(app.frame.insetBy(dx: 2, dy: 2))
                 if frame.width > 1 && frame.height > 1 && !visible.isNull,
-                   visible.width + 0.5 >= min(24, frame.width), visible.height + 0.5 >= min(24, frame.height) { return }
+                   visible.width + 0.5 >= min(24, frame.width), visible.height + 0.5 >= min(24, frame.height),
+                   !aim.isNull, viewport.contains(CGPoint(x: aim.midX, y: aim.midY)) { return }
                 let scroll = app.scrollViews.containing(.any, identifier: element.identifier).firstMatch
-                app.leafDragContent(up: frame.maxY > viewport.minY, in: scroll)
+                // Bring up what sits low or behind the tab bar; bring down what is behind the navigation bar.
+                app.leafDragContent(up: aim.isNull ? frame.maxY > viewport.minY : aim.midY >= viewport.minY, in: scroll)
             } else { app.leafDragContent(up: true) }
         }
         XCTContext.runActivity(named: "Unreachable discovery control") { activity in
@@ -289,6 +294,18 @@ final class BestsellerUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10), file: file, line: line)
         expectation(for: NSPredicate(format: "label CONTAINS %@", text), evaluatedWith: row); waitForExpectations(timeout: 10)
     }
+    /// The floating Ask Leaf button rests over the right edge, where each row's action is.
+    /// Scroll the row out from under it, as a reader would, before tapping the action.
+    @MainActor private func tapClearOfChatButton(_ element: XCUIElement, app: XCUIApplication) {
+        reveal(element, app: app)
+        let chat = app.buttons["openLibraryChat"], origin = app.coordinate(withNormalizedOffset: .zero)
+        for _ in 0..<4 where chat.exists && element.frame.intersects(chat.frame.insetBy(dx: -36, dy: -36)) {
+            let start = origin.withOffset(CGVector(dx: 90, dy: app.frame.midY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -150)), withVelocity: .slow, thenHoldForDuration: 0.15)
+        }
+        XCTAssertFalse(chat.exists && element.frame.intersects(chat.frame), "\(element.identifier) is still under the chat button")
+        element.leafTapVisible(in: app)
+    }
     @MainActor func testWebNovelChartListsRowsWithSynopsisAndSwitchesChartPeriodAndCategory() {
         let app = launch(webNovels: true); openWebNovels(app)
         webNovelRow(1, has: "星海拾荒者, 青柠茶 · 科幻 · 128.5万字", app: app); webNovelRow(2, has: "长夜书局", app: app)
@@ -328,7 +345,7 @@ final class BestsellerUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["webNovelOwned-1"].firstMatch.waitForExistence(timeout: 15))
         capture("网文 row added to the library")
         // A sequel beside the book itself has to be chosen by the reader.
-        let choose = app.buttons["webNovelChoose-2"]; reveal(choose, app: app); XCTAssertEqual(choose.label, "Choose"); choose.leafTapVisible(in: app)
+        let choose = app.buttons["webNovelChoose-2"]; reveal(choose, app: app); XCTAssertEqual(choose.label, "Choose"); tapClearOfChatButton(choose, app: app)
         XCTAssertTrue(app.staticTexts["webNovelDetailTitle"].waitForExistence(timeout: 8))
         XCTAssertEqual(app.staticTexts["webNovelDetailTitle"].label, "长夜书局")
         XCTAssertEqual(app.staticTexts["webNovelRanking"].label, "#2 · 月票榜 · 全站 · 5.1万月票")
@@ -338,7 +355,7 @@ final class BestsellerUITests: XCTestCase {
         capture("网文 book page with the book and its sequel to choose from")
         app.navigationBars.buttons.firstMatch.leafTapVisible(in: app)
         // Nothing in the catalog: the row offers a search instead.
-        let find = app.buttons["webNovelChoose-3"]; reveal(find, app: app); XCTAssertEqual(find.label, "Find"); find.leafTapVisible(in: app)
+        let find = app.buttons["webNovelChoose-3"]; reveal(find, app: app); XCTAssertEqual(find.label, "Find"); tapClearOfChatButton(find, app: app)
         XCTAssertTrue(app.staticTexts["webNovelDetailTitle"].waitForExistence(timeout: 8))
         let search = app.buttons["bestsellerSearchCatalog"]; reveal(search, app: app)
         XCTAssertTrue(app.staticTexts["No matching edition found yet."].exists)
