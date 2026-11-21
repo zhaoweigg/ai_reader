@@ -65,7 +65,7 @@ private actor ChartPages: WebNovelServing {
     }
 
     func testAPageThatIsNotTheChartAskedForOrIsIncompleteIsRejected() {
-        func rejected(_ data: Data, _ selection: WebNovelSelection = WebNovelSelection(), _ reason: String, line: UInt = #line) {
+        func rejected(_ data: Data, _ reason: String, _ selection: WebNovelSelection = WebNovelSelection(), line: UInt = #line) {
             XCTAssertThrowsError(try QidianChartClient.parse(data, selection: selection), reason, line: line) {
                 XCTAssertEqual($0 as? WebNovelFeedError, .invalidResponse, line: line)
             }
@@ -73,7 +73,7 @@ private actor ChartPages: WebNovelServing {
         rejected(Data("<html><script src=\"/probe.js\"></script></html>".utf8), "the site's browser check")
         rejected(page(chart: "hotsales"), "another chart")
         rejected(page(category: 22), "another category")
-        rejected(page(chart: "rec", period: 2, month: nil), WebNovelSelection(chart: .recommended, period: .week), "another period")
+        rejected(page(chart: "rec", period: 2, month: nil), "another period", WebNovelSelection(chart: .recommended, period: .week))
         rejected(page(pageNumber: 2), "a later page")
         rejected(page(rows: (1...19).map { row($0) }), "a cut-off chart")
         rejected(page(rows: (1...20).map { row($0 == 7 ? 8 : $0) }), "a gap in the ranks")
