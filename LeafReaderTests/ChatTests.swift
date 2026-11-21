@@ -413,6 +413,8 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(session.messages[1].state, .streaming); XCTAssertEqual(session.messages[1].text, "")
         XCTAssertEqual(session.activity, "Reading the page…"); XCTAssertEqual(session.draft, ""); XCTAssertTrue(session.isSending)
         XCTAssertTrue(provider.requests.isEmpty, "Nothing leaves before the passage is attached")
+        // The question shows before the capture starts; releasing a gate nobody waits at yet does nothing.
+        try await eventually { gate.continuation != nil }
         gate.continuation?.resume(returning: context)
         try await eventually { provider.requests.count == 1 }
         XCTAssertEqual(session.messages.count, 2)

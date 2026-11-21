@@ -4226,6 +4226,102 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testStreamingScrollAtOwnPaceInLibrary() { verifyStreamingScroll(flow: "Library") }
     @MainActor func testStreamingScrollAtOwnPaceUsingLegacyTracking() { verifyStreamingScroll(flow: "Library", legacy: true) }
 
+    @MainActor func testSlidingDuringAReplyKeepsItsPlaceInPages() { verifySlideDuringReply(flow: "Pages") }
+    @MainActor func testSlidingDuringAReplyKeepsItsPlaceInScroll() { verifySlideDuringReply(flow: "Scroll") }
+    @MainActor func testSlidingDuringAReplyKeepsItsPlaceInPDF() { verifySlideDuringReply(flow: "PDF") }
+    @MainActor func testSlidingDuringAReplyKeepsItsPlaceInLibrary() { verifySlideDuringReply(flow: "Library") }
+
+    /// Sliding to earlier text while a reply prints, in a conversation longer than one
+    /// history page (a finished reply drops the page's two oldest messages): the text
+    /// being read stays where it is when the reply finishes.
+    @MainActor private func verifySlideDuringReply(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(scrollStream: true)
+        if flow == "Library" { app.buttons["openLibraryChat"].tap() }
+        else { openSelectionFixture(flow, app: app); waitForBook(app); app.buttons["openReaderChat"].tap() }
+        let input = app.textFields["readerChatInput"].exists ? app.textFields["readerChatInput"] : app.textViews["readerChatInput"]
+        let send = app.buttons["sendReaderChat"], history = app.scrollViews["chatMessageHistory"]
+        let geometry = app.descendants(matching: .any)["uitestChatHistoryGeometry"].firstMatch
+        func text(_ identifier: String, containing words: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", identifier, words)).firstMatch
+        }
+        func ask(_ question: String) { input.tap(); input.typeText(question); send.tap() }
+        func metrics() -> [String: Any] {
+            let data = (geometry.value as? String ?? "").data(using: .utf8) ?? Data()
+            return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        }
+        /// How far the end of the history is below the bottom of its viewport.
+        func gap() -> Double {
+            let values = metrics()
+            guard let height = values["contentHeight"] as? Double, let offset = values["offset"] as? Double, let viewport = values["viewportHeight"] as? Double else { return .nan }
+            return height - offset - viewport
+        }
+        // Thirteen brief exchanges: two messages more than one page holds.
+        for index in 1...13 {
+            ask("Short \(index)")
+            XCTAssertTrue(text("chatReply", containing: "Short \(index) is done").waitForExistence(timeout: 10), "Brief reply \(index)")
+            expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
+            waitForExpectations(timeout: 5)
+        }
+        XCTAssertTrue(app.buttons["earlierChatMessages"].exists, "The conversation must be longer than one history page")
+        XCTAssertTrue(geometry.waitForExistence(timeout: 5))
+        continueAfterFailure = true // The timeline is attached even when a check fails.
+        let began = Date()
+        var samples: [String] = []
+        func sample(_ note: String) {
+            samples.append(String(format: "%5.1fs ", Date().timeIntervalSince(began)) + note + " · \(history.value as? String ?? "?") · \(geometry.value as? String ?? "?")")
+        }
+        /// Samples until the reply ends by itself, then once more after it has settled.
+        func sampleUntilFinished(_ note: () -> String) {
+            let limit = Date().addingTimeInterval(40)
+            while send.label != "Send message", Date() < limit { sample(note()); usleep(250_000) }
+            XCTAssertEqual(send.label, "Send message", "The reply must finish by itself")
+            usleep(1_200_000); sample("finished " + note())
+        }
+        func attach(_ name: String) {
+            let trace = XCTAttachment(string: samples.joined(separator: "\n")); trace.name = flow + " " + name; trace.lifetime = .keepAlways; add(trace)
+        }
+
+        // A slide to earlier text: the question that started this reply is the place to keep.
+        ask("Explain then finish B")
+        // Read with the keyboard away, as the history is at its reading height then.
+        if app.buttons["Hide keyboard"].waitForExistence(timeout: 2) { app.buttons["Hide keyboard"].tap() }
+        XCTAssertTrue(text("chatReply", containing: "Update B:").waitForExistence(timeout: 10))
+        let question = text("chatQuestion", containing: "then finish B")
+        /// The first line of the question is inside the history's viewport.
+        func questionInView() -> Bool {
+            guard question.exists else { return false }
+            let frame = question.frame, viewport = history.frame
+            return frame.height > 10 && frame.minY >= viewport.minY - 1 && frame.minY <= viewport.maxY - 20
+        }
+        for _ in 0..<12 where !questionInView() {
+            // Each slide is shorter than the viewport, so the question cannot pass through
+            // unseen; the tab chat's history is only about a hundred points tall.
+            let start = history.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15))
+            start.press(forDuration: 0.02, thenDragTo: start.withOffset(CGVector(dx: 0, dy: max(24, min(110, history.frame.height - 46)))),
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
+        }
+        XCTAssertTrue(questionInView(), "The question must be in view after sliding to earlier text")
+        expectation(for: NSPredicate(format: "value == %@", "Reading earlier"), evaluatedWith: history)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(send.label == "Send message", "The slide must end while the reply still prints")
+        let place = question.frame.minY
+        sampleUntilFinished { String(format: "earlier, question at %.1f", question.frame.minY) }
+        attach("slide to earlier text")
+        XCTAssertEqual(question.frame.minY, place, accuracy: 3, "A finished reply must not move the text being read:\n" + samples.suffix(6).joined(separator: "\n"))
+        XCTAssertEqual(history.value as? String, "Reading earlier")
+        capture(flow + " reply finished while reading earlier text")
+
+        // The end is still one slide away, and following resumes there.
+        for _ in 0..<12 {
+            if history.value as? String == "Following latest" { break }
+            history.swipeUp(velocity: .fast)
+        }
+        XCTAssertEqual(history.value as? String, "Following latest")
+        XCTAssertLessThanOrEqual(gap(), 4, "Sliding back must reach the end of the finished reply")
+        capture(flow + " end of the reply after sliding back")
+    }
+
     @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInPages() { verifySendKeepsQuestionInView(flow: "Pages") }
     @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInScroll() { verifySendKeepsQuestionInView(flow: "Scroll") }
     @MainActor func testSendingFromTheKeyboardKeepsTheQuestionInViewInPDF() { verifySendKeepsQuestionInView(flow: "PDF") }
@@ -4402,7 +4498,7 @@ final class LeafReaderUITests: XCTestCase {
         func ask(_ question: String) {
             // Close the keyboard first, so the panel does not resize while measured.
             input.tap(); input.typeText(question)
-            if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+            if app.buttons["Hide keyboard"].waitForExistence(timeout: 2) { app.buttons["Hide keyboard"].tap() }
             expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
             waitForExpectations(timeout: 5)
             send.tap()
