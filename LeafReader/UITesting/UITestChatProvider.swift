@@ -112,6 +112,16 @@ extension UITestChatProvider: ToolChatProvider {
                         continuation.finish(); return
                     }
                     try await Task.sleep(for: .milliseconds(150))
+                    // Web search: the provider searches by itself and cites a page.
+                    let question = items.compactMap { item -> String? in if case .turn(let turn) = item, turn.role == "user" { return turn.content }; return nil }.last ?? ""
+                    if allowTools, tools.contains(where: \.hosted), question.localizedCaseInsensitiveContains("search the web") {
+                        continuation.yield(.webSearch(nil))
+                        try await Task.sleep(for: .milliseconds(1500))
+                        continuation.yield(.webSearch("Leaf reader app"))
+                        continuation.yield(.text("Web reply: Leaf is a quiet reading app. [Leaf on the web](https://example.com/leaf)"))
+                        continuation.yield(.usage(TokenUsage(input: 1000, output: 20)))
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
                     continuation.yield(.usage(TokenUsage(input: 1200 + items.count * 300, output: 30, cachedInput: 800)))
                     let results = items.compactMap { item -> [AgentToolResult]? in if case .toolResults(let value) = item { return value }; return nil }.last
                     if tools.contains(where: { $0.name == "get_current_view" }) {

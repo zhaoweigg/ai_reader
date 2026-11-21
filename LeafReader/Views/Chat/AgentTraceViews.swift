@@ -16,14 +16,14 @@ struct AgentLimitsSection: View {
             Toggle("Search highlighted name first", isOn: $configuration.agentLimits.seedSearch).accessibilityIdentifier("agentSeedSearch")
         } header: { Text("Agent limits") }
         Section {
-            ForEach((AgentTool.all + AgentTool.view + AgentTool.app).map(\.name), id: \.self) { name in
+            ForEach((AgentTool.all + AgentTool.view + AgentTool.app + [AgentTool.webSearch]).map(\.name), id: \.self) { name in
                 Toggle(name, isOn: Binding(get: { !configuration.agentLimits.disabledTools.contains(name) }, set: { on in
                     if on { configuration.agentLimits.disabledTools.remove(name) } else { configuration.agentLimits.disabledTools.insert(name) }
                 })).font(.system(.body, design: .monospaced)).accessibilityIdentifier("agentTool-\(name)")
             }
         } header: { Text("Agent tools") } footer: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("Higher limits can give fuller answers but take longer and use more of your plan.")
+                Text("Higher limits can give fuller answers but take longer and use more of your plan. web_search uses the web search of ChatGPT or Claude; other providers don’t offer it.")
                 Button("Reset to defaults") { configuration.agentLimits = AgentLimits() }.font(.footnote).accessibilityIdentifier("agentLimitsReset")
             }
         }

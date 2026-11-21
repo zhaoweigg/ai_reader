@@ -13,6 +13,18 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
     /// Account and model pairs that refused the image tool during this launch,
     /// with the reason; their requests go out without it.
     @MainActor static var imageToolRejected: [String: String] = [:]
+    /// ChatGPT's own web search, offered in agent rounds that may still use tools.
+    static let webSearchTool: [String: Any] = ["type": "web_search"]
+    /// Account and model pairs that refused web search during this launch, with the reason.
+    @MainActor static var webSearchRejected: [String: String] = [:]
+    /// Which hosted tools a request may offer, and which it did offer.
+    struct HostedTools: Equatable { var images = false; var web = false }
+    /// What one streamed reply has said so far: its answer text, the tool calls it
+    /// made and the web pages it cited.
+    struct ResponseState {
+        var text = ""
+        var sources: [WebSource] = []
+    }
     private var imageKey: String { accountID + "\n" + model }
     /// Added to the instructions whenever the image tool is offered: the reading
     /// prompt describes only the book tools, and earlier replies in a conversation
@@ -58,7 +70,9 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
         return request
     }
     func stream(_ conversation: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
-        let events = open({ try makeRequest(conversation, accessToken: $0, images: $1) }) { data, _ in
+        let events = open({ token, allowed in
+            (try makeRequest(conversation, accessToken: token, images: allowed.images), HostedTools(images: allowed.images))
+        }) { data, _ in
             try Self.decode(data).map(\.agentEvent)
         }
         return AsyncThrowingStream { continuation in
@@ -71,7 +85,7 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                         case .image(let data): continuation.yield(.image(data))
                         case .imageToolRefused(let reason): continuation.yield(.imageToolRefused(reason))
                         case .finished(let value): continuation.yield(.finished(truncated: value))
-                        case .toolCall, .usage: break
+                        case .toolCall, .usage, .webSearch, .webSearchRefused, .providerContent: break
                         }
                     }
                     continuation.finish()
@@ -82,9 +96,10 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
     }
     /// Registers the request with its account, refreshes the token, and decodes
     /// SSE. A reply must contain answer text, a picture or tool calls, and a terminal event.
-    /// `build` receives whether to offer the hosted image tool.
-    private func open(_ build: @escaping @MainActor (String, Bool) throws -> URLRequest,
-                      decode: @escaping (String, inout Int) throws -> [AgentEvent]) -> AsyncThrowingStream<AgentEvent, Error> {
+    /// `build` receives which hosted tools it may offer and returns the request with the
+    /// tools it did offer.
+    private func open(_ build: @escaping @MainActor (String, HostedTools) throws -> (URLRequest, HostedTools),
+                      decode: @escaping (String, inout ResponseState) throws -> [AgentEvent]) -> AsyncThrowingStream<AgentEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 let requestID = UUID()
@@ -96,25 +111,38 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                     try await accounts.validateModel(model, accountID: accountID)
                     let token = try await accounts.accessToken(accountID: accountID)
                     try Task.checkCancellation()
-                    var images = imageGeneration && Self.imageToolRejected[imageKey] == nil
+                    var allowed = HostedTools(images: imageGeneration && Self.imageToolRejected[imageKey] == nil,
+                                              web: Self.webSearchRejected[imageKey] == nil)
                     if imageGeneration, let reason = Self.imageToolRejected[imageKey] { continuation.yield(.imageToolRefused(reason)) }
-                    var (response, lines) = try await transport.open(try build(token, images))
-                    if images, [400, 422].contains(response.statusCode) {
-                        // A model or plan without the hosted image tool rejects the whole
-                        // request. Ask once more without it; only if that is accepted is
-                        // the tool set aside for this account and model until relaunch,
-                        // and the reason reported so the reply and trace can say so.
+                    if let reason = Self.webSearchRejected[imageKey], try build(token, HostedTools(images: allowed.images, web: true)).1.web {
+                        continuation.yield(.webSearchRefused(reason))
+                    }
+                    var (request, offered) = try build(token, allowed)
+                    var (response, lines) = try await transport.open(request)
+                    // A model, plan or workspace without a hosted tool rejects the whole
+                    // request. Ask again without the tool, the picture tool first; only if a
+                    // request is then accepted is the tool dropped last set aside for this
+                    // account and model until relaunch, and the reason reported so the reply
+                    // and trace can say so.
+                    var blamed: (web: Bool, reason: String)?
+                    while [400, 422].contains(response.statusCode), offered.images || offered.web {
                         var body = Data()
                         for try await line in lines {
                             body.append(Data(line.utf8))
                             if body.count > 16384 { break }
                         }
                         let reason = Self.refusalReason(body, status: response.statusCode)
-                        images = false
-                        (response, lines) = try await transport.open(try build(token, images))
-                        if (200..<300).contains(response.statusCode) {
-                            Self.imageToolRejected[imageKey] = reason
-                            continuation.yield(.imageToolRefused(reason))
+                        if offered.images { allowed.images = false; blamed = (false, reason) } else { allowed.web = false; blamed = (true, reason) }
+                        (request, offered) = try build(token, allowed)
+                        (response, lines) = try await transport.open(request)
+                    }
+                    if let blamed, (200..<300).contains(response.statusCode) {
+                        if blamed.web {
+                            Self.webSearchRejected[imageKey] = blamed.reason
+                            continuation.yield(.webSearchRefused(blamed.reason))
+                        } else {
+                            Self.imageToolRejected[imageKey] = blamed.reason
+                            continuation.yield(.imageToolRefused(blamed.reason))
                         }
                     }
                     guard (200..<300).contains(response.statusCode) else {
@@ -134,17 +162,19 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                         guard mediaType == "text/event-stream" else { throw ChatGPTError.invalidResponse }
                     }
                     var decoder = ServerSentEventDecoder()
+                    var state = ResponseState()
                     var textLength = 0, calls = 0, pictures = 0
                     for try await line in lines {
                         try Task.checkCancellation()
                         guard let data = try decoder.consume(line) else { continue }
-                        for event in try decode(data, &calls) {
+                        for event in try decode(data, &state) {
                             switch event {
                             case .text(let text):
                                 textLength += text.count
                                 guard textLength <= 64000 else { throw ChatError.tooLarge }
                             case .image: pictures += 1
-                            case .toolCall, .usage, .imageStarted, .imageToolRefused: break
+                            case .toolCall: calls += 1
+                            case .usage, .imageStarted, .imageToolRefused, .webSearch, .webSearchRefused, .providerContent: break
                             case .finished:
                                 guard textLength > 0 || calls > 0 || pictures > 0 else { throw ChatError.emptyResponse }
                                 continuation.yield(event); continuation.finish(); return
@@ -189,46 +219,121 @@ extension ChatGPTSubscriptionProvider: ToolChatProvider {
         items.flatMap { item -> [[String: Any]] in
             switch item {
             case .turn(let turn): return [["role": turn.role, "content": turn.content]]
-            case .toolCalls(_, let calls):
+            case .toolCalls(_, let calls), .providerContent(_, _, let calls):
                 return calls.map { ["type": "function_call", "call_id": $0.id, "name": $0.name, "arguments": $0.arguments] }
             case .toolResults(let results):
                 return results.map { ["type": "function_call_output", "call_id": $0.id, "output": $0.output] }
             }
         }
     }
-    func makeAgentRequest(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool, accessToken: String, images: Bool = false) throws -> URLRequest {
-        var offered: [[String: Any]] = tools.map { ["type": "function", "name": $0.name, "description": $0.description, "parameters": $0.parameters] }
+    func makeAgentRequest(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool, accessToken: String,
+                          images: Bool = false, webSearch: Bool = true) throws -> URLRequest {
+        try makeAgentRequest(system: system, items: items, tools: tools, allowTools: allowTools, accessToken: accessToken,
+                             allowed: HostedTools(images: images, web: webSearch)).0
+    }
+    /// The request, and which hosted tools it offers.
+    func makeAgentRequest(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool, accessToken: String,
+                          allowed: HostedTools) throws -> (URLRequest, HostedTools) {
+        let functions = tools.filter { !$0.hosted }
+        var offered: [[String: Any]] = functions.map { ["type": "function", "name": $0.name, "description": $0.description, "parameters": $0.parameters] }
         // Pictures are offered whenever the model may still act: every agent round
         // that allows tools, and a plain traced reply. The closing round answers in words.
-        let drawing = images && (allowTools || tools.isEmpty)
+        let drawing = allowed.images && (allowTools || functions.isEmpty)
+        // Web search only in rounds that may still use tools, and only when the chat offers it.
+        let searching = allowed.web && allowTools && tools.contains { $0.hosted }
         if drawing { offered.append(Self.imageTool) }
+        if searching { offered.append(Self.webSearchTool) }
         var extra: [String: Any] = offered.isEmpty ? [:] : ["tools": offered, "tool_choice": allowTools || drawing ? "auto" : "none"]
-        if !tools.isEmpty { extra["parallel_tool_calls"] = true }
-        return try makeRequest(instructions: drawing ? system + "\n\n" + Self.drawingInstruction : system,
-                               input: Self.input(items), extra: extra, accessToken: accessToken)
+        if !functions.isEmpty { extra["parallel_tool_calls"] = true }
+        var instructions = system
+        if drawing { instructions += "\n\n" + Self.drawingInstruction }
+        if searching { instructions += "\n\n" + AgentTool.webSearchInstruction }
+        return (try makeRequest(instructions: instructions, input: Self.input(items), extra: extra, accessToken: accessToken),
+                HostedTools(images: drawing, web: searching))
     }
     func streamAgent(system: String, items: [AgentItem], tools: [AgentTool], allowTools: Bool) -> AsyncThrowingStream<AgentEvent, Error> {
-        open({ try makeAgentRequest(system: system, items: items, tools: tools, allowTools: allowTools, accessToken: $0, images: $1) }) { data, calls in
-            let events = try Self.decodeAgent(data)
-            calls += events.filter { if case .toolCall = $0 { return true }; return false }.count
-            return events
+        open({ try makeAgentRequest(system: system, items: items, tools: tools, allowTools: allowTools, accessToken: $0, allowed: $1) }) { data, state in
+            try Self.decodeAgent(data, state: &state)
         }
     }
     static func decodeAgent(_ data: String) throws -> [AgentEvent] {
-        if let object = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any],
-           object["type"] as? String == "response.completed", let usage = (object["response"] as? [String: Any])?["usage"] as? [String: Any] {
-            let reported = TokenUsage(input: usage["input_tokens"] as? Int, output: usage["output_tokens"] as? Int,
-                                      cachedInput: (usage["input_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int,
-                                      reasoning: (usage["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int)
-            return (reported.isEmpty ? [] : [.usage(reported)]) + [.finished(truncated: false)]
-        }
-        if let object = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any],
-           object["type"] as? String == "response.output_item.done",
-           let item = object["item"] as? [String: Any], item["type"] as? String == "function_call" {
-            guard let id = item["call_id"] as? String, let name = item["name"] as? String else { throw ChatGPTError.invalidResponse }
-            let arguments = item["arguments"] as? String ?? "{}"
+        var state = ResponseState()
+        return try decodeAgent(data, state: &state)
+    }
+    static func decodeAgent(_ data: String, state: inout ResponseState) throws -> [AgentEvent] {
+        let object = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any]
+        let item = object?["item"] as? [String: Any]
+        switch object?["type"] as? String {
+        case "response.completed":
+            var events: [AgentEvent] = []
+            // Every page the answer cites stays reachable, even when the answer did not link it.
+            if let footnote = WebSource.footnote(state.sources, after: state.text) { events.append(.text(footnote)) }
+            if let usage = (object?["response"] as? [String: Any])?["usage"] as? [String: Any] {
+                let reported = TokenUsage(input: usage["input_tokens"] as? Int, output: usage["output_tokens"] as? Int,
+                                          cachedInput: (usage["input_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int,
+                                          reasoning: (usage["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int)
+                if !reported.isEmpty { events.append(.usage(reported)) }
+            }
+            return events + [.finished(truncated: false)]
+        case "response.output_item.added" where item?["type"] as? String == "web_search_call":
+            return [.webSearch(nil)]
+        case "response.output_item.done" where item?["type"] as? String == "web_search_call":
+            // Opening or reading inside a page belongs to the search already shown.
+            let action = item?["action"] as? [String: Any]
+            guard action == nil || action?["type"] as? String == "search" else { return [] }
+            let query = action?["query"] as? String ?? (action?["queries"] as? [String])?.first ?? ""
+            return [.webSearch(query.trimmingCharacters(in: .whitespacesAndNewlines))]
+        case "response.output_item.done" where item?["type"] as? String == "function_call":
+            guard let id = item?["call_id"] as? String, let name = item?["name"] as? String else { throw ChatGPTError.invalidResponse }
+            let arguments = item?["arguments"] as? String ?? "{}"
             return [.toolCall(AgentToolCall(id: id, name: name, arguments: arguments.isEmpty ? "{}" : arguments))]
+        case "response.output_item.done" where item?["type"] as? String == "message":
+            for part in item?["content"] as? [[String: Any]] ?? [] {
+                for annotation in part["annotations"] as? [[String: Any]] ?? [] { state.cite(annotation) }
+            }
+            return []
+        case "response.output_text.annotation.added":
+            if let annotation = object?["annotation"] as? [String: Any] { state.cite(annotation) }
+            return []
+        default:
+            let events = try decode(data).map(\.agentEvent)
+            for case .text(let text) in events { state.text += text }
+            return events
         }
-        return try decode(data).map(\.agentEvent)
+    }
+}
+
+extension ChatGPTSubscriptionProvider.ResponseState {
+    /// Keeps a `url_citation` annotation's page, once.
+    mutating func cite(_ annotation: [String: Any]) {
+        guard annotation["type"] as? String == "url_citation", let source = WebSource(url: annotation["url"] as? String, title: annotation["title"] as? String),
+              !sources.contains(where: { $0.url == source.url }) else { return }
+        sources.append(source)
+    }
+}
+
+/// A web page a reply cites.
+struct WebSource: Equatable {
+    let url: URL
+    let title: String
+    /// Only web links: a citation can never become an app or file link.
+    init?(url: String?, title: String?) {
+        guard let url = url.flatMap(URL.init(string:)), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return nil }
+        self.url = url
+        let name = (title ?? "").replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.title = name.isEmpty ? (url.host ?? url.absoluteString) : String(name.prefix(120))
+    }
+    /// Links to the cited pages the reply did not already link, in the reply's language,
+    /// so web results always show where they came from.
+    static func footnote(_ sources: [WebSource], after text: String) -> String? {
+        let missing = sources.filter { !text.contains($0.url.absoluteString) }.prefix(8)
+        guard !missing.isEmpty else { return nil }
+        let chinese = text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
+        let lines = missing.map { source -> String in
+            let label = source.title.replacingOccurrences(of: "[", with: "(").replacingOccurrences(of: "]", with: ")")
+            let link = source.url.absoluteString.replacingOccurrences(of: "(", with: "%28").replacingOccurrences(of: ")", with: "%29")
+            return "- [\(label)](\(link))"
+        }
+        return "\n\n" + (chinese ? "来源：" : "Sources:") + "\n" + lines.joined(separator: "\n")
     }
 }

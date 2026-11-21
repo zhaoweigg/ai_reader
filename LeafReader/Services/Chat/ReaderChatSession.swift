@@ -407,7 +407,7 @@ final class ReaderChatSession: ObservableObject {
                 try Task.checkCancellation()
                 let app = self.app
                 let toolbox = ReadingAgentToolbox(book: book, screen: book == nil ? screen : nil, app: app) { [weak self] terms in self?.conversationMatches(terms) ?? "{\"matches\":[]}" }
-                toolbox.limits = agentLimits; toolbox.sharePassages = sharePage
+                toolbox.limits = agentLimits; toolbox.sharePassages = sharePage; toolbox.webSearch = true
                 toolbox.activity = { [weak self] text in if self?.generation == token { self?.activity = text } }
                 do {
                     let request = ChatRequest.conversation(history, earlierMessages: book == nil && app == nil ? loadEarlier(sharePage: sharePage) : [],
@@ -518,7 +518,7 @@ final class ReaderChatSession: ObservableObject {
                 case .imageStarted: drawing(id, token: token)
                 case .image(let data): try attachImage(data, to: id, token: token)
                 case .imageToolRefused(let reason): imageToolRefused(reason, token: token)
-                case .toolCall: break
+                case .toolCall, .webSearch, .webSearchRefused, .providerContent: break
                 case .finished(let truncated): recorder.round(1, text: answer, calls: [], usage: usage, final: true); return truncated
                 }
             }
