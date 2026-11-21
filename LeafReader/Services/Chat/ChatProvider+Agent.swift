@@ -64,6 +64,7 @@ extension HTTPChatProvider: ToolChatProvider {
                             if body.count > 16384 { break }
                         }
                         let reason = ChatGPTSubscriptionProvider.refusalReason(body, status: response.statusCode)
+                        webSearch = false
                         (response, lines) = try await transport.open(
                             try makeAgentRequest(system: system, items: items, tools: tools, allowTools: allowTools, webSearch: false))
                         if (200..<300).contains(response.statusCode) {
@@ -71,12 +72,18 @@ extension HTTPChatProvider: ToolChatProvider {
                             continuation.yield(.webSearchRefused(reason))
                         }
                     }
+                    if offersSearch {
+                        let sent = webSearch ? "\(Self.anthropicWebSearchType(profile.model)) sent"
+                            : "web_search not sent: " + (Self.webSearchRefusals[refusalKey].map { "refused earlier this launch (\($0))" } ?? "refused by this request")
+                        continuation.yield(.diagnostic(title: "Hosted tools", detail: "\(sent) · model \(profile.model) · HTTP \(response.statusCode)"))
+                    }
                     guard (200..<300).contains(response.statusCode) else { throw ChatRequestFailure(ChatError.http(response.statusCode), response: response) }
                     guard response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true else {
                         throw ChatError.invalidResponse
                     }
                     var decoder = ServerSentEventDecoder()
                     var state = AgentStreamState()
+                    var searches = 0
                     for try await line in lines {
                         try Task.checkCancellation()
                         guard let data = try decoder.consume(line) else { continue }
@@ -86,10 +93,14 @@ extension HTTPChatProvider: ToolChatProvider {
                                 state.textLength += text.count
                                 guard state.textLength <= 64000 else { throw ChatError.tooLarge }
                             case .toolCall: state.calls += 1
-                            case .usage, .imageStarted, .image, .imageToolRefused, .webSearch, .webSearchRefused, .providerContent: break
+                            case .webSearch(let query): if query != nil { searches += 1 }
+                            case .usage, .imageStarted, .image, .imageToolRefused, .webSearchRefused, .providerContent, .diagnostic: break
                             case .finished:
                                 // A turn Claude paused while searching may hold no text yet.
                                 guard state.textLength > 0 || state.calls > 0 || state.paused else { throw ChatError.emptyResponse }
+                                if webSearch, searches == 0, allowTools {
+                                    continuation.yield(.diagnostic(title: "Web search not used", detail: "offered and accepted; the model answered without searching"))
+                                }
                                 continuation.yield(event); continuation.finish(); return
                             }
                             continuation.yield(event)
@@ -150,6 +161,10 @@ extension HTTPChatProvider: ToolChatProvider {
                         return block["name"] as? String == AgentTool.webSearchName ? [.webSearch(nil)] : []
                     case "web_search_tool_result":
                         state.searched = true
+                        // A failed search returns an error object instead of a list of results.
+                        if let failure = block["content"] as? [String: Any] {
+                            return [.diagnostic(title: "Web search error", detail: failure["error_code"] as? String ?? "unknown")]
+                        }
                         return []
                     default: break // Text, which the plain decoder below reads, and thinking.
                     }

@@ -31,9 +31,12 @@ enum AgentItem: Equatable {
 /// take the web search tool and the request went out again without it.
 /// `providerContent` carries the reply's own content blocks, which the next request
 /// must repeat; `paused` means the provider stopped mid-turn and expects it back to go on.
+/// `diagnostic` is a troubleshooting line for the agent trace (which hosted tools were
+/// sent and accepted, how a search ended); it never contains book or answer text.
 enum AgentEvent: Equatable {
     case text(String), toolCall(AgentToolCall), usage(TokenUsage), imageStarted, image(Data), imageToolRefused(String)
     case webSearch(String?), webSearchRefused(String), providerContent(Data, paused: Bool)
+    case diagnostic(title: String, detail: String)
     case finished(truncated: Bool)
 }
 
@@ -382,6 +385,7 @@ enum ReadingAgentRunner {
                         case .webSearch(let query): toolbox.searchedWeb(query, recorder: recorder)
                         case .webSearchRefused(let reason): recorder?.webSearchRefused(reason)
                         case .providerContent(let data, let paused): content = (data, paused)
+                        case .diagnostic(let title, let detail): recorder?.note(title, detail: detail)
                         case .finished(let value): truncated = value; finished = true
                         }
                         if finished { break }

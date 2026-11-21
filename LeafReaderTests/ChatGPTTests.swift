@@ -595,6 +595,12 @@ final class ChatGPTTests: XCTestCase {
     func testWebSearchEventsAndCitedPagesStayVisibleInTheAnswer() throws {
         var state = ChatGPTSubscriptionProvider.ResponseState()
         func decode(_ json: String) throws -> [AgentEvent] { try ChatGPTSubscriptionProvider.decodeAgent(json, state: &state) }
+        // Troubleshooting: the server's own list of accepted tools, and searches that did not complete.
+        XCTAssertEqual(try decode(#"{"type":"response.created","response":{"model":"gpt-6.1-sol","tools":[{"type":"function"},{"type":"function"},{"type":"web_search"}]}}"#),
+                       [.diagnostic(title: "Server accepted tools", detail: "model gpt-6.1-sol · function×2, web_search")])
+        XCTAssertEqual(try decode(#"{"type":"response.created","response":{"tools":[{"type":"function"}]}}"#), [], "Nothing to note without hosted tools")
+        XCTAssertEqual(try decode(#"{"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_0","status":"failed","action":{"type":"search","query":"x"}}}"#),
+                       [.diagnostic(title: "Web search call failed", detail: "action search")])
         XCTAssertEqual(try decode(#"{"type":"response.output_item.added","item":{"type":"web_search_call","id":"ws_1","status":"in_progress"}}"#), [.webSearch(nil)])
         XCTAssertEqual(try decode(#"{"type":"response.web_search_call.searching","item_id":"ws_1"}"#), [])
         XCTAssertEqual(try decode(#"{"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":" 青山 会说话的肘子 "}}}"#), [.webSearch("青山 会说话的肘子")])
@@ -644,7 +650,8 @@ final class ChatGPTTests: XCTestCase {
         XCTAssertTrue(types(transport.bodies[0]).contains("image_generation")); XCTAssertTrue(types(transport.bodies[0]).contains("web_search"))
         XCTAssertFalse(types(transport.bodies[1]).contains("image_generation")); XCTAssertTrue(types(transport.bodies[1]).contains("web_search"))
         XCTAssertFalse(types(transport.bodies[2]).contains("web_search")); XCTAssertEqual(types(transport.bodies[2]).count, AgentTool.all.count, "The book tools stay")
-        XCTAssertEqual(events, [.webSearchRefused(reason), .text("From the book."), .finished(truncated: false)])
+        XCTAssertEqual(events, [.webSearchRefused(reason), .diagnostic(title: "Hosted tools", detail: "web_search not sent: refused earlier this launch (\(reason)) · model \(model) · HTTP 200"),
+                                .text("From the book."), .finished(truncated: false)])
         XCTAssertEqual(ChatGPTSubscriptionProvider.webSearchRejected[key], reason)
         XCTAssertNil(ChatGPTSubscriptionProvider.imageToolRejected[key])
         XCTAssertFalse(reason.contains("secret"), "Server message text is never reported")

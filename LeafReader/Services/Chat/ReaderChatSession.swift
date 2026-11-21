@@ -519,6 +519,7 @@ final class ReaderChatSession: ObservableObject {
                 case .image(let data): try attachImage(data, to: id, token: token)
                 case .imageToolRefused(let reason): imageToolRefused(reason, token: token)
                 case .toolCall, .webSearch, .webSearchRefused, .providerContent: break
+                case .diagnostic(let title, let detail): recorder.note(title, detail: detail)
                 case .finished(let truncated): recorder.round(1, text: answer, calls: [], usage: usage, final: true); return truncated
                 }
             }

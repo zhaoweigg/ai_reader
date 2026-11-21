@@ -85,7 +85,7 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                         case .image(let data): continuation.yield(.image(data))
                         case .imageToolRefused(let reason): continuation.yield(.imageToolRefused(reason))
                         case .finished(let value): continuation.yield(.finished(truncated: value))
-                        case .toolCall, .usage, .webSearch, .webSearchRefused, .providerContent: break
+                        case .toolCall, .usage, .webSearch, .webSearchRefused, .providerContent, .diagnostic: break
                         }
                     }
                     continuation.finish()
@@ -145,6 +145,13 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                             continuation.yield(.imageToolRefused(blamed.reason))
                         }
                     }
+                    // Troubleshooting: whether this request could carry web search, whether it did,
+                    // and why not. Only when the chat offers web search at all.
+                    let possible = try build(token, HostedTools(images: allowed.images, web: true)).1
+                    if possible.web {
+                        let sent = offered.web ? "web_search sent" : "web_search not sent: " + (Self.webSearchRejected[imageKey].map { "refused earlier this launch (\($0))" } ?? "refused by this request")
+                        continuation.yield(.diagnostic(title: "Hosted tools", detail: "\(sent) · model \(model) · HTTP \(response.statusCode)"))
+                    }
                     guard (200..<300).contains(response.statusCode) else {
                         var errorData = Data()
                         for try await line in lines {
@@ -163,7 +170,7 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                     }
                     var decoder = ServerSentEventDecoder()
                     var state = ResponseState()
-                    var textLength = 0, calls = 0, pictures = 0
+                    var textLength = 0, calls = 0, pictures = 0, searches = 0
                     for try await line in lines {
                         try Task.checkCancellation()
                         guard let data = try decoder.consume(line) else { continue }
@@ -174,9 +181,13 @@ struct ChatGPTSubscriptionProvider: ChatProvider {
                                 guard textLength <= 64000 else { throw ChatError.tooLarge }
                             case .image: pictures += 1
                             case .toolCall: calls += 1
-                            case .usage, .imageStarted, .imageToolRefused, .webSearch, .webSearchRefused, .providerContent: break
+                            case .webSearch(let query): if query != nil { searches += 1 }
+                            case .usage, .imageStarted, .imageToolRefused, .webSearchRefused, .providerContent, .diagnostic: break
                             case .finished:
                                 guard textLength > 0 || calls > 0 || pictures > 0 else { throw ChatError.emptyResponse }
+                                if offered.web, searches == 0 {
+                                    continuation.yield(.diagnostic(title: "Web search not used", detail: "offered and accepted; the model answered without searching"))
+                                }
                                 continuation.yield(event); continuation.finish(); return
                             }
                             continuation.yield(event)
@@ -264,6 +275,20 @@ extension ChatGPTSubscriptionProvider: ToolChatProvider {
         let object = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any]
         let item = object?["item"] as? [String: Any]
         switch object?["type"] as? String {
+        case "response.created":
+            // The server's own list of the tools it took: proof that web search was accepted.
+            let response = object?["response"] as? [String: Any]
+            guard let tools = response?["tools"] as? [[String: Any]] else { return [] }
+            let types = tools.compactMap { $0["type"] as? String }
+            guard types.contains("web_search") || types.contains("web_search_preview") || types.contains("image_generation") else { return [] }
+            var counted: [String: Int] = [:]
+            for type in types { counted[type, default: 0] += 1 }
+            let list = counted.keys.sorted().map { counted[$0]! > 1 ? "\($0)×\(counted[$0]!)" : $0 }.joined(separator: ", ")
+            let name = (response?["model"] as? String).map { "model \($0) · " } ?? ""
+            return [.diagnostic(title: "Server accepted tools", detail: name + list)]
+        case "response.incomplete":
+            let reason = ((object?["response"] as? [String: Any])?["incomplete_details"] as? [String: Any])?["reason"] as? String
+            return [.diagnostic(title: "Reply incomplete", detail: reason ?? "no reason given")] + (try decode(data).map(\.agentEvent))
         case "response.completed":
             var events: [AgentEvent] = []
             // Every page the answer cites stays reachable, even when the answer did not link it.
@@ -280,6 +305,11 @@ extension ChatGPTSubscriptionProvider: ToolChatProvider {
         case "response.output_item.done" where item?["type"] as? String == "web_search_call":
             // Opening or reading inside a page belongs to the search already shown.
             let action = item?["action"] as? [String: Any]
+            let status = item?["status"] as? String ?? "completed"
+            if status != "completed" {
+                // A search the account or policy stopped can end this way instead of an HTTP error.
+                return [.diagnostic(title: "Web search call \(status)", detail: "action \(action?["type"] as? String ?? "none")")]
+            }
             guard action == nil || action?["type"] as? String == "search" else { return [] }
             let query = action?["query"] as? String ?? (action?["queries"] as? [String])?.first ?? ""
             return [.webSearch(query.trimmingCharacters(in: .whitespacesAndNewlines))]
