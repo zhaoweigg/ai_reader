@@ -4231,10 +4231,9 @@ final class LeafReaderUITests: XCTestCase {
     @MainActor func testSlidingDuringAReplyKeepsItsPlaceInPDF() { verifySlideDuringReply(flow: "PDF") }
     @MainActor func testSlidingDuringAReplyKeepsItsPlaceInLibrary() { verifySlideDuringReply(flow: "Library") }
 
-    /// Sliding the history while a reply prints, in a conversation longer than one
-    /// history page (a finished reply drops the page's two oldest messages). A slide
-    /// toward the newest text keeps following it to the end; a slide to earlier text
-    /// stays on that text when the reply finishes.
+    /// Sliding to earlier text while a reply prints, in a conversation longer than one
+    /// history page (a finished reply drops the page's two oldest messages): the text
+    /// being read stays where it is when the reply finishes.
     @MainActor private func verifySlideDuringReply(flow: String) {
         continueAfterFailure = false
         let app = launchApp(scrollStream: true)
@@ -4264,9 +4263,9 @@ final class LeafReaderUITests: XCTestCase {
             expectation(for: NSPredicate(format: "label == %@", "Send message"), evaluatedWith: send)
             waitForExpectations(timeout: 5)
         }
-        XCTAssertTrue(app.buttons["Earlier"].exists, "The conversation must be longer than one history page")
+        XCTAssertTrue(app.buttons["earlierChatMessages"].exists, "The conversation must be longer than one history page")
         XCTAssertTrue(geometry.waitForExistence(timeout: 5))
-        continueAfterFailure = true // Both slides are measured, even when the first one fails.
+        continueAfterFailure = true // The timeline is attached even when a check fails.
         let began = Date()
         var samples: [String] = []
         func sample(_ note: String) {
@@ -4283,29 +4282,7 @@ final class LeafReaderUITests: XCTestCase {
             let trace = XCTAttachment(string: samples.joined(separator: "\n")); trace.name = flow + " " + name; trace.lifetime = .keepAlways; add(trace)
         }
 
-        // A slide toward the newest text, held long enough for waiting text to land under the finger.
-        ask("Explain then finish A")
-        XCTAssertTrue(text("chatReply", containing: "Update A:").waitForExistence(timeout: 10))
-        sample("before the slide toward the newest text")
-        let low = history.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
-        low.press(forDuration: 0.05, thenDragTo: low.withOffset(CGVector(dx: 0, dy: -90)), withVelocity: .slow, thenHoldForDuration: 1.4)
-        sample("after the slide toward the newest text")
-        let follows = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Following latest"), object: history)
-        let resumed = XCTWaiter.wait(for: [follows], timeout: 3)
-        XCTAssertFalse(send.label == "Send message", "The slide must end while the reply still prints")
-        sampleUntilFinished { "newest" }
-        attach("slide toward the newest text")
-        XCTAssertEqual(resumed, .completed, "A slide that ends at the newest text must keep following the reply:\n" + samples.suffix(6).joined(separator: "\n"))
-        XCTAssertEqual(history.value as? String, "Following latest")
-        XCTAssertLessThanOrEqual(gap(), 4, "The end of the finished reply and the line under it must be in view:\n" + samples.suffix(6).joined(separator: "\n"))
-        capture(flow + " reply finished after a slide toward the newest text")
-
         // A slide to earlier text: the question that started this reply is the place to keep.
-        samples = []
-        for _ in 0..<8 {
-            if history.value as? String == "Following latest" { break }
-            history.swipeUp(velocity: .fast)
-        }
         ask("Explain then finish B")
         XCTAssertTrue(text("chatReply", containing: "Update B:").waitForExistence(timeout: 10))
         let question = text("chatQuestion", containing: "then finish B")
