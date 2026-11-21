@@ -27,7 +27,7 @@ struct UITestChatProvider: ChatProvider {
                         if UITesting.flag(.chatSlowStart) { try await Task.sleep(for: .seconds(3)) }
                         // The question picks the reply: “Short …” ends at once, to fill a
                         // conversation past one history page; “… then finish X” prints for
-                        // eighteen seconds and ends by itself; anything else prints for minutes.
+                        // thirty seconds and ends by itself; anything else prints for minutes.
                         let question = request.turns.last?.content.components(separatedBy: "\n").last ?? ""
                         if question.hasPrefix("Short ") {
                             continuation.yield(.text("Answer to \(question) is done.\n\nParagraph 1: A brief reply that still takes a few lines of the history."))
@@ -36,7 +36,7 @@ struct UITestChatProvider: ChatProvider {
                         if question.contains("then finish") {
                             continuation.yield(.text((1...3).map { "Paragraph \($0): Read this explanation at your own pace, without jumping to the newest words." }.joined(separator: "\n\n")))
                             continuation.yield(.text("\n\nUpdate \(question.split(separator: " ").last ?? "A"):"))
-                            for index in 1...300 {
+                            for index in 1...500 {
                                 try await Task.sleep(for: .milliseconds(60))
                                 continuation.yield(.text(" next \(index)."))
                             }

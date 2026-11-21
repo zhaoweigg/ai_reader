@@ -4294,10 +4294,11 @@ final class LeafReaderUITests: XCTestCase {
             let frame = question.frame, viewport = history.frame
             return frame.height > 10 && frame.minY >= viewport.minY - 1 && frame.minY <= viewport.maxY - 20
         }
-        for _ in 0..<8 where !questionInView() {
-            // Each slide is shorter than the viewport, so the question cannot pass through unseen.
-            let start = history.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
-            start.press(forDuration: 0.02, thenDragTo: start.withOffset(CGVector(dx: 0, dy: max(24, min(100, history.frame.height - 60)))),
+        for _ in 0..<12 where !questionInView() {
+            // Each slide is shorter than the viewport, so the question cannot pass through
+            // unseen; the tab chat's history is only about a hundred points tall.
+            let start = history.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15))
+            start.press(forDuration: 0.02, thenDragTo: start.withOffset(CGVector(dx: 0, dy: max(24, min(110, history.frame.height - 46)))),
                         withVelocity: .slow, thenHoldForDuration: 0.2)
         }
         XCTAssertTrue(questionInView(), "The question must be in view after sliding to earlier text")
@@ -4497,7 +4498,7 @@ final class LeafReaderUITests: XCTestCase {
         func ask(_ question: String) {
             // Close the keyboard first, so the panel does not resize while measured.
             input.tap(); input.typeText(question)
-            if app.buttons["Hide keyboard"].exists { app.buttons["Hide keyboard"].tap() }
+            if app.buttons["Hide keyboard"].waitForExistence(timeout: 2) { app.buttons["Hide keyboard"].tap() }
             expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
             waitForExpectations(timeout: 5)
             send.tap()
