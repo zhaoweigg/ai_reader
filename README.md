@@ -1,6 +1,6 @@
 # Leaf for iOS
 
-A native ebook reader for iPhone and iPad: offline reading of EPUB, PDF and nine other formats, read-aloud with Apple voices, highlights and voice notes, a book catalog, bestseller charts and Chinese web-novel charts, iCloud Drive sync, and an optional AI reading companion ("Ask Leaf") that works with your own API key or ChatGPT subscription. Built with SwiftUI, WebKit and PDFKit. Requires iOS 17 or later and Xcode 16 or later.
+A native ebook reader for iPhone and iPad: offline reading of EPUB, PDF and nine other formats, read-aloud with Apple voices, highlights and voice notes, a book catalog, bestseller charts and Chinese book and web-novel charts, iCloud Drive sync, and an optional AI reading companion ("Ask Leaf") that works with your own API key or ChatGPT subscription. Built with SwiftUI, WebKit and PDFKit. Requires iOS 17 or later and Xcode 16 or later.
 
 ```mermaid
 mindmap
@@ -26,7 +26,7 @@ mindmap
     Discover
       Z-Library catalog
       Indie and NYT bestsellers
-      起点 web-novel charts
+      起点 and 微信读书 charts
     Sync
       iCloud Drive folder
       Library, places, notes, chats, settings
@@ -233,7 +233,7 @@ Every Ask Leaf chat, in a book or on a tab, offers the same read-only tools. The
 | `get_current_view` · `get_item_details` | the screen the chat floats over, as it is now | Discover, Bookmarks, Library |
 | `get_catalog_feed` · `search_catalog` · `get_catalog_book` | Z-Library popular / recommended lists, search, one book's details | every chat |
 | `get_bestsellers` | Indie or NYT hardcover fiction / nonfiction chart | every chat |
-| `get_web_novel_chart` | a 起点 chart of Chinese web novels, optionally one category | every chat |
+| `get_web_novel_chart` | a 起点 web-novel chart (optionally one category) or a 微信读书 book chart | every chat |
 | `list_library` · `search_saved` | your books with progress; bookmarks, highlights and notes | every chat |
 | `search_my_books` | other books' text, each only up to where you stopped | every chat, passage sharing on |
 | `search_conversation` | older messages in this chat | every chat |
@@ -288,9 +288,16 @@ Keys and tokens are stored `WhenUnlockedThisDeviceOnly` and are not synced. Requ
 
 ## Discover
 
-The Discover tab has four sections: Z-Library's most popular books (**Popular**), its recommendations for your account (**For you**), **Bestsellers** with Indie and New York Times hardcover fiction and nonfiction charts, and **网文** with 起点中文网's web-novel charts. The catalog sections have search with eight sort orders and book details. The Library tab has a cover shelf that opens the catalog and bestseller screens.
+The Discover tab has four sections: Z-Library's most popular books (**Popular**), its recommendations for your account (**For you**), **Bestsellers** with Indie and New York Times hardcover fiction and nonfiction charts, and **中文** with Chinese charts from 起点中文网 and 微信读书. The catalog sections have search with eight sort orders and book details. The Library tab has a cover shelf that opens the catalog and bestseller screens.
 
-网文 shows one 起点 chart at a time: 月票榜, 畅销榜, 阅读指数榜 or 推荐票榜 (by week, month or all time), for the whole site or one of fourteen categories. Each of the top 20 is a row with its cover, author, category, length, the chart's count and the start of its synopsis. A row offers **Add** when Z-Library has exactly one edition with the same title and author, and **Choose** or **Find** otherwise. Many charted books are still being written, so Z-Library may not have them yet or may have only part.
+中文 shows one chart at a time from the site you pick, and remembers the chart last chosen on each:
+
+| Site | Charts | Each row shows |
+| --- | --- | --- |
+| 起点 (web novels) | 月票榜, 畅销榜, 阅读指数榜, 推荐票榜 (week, month or all time); whole site or one of fourteen categories; top 20 | author, category, length, the chart's count |
+| 微信读书 (published books) | 总榜, 飙升榜, 新书榜, 神作榜; top 20, **Load more** up to 100 | author, category, recommendation rate, readers today |
+
+Every row also has the book's cover and the start of its synopsis. A row offers **Add** when Z-Library has exactly one edition with the same title and author, and **Choose** or **Find** otherwise. Many books on 起点's charts are still being written, so Z-Library may not have them yet or may have only part.
 
 ```mermaid
 flowchart LR
@@ -311,8 +318,9 @@ flowchart LR
         NYT -.->|"optional personal key"| NYTAPI["NYT Books API<br/>key in Keychain, sent only to api.nytimes.com"]
         BStore --> Match["BestsellerMatching<br/>finds editions in the catalog"]
     end
-    subgraph Novels["网文 (public charts)"]
+    subgraph Novels["中文 (public charts)"]
         NStore["WebNovelStore<br/>6-hour cache, 8 charts"] --> Qidian["起点 mobile chart page<br/>no account"]
+        NStore --> WeRead["微信读书 chart data<br/>no account"]
         NStore --> Match
     end
     Client -->|"download ≤100 MB<br/>to a protected temp file"| Import["Library import"]

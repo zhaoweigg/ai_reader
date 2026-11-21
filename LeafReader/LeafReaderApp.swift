@@ -82,7 +82,7 @@ struct LeafReaderApp: App {
         var bestsellerCredentials = chatCredentials; bestsellerCredentials.service += ".nytbooks"
         _bestsellers = StateObject(wrappedValue: BestsellerStore(defaults: defaults, credentials: bestsellerCredentials,
             service: bestsellerService ?? BestsellerFeedClient(), allowsAutomaticShelf: bestsellerShelf))
-        _webNovels = StateObject(wrappedValue: WebNovelStore(defaults: defaults, service: webNovelService ?? QidianChartClient()))
+        _webNovels = StateObject(wrappedValue: WebNovelStore(defaults: defaults, service: webNovelService ?? WebNovelClient()))
         readingDefaults = defaults
         if root == nil, let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             Task.detached(priority: .utility) { try? RetiredVoicePackCleanup.removeDownloadedPack(applicationSupport: support) }
@@ -179,7 +179,7 @@ struct AppView: View {
         .toolbarBackground(theme.canvas, for: .tabBar)
     }
     /// A book synced from iCloud may not be on this device yet; download it first.
-    /// Leaving Library for the catalog or the bestseller lists takes Discover off the 网文 section.
+    /// Leaving Library for the catalog or the bestseller lists takes Discover off the 中文 section.
     private func showCharts(bestsellers show: Bool) { bestsellers.showingBestsellers = show; webNovels.showing = false }
     private func open(_ id: UUID, locator: String? = nil) {
         guard let book = library.book(id), !library.isDownloaded(book), sync.isConnected else {

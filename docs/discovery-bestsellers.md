@@ -12,19 +12,31 @@ Ask Leaf reads the selected chart's source, category, date, ranks, and public de
 
 Library refreshes its Z-Library shelf when the account, connection, or website changes. Pull to refresh reloads both the account shelf and the selected bestseller list. Shelf failures keep saved books visible, show a retry action, and allow an immediate manual retry; automatic retries have a short cooldown. A successful matching Discover feed refresh also updates Library, and older in-flight shelf responses cannot replace it.
 
-## 网文 (Chinese web novels)
+## 中文 (Chinese charts)
 
-Discover's fourth section shows 起点中文网 charts: 月票榜, 畅销榜, 阅读指数榜 and 推荐票榜 (周榜 / 月榜 / 总榜), for 全站 or one of the site's fourteen categories. The segment labels were shortened to Popular / For you / Bestsellers / 网文 so four fit on a narrow phone; the catalog headings keep the feeds' full names.
+Discover's fourth section shows one chart at a time from one of two sites, chosen with a switch at the top. The segment labels are Popular / For you / Bestsellers / 中文 so four fit on a narrow phone; the catalog headings keep the feeds' full names. The chosen site, the chart last chosen on each site, and 起点's category and period persist on the device; they are not synced. The type names (`WebNovel…`) date from 1.41, when the section held only 起点's web novels.
 
-Each chart is one request to the public chart page of 起点's mobile site (`m.qidian.com/rank/<chart>/catid<id>/[<period>/]`), with no account and an ephemeral session. The desktop site answers with a browser check and is not used. The page carries its data as JSON for its own scripts (`vite-plugin-ssr_pageContext`); `QidianChartClient.parse` reads that and nothing executable. A page is accepted only when it names the chart, category and period that were asked for, is the first page, and has a gapless ranking of a full page (20) or, for a small category, of everything the site says the chart has. Book identifiers must be numeric because they form the cover and book addresses. Anything else fails without replacing the saved chart. 月票榜 carries the month it counts; the other charts show the day they were retrieved.
+### 起点中文网
 
-The last eight charts are cached for six hours each. The chosen chart, category and period persist on the device; they are not synced. Covers come from 起点's cover host by book identifier. There is no bundled fallback chart and no Library shelf for 网文.
+月票榜, 畅销榜, 阅读指数榜 and 推荐票榜 (周榜 / 月榜 / 总榜), for 全站 or one of the site's fourteen categories; the top 20 of each.
 
-Web novels have no ISBN, so catalog lookup is by title and author only (`WebNovelText`). Uploads are usually titled like `《书名》（精校版）作者：某某`; the comparison takes off 《》, bracketed notes, the author credit and edition words first. The same title with the same author is a sure match; an upload with no author, or a longer title that begins the same way (a sequel or a collection), is offered only for the reader to check. The chart does not say whether a book is finished, so rows cannot be marked 连载 or 完结.
+Each chart is one request to the public chart page of 起点's mobile site (`m.qidian.com/rank/<chart>/catid<id>/[<period>/]`), with no account and an ephemeral session. The desktop site answers with a browser check and is not used. The page carries its data as JSON for its own scripts (`vite-plugin-ssr_pageContext`); `QidianChart.parse` reads that and nothing executable. A page is accepted only when it names the chart, category and period that were asked for, is the first page, and has a gapless ranking of a full page (20) or, for a small category, of everything the site says the chart has. Book identifiers must be numeric because they form the cover and book addresses. 月票榜 carries the month it counts; the other charts show the day they were retrieved. The chart does not say whether a book is finished, so rows cannot be marked 连载 or 完结. 起点's 女生 charts did not load at the addresses tried and are not offered.
 
-Ask Leaf reads the chart on screen or the open book's page, and `get_web_novel_chart` reads any chart from any chat without changing the screen.
+### 微信读书
 
-Not verified: whether Z-Library carries the charted titles (fixtures stand in for the catalog), the live page from a phone or from mainland China, and 起点's 女生 charts, which did not load at the addresses tried and are not offered.
+总榜 (TOP 200), 飙升榜, 新书榜 and 神作榜, for the whole site. The first 20 books load with the chart; **Load more** adds 20 at a time up to 100.
+
+The data is what the site's own web pages load: `weread.qq.com/web/bookListInCategory/<chart>?maxIndex=<offset>&rank=1`, JSON, no account, an ephemeral session. This is not a published API and can change. `WeReadChart.parse` accepts a response only as the next page of the ranking: every book's place must continue from the offset asked for, a response that says there is more must be a full 20, and identifiers must be plain. Each book carries its recommendation rate (shown as a percentage), the number reading it today, a category, a synopsis, a cover and a page on the site; cover and page addresses are used only when they are https on the site's own hosts. A book that reappears on a later page because the chart moved is not listed twice. Only the first page of a chart is kept between launches.
+
+### Shared behaviour
+
+Any response that fails those checks leaves the saved chart in place and shows a readable error. The last eight charts are cached for six hours each. There is no bundled fallback chart and no Library shelf for this section.
+
+Neither site gives an ISBN, so catalog lookup is by title and author only (`WebNovelText`). Uploads are usually titled like `《书名》（精校版）作者：某某`, and the charts add notes of their own such as `（全三册）`, `全集` or `[英]` before a translated author; the comparison takes those off first. The same title with the same author is a sure match. An upload with no author or only the author's surname, a longer title that begins the same way (a sequel or a collection), or one that differs only in its subtitle is offered for the reader to check.
+
+Ask Leaf reads the chart on screen or the open book's page, and `get_web_novel_chart` reads any chart of either site from any chat without changing the screen.
+
+Not verified: whether Z-Library carries the charted titles (fixtures stand in for the catalog), and the live sites from inside the app, from a phone, or from mainland China. Outside the app, the parser's rules were checked against every live 起点 chart page and the first pages of the four 微信读书 charts.
 
 ## Verification scope
 

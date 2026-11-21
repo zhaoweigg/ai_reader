@@ -1,14 +1,15 @@
 #if DEBUG
 import Foundation
 
-/// An offline 起点 chart with invented books, and the catalog editions the mock
-/// catalog returns for them: one sure match, one to choose from, one with none.
+/// Offline 起点 and 微信读书 charts with invented books, and the catalog editions the
+/// mock catalog returns for them: one sure match, one to choose from, one with none.
 actor UITestWebNovelClient: WebNovelServing {
     private var attempts = 0
-    func list(_ selection: WebNovelSelection) async throws -> WebNovelList {
+    func list(_ selection: WebNovelSelection, offset: Int) async throws -> WebNovelList {
         try await Task.sleep(for: .milliseconds(160)); try Task.checkCancellation()
         attempts += 1
         if UITesting.flag(.webNovelsFeedFailure), attempts == 1 { throw WebNovelFeedError.unavailable }
+        if selection.source == .weread { return Self.weread(selection, offset: offset) }
         var rows = Self.samples
         if selection.category != WebNovelCategory.everything.id { rows = rows.filter { $0.category == WebNovelCategory.titled(selection.category) } }
         // Each chart and period has its own order, so a switch is visible.
@@ -20,6 +21,19 @@ actor UITestWebNovelClient: WebNovelServing {
                 WebNovel(rank: index + 1, bookID: row.bookID, title: row.title, author: row.author, category: row.category, subcategory: row.subcategory,
                          length: row.length, figure: unit.isEmpty ? "" : "\(6 - index).\(index)\(unit)", summary: row.summary)
             })
+    }
+    /// 微信读书 the way the site serves it: titles and authors with its own notes, a
+    /// rating and today's readers, and the chart in pages (four books here).
+    static func weread(_ selection: WebNovelSelection, offset: Int) -> WebNovelList {
+        let rows = selection.chart == .top ? samples : samples.reversed()
+        let noted = ["星海拾荒者": ("星海拾荒者（全三册）", "青柠茶"), "长夜书局": ("长夜书局", "[英]墨白")]
+        let page = Array(rows.enumerated()).dropFirst(offset).prefix(4)
+        return WebNovelList(selection: selection, published: "", fetchedAt: Date(), books: page.map { index, row in
+            let names = noted[row.title] ?? (row.title, row.author)
+            return WebNovel(rank: index + 1, bookID: "w" + row.bookID, title: names.0, author: names.1, category: row.category,
+                            subcategory: row.subcategory, length: "", figure: "\(96 - index).0% 推荐 · 今日 \(3000 - index * 400)人在读",
+                            summary: row.summary, source: .weread)
+        }, hasMore: offset + 4 < rows.count)
     }
     static let samples: [WebNovel] = [
         ("星海拾荒者", "青柠茶", "科幻", "星际文明", "128.5万字", "废土边缘的拾荒少年捡到一枚会说话的导航核心，从此踏上横穿星海的归途。沿途的每一座空间站，都藏着旧时代留下的一道谜题。"),

@@ -8,7 +8,7 @@ struct ZLibraryView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var discovery: BestsellerStore
     @EnvironmentObject private var novels: WebNovelStore
-    /// Bestsellers and 网文 are public charts shown in place of the catalog grid.
+    /// Bestsellers and the 中文 charts are public lists shown in place of the catalog grid.
     private var showingCharts: Bool { discovery.showingBestsellers || novels.showing }
     private var chartsVisible: Bool { showingCharts && catalog.activeQuery.isEmpty }
     private var section: Binding<DiscoverSection> {
