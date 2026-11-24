@@ -221,7 +221,7 @@ struct ListedBookEditions: View {
             Text("Use your Z-Library connection to find editions and add books.").font(.subheadline).foregroundStyle(.secondary)
             Button("Connect Z-Library", action: connect).buttonStyle(.bordered)
         case .failed(let message, _):
-            Text(message).font(.subheadline).foregroundStyle(.secondary)
+            Text(message).font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("editionCheckFailure")
             Button("Try again", action: retry)
             Button("Search Z-Library", action: search)
         case .ready(let choices):
