@@ -3,9 +3,10 @@ import CoreFoundation
 
 // The mobile EAPI is unofficial. Keep wire details outside the library and reader.
 enum ZLibraryError: LocalizedError, Equatable {
-    case address, query, signInRequired, challenge, accessCheck, response, metadata, service(String), size, file, busy, unreachable
+    case address, query, signInRequired, challenge, accessCheck, response, metadata, service(String), size, file, busy, unreachable, searchRefused
     var errorDescription: String? {
         switch self {
+        case .searchRefused: return "Z-Library is refusing searches from apps right now, and its website search did not answer either. This is on Z-Library’s side; its shelves still work. Try again later."
         case .address: return "Enter an HTTPS website address without a path, port, or sign-in details."
         case .query: return "Enter a title, author, or ISBN of up to 500 characters."
         case .signInRequired: return "Connect your Z-Library account to continue."
@@ -199,12 +200,29 @@ protocol ZLibraryServing {
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL
 }
 
+/// Remembers, for every client, that Z-Library refused an app search, so later searches go
+/// straight to its website for a while instead of being refused first.
+final class ZLibrarySearchRoute: @unchecked Sendable {
+    static let shared = ZLibrarySearchRoute()
+    static let websiteFor: TimeInterval = 15 * 60
+    private let lock = NSLock()
+    private var refusedAt: Date?
+    var usesWebsite: Bool { lock.withLock { refusedAt.map { Date().timeIntervalSince($0) < Self.websiteFor } ?? false } }
+    func refused() { lock.withLock { refusedAt = Date() } }
+    func answered() { lock.withLock { refusedAt = nil } }
+}
+
 struct ZLibraryClient: ZLibraryServing {
     var transport: any ZLibraryTransport = ZLibraryHTTPTransport()
+    var searchRoute = ZLibrarySearchRoute.shared
+    /// Z-Library's own apps say which app is asking. Since 2026-11-23 its search answers
+    /// HTTP 400 "Access denied" to requests that do not; other requests do not check it.
+    static let clientSource = "ios"
     func request(_ path: String, origin: ZLibraryOrigin, session: ZLibrarySession?) -> URLRequest {
         var request = URLRequest(url: origin.url.appendingPathComponent("eapi").appendingPathComponent(path))
         request.setValue(session?.valid == true ? session?.userAgent ?? "Leaf (iOS)" : "Leaf (iOS)", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(Self.clientSource, forHTTPHeaderField: "source")
         if let session, session.valid {
             request.setValue(session.userID, forHTTPHeaderField: "remix-userid")
             request.setValue(session.userKey, forHTTPHeaderField: "remix-userkey")
@@ -322,11 +340,113 @@ struct ZLibraryClient: ZLibraryServing {
     func search(_ query: String, page: Int, order: ZLibrarySearchOrder = .popular, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, query.count <= 500, (1...ZLibrarySearchPage.maximumPages).contains(page) else { throw ZLibraryError.query }
-        let object = try await object("book/search", origin: origin, session: session,
-                                      form: ["message": query, "page": String(page), "limit": String(ZLibrarySearchPage.pageSize), "order": order.rawValue])
+        if searchRoute.usesWebsite {
+            return try await websiteSearch(query, page: page, order: order, origin: origin, session: session,
+                                           refusal: "POST /eapi/book/search · refused earlier · not asked again")
+        }
+        let object: [String: Any]
+        do {
+            object = try await self.object("book/search", origin: origin, session: session,
+                                           form: ["message": query, "page": String(page), "limit": String(ZLibrarySearchPage.pageSize), "order": order.rawValue])
+        } catch where Self.isSearchRefusal(error) {
+            searchRoute.refused()
+            return try await websiteSearch(query, page: page, order: order, origin: origin, session: session,
+                                           refusal: (error as? ZLibraryRequestFailure)?.diagnostic ?? "POST /eapi/book/search · Access denied")
+        }
+        searchRoute.answered()
         guard let rows = object["books"] as? [[String: Any]] else { throw ZLibraryError.response }
         let books = Self.books(rows, origin: origin, limit: ZLibrarySearchPage.pageSize)
         return ZLibrarySearchPage(books: books, hasMore: !books.isEmpty && rows.count >= ZLibrarySearchPage.pageSize)
+    }
+    /// The app search answered "Access denied": a refusal of searching itself, not of the account.
+    static func isSearchRefusal(_ error: Error) -> Bool {
+        guard case .service(let message)? = ZLibraryRequestFailure.issue(error) else { return false }
+        return message.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)).lowercased() == "access denied"
+    }
+
+    /// Searches the website's own search page, which still answers when the app search is
+    /// refused, and reads the book cards on it.
+    func websiteSearch(_ query: String, page: Int, order: ZLibrarySearchOrder, origin: ZLibraryOrigin, session: ZLibrarySession?, refusal: String) async throws -> ZLibrarySearchPage {
+        let url = try Self.websiteSearchURL(query, page: page, order: order, origin: origin)
+        var request = URLRequest(url: url)
+        for (key, value) in self.request("", origin: origin, session: session).allHTTPHeaderFields ?? [:] where key.lowercased() != "accept" {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        request.setValue("text/html", forHTTPHeaderField: "Accept")
+        let payload: ZLibraryPayload
+        do { payload = try await transport.send(request, toFile: false, progress: { _ in }) }
+        catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+            // A website access check is something the reader can act on; say so.
+            if ZLibraryRequestFailure.issue(error) == .accessCheck { throw error }
+            let detail = (error as? ZLibraryRequestFailure)?.diagnostic ?? "no answer"
+            throw ZLibraryRequestFailure(issue: .searchRefused, diagnostic: refusal + "\nGET /s/ · " + detail)
+        }
+        let status = payload.response.statusCode
+        guard (200...299).contains(status), let found = Self.websiteBooks(String(decoding: payload.data, as: UTF8.self), origin: origin) else {
+            throw ZLibraryRequestFailure(issue: .searchRefused, diagnostic: refusal + "\nGET /s/ · HTTP \(status) · \((200...299).contains(status) ? "no search results page" : "website search failed")")
+        }
+        return ZLibrarySearchPage(books: found.books, hasMore: !found.books.isEmpty && found.pages.map { page < min($0, ZLibrarySearchPage.maximumPages) } == true)
+    }
+    static func websiteSearchURL(_ query: String, page: Int, order: ZLibrarySearchOrder, origin: ZLibraryOrigin) throws -> URL {
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard let path = query.addingPercentEncoding(withAllowedCharacters: unreserved) else { throw ZLibraryError.query }
+        var items: [String] = []
+        // The website's own names for the orders; best match is its default.
+        switch order {
+        case .bestMatch: break
+        case .recentlyAdded: items.append("order=date_created")
+        default: items.append("order=\(order.rawValue)")
+        }
+        if page > 1 { items.append("page=\(page)") }
+        guard let url = URL(string: origin.url.absoluteString + "/s/" + path + (items.isEmpty ? "" : "?" + items.joined(separator: "&"))) else { throw ZLibraryError.query }
+        return url
+    }
+    /// The book cards on a website search page, and its page count. Nil when the page is not
+    /// a search result page (a sign-in or check page), so nothing is mistaken for "no results".
+    static func websiteBooks(_ html: String, origin: ZLibraryOrigin) -> (books: [ZLibraryBook], pages: Int?)? {
+        guard html.contains("searchResultBox") else { return nil }
+        let pages = captures(#"pagesTotal:\s*(\d{1,4})"#, in: html).first.flatMap { Int($0[0]) }
+        var seen = Set<String>(), books: [ZLibraryBook] = []
+        for card in captures(#"(?s)<z-bookcard\b([^>]*)>(.*?)</z-bookcard>"#, in: html, limit: 100) {
+            var attributes: [String: String] = [:]
+            for pair in captures(#"([A-Za-z][A-Za-z0-9_-]*)\s*=\s*"([^"]*)""#, in: card[0]) {
+                attributes[pair[0].lowercased()] = entities(pair[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            let inner = card[1]
+            func slot(_ name: String) -> String {
+                captures(#"(?s)<div[^>]*slot\s*=\s*"\#(name)"[^>]*>(.*?)</div>"#, in: inner).first.flatMap { Self.plainText($0[0]) } ?? ""
+            }
+            // The card's link is /book/<id>/<hash>/<title>.html.
+            let link = (attributes["href"] ?? "").split(separator: "/").map(String.init)
+            guard link.count >= 3, link[0] == "book", (attributes["id"] ?? link[1]) == link[1] else { continue }
+            let cover = captures(#"<img\b[^>]*\bdata-src\s*=\s*"([^"]+)""#, in: inner).first?[0]
+                ?? captures(#"<img\b[^>]*\bsrc\s*=\s*"(https?:[^"]+)""#, in: inner).first?[0] ?? ""
+            let authors = slot("author").split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            let row: [String: Any] = ["id": link[1], "hash": link[2], "title": slot("title"),
+                                      "author": authors.joined(separator: ", "), "extension": attributes["extension"] ?? "",
+                                      "filesizeString": attributes["filesize"] ?? "", "language": attributes["language"] ?? "",
+                                      "year": attributes["year"] ?? "", "cover": entities(cover), "rating": attributes["rating"] ?? "",
+                                      "qualityScore": attributes["quality"] ?? "", "isbn": attributes["isbn"] ?? ""]
+            guard let parsed = Self.book(row, origin: origin), seen.insert(parsed.id).inserted else { continue }
+            books.append(parsed)
+        }
+        return (books, pages)
+    }
+    /// Each match's capture groups, in order.
+    private static func captures(_ pattern: String, in text: String, limit: Int = 200) -> [[String]] {
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return expression.matches(in: text, range: range).prefix(limit).map { match in
+            (1..<match.numberOfRanges).map { Range(match.range(at: $0), in: text).map { String(text[$0]) } ?? "" }
+        }
+    }
+    private static func entities(_ text: String) -> String {
+        var text = text
+        for (entity, character) in [("&quot;", "\""), ("&#39;", "'"), ("&#039;", "'"), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " "), ("&amp;", "&")] {
+            text = text.replacingOccurrences(of: entity, with: character)
+        }
+        return text
     }
     private static func books(_ rows: [[String: Any]], origin: ZLibraryOrigin, limit: Int) -> [ZLibraryBook] {
         var seen = Set<String>()

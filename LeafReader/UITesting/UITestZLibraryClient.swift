@@ -91,6 +91,11 @@ struct UITestZLibraryClient: ZLibraryServing {
         ]
     }
     func search(_ query: String, page: Int, order: ZLibrarySearchOrder, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibrarySearchPage {
+        if UITesting.flag(.zlibSearchRefused) {
+            // Z-Library's own refusal of app searches since 2026-11-23, with its website search failing too.
+            try await Task.sleep(for: .milliseconds(150))
+            throw ZLibraryRequestFailure(issue: .searchRefused, diagnostic: "POST /eapi/book/search · HTTP 400 · JSON/API response\nGET /s/ (website search) · HTTP 503 · website search failed")
+        }
         if UITesting.flag(.bestsellersMock) { return ZLibrarySearchPage(books: UITestBestsellerClient.search(query), hasMore: false) }
         if UITesting.flag(.webNovelsMock) { return ZLibrarySearchPage(books: UITestWebNovelClient.search(query), hasMore: false) }
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()

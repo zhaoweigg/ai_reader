@@ -530,6 +530,23 @@ final class BestsellerUITests: XCTestCase {
         setReaderOrientation(.portrait, app: app)
     }
 
+    @MainActor func testRefusedSearchesSayWhyOnEveryRowAndOnTheBookPage() {
+        let app = launch(catalogFlags: ["SEARCH_REFUSED"], webNovels: true); openWebNovels(app)
+        webNovelRow(1, has: "星海拾荒者", app: app)
+        // Z-Library refusing searches is said as such, not as a problem with the book.
+        for rank in 1...2 {
+            let reason = app.staticTexts["webNovelEditionsFailed-\(rank)"]
+            XCTAssertTrue(reason.waitForExistence(timeout: 10), "row \(rank)")
+            XCTAssertEqual(reason.label, "Z-Library is refusing searches")
+        }
+        capture("起点 rows while Z-Library refuses searches")
+        let row = app.buttons["webNovelRow-1"]; reveal(row, app: app); row.leafTapVisible(in: app)
+        XCTAssertTrue(app.staticTexts["webNovelDetailTitle"].waitForExistence(timeout: 8))
+        let message = app.staticTexts["Z-Library is refusing searches right now. This is on its side; try again later."]
+        XCTAssertTrue(message.waitForExistence(timeout: 10)); reveal(message, app: app)
+        capture("起点 page while Z-Library refuses searches")
+    }
+
     @MainActor func testImportedBestsellerOpensAndRestoresInPages() { readImported(flow: "Pages") }
     @MainActor func testImportedBestsellerOpensAndRestoresInScroll() { readImported(flow: "Scroll") }
     @MainActor private func readImported(flow: String) {

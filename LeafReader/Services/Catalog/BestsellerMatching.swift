@@ -32,7 +32,8 @@ struct CatalogMatchQuery {
 }
 
 enum BestsellerMatchState: Equatable {
-    case loading, ready([BestsellerEdition]), failed(String), connectionRequired
+    /// `reason` is the short line a list row shows; `message` is the book page's sentence.
+    case loading, ready([BestsellerEdition]), failed(String, reason: String), connectionRequired
     var editions: [BestsellerEdition] { if case .ready(let values) = self { return values }; return [] }
     var automatic: ZLibraryBook? {
         let values = editions.filter { $0.confidence != .possible && $0.canAdd }
@@ -102,7 +103,21 @@ enum BestsellerMatchState: Equatable {
             states[key] = .ready(result)
         } catch {
             guard context == token, catalog.matchingContextID == token, requests[key]?.id == request.id, !Task.isCancelled, !ZLibraryStore.isCancellation(error) else { return }
-            states[key] = ZLibraryRequestFailure.issue(error) == .signInRequired ? .connectionRequired : .failed("Z-Library editions could not be checked. Try again or search the catalog.")
+            states[key] = ZLibraryRequestFailure.issue(error) == .signInRequired ? .connectionRequired : Self.failure(error)
+        }
+    }
+    /// Says why editions could not be checked, so a refusal on Z-Library's side does not look
+    /// like a problem with the book or the reader's connection.
+    nonisolated static func failure(_ error: Error) -> BestsellerMatchState {
+        switch ZLibraryRequestFailure.issue(error) {
+        case .searchRefused?:
+            return .failed("Z-Library is refusing searches right now. This is on its side; try again later.", reason: "Z-Library is refusing searches")
+        case .accessCheck?, .challenge?:
+            return .failed("Z-Library wants its website checked first. Open it from Connection, then try again.", reason: "Z-Library wants a website check")
+        case .unreachable?:
+            return .failed("Couldn’t reach Z-Library. Check your connection and try again.", reason: "Couldn’t reach Z-Library")
+        default:
+            return .failed("Z-Library editions could not be checked. Try again or search the catalog.", reason: "Could not check editions")
         }
     }
     private func release(_ reader: UUID, key: String, request id: UUID) {
