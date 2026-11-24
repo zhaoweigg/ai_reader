@@ -63,6 +63,16 @@ struct BookReviewSummarizer: BookReviewSummarizing {
     }
 }
 
+/// The reader reviews loaded past the first few, while the app is open.
+struct MoreReaderReviews: Equatable {
+    var reviews: [ReaderReview] = []
+    /// Where the next ones start; nil once the site has no more to show.
+    var next: Int? = 0
+    var total: Int? = nil
+    var loading = false
+    var error: String? = nil
+}
+
 /// Each book's ratings and reviews, looked up when its page opens and kept a week, and
 /// its Ask Leaf summary, kept until the reader asks for a new one.
 @MainActor final class BookReviewStore: ObservableObject {
@@ -72,6 +82,8 @@ struct BookReviewSummarizer: BookReviewSummarizing {
     /// What the summary is doing now, for each book being summarized.
     @Published private(set) var summarizing: [String: String] = [:]
     @Published private(set) var summaryErrors: [String: String] = [:]
+    /// More reader reviews, loaded on request; not kept across launches.
+    @Published private(set) var more: [String: MoreReaderReviews] = [:]
     private let defaults: UserDefaults
     private let service: any BookReviewServing
     private let summarizer: any BookReviewSummarizing
@@ -119,7 +131,9 @@ struct BookReviewSummarizer: BookReviewSummarizing {
             guard let self, !Task.isCancelled else { return }
             // Kept for a week (or an hour) from when this store asked, by its own clock.
             result.fetchedAt = self.now()
-            self.entries[key] = Self.merged(result, keeping: self.entries[key])
+            let merged = Self.merged(result, keeping: self.entries[key])
+            if merged.readerReviews != self.entries[key]?.readerReviews { self.more[key] = nil }
+            self.entries[key] = merged
             self.save()
         }
         requests[key] = task
@@ -139,6 +153,38 @@ struct BookReviewSummarizer: BookReviewSummarizing {
             if site == .nyt, result.critics.isEmpty { result.critics = old.critics }
         }
         return result
+    }
+
+    /// Whether the site may have reader reviews beyond those shown.
+    func hasMoreReaderReviews(_ query: BookReviewQuery) -> Bool {
+        guard let entry = entries[query.key], entry.readerReviewsSite == .douban, entry.readerReviewsURL != nil else { return false }
+        guard let more = more[query.key] else { return (entry.readerReviewsTotal ?? .max) > entry.readerReviews.count }
+        return more.next != nil
+    }
+
+    /// The next reader reviews, without the ones already shown.
+    func loadMoreReaderReviews(_ query: BookReviewQuery) async {
+        let key = query.key
+        guard let entry = entries[key], let site = entry.readerReviewsSite, let url = entry.readerReviewsURL else { return }
+        var state = more[key] ?? MoreReaderReviews(total: entry.readerReviewsTotal)
+        guard !state.loading, var start = state.next else { return }
+        state.loading = true; state.error = nil; more[key] = state
+        var shown = Set((entry.readerReviews + state.reviews).map(\.text))
+        do {
+            // The first page repeats the few already shown; one more is asked for when nothing new came.
+            for _ in 0..<2 {
+                let page = try await service.moreReaderReviews(site, url: url, start: start)
+                let fresh = page.reviews.filter { shown.insert($0.text).inserted }
+                state.reviews += fresh; state.next = page.next; state.total = page.total ?? state.total
+                guard fresh.isEmpty, let next = page.next else { break }
+                start = next
+            }
+        } catch {
+            state.error = "\(site.title) didn’t answer. Try again."
+        }
+        state.loading = false
+        // The book's reviews were looked up again meanwhile: what was loaded belongs to the old ones.
+        if entries[key]?.readerReviews == entry.readerReviews { more[key] = state }
     }
 
     func summary(for query: BookReviewQuery) -> BookReviewSummary? { summaries[query.key] }

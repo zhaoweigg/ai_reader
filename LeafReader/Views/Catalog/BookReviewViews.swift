@@ -53,9 +53,11 @@ struct BookReviewsSection: View {
     }
 
     private func readerReviews(_ entry: BookReviews) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let more = reviews.more[query.key]
+        let all = entry.readerReviews + (more?.reviews ?? [])
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Reader reviews" + (entry.readerReviewsSite.map { " · \($0.title)" } ?? "")).font(.subheadline.weight(.semibold))
-            ForEach(Array(entry.readerReviews.enumerated()), id: \.offset) { index, review in
+            ForEach(Array(all.enumerated()), id: \.offset) { index, review in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         if let stars = review.stars { BookStars(value: Double(stars)).font(.caption2) }
@@ -69,13 +71,42 @@ struct BookReviewsSection: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel([review.stars.map { "\($0) of 5 stars" }, review.helpful.map { "\($0) found this useful" }, review.text].compactMap { $0 }.joined(separator: ", "))
                 .accessibilityIdentifier("bookReaderReview-\(index)")
-                if index < entry.readerReviews.count - 1 { Divider() }
+                if index < all.count - 1 { Divider() }
             }
+            moreReaderReviews(entry, shown: all.count, more: more)
             if let url = entry.readerReviewsURL, let site = entry.readerReviewsSite {
                 Link("All reviews on \(site.title)", destination: url).font(.caption.weight(.semibold)).accessibilityIdentifier("allReaderReviews")
             }
         }
     }
+
+    /// Loads the next reviews here, or says why there are no more to load.
+    @ViewBuilder private func moreReaderReviews(_ entry: BookReviews, shown: Int, more: MoreReaderReviews?) -> some View {
+        let total = more?.total ?? entry.readerReviewsTotal
+        if more?.loading == true {
+            HStack(spacing: 8) { ProgressView(); Text("Loading more reviews…").font(.footnote).foregroundStyle(.secondary) }
+                .accessibilityElement(children: .combine).accessibilityIdentifier("moreReaderReviewsLoading")
+        } else if let error = more?.error {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(error).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("moreReaderReviewsError")
+                Button("Try again", action: loadMore).font(.footnote.weight(.semibold)).accessibilityIdentifier("retryMoreReaderReviews")
+            }
+        } else if reviews.hasMoreReaderReviews(query) {
+            HStack(spacing: 10) {
+                Button(action: loadMore) { Label("More reviews", systemImage: "text.bubble") }
+                    .buttonStyle(.bordered).controlSize(.small).tint(theme.accent).accessibilityIdentifier("moreReaderReviews")
+                if let total, total > shown {
+                    Text("\(shown.formatted()) of \(total.formatted())").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        .accessibilityIdentifier("readerReviewsShown")
+                }
+            }
+        } else if more != nil, let total, total > shown, let site = entry.readerReviewsSite {
+            // 豆瓣 shows a visitor its first hundred.
+            Text("\(site.title) shows its other \((total - shown).formatted()) reviews only to signed-in readers.")
+                .font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("readerReviewsLimit")
+        }
+    }
+    private func loadMore() { Task { await reviews.loadMoreReaderReviews(query) } }
 
     private func critics(_ reviews: [CriticReview]) -> some View {
         VStack(alignment: .leading, spacing: 10) {

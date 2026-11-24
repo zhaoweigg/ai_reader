@@ -17,6 +17,19 @@ private actor ScriptedReviews: BookReviewServing {
     }
 }
 
+/// 豆瓣's feed in pages, failing where asked, and recording where each request started.
+private actor PagedReviews: BookReviewServing {
+    private var pages: [Result<ReaderReviewPage, BookReviewError>]
+    private(set) var starts: [Int] = []
+    let entry: BookReviews
+    init(_ entry: BookReviews, pages: [Result<ReaderReviewPage, BookReviewError>]) { self.entry = entry; self.pages = pages }
+    func reviews(_ query: BookReviewQuery, nytKey: String?) async -> BookReviews { entry }
+    func moreReaderReviews(_ site: BookReviewSite, url: URL, start: Int) async throws -> ReaderReviewPage {
+        starts.append(start)
+        return try pages.removeFirst().get()
+    }
+}
+
 /// An AI with the agent interface that searches the web once, then answers.
 @MainActor private final class SearchingProvider: ToolChatProvider {
     var systems: [String] = [], tools: [[String]] = [], questions: [String] = []
@@ -65,6 +78,9 @@ private actor ScriptedReviews: BookReviewServing {
         <span property="v:itemreviewed">三体</span><strong class="ll rating_num" property="v:average"> 8.9 </strong>
         <span property="v:votes">519564</span>\(["62.6", "29.7", "6.5", "0.8", "0.5"].map { #"<span class="rating_per">\#($0)%</span>"# }.joined())
         <ul>\(item(531, 3, "物理名词&amp;设定很多")) \(item(13066, 5, "想象力一流")) \(item(9, 1, ""))</ul>
+        <span class="pl">&nbsp;(
+            <a href="https://book.douban.com/subject/2567698/comments/">全部 125237 条</a>
+        ) </span><span class="pl">( <a href="reviews">全部 4812 条</a> )</span>
         """
         let address = URL(string: "https://book.douban.com/subject/2567698/")!
         let book = try DoubanBooks.parse(Data(html.utf8), address: address)
@@ -74,11 +90,61 @@ private actor ScriptedReviews: BookReviewServing {
         // The most useful first; an empty review is left out; no reader's name is kept.
         XCTAssertEqual(book.reviews, [ReaderReview(stars: 5, text: "想象力一流", helpful: 13066), ReaderReview(stars: 3, text: "物理名词&设定很多", helpful: 531)])
         XCTAssertEqual(book.reviewsURL.absoluteString, "https://book.douban.com/subject/2567698/comments/")
+        XCTAssertEqual(book.total, 125237, "The short reviews' count, not the long reviews'")
         // Too few ratings for a score: the reviews still count.
         let unrated = try DoubanBooks.parse(Data(#"<span property="v:itemreviewed">新书</span><strong class="ll rating_num" property="v:average">  </strong>\#(item(4, 4, "好看"))"#.utf8), address: address)
         XCTAssertNil(unrated.rating); XCTAssertEqual(unrated.reviews.count, 1)
         XCTAssertThrowsError(try DoubanBooks.parse(Data(html.utf8), address: URL(string: "https://www.douban.com/misc/sorry")!))
         XCTAssertThrowsError(try DoubanBooks.parse(Data("<html>check</html>".utf8), address: address))
+    }
+
+    func testDoubanFeedPagesTwentyAtATimeUpToWhatAVisitorIsShown() throws {
+        func feed(_ total: Int, _ rows: [String]) -> Data { Data(#"{"start":0,"count":20,"total":\#(total),"interests":[\#(rows.joined(separator: ","))]}"#.utf8) }
+        let rows = [#"{"comment":" 想象力一流 ","rating":{"value":5,"max":5},"vote_count":13066,"user":{"name":"someone"}}"#,
+                    #"{"comment":"没打分","rating":null,"vote_count":2}"#, #"{"comment":"   ","rating":{"value":1}}"#]
+        let page = try DoubanComments.parse(feed(125237, rows), start: 0)
+        // No reader's name is kept; an empty review is left out but still counts toward where the next page starts.
+        XCTAssertEqual(page.reviews, [ReaderReview(stars: 5, text: "想象力一流", helpful: 13066), ReaderReview(stars: nil, text: "没打分", helpful: 2)])
+        XCTAssertEqual(page.total, 125237); XCTAssertEqual(page.next, 3)
+        // A visitor is shown the first hundred, and a short book ends with its last review.
+        XCTAssertNil(try DoubanComments.parse(feed(125237, Array(repeating: rows[0], count: 20)), start: 80).next)
+        XCTAssertEqual(try DoubanComments.parse(feed(125237, Array(repeating: rows[0], count: 20)), start: 60).next, 80)
+        XCTAssertNil(try DoubanComments.parse(feed(26, Array(repeating: rows[0], count: 6)), start: 20).next)
+        XCTAssertNil(try DoubanComments.parse(feed(949, []), start: 40).next, "An empty page is the end")
+        XCTAssertThrowsError(try DoubanComments.parse(Data(#"{"msg":"need_permission","code":1000}"#.utf8), start: 0))
+    }
+
+    func testMoreReviewsSkipThoseShownAskAgainAfterAFailureAndStopAtTheEnd() async {
+        let shown = [ReaderReview(stars: 5, text: "一", helpful: 9), ReaderReview(stars: 4, text: "二", helpful: 8)]
+        let entry = BookReviews(readerReviews: shown, readerReviewsSite: .douban, readerReviewsURL: URL(string: "https://book.douban.com/subject/1/comments/"),
+                                readerReviewsTotal: 949, fetchedAt: Date())
+        func review(_ text: String) -> ReaderReview { ReaderReview(stars: 3, text: text, helpful: 1) }
+        let service = PagedReviews(entry, pages: [
+            .failure(.unavailable),
+            .success(ReaderReviewPage(reviews: shown, total: 949, next: 2)),                       // only those shown: ask for the next page
+            .success(ReaderReviewPage(reviews: [review("三"), shown[1], review("四")], total: 949, next: 80)),
+            .success(ReaderReviewPage(reviews: [review("五")], total: 949, next: nil))
+        ])
+        let store = BookReviewStore(defaults: defaults(), service: service)
+        let query = BookReviewQuery(title: "三体", author: "刘慈欣")
+        await store.load(query)
+        XCTAssertTrue(store.hasMoreReaderReviews(query))
+        await store.loadMoreReaderReviews(query)
+        XCTAssertEqual(store.more[query.key]?.error, "豆瓣读书 didn’t answer. Try again."); XCTAssertEqual(store.more[query.key]?.reviews, [])
+        XCTAssertTrue(store.hasMoreReaderReviews(query), "A failure can be tried again")
+        await store.loadMoreReaderReviews(query)
+        XCTAssertEqual(store.more[query.key]?.reviews.map(\.text), ["三", "四"]); XCTAssertNil(store.more[query.key]?.error)
+        await store.loadMoreReaderReviews(query)
+        XCTAssertEqual(store.more[query.key]?.reviews.map(\.text), ["三", "四", "五"])
+        XCTAssertFalse(store.hasMoreReaderReviews(query))
+        await store.loadMoreReaderReviews(query)
+        let starts = await service.starts
+        XCTAssertEqual(starts, [0, 0, 2, 80], "Nothing is asked once the site has no more")
+        // A book page with every review already shown offers none.
+        let complete = BookReviewStore(defaults: defaults(), service: PagedReviews(BookReviews(readerReviews: shown, readerReviewsSite: .douban,
+            readerReviewsURL: entry.readerReviewsURL, readerReviewsTotal: 2, fetchedAt: Date()), pages: []))
+        await complete.load(query)
+        XCTAssertFalse(complete.hasMoreReaderReviews(query))
     }
 
     func testDoubanSuggestionsAreMatchedByTitleAndAuthor() throws {

@@ -62,6 +62,8 @@ struct BookReviews: Codable, Equatable {
     /// Where the reader reviews come from and where all of them can be read.
     var readerReviewsSite: BookReviewSite? = nil
     var readerReviewsURL: URL? = nil
+    /// How many short reviews the site has for the book, when it says.
+    var readerReviewsTotal: Int? = nil
     var critics: [CriticReview] = []
     /// Sites that did not answer this time, kept apart from sites with no entry for the book.
     var unavailable: [BookReviewSite] = []
@@ -131,9 +133,23 @@ private enum BookReviewPart: Sendable {
     case nothing, rating(BookRating?), douban(DoubanBook?), critics([CriticReview]), failed(BookReviewSite)
 }
 
+/// The next reader reviews from a site, and where the ones after them start.
+struct ReaderReviewPage: Equatable {
+    var reviews: [ReaderReview]
+    var total: Int?
+    /// Nil when the site has no more to show a visitor.
+    var next: Int?
+}
+
 protocol BookReviewServing: Sendable {
     /// Every site's part for one book. A site that fails is listed in `unavailable`; the rest still count.
     func reviews(_ query: BookReviewQuery, nytKey: String?) async -> BookReviews
+    /// More of the reader reviews whose page is `url`, from the `start`th.
+    func moreReaderReviews(_ site: BookReviewSite, url: URL, start: Int) async throws -> ReaderReviewPage
+}
+
+extension BookReviewServing {
+    func moreReaderReviews(_ site: BookReviewSite, url: URL, start: Int) async throws -> ReaderReviewPage { throw BookReviewError.unavailable }
 }
 
 struct BookReviewClient: BookReviewServing {
@@ -171,7 +187,9 @@ struct BookReviewClient: BookReviewServing {
                 guard let book else { continue }
                 if let rating = book.rating { result.ratings.append(rating) }
                 result.readerReviews = Array(book.reviews.prefix(3))
-                if !result.readerReviews.isEmpty { result.readerReviewsSite = .douban; result.readerReviewsURL = book.reviewsURL }
+                if !result.readerReviews.isEmpty {
+                    result.readerReviewsSite = .douban; result.readerReviewsURL = book.reviewsURL; result.readerReviewsTotal = book.total
+                }
             case .critics(let critics): result.critics = critics
             case .failed(let site): result.unavailable.append(site)
             }
@@ -217,6 +235,18 @@ struct BookReviewClient: BookReviewServing {
         return try DoubanBooks.parse(data, address: address)
     }
 
+    // MARK: More 豆瓣 short reviews, most useful first, from the feed its mobile site reads.
+    func moreReaderReviews(_ site: BookReviewSite, url: URL, start: Int) async throws -> ReaderReviewPage {
+        guard site == .douban, let id = DoubanBooks.subjectID(url) else { throw BookReviewError.unavailable }
+        var feed = URLComponents(string: "https://m.douban.com/rexxar/api/v2/book/\(id)/interests")!
+        feed.queryItems = [URLQueryItem(name: "count", value: String(DoubanComments.pageSize)), URLQueryItem(name: "start", value: String(start)),
+                           URLQueryItem(name: "order_by", value: "hot")]
+        // The feed answers only requests that come from the book's mobile page.
+        let (data, _) = try await page(feed.url!, accept: "application/json", referer: "https://m.douban.com/book/subject/\(id)/", missingIsNil: false)
+        guard let data else { throw BookReviewError.unavailable }
+        return try DoubanComments.parse(data, start: start)
+    }
+
     // MARK: 微信读书: its search lists each book's recommendation rate.
     func weread(_ query: BookReviewQuery) async throws -> BookRating? {
         var url = URLComponents(string: "https://weread.qq.com/web/search/global")!
@@ -237,10 +267,11 @@ struct BookReviewClient: BookReviewServing {
         return data
     }
     /// The body and the address it finally came from; nothing for a 404 when that means "no entry".
-    private func page(_ url: URL, accept: String = "text/html", missingIsNil: Bool) async throws -> (Data?, URL?) {
+    private func page(_ url: URL, accept: String = "text/html", referer: String? = nil, missingIsNil: Bool) async throws -> (Data?, URL?) {
         var request = URLRequest(url: url, timeoutInterval: 20)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(accept, forHTTPHeaderField: "Accept")
+        if let referer { request.setValue(referer, forHTTPHeaderField: "Referer") }
         let (data, response) = try await session.data(for: request)
         try Task.checkCancellation()
         guard let response = response as? HTTPURLResponse else { throw BookReviewError.invalidResponse }
@@ -249,7 +280,8 @@ struct BookReviewClient: BookReviewServing {
         switch response.statusCode {
         case 200: break
         case 404 where missingIsNil: return (nil, nil)
-        case 403, 418: throw BookReviewError.blocked
+        // 豆瓣's feed says 400 or 403 "need_permission" for what it shows only to signed-in readers.
+        case 400, 403, 418: throw BookReviewError.blocked
         default: throw BookReviewError.unavailable
         }
         guard !data.isEmpty, data.count <= 3_000_000 else { throw BookReviewError.invalidResponse }
@@ -299,6 +331,8 @@ struct DoubanBook: Equatable {
     let rating: BookRating?
     let reviews: [ReaderReview]
     let reviewsURL: URL
+    /// "全部 949 条": every short review of this edition.
+    var total: Int? = nil
 }
 
 enum DoubanBooks {
@@ -340,7 +374,8 @@ enum DoubanBooks {
             let stars = first(#"allstar(\d)0"#, item).flatMap { Int($0) }.flatMap { (1...5).contains($0) ? $0 : nil }
             return ReaderReview(stars: stars, text: String(text.prefix(400)), helpful: first(#"class="vote-count"[^>]*>(\d+)<"#, item).flatMap { Int($0) })
         }.sorted { ($0.helpful ?? 0) > ($1.helpful ?? 0) }
-        return DoubanBook(rating: rating, reviews: reviews, reviewsURL: page.appendingPathComponent("comments/"))
+        let total = first(#"/comments/"[^>]*>\s*全部\s*(\d+)\s*条"#, html).flatMap { Int($0) }
+        return DoubanBook(rating: rating, reviews: reviews, reviewsURL: page.appendingPathComponent("comments/"), total: total)
     }
     private static func first(_ pattern: String, _ text: String) -> String? { all(pattern, text).first }
     private static func all(_ pattern: String, _ text: String) -> [String] {
@@ -349,6 +384,28 @@ enum DoubanBooks {
             let index = match.numberOfRanges > 1 ? 1 : 0
             return Range(match.range(at: index), in: text).map { String(text[$0]) }
         }
+    }
+}
+
+/// 豆瓣's short-review feed: twenty at a time, most useful first. A visitor who is not
+/// signed in is shown the first hundred.
+enum DoubanComments {
+    static let pageSize = 20
+    static let visitorLimit = 100
+
+    static func parse(_ data: Data, start: Int) throws -> ReaderReviewPage {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let rows = root["interests"] as? [[String: Any]]
+        else { throw BookReviewError.invalidResponse }
+        let total = (root["total"] as? Int).flatMap { $0 >= 0 ? $0 : nil }
+        let reviews = rows.prefix(pageSize).compactMap { row -> ReaderReview? in
+            let text = (row["comment"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            let stars = ((row["rating"] as? [String: Any])?["value"] as? Int).flatMap { (1...5).contains($0) ? $0 : nil }
+            return ReaderReview(stars: stars, text: String(text.prefix(400)), helpful: row["vote_count"] as? Int)
+        }
+        let next = start + rows.count
+        let more = !rows.isEmpty && next < min(total ?? .max, visitorLimit)
+        return ReaderReviewPage(reviews: reviews, total: total, next: more ? next : nil)
     }
 }
 
