@@ -38,6 +38,23 @@ Ask Leaf reads the chart on screen or the open book's page, and `get_web_novel_c
 
 Not verified: whether Z-Library carries the charted titles (fixtures stand in for the catalog), and the live sites from inside the app, from a phone, or from mainland China. Outside the app, the parser's rules were checked against every live 起点 chart page and the first pages of the four 微信读书 charts.
 
+## Ratings & reviews
+
+`BookReviewsSection` sits on `ZLibraryBookView`, `BestsellerBookView` and `WebNovelBookView`. `BookReviewStore` keys each book by its first ISBN (ISBN-10 and ISBN-13 are the same key) or, without one, by title and author as `WebNovelText` compares them, so a book opened from two lists shares one entry. A lookup runs when a page opens and is kept for seven days; if a site did not answer, the page says so with **Try again**, the site is asked again after an hour, and what it said last time is kept meanwhile. The catalog page waits for the edition's details so the lookup has its ISBNs. The last 60 books and their summaries are kept in UserDefaults.
+
+`BookReviewClient` asks the sites at once with an honest User-Agent and an ephemeral session, and each site's failure stays its own:
+
+- **Open Library**: `openlibrary.org/search.json` by `isbn`, or `title` + `author`, with the rating fields; a title search must match the title and an author. Official, no key.
+- **豆瓣读书**: no API. `book.douban.com/isbn/<isbn>/` redirects to the book's page; for a Chinese book without an ISBN, `book.douban.com/j/subject_suggest` lists candidates and one with the same title (or a numbered volume of it) and author is chosen. One page fetch then gives the score, the star shares and the page's short reviews, of which the three most useful are shown without readers' names. A redirect to its `sec.` check host, or a 403/418, is reported as not answering; Leaf does not retry inside the same lookup. 豆瓣 discourages automated reading, so it is asked only for a book page the reader opened.
+- **微信读书**: chart rows keep `newRating`, `newRatingCount` and `newRatingDetail.title`; other Chinese books use `weread.qq.com/web/search/global` and need the same title and author. Its written reviews need a 微信读书 login and are not read.
+- **NYT**: `api.nytimes.com/svc/books/v3/reviews.json?isbn=` with the key saved for the NYT lists; only `nytimes.com` links are kept.
+- **起点** pages carry no score or reviews, only a few 书友圈 posts, so 起点 books rely on 豆瓣 and 微信读书.
+- Goodreads (no API) and Google Books (keyless requests are rate limited) are not used.
+
+**Summarize reviews with Ask Leaf** (`BookReviewSummarizer`) sends one request through the reader's AI settings with web search as the only tool (`search_conversation` is turned off), in Chinese for a Chinese book. The request carries the title, author, ISBN and the scores on the page as untrusted data. The answer is four lines with its sources; a model that could not search says so, and the page labels the summary "from general knowledge". Providers without the agent interface answer without searching.
+
+Not verified: the live sites from inside the app or from a phone. UI tests use `UITestBookReviewClient` and the mock AI. Outside the app on 2026-11-23, Open Library, 豆瓣 (by ISBN, by title, the book page and its short reviews) and 微信读书 search answered without an account; the NYT reviews endpoint needs a key and was not called.
+
 ## Verification scope
 
 `BestsellerFeedTests`, `BestsellerStoreTests`, and `BestsellerMatchingTests` cover parsing, full rankings, provider failures, key privacy, cache retention, source changes, account changes, concurrent lookup limits, cancellation, ambiguity, and work ownership. `BestsellerUITests` covers the Library shelf, all filters, catalog search, matching/import transitions, account setup, retries/quota/cancellation, Ask Leaf, the three appearances, scene geometry, and imported-book Pages/Scroll smoke checks. DEBUG native fixtures use original TXT passages and local publisher cover samples; existing catalog EPUB regressions remain separate.

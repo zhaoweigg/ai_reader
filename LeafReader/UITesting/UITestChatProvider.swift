@@ -15,6 +15,14 @@ struct UITestChatProvider: ChatProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    // The book page's review summary, in the four lines it asks for.
+                    if request.turns.last?.content.hasPrefix(BookReviewSummarizer.question) == true {
+                        try await Task.sleep(for: .milliseconds(600))
+                        continuation.yield(.text(request.system.contains("Simplified Chinese")
+                            ? "**好评：** 设定新奇，后半段节奏紧凑。\n**争议：** 开头偏慢，人物略单薄。\n**适合谁：** 喜欢悬疑与想象力的读者。\n**来源：** [示例书评](https://example.com/reviews)"
+                            : "**Liked:** the steady pace and the friendship at its centre.\n**Mixed:** the narrator’s voice divides readers.\n**Who it’s for:** readers who enjoy quiet, hopeful fiction.\n**Sources:** [Fixture reviews](https://example.com/reviews)"))
+                        continuation.yield(.finished(truncated: false)); continuation.finish(); return
+                    }
                     if UITesting.flag(.chatScrollPerf) {
                         continuation.yield(.text((1...28).map {
                             "### 线索 \($0)\n\n白虎说完又看向几人。**人物的猜测**需要和已经发生的事情分开来看。读到这里，可以结合前文回顾这个角色的身份，观察他的话和行动是否一致。\n\n- 当前的解释还不是最终结论。\n- 保留阅读位置，继续寻找书中的证据。"
@@ -114,6 +122,13 @@ extension UITestChatProvider: ToolChatProvider {
                 do {
                     // Every chat offers tools now. Only cases that script the agent call them;
                     // the rest, and a reply without tools, behave like the plain chat reply.
+                    // A review summary searches the web first, as a hosted search would.
+                    let asked = items.compactMap { item -> String? in if case .turn(let turn) = item, turn.role == "user" { return turn.content }; return nil }.last ?? ""
+                    if asked.hasPrefix(BookReviewSummarizer.question), allowTools, tools.contains(where: \.hosted) {
+                        continuation.yield(.webSearch(nil))
+                        try await Task.sleep(for: .milliseconds(400))
+                        continuation.yield(.webSearch("book reviews"))
+                    }
                     if tools.isEmpty || !UITesting.flag(.chatAgent) {
                         let turns = items.compactMap { item -> ChatTurn? in if case .turn(let turn) = item { return turn }; return nil }
                         for try await event in stream(ChatRequest(system: system, turns: turns)) {

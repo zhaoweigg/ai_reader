@@ -245,14 +245,8 @@ struct ZLibraryBookView: View {
                     };Spacer() }
                     Text(edition.fileExtension.isEmpty ? (detailsError == nil ? "Loading edition information…" : "Edition information unavailable") : edition.format == nil ? "This format cannot be opened in Leaf." : edition.format == .pdf ? "Original page layout" : "Reading appearance can be adjusted in Leaf").font(.caption).foregroundStyle(.secondary)
                 }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(theme.surface,in:.rect(cornerRadius:18))
-                VStack(alignment:.leading,spacing:12) {
-                    Text("Ratings & reviews").font(.headline)
-                    Label(edition.ratingSummary,systemImage:edition.rating == nil ? "star" : "star.fill").foregroundStyle(theme.accent)
-                    if let quality = edition.qualityScore {
-                        Label("File quality \(quality.formatted(.number.precision(.fractionLength(0...1))))",systemImage:"checkmark.seal").font(.subheadline)
-                    }
-                    Text("Scores are supplied by Z-Library. Written reviews are not available through this connection.").font(.caption).foregroundStyle(.secondary)
-                }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(theme.surface,in:.rect(cornerRadius:18))
+                // Waits for the edition's ISBNs, which arrive with its details.
+                BookReviewsSection(query:BookReviewQuery(edition),ready:resolved != nil || descriptionFailed || detailsError != nil || (!book.fileExtension.isEmpty && book.summary != nil))
                 if let error = catalog.importError { Text(error).font(.subheadline).foregroundStyle(.red).accessibilityIdentifier("catalogImportError") }
                 if catalog.downloadingID == book.id {
                     if let progress = catalog.progress { ProgressView(value:progress).accessibilityLabel("Download progress") } else { ProgressView("Preparing download…") }

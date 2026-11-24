@@ -111,6 +111,10 @@ struct WebNovel: Codable, Equatable, Identifiable {
     /// 微信读书 names each book's cover and page; 起点's follow from the book's number.
     var cover: URL? = nil
     var link: URL? = nil
+    /// 微信读书's recommendation rate in thousandths, how many readers rated it, and its verdict such as 神作.
+    var ratingPermille: Int? = nil
+    var ratingCount: Int? = nil
+    var ratingTitle: String? = nil
     var id: String { source.rawValue + ":" + bookID }
     var coverURL: URL? { cover ?? (source == .qidian ? URL(string: "https://bookcover.yuewen.com/qdbimg/349573/\(bookID)/180") : nil) }
     var sourceURL: URL { link ?? URL(string: source == .qidian ? "https://m.qidian.com/book/\(bookID)/" : "https://weread.qq.com/")! }
@@ -195,7 +199,10 @@ enum WeReadChart {
                             subcategory: shelves.count > 1 ? shelves[0] : "", length: "", figure: figures.joined(separator: " · "),
                             summary: text("intro", 3000), source: .weread,
                             cover: address(info["cover"], hosts: ["weread.qq.com", "myqcloud.com", "qqmail.com", "qpic.cn"]),
-                            link: address(info["deepLink"], hosts: ["weread.qq.com"]))
+                            link: address(info["deepLink"], hosts: ["weread.qq.com"]),
+                            ratingPermille: (info["newRating"] as? Int).flatMap { (1...1000).contains($0) ? $0 : nil },
+                            ratingCount: (info["newRatingCount"] as? Int).flatMap { $0 > 0 ? $0 : nil },
+                            ratingTitle: ((info["newRatingDetail"] as? [String: Any])?["title"] as? String).map { String($0.prefix(20)) })
         }
         guard Set(books.map(\.bookID)).count == books.count else { throw WebNovelFeedError.invalidResponse }
         return WebNovelList(selection: selection, published: "", fetchedAt: now, books: books, hasMore: more != 0)

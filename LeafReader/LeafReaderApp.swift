@@ -8,6 +8,7 @@ struct LeafReaderApp: App {
     @StateObject private var catalog: ZLibraryStore
     @StateObject private var bestsellers: BestsellerStore
     @StateObject private var webNovels: WebNovelStore
+    @StateObject private var bookReviews: BookReviewStore
     @StateObject private var agentTraces: AgentTraceStore
     @StateObject private var sync: ICloudSync
     private let readingDefaults: UserDefaults
@@ -24,11 +25,14 @@ struct LeafReaderApp: App {
         var bestsellerService: (any BestsellerServing)?
         var bestsellerShelf = true
         var webNovelService: (any WebNovelServing)?
+        var reviewService: (any BookReviewServing)?
         var syncFolder: URL?
         #if DEBUG
         if let id = UITesting.testID {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("LeafUITests/\(id.uuidString)", isDirectory: true)
             seedSamples = !UITesting.flag(.emptyLibrary)
+            // Book pages never ask the live review sites during UI tests.
+            reviewService = UITestBookReviewClient()
             chatCredentials.service = "com.leafreader.uitests.\(id.uuidString)"
             if UITesting.flag(.chatMock) {
                 chatProvider = UITestChatProvider(slow: UITesting.flag(.chatSlow))
@@ -83,6 +87,9 @@ struct LeafReaderApp: App {
         _bestsellers = StateObject(wrappedValue: BestsellerStore(defaults: defaults, credentials: bestsellerCredentials,
             service: bestsellerService ?? BestsellerFeedClient(), allowsAutomaticShelf: bestsellerShelf))
         _webNovels = StateObject(wrappedValue: WebNovelStore(defaults: defaults, service: webNovelService ?? WebNovelClient()))
+        // NYT reviews use the reader's own NYT Books key, when they saved one.
+        _bookReviews = StateObject(wrappedValue: BookReviewStore(defaults: defaults, service: reviewService ?? BookReviewClient(),
+            nytKey: { [bestsellerCredentials] in ((try? bestsellerCredentials.read(account: "nyt-books")) ?? nil) }))
         readingDefaults = defaults
         if root == nil, let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             Task.detached(priority: .utility) { try? RetiredVoicePackCleanup.removeDownloadedPack(applicationSupport: support) }
@@ -103,7 +110,7 @@ struct LeafReaderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(bestsellers).environmentObject(bestsellers.matching).environmentObject(webNovels).environmentObject(agentTraces).environmentObject(sync).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
+            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(bestsellers).environmentObject(bestsellers.matching).environmentObject(webNovels).environmentObject(bookReviews).environmentObject(agentTraces).environmentObject(sync).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
                 #if DEBUG
                 .background(UITestSceneGeometryBridge())
                 .background(UITestScrollTouchProbe())

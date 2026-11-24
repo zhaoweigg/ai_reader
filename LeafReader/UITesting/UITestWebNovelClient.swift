@@ -32,7 +32,8 @@ actor UITestWebNovelClient: WebNovelServing {
             let names = noted[row.title] ?? (row.title, row.author)
             return WebNovel(rank: index + 1, bookID: "w" + row.bookID, title: names.0, author: names.1, category: row.category,
                             subcategory: row.subcategory, length: "", figure: "\(96 - index).0% 推荐 · 今日 \(3000 - index * 400)人在读",
-                            summary: row.summary, source: .weread)
+                            summary: row.summary, source: .weread, ratingPermille: 960 - index * 10, ratingCount: 52_000 - index * 4000,
+                            ratingTitle: index == 0 ? "神作" : nil)
         }, hasMore: offset + 4 < rows.count)
     }
     static let samples: [WebNovel] = [
