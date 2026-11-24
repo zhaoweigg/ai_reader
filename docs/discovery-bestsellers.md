@@ -42,6 +42,8 @@ Not verified: whether Z-Library carries the charted titles (fixtures stand in fo
 
 `BookReviewsSection` sits on `ZLibraryBookView`, `BestsellerBookView` and `WebNovelBookView`. `BookReviewStore` keys each book by its first ISBN (ISBN-10 and ISBN-13 are the same key) or, without one, by title and author as `WebNovelText` compares them, so a book opened from two lists shares one entry. A lookup runs when a page opens and is kept for seven days; if a site did not answer, the page says so with **Try again**, the site is asked again after an hour, and what it said last time is kept meanwhile. The catalog page waits for the edition's details so the lookup has its ISBNs. The last 60 books and their summaries are kept in UserDefaults.
 
+`BookRatingCards` lays the scores out: `ViewThatFits` takes one row in which the cards share the width (128 pt each at least, so three fit across a phone held sideways) and, when that does not fit, a sideways scroll whose cards are sized from the scroll's width so that two show whole and the third starts 14 pt inside the section's padding. In both, every card is as tall as the tallest. Z-Library's own score is moved to the end, and `BookReviewSite.scoreScale` supplies the "/10" and "/5" beside 豆瓣's and Open Library's scores.
+
 `BookReviewClient` asks the sites at once with an honest User-Agent and an ephemeral session, and each site's failure stays its own:
 
 - **Open Library**: `openlibrary.org/search.json` by `isbn`, or `title` + `author`, with the rating fields; a title search must match the title and an author. Official, no key.

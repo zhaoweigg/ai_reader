@@ -10,6 +10,7 @@ struct BookReviewsSection: View {
     @EnvironmentObject private var settings: AISettingsStore
     @Environment(\.leafTheme) private var theme
 
+    private static let padding: CGFloat = 18
     private var entry: BookReviews? { reviews.reviews(for: query) }
     private var ratings: [BookRating] { entry?.ratings ?? [query.listed].compactMap { $0 } }
 
@@ -17,16 +18,14 @@ struct BookReviewsSection: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Ratings & reviews").font(.headline).accessibilityAddTraits(.isHeader)
             if !ratings.isEmpty {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10, alignment: .top)], alignment: .leading, spacing: 10) {
-                    ForEach(ratings, id: \.site) { BookRatingTile(rating: $0) }
-                }
+                BookRatingCards(ratings: ratings, edge: Self.padding)
             }
             status
             if let entry, !entry.readerReviews.isEmpty { readerReviews(entry) }
             if let entry, !entry.critics.isEmpty { critics(entry.critics) }
             summary
         }
-        .padding(18).frame(maxWidth: .infinity, alignment: .leading).background(theme.surface, in: .rect(cornerRadius: 18))
+        .padding(Self.padding).frame(maxWidth: .infinity, alignment: .leading).background(theme.surface, in: .rect(cornerRadius: 18))
         .accessibilityElement(children: .contain).accessibilityIdentifier("bookReviewsSection")
         .task(id: ready ? query.key : "") { if ready { await reviews.load(query) } }
     }
@@ -165,6 +164,51 @@ struct BookReviewsSection: View {
     }
 }
 
+/// Each site's score on a card. The cards are one height. They share the width while they
+/// all fit; when they do not, they are swiped sideways and the next one shows at the edge.
+private struct BookRatingCards: View {
+    let ratings: [BookRating]
+    /// The section's padding: the swiped row runs through it to the section's edge.
+    let edge: CGFloat
+
+    private static let spacing: CGFloat = 10
+    private static let narrowest: CGFloat = 128
+    /// How much of the next card shows inside the section's padding.
+    private static let peek: CGFloat = 14
+
+    /// Readers' scores first; the catalog's own score says the least about the book.
+    private var ordered: [BookRating] { ratings.filter { $0.site != .zlibrary } + ratings.filter { $0.site == .zlibrary } }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            // Three fit across a phone held sideways.
+            row { $0.frame(minWidth: Self.narrowest, idealWidth: Self.narrowest, maxWidth: .infinity) }
+            ScrollView(.horizontal) {
+                // Two whole cards and the start of the third, whatever the phone's width.
+                row { $0.containerRelativeFrame(.horizontal) { width, _ in max(Self.narrowest, (width - 2 * edge - 2 * Self.spacing - Self.peek) / 2) } }
+                    .padding(.horizontal, edge)
+            }
+            .scrollIndicators(.hidden)
+            // A card at either edge fades out, so it reads as more to swipe to.
+            .mask {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(0.1), .black], startPoint: .leading, endPoint: .trailing).frame(width: edge)
+                    Color.black
+                    LinearGradient(colors: [.black, .black.opacity(0.1)], startPoint: .leading, endPoint: .trailing).frame(width: edge)
+                }
+            }
+            .padding(.horizontal, -edge)
+            .accessibilityIdentifier("bookRatingsScroll")
+        }
+    }
+
+    /// The cards side by side, each as tall as the tallest.
+    private func row<Card: View>(@ViewBuilder _ sized: @escaping (BookRatingTile) -> Card) -> some View {
+        HStack(alignment: .top, spacing: Self.spacing) { ForEach(ordered, id: \.site) { sized(BookRatingTile(rating: $0)) } }
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 private struct BookRatingTile: View {
     let rating: BookRating
     @Environment(\.leafTheme) private var theme
@@ -174,7 +218,8 @@ private struct BookRatingTile: View {
             if let url = rating.url { Link(destination: url) { tile }.buttonStyle(.plain) } else { tile }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(([rating.site.title, rating.score, rating.count] + [rating.verdict].compactMap { $0 } + rating.notes).joined(separator: ", "))
+        .accessibilityLabel(([rating.site.title, rating.score + (rating.site.scoreScale.map { " out of \($0)" } ?? ""), rating.count]
+                             + [rating.verdict].compactMap { $0 } + rating.notes).joined(separator: ", "))
         .accessibilityHint(Text(rating.url == nil ? "" : "Opens the book on \(rating.site.title)"))
         .accessibilityAddTraits(rating.url == nil ? [] : .isLink)
         .accessibilityIdentifier("bookRating-\(rating.site.rawValue)")
@@ -182,11 +227,14 @@ private struct BookRatingTile: View {
 
     private var tile: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(rating.score).font(.title2.weight(.bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            // The site's name sits under its score: beside it, 微信读书 broke in two next to 91.2%.
+            VStack(alignment: .leading, spacing: 2) {
+                // 7.4 beside 3.9 compares only when each says what it is out of.
+                (Text(rating.score).font(.title2.weight(.bold)).monospacedDigit()
+                 + Text(rating.site.scoreScale.map { "/\($0)" } ?? "").font(.caption.weight(.semibold)).foregroundColor(.secondary))
+                    .lineLimit(1).minimumScaleFactor(0.7)
                 Text(rating.site.title).font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
             }
-            // The full width of the tile: "recommended · 52,000 ratings" does not fit beside the score.
             Text(rating.count).font(.caption2).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
             if let stars = rating.stars { BookStars(value: stars).font(.caption) }
             if let verdict = rating.verdict {
@@ -210,7 +258,7 @@ private struct BookRatingTile: View {
             }
             ForEach(rating.notes, id: \.self) { Text($0).font(.caption2).foregroundStyle(.secondary) }
         }
-        .padding(12).frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.canvas.opacity(0.6), in: .rect(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.secondary.opacity(0.2), lineWidth: 0.75))
     }

@@ -542,6 +542,7 @@ final class BestsellerUITests: XCTestCase {
         reviewPart("bookRating-douban", has: ["8.6"], app: app)
         let douban = element("bookRating-douban", app).frame, weread = element("bookRating-weread", app).frame
         XCTAssertEqual(douban.minY, weread.minY, accuracy: 2, "The scores sit side by side")
+        XCTAssertEqual(douban.height, weread.height, accuracy: 1, "The cards are one height")
         capture("Night 起点 page ratings landscape")
         setReaderOrientation(.portrait, app: app)
     }
