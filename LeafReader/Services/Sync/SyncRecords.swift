@@ -139,6 +139,7 @@ struct SyncedSettings: Codable, Equatable {
         "reader.chatButtonTransparency", "chat.dictationLanguage", "chat.quickPrompts",
         "audio.voice", "audio.followsText", "audio.speed",
         "audio.speed.system",
-        "ai.configuration", "zlibrary.origin", "zlibrary.feed", "zlibrary.searchOrder"
+        "ai.configuration", "zlibrary.origin", "zlibrary.feed", "zlibrary.searchOrder",
+        "discover.lists"
     ]
 }

@@ -8,22 +8,28 @@ struct ZLibraryView: View {
     @EnvironmentObject private var library: LibraryStore
     @EnvironmentObject private var discovery: BestsellerStore
     @EnvironmentObject private var novels: WebNovelStore
-    /// Bestsellers and the 中文 charts are public lists shown in place of the catalog grid.
-    private var showingCharts: Bool { discovery.showingBestsellers || novels.showing }
+    @EnvironmentObject private var lists: BookListStore
+    @EnvironmentObject private var arrangement: DiscoverListsStore
+    /// Bestsellers, the 中文 charts and the other public lists are shown in place of the catalog grid.
+    private var showingCharts: Bool { discovery.showingBestsellers || novels.showing || lists.showing }
     private var chartsVisible: Bool { showingCharts && catalog.activeQuery.isEmpty }
-    private var section: Binding<DiscoverSection> {
-        Binding(get: { novels.showing ? .webNovels : discovery.showingBestsellers ? .bestsellers : catalog.feed == .popular ? .popular : .recommended }, set: { value in
-            searchFocused = false; searchText = ""
-            discovery.showingBestsellers = value == .bestsellers; novels.showing = value == .webNovels
-            switch value {
-            case .bestsellers: catalog.show(catalog.feed); Task { await discovery.load() }
-            case .webNovels: catalog.show(catalog.feed); Task { await novels.load() }
-            case .popular, .recommended: Task { await catalog.browse(value == .popular ? .popular : .recommended) }
-            }
-        })
+    private var current: DiscoverList { DiscoverList.current(catalog: catalog, bestsellers: discovery, novels: novels, lists: lists) }
+    /// The reader's lists, plus the one showing if it was opened from elsewhere while hidden.
+    private var chips: [DiscoverList] { arrangement.shown + (arrangement.isShown(current) ? [] : [current]) }
+    private func select(_ value: DiscoverList) {
+        searchFocused = false; searchText = ""
+        arrangement.remember(value)
+        value.show(catalog: catalog, bestsellers: discovery, novels: novels, lists: lists)
+        switch value {
+        case .nyt, .indie: Task { await discovery.load() }
+        case .qidian, .weread: Task { await novels.load() }
+        case .popular, .recommended: Task { await catalog.browse(value == .popular ? .popular : .recommended) }
+        default: Task { await lists.load() }
+        }
     }
     private enum Sheet: String, Identifiable { case connection, website; var id: String { rawValue } }
     @State private var sheet: Sheet?
+    @State private var editingLists = false
     @State private var searchText = ""
     @FocusState private var searchFocused: Bool
     var body: some View {
@@ -46,10 +52,10 @@ struct ZLibraryView: View {
                         .font(.subheadline.weight(.semibold)).disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("zlibrarySubmitSearch")
                 }.padding(14).frame(minHeight: 48).background(theme.surface, in: .rect(cornerRadius: 14))
-                Picker("Browse books", selection: section) {
-                    ForEach(DiscoverSection.allCases) { value in Text(value.title).tag(value) }
-                }.pickerStyle(.segmented).accessibilityIdentifier("zlibraryFeedPicker")
-                if chartsVisible, novels.showing {
+                DiscoverListChips(lists: chips, selection: current, select: select, edit: { searchFocused = false; editingLists = true })
+                if chartsVisible, lists.showing {
+                    BookListCharts(close: close)
+                } else if chartsVisible, novels.showing {
                     WebNovelCharts(close: close)
                 } else if chartsVisible {
                     BestsellerGrid(close: close)
@@ -172,10 +178,18 @@ struct ZLibraryView: View {
             }
         }
         .onDisappear { catalog.traceCatalogLoad("view disappeared"); catalog.cancelCatalogLoad("view disappeared") }
-        .task { if !chartsVisible { await catalog.search(catalog.activeQuery) } else if novels.showing { await novels.load() } else { await discovery.load() } }
+        .task {
+            if !chartsVisible { await catalog.search(catalog.activeQuery) } else if lists.showing { await lists.load() }
+            else if novels.showing { await novels.load() } else { await discovery.load() }
+        }
         .refreshable {
             if !chartsVisible { catalog.traceCatalogLoad("pull to refresh"); await catalog.reload() }
+            else if lists.showing { await lists.load(force: true) }
             else if novels.showing { await novels.load(force: true) } else { await discovery.load(force: true) }
+        }
+        .onChange(of: arrangement.shown) { _, shown in
+            // Hiding the list on screen moves Discover to the first one still shown.
+            if !shown.contains(current), editingLists, let first = shown.first { select(first) }
         }
         #if DEBUG
         .overlay(alignment: .bottomLeading) {
@@ -191,6 +205,7 @@ struct ZLibraryView: View {
         .sheet(item:$sheet,onDismiss: { Task { await catalog.reload() } }) { sheet in
             if sheet == .website { ZLibraryWebsiteSignIn() } else { ZLibraryConnectionView() }
         }
+        .sheet(isPresented: $editingLists) { DiscoverListsEditor() }
     }
     private func submitSearch() {
         searchFocused = false

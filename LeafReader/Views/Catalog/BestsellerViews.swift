@@ -1,19 +1,5 @@
 import SwiftUI
 
-enum DiscoverSection: String, CaseIterable, Identifiable {
-    case popular, recommended, bestsellers, webNovels
-    var id: String { rawValue }
-    /// Short enough for four segments on a narrow phone.
-    var title: String {
-        switch self {
-        case .popular: return "Popular"
-        case .recommended: return "For you"
-        case .bestsellers: return "Bestsellers"
-        case .webNovels: return "中文"
-        }
-    }
-}
-
 struct BestsellerCover: View {
     @Environment(\.leafTheme) private var theme
     let book: BestsellerBook
@@ -54,15 +40,12 @@ struct BestsellerGrid: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Bestsellers").font(.system(size: 32, design: .serif)).accessibilityIdentifier("bestsellersHeading")
+                Text(discovery.source == .nyt ? "NYT Best Sellers" : "Indie Bestsellers").font(.system(size: 32, design: .serif)).accessibilityIdentifier("bestsellersHeading")
                 Spacer()
                 Button("Refresh lists", systemImage: "arrow.clockwise") { Task { await discovery.load(force: true) } }
                     .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(discovery.isLoading)
                     .accessibilityIdentifier("bestsellersRefresh")
             }
-            Picker("Bestseller source", selection: $discovery.source) {
-                ForEach(BestsellerSource.allCases) { Text($0.title).tag($0) }
-            }.pickerStyle(.segmented).accessibilityIdentifier("bestsellerSourcePicker")
             HStack {
                 Picker("Book category", selection: $discovery.genre) {
                     ForEach(BestsellerGenre.allCases) { Text($0.title).tag($0) }

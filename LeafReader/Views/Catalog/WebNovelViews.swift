@@ -32,15 +32,12 @@ struct WebNovelCharts: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("中文榜单").font(.system(size: 32, design: .serif)).accessibilityIdentifier("webNovelsHeading")
+                Text(novels.source.fullName).font(.system(size: 32, design: .serif)).accessibilityIdentifier("webNovelsHeading")
                 Spacer()
                 Button("Refresh chart", systemImage: "arrow.clockwise") { Task { await novels.load(force: true) } }
                     .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(novels.isLoading)
                     .accessibilityIdentifier("webNovelsRefresh")
             }
-            Picker("Site", selection: $novels.source) {
-                ForEach(WebNovelSource.allCases) { Text($0.title).tag($0) }
-            }.pickerStyle(.segmented).accessibilityIdentifier("webNovelSourcePicker")
             Picker("Chart", selection: $novels.chart) {
                 ForEach(novels.source.charts) { Text($0.shortTitle).tag($0) }
             }.pickerStyle(.segmented).id(novels.source).accessibilityIdentifier("webNovelChartPicker")
