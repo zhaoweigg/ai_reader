@@ -17,6 +17,15 @@ enum BookReviewSite: String, Codable, CaseIterable, Hashable {
         case .nyt: return "The New York Times"
         }
     }
+    /// What the site's score is out of, where the site says: 豆瓣's 7.4 is of 10 and Open
+    /// Library's 3.9 of 5. Z-Library does not say, and 微信读书's is a percentage.
+    var scoreScale: Int? {
+        switch self {
+        case .douban: return 10
+        case .openLibrary: return 5
+        case .weread, .zlibrary, .nyt: return nil
+        }
+    }
 }
 
 /// One site's score for a book, worded as the site shows it.

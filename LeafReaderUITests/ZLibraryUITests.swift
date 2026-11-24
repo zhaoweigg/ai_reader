@@ -695,6 +695,58 @@ final class ZLibraryUITests: XCTestCase {
         XCTAssertTrue(library.waitForExistence(timeout:8))
         capture("Book rating and file quality details")
     }
+    /// Three sites' scores used to sit in a two-column grid, each card as tall as its own
+    /// text, which left holes beside the short ones.
+    @MainActor func testThreeScoreCardsShareOneHeightAndTheThirdIsSwipedTo() {
+        let app = launch(sceneGeometry: true, threeColumnGrid: true); openDiscover(app)
+        let book = app.buttons["catalogBook-grid3"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10)); book.leafTapVisible(in: app)
+        XCTAssertTrue(app.navigationBars["Book details"].waitForExistence(timeout: 5))
+        func part(_ identifier: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: identifier).firstMatch }
+        let douban = part("bookRating-douban"), weread = part("bookRating-weread"), catalog = part("bookRating-zlibrary")
+        for card in [douban, weread, catalog] { XCTAssertTrue(card.waitForExistence(timeout: 10)) }
+        XCTAssertTrue(douban.label.hasPrefix("豆瓣读书, 8.6 out of 10, 12,345 ratings"), douban.label)
+        XCTAssertTrue(catalog.label.hasPrefix("Z-Library, 4.8, 123 ratings"), "Z-Library does not say what its score is out of: " + catalog.label)
+        let section = part("bookReviewsSection")
+        func assertOneRow(_ moment: String) {
+            for card in [weread, catalog] {
+                XCTAssertEqual(card.frame.minY, douban.frame.minY, accuracy: 1, moment)
+                XCTAssertEqual(card.frame.height, douban.frame.height, accuracy: 1, moment)
+            }
+            // Readers' scores come first, the catalog's own last.
+            XCTAssertLessThan(douban.frame.maxX, weread.frame.minX, moment); XCTAssertLessThan(weread.frame.maxX, catalog.frame.minX, moment)
+        }
+        // A card cut off at the edge may report only the part that shows, so a whole card is
+        // also as wide as the first one was before anything was swiped.
+        var cardWidth: CGFloat = 0
+        func whole(_ card: XCUIElement) -> Bool {
+            card.frame.minX >= section.frame.minX && card.frame.maxX <= section.frame.maxX && abs(card.frame.width - cardWidth) <= 1
+        }
+        revealSummaryControl(douban, app: app); cardWidth = douban.frame.width
+        XCTAssertTrue(part("bookRatingsScroll").exists)
+        assertOneRow("portrait")
+        XCTAssertTrue(whole(douban) && whole(weread), "The first two cards are whole: \(douban.frame) \(weread.frame) in \(section.frame)")
+        XCTAssertFalse(whole(catalog), "The third card is swiped to")
+        XCTAssertLessThan(catalog.frame.minX, section.frame.maxX - 24, "The third card shows at the edge")
+        capture("Three score cards portrait")
+        let top = douban.frame.minY
+        let start = weread.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: -220, dy: 0)))
+        expectation(for: NSPredicate { _, _ in whole(catalog) }, evaluatedWith: catalog); waitForExpectations(timeout: 5)
+        XCTAssertEqual(douban.frame.minY, top, accuracy: 2, "A sideways swipe leaves the page where it was")
+        XCTAssertEqual(catalog.frame.height, weread.frame.height, accuracy: 1)
+        capture("Third score card after a sideways swipe")
+        // With room for all three they share the width and nothing is swiped.
+        setReaderOrientation(.landscapeLeft, app: app)
+        expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 5)
+        revealSummaryControl(douban, app: app); cardWidth = douban.frame.width
+        assertOneRow("landscape")
+        for card in [douban, weread, catalog] { XCTAssertTrue(whole(card), "landscape \(card.frame) in \(section.frame)") }
+        XCTAssertFalse(part("bookRatingsScroll").exists)
+        capture("Three score cards landscape")
+        setReaderOrientation(.portrait, app: app)
+        expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app); waitForExpectations(timeout: 5)
+    }
     @MainActor func testConnectionRejectsUnsafeAddressAndCancellingKeepsCatalog() {
         let app = launch(); openDiscover(app)
         XCTAssertTrue(app.buttons["Z-Library connection"].waitForExistence(timeout:10));app.buttons["Z-Library connection"].tap()
