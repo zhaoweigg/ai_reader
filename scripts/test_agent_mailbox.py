@@ -131,6 +131,16 @@ class MailboxTests(unittest.TestCase):
         self.assertEqual([line.split()[1] for line in self.lines(watch)], ["coord-after"])
         self.assertEqual(json.loads((self.root / "watch-baseline.json").read_text())["ignored"], ["coord-old-1", "coord-old-2"])
 
+    def test_the_command_line_takes_the_name_before_or_after_the_worker(self):
+        self.message("coord-cli")
+        child = subprocess.run([sys.executable, SCRIPT, "ack", "--worker", "worker", "--root", str(self.root), "coord-cli", "--note", "read"],
+                               capture_output=True, text=True)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertTrue(child.stdout.startswith("wrote "), child.stdout)
+        self.assertEqual(json.loads((self.root / "acks" / "by-worker" / "coord-cli.json").read_text())["payload"]["note"], "read")
+        self.assertIn("ACK already exists", self.lines(self.run_tool("ack", "coord-cli"))[0])
+        self.assertIn("0 pending", self.lines(self.run_tool("pending"))[-1])
+
     def test_stream_reports_each_message_once_and_keeps_running(self):
         self.message("coord-first")
         watch = self.run_tool("watch", "--stream")

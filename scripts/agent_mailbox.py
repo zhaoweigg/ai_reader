@@ -293,7 +293,8 @@ def main(arguments=None):
     parser.add_argument("--stream", action="store_true", help="watch: keep running, one line per new message")
     parser.add_argument("--timeout", type=float, help="wait: seconds before giving up (exit 3)")
     parser.add_argument("--note", default="")
-    options = parser.parse_args(arguments)
+    # Intermixed, so the message name may follow --worker as the usage line shows.
+    options = parser.parse_intermixed_args(arguments)
     root = Path(options.root) if options.root else main_checkout() / "build" / "agent-mailbox" / "v1" / options.worker
     if not (root / "from-coordinator").is_dir():
         raise SystemExit("no mailbox at " + str(root))
