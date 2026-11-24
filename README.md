@@ -343,6 +343,8 @@ Every Discover book page (catalog, bestseller, 起点 and 微信读书) has one 
 | Open Library | average, star breakdown, want-to-read and read counts | ISBN, or title and author | non-Chinese books |
 | The New York Times | links to its critics' reviews | ISBN, with your own NYT Books key | non-Chinese books with an ISBN |
 
+**More reviews** under the 豆瓣 reviews loads the next twenty on the page, most useful first, from the feed 豆瓣's mobile site reads. 豆瓣 shows a visitor who is not signed in the first hundred short reviews of an edition; past that the page says how many more it keeps for signed-in readers, and **All reviews on 豆瓣读书** still opens the site. The extra reviews are not kept after Leaf closes.
+
 **Summarize reviews with Ask Leaf** asks your AI once, with web search as its only tool, for four lines: what reviewers like, what divides them, who the book suits, and the pages it read. Only the title, author, ISBN and the scores on the page are sent. The summary is kept with the book until you ask again. Details: [docs/discovery-bestsellers.md](docs/discovery-bestsellers.md#ratings--reviews).
 
 ## iCloud Drive sync

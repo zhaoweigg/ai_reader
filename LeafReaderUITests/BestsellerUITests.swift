@@ -506,6 +506,22 @@ final class BestsellerUITests: XCTestCase {
         XCTAssertTrue(app.buttons["allReaderReviews"].exists || app.links["allReaderReviews"].exists)
         XCTAssertFalse(element("bookReviewsUnavailable", app).exists)
         capture("微信读书 page with 豆瓣 score and short reviews")
+        // More reviews load on the page; the first time 豆瓣 does not answer.
+        let more = app.buttons["moreReaderReviews"]; reveal(more, app: app)
+        XCTAssertEqual(app.staticTexts["readerReviewsShown"].label, "3 of 26")
+        more.leafTapVisible(in: app)
+        reviewPart("moreReaderReviewsError", has: ["豆瓣读书 didn’t answer"], app: app)
+        let retryMore = app.buttons["retryMoreReaderReviews"]; reveal(retryMore, app: app); retryMore.leafTapVisible(in: app)
+        // The three already shown are not repeated.
+        reviewPart("bookReaderReview-3", has: ["第4条短评"], app: app)
+        reviewPart("bookReaderReview-19", has: ["第20条短评"], app: app)
+        XCTAssertEqual(app.staticTexts["readerReviewsShown"].label, "20 of 26")
+        capture("微信读书 page after loading more 豆瓣 reviews")
+        app.buttons["moreReaderReviews"].leafTapVisible(in: app)
+        reviewPart("bookReaderReview-25", has: ["第26条短评"], app: app)
+        XCTAssertFalse(app.buttons["moreReaderReviews"].exists, "Every review is shown")
+        XCTAssertFalse(element("readerReviewsLimit", app).exists)
+        XCTAssertTrue(app.buttons["allReaderReviews"].exists || app.links["allReaderReviews"].exists)
         summarize(has: "好评：", app: app)
         capture("微信读书 page Ask Leaf summary in Chinese")
     }
