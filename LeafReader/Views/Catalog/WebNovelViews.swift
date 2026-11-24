@@ -203,6 +203,7 @@ struct WebNovelBookView: View {
                         .accessibilityIdentifier("webNovelSynopsis")
                     Link("View on \(novel.source.title)", destination: novel.sourceURL).font(.caption)
                 }.frame(maxWidth: .infinity, alignment: .leading)
+                BookReviewsSection(query: BookReviewQuery(novel))
                 ListedBookEditions(state: state, close: close, connect: { connection = true }, search: { search = true },
                                    retry: { Task { await matching.resolve(novel, catalog: catalog, force: true) } })
             }.padding(24).frame(maxWidth: 520).frame(maxWidth: .infinity)

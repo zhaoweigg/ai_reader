@@ -183,6 +183,7 @@ struct BestsellerBookView: View {
                     Text(book.summary.isEmpty ? "No description supplied by the list provider." : book.summary).font(.subheadline).foregroundStyle(.secondary)
                     Link("View on \(book.source == .indie ? "IndieBound" : "The New York Times")", destination: book.sourceURL).font(.caption)
                 }.frame(maxWidth: .infinity, alignment: .leading)
+                BookReviewsSection(query: BookReviewQuery(book))
                 ListedBookEditions(state: state, close: close, connect: { connection = true }, search: { search = true },
                                    retry: { Task { await matching.resolve(book, catalog: catalog, force: true) } })
             }.padding(24).frame(maxWidth: 520).frame(maxWidth: .infinity)

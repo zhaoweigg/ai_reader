@@ -2,7 +2,7 @@ import XCTest
 
 final class BestsellerUITests: XCTestCase {
     @MainActor private func launch(_ flags: [String] = [], agent: Bool = false, catalogFlags: [String] = [], emptyLibrary: Bool = true,
-                                   webNovels: Bool = false, webNovelFeedFailure: Bool = false) -> XCUIApplication {
+                                   webNovels: Bool = false, webNovelFeedFailure: Bool = false, reviewsFailure: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
@@ -12,6 +12,7 @@ final class BestsellerUITests: XCTestCase {
         for flag in catalogFlags { app.launchEnvironment["LEAF_UI_ZLIB_" + flag] = "1" }
         if !emptyLibrary { app.launchEnvironment.removeValue(forKey: "LEAF_UI_EMPTY_LIBRARY") }
         if agent { app.launchEnvironment["LEAF_UI_CHAT_AGENT"] = "1" }
+        if reviewsFailure { app.launchEnvironment["LEAF_UI_BOOK_REVIEWS_FAILURE"] = "1" }
         if webNovels {
             // The 中文 fixture brings its own catalog editions in place of the bestseller ones.
             app.launchEnvironment.removeValue(forKey: "LEAF_UI_BESTSELLERS_MOCK"); app.launchEnvironment.removeValue(forKey: "LEAF_UI_ZLIB_SHELF")
@@ -447,6 +448,86 @@ final class BestsellerUITests: XCTestCase {
         app.buttons["openLibraryChat"].leafTapVisible(in: app)
         ask("What is this one about?", prefix: "Screen reply: open book 长夜书局", app: app)
         capture("Ask Leaf reads the open 中文 book")
+    }
+
+    // MARK: Ratings & reviews on the book pages (review sites and the AI are fixtures)
+
+    @MainActor private func element(_ identifier: String, _ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+    /// Waits for an element's accessibility label to contain each piece, then brings it into view.
+    @MainActor private func reviewPart(_ identifier: String, has pieces: [String], app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let part = element(identifier, app)
+        XCTAssertTrue(part.waitForExistence(timeout: 10), "\(identifier) is missing", file: file, line: line)
+        expectation(for: NSPredicate { _, _ in pieces.allSatisfy { part.label.contains($0) } }, evaluatedWith: part); waitForExpectations(timeout: 10)
+        reveal(part, app: app)
+    }
+    @MainActor private func summarize(has text: String, app: XCUIApplication) {
+        let button = app.buttons["summarizeBookReviews"]; reveal(button, app: app); button.leafTapVisible(in: app)
+        let summary = app.staticTexts["bookReviewSummary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", text), evaluatedWith: summary); waitForExpectations(timeout: 10)
+        reveal(summary, app: app)
+    }
+
+    @MainActor func testBestsellerPageShowsOpenLibraryRatingsACriticAndAnAskLeafSummaryThatIsKept() {
+        let app = launch(); open(app); detail(app)
+        reviewPart("bookRating-openLibrary", has: ["Open Library", "4.3", "1,204 ratings", "3,410 want to read"], app: app)
+        XCTAssertFalse(element("bookRating-douban", app).exists, "No 豆瓣 entry for this English book")
+        reviewPart("bookCriticReview-0", has: ["The New York Times", "2026-05-04"], app: app)
+        capture("Bestseller page ratings and critic")
+        summarize(has: "Liked: the steady pace", app: app)
+        XCTAssertTrue(app.staticTexts["bookReviewSummary"].label.contains("Sources: Fixture reviews"), "Links read as their text")
+        XCTAssertTrue(app.staticTexts["bookReviewSummarySource"].label.hasPrefix("Ask Leaf, from a web search"))
+        XCTAssertFalse(app.buttons["summarizeBookReviews"].exists)
+        capture("Bestseller page Ask Leaf summary")
+        // The summary is kept for the book: back on the page, it is there without asking again.
+        app.navigationBars.buttons.firstMatch.leafTapVisible(in: app); detail(app)
+        let kept = app.staticTexts["bookReviewSummary"]; reveal(kept, app: app)
+        XCTAssertTrue(kept.label.contains("Liked: the steady pace")); XCTAssertTrue(app.buttons["refreshBookReviewSummary"].exists)
+    }
+
+    @MainActor func testWeReadPageShowsItsRateDoubanReviewsTriesAgainAndSummarizesInChinese() {
+        let app = launch(webNovels: true, reviewsFailure: true); openWebNovels(app)
+        app.segmentedControls["webNovelSourcePicker"].buttons["微信读书"].leafTapVisible(in: app)
+        webNovelRow(1, has: "星海拾荒者（全三册）", app: app)
+        let row = app.buttons["webNovelRow-1"]; reveal(row, app: app); row.leafTapVisible(in: app)
+        XCTAssertTrue(app.staticTexts["webNovelDetailTitle"].waitForExistence(timeout: 8))
+        // The chart's own rate shows at once; 豆瓣 does not answer the first time.
+        reviewPart("bookRating-weread", has: ["微信读书", "96.0%", "recommended · 52,000 ratings", "神作"], app: app)
+        reviewPart("bookReviewsUnavailable", has: ["豆瓣读书"], app: app)
+        XCTAssertFalse(element("bookRating-douban", app).exists)
+        capture("微信读书 page while 豆瓣 does not answer")
+        let retry = app.buttons["retryBookReviews"]; reveal(retry, app: app); retry.leafTapVisible(in: app)
+        reviewPart("bookRating-douban", has: ["豆瓣读书", "8.6", "12,345 ratings"], app: app)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "bookRating-weread").count, 1, "The list's rate is not asked for again")
+        reviewPart("bookReaderReview-0", has: ["5 of 5 stars", "1204 found this useful", "开篇就把人拉进去"], app: app)
+        XCTAssertTrue(element("bookReaderReview-2", app).exists); XCTAssertFalse(element("bookReaderReview-3", app).exists)
+        XCTAssertTrue(app.buttons["allReaderReviews"].exists || app.links["allReaderReviews"].exists)
+        XCTAssertFalse(element("bookReviewsUnavailable", app).exists)
+        capture("微信读书 page with 豆瓣 score and short reviews")
+        summarize(has: "好评：", app: app)
+        capture("微信读书 page Ask Leaf summary in Chinese")
+    }
+
+    @MainActor func testQidianPageFindsDoubanAndWeReadRatingsInNightPortraitAndLandscape() {
+        let app = launch(webNovels: true); app.tabBars.buttons["Settings"].leafTapVisible(in: app)
+        XCTAssertTrue(app.tabBars.buttons["Settings"].isSelected)
+        app.buttons["Night theme"].leafTapVisible(in: app); openWebNovels(app)
+        webNovelRow(1, has: "星海拾荒者", app: app)
+        let row = app.buttons["webNovelRow-1"]; reveal(row, app: app); row.leafTapVisible(in: app)
+        XCTAssertTrue(app.staticTexts["webNovelDetailTitle"].waitForExistence(timeout: 8))
+        // 起点 has no scores of its own: 豆瓣 and 微信读书 are found by title and author.
+        reviewPart("bookRating-weread", has: ["微信读书", "91.2%", "好评如潮"], app: app)
+        reviewPart("bookRating-douban", has: ["豆瓣读书", "8.6"], app: app)
+        reviewPart("bookReaderReview-0", has: ["开篇就把人拉进去"], app: app)
+        capture("Night 起点 page ratings portrait")
+        setReaderOrientation(.landscapeLeft, app: app)
+        reviewPart("bookRating-douban", has: ["8.6"], app: app)
+        let douban = element("bookRating-douban", app).frame, weread = element("bookRating-weread", app).frame
+        XCTAssertEqual(douban.minY, weread.minY, accuracy: 2, "The scores sit side by side")
+        capture("Night 起点 page ratings landscape")
+        setReaderOrientation(.portrait, app: app)
     }
 
     @MainActor func testImportedBestsellerOpensAndRestoresInPages() { readImported(flow: "Pages") }

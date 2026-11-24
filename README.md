@@ -331,6 +331,20 @@ flowchart LR
 
 Access checks, expired sessions, unavailable domains and download limits are reported as readable errors with a redacted **Request details** diagnostic. Credentials are never sent to a different origin. Cover thumbnails are downsampled into an 8 MB cache. Details: [docs/discovery-bestsellers.md](docs/discovery-bestsellers.md).
 
+### Ratings & reviews
+
+Every Discover book page (catalog, bestseller, 起点 and 微信读书) has one **Ratings & reviews** section. It is filled when the page opens, from the sites that have something for that book, and kept for a week:
+
+| Site | What it gives | How the book is found | Asked for |
+| --- | --- | --- | --- |
+| Z-Library | its own score, count and file quality | already in the catalog | catalog books |
+| 微信读书 | recommendation rate, count, verdict such as 神作 | already in its chart; otherwise its search, by title and author | Chinese books |
+| 豆瓣读书 | score, star breakdown, three most useful short reviews | ISBN, or its title suggestions by title and author | books with an ISBN, and Chinese books |
+| Open Library | average, star breakdown, want-to-read and read counts | ISBN, or title and author | non-Chinese books |
+| The New York Times | links to its critics' reviews | ISBN, with your own NYT Books key | non-Chinese books with an ISBN |
+
+**Summarize reviews with Ask Leaf** asks your AI once, with web search as its only tool, for four lines: what reviewers like, what divides them, who the book suits, and the pages it read. Only the title, author, ISBN and the scores on the page are sent. The summary is kept with the book until you ask again. Details: [docs/discovery-bestsellers.md](docs/discovery-bestsellers.md#ratings--reviews).
+
 ## iCloud Drive sync
 
 Leaf has no server and no account. Sync works through a folder you pick in iCloud Drive (create one named **Leaf**, choose it on each device).

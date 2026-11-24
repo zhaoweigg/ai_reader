@@ -687,8 +687,12 @@ final class ZLibraryUITests: XCTestCase {
         rated.tap()
         XCTAssertTrue(app.staticTexts["Ratings & reviews"].waitForExistence(timeout:5))
         app.swipeUp()
-        XCTAssertTrue(app.staticTexts["File quality 4.2"].exists)
-        XCTAssertTrue(app.staticTexts["Scores are supplied by Z-Library. Written reviews are not available through this connection."].exists)
+        // Z-Library's own score stays with its count and file quality, beside the other sites'.
+        let score = app.descendants(matching:.any).matching(identifier:"bookRating-zlibrary").firstMatch
+        XCTAssertTrue(score.waitForExistence(timeout:5))
+        XCTAssertTrue(score.label.contains("Z-Library, 4.6, 52 ratings, File quality 4.2"), score.label)
+        let library = app.descendants(matching:.any).matching(identifier:"bookRating-openLibrary").firstMatch
+        XCTAssertTrue(library.waitForExistence(timeout:8))
         capture("Book rating and file quality details")
     }
     @MainActor func testConnectionRejectsUnsafeAddressAndCancellingKeepsCatalog() {
