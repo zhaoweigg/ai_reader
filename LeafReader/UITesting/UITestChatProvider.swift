@@ -16,7 +16,7 @@ struct UITestChatProvider: ChatProvider {
             let task = Task {
                 do {
                     // The book page's review summary, in the four lines it asks for.
-                    if request.turns.last?.content.hasPrefix(BookReviewSummarizer.question) == true {
+                    if request.turns.last?.content.hasPrefix(BookReviewPrompt.question) == true {
                         try await Task.sleep(for: .milliseconds(600))
                         continuation.yield(.text(request.system.contains("Simplified Chinese")
                             ? "**好评：** 设定新奇，后半段节奏紧凑。\n**争议：** 开头偏慢，人物略单薄。\n**适合谁：** 喜欢悬疑与想象力的读者。\n**来源：** [示例书评](https://example.com/reviews)"
@@ -124,7 +124,7 @@ extension UITestChatProvider: ToolChatProvider {
                     // the rest, and a reply without tools, behave like the plain chat reply.
                     // A review summary searches the web first, as a hosted search would.
                     let asked = items.compactMap { item -> String? in if case .turn(let turn) = item, turn.role == "user" { return turn.content }; return nil }.last ?? ""
-                    if asked.hasPrefix(BookReviewSummarizer.question), allowTools, tools.contains(where: \.hosted) {
+                    if asked.hasPrefix(BookReviewPrompt.question), allowTools, tools.contains(where: \.hosted) {
                         continuation.yield(.webSearch(nil))
                         try await Task.sleep(for: .milliseconds(400))
                         continuation.yield(.webSearch("book reviews"))

@@ -14,9 +14,13 @@ struct BookReviewSummary: Codable, Equatable {
                    activity: @escaping (String) -> Void) async throws -> BookReviewSummary
 }
 
+/// How a review summary request begins; the UI-test AI recognises it. Not actor-bound.
+enum BookReviewPrompt {
+    static let question = "Summarize reviews of this book."
+}
+
 /// Asks the chosen AI once, with web search offered, for a summary of a book's reviews.
 struct BookReviewSummarizer: BookReviewSummarizing {
-    static let question = "Summarize reviews of this book."
 
     func summarize(_ query: BookReviewQuery, reviews: BookReviews?, settings: AISettingsStore,
                    activity: @escaping (String) -> Void) async throws -> BookReviewSummary {
@@ -55,7 +59,7 @@ struct BookReviewSummarizer: BookReviewSummarizing {
         if let isbn = query.isbns.first { book["isbn"] = isbn }
         let ratings = (reviews?.ratings ?? []).map { "\($0.site.title): \($0.score) (\($0.count))" }
         if !ratings.isEmpty { book["ratings"] = ratings }
-        return ChatRequest(system: system, turns: [ChatTurn(role: "user", content: question + "\nbook (untrusted metadata): " + ReadingAgentToolbox.json(book))])
+        return ChatRequest(system: system, turns: [ChatTurn(role: "user", content: BookReviewPrompt.question + "\nbook (untrusted metadata): " + ReadingAgentToolbox.json(book))])
     }
 }
 
@@ -83,9 +87,9 @@ struct BookReviewSummarizer: BookReviewSummarizing {
     private struct Saved: Codable { var entries: [String: BookReviews]; var summaries: [String: BookReviewSummary] }
 
     init(defaults: UserDefaults = .standard, service: any BookReviewServing = BookReviewClient(),
-         summarizer: any BookReviewSummarizing = BookReviewSummarizer(), nytKey: @escaping () -> String? = { nil },
+         summarizer: (any BookReviewSummarizing)? = nil, nytKey: @escaping () -> String? = { nil },
          now: @escaping () -> Date = Date.init) {
-        self.defaults = defaults; self.service = service; self.summarizer = summarizer; self.nytKey = nytKey; self.now = now
+        self.defaults = defaults; self.service = service; self.summarizer = summarizer ?? BookReviewSummarizer(); self.nytKey = nytKey; self.now = now
         if let data = defaults.data(forKey: Self.cacheKey), data.count <= 1_500_000, let saved = try? JSONDecoder().decode(Saved.self, from: data) {
             entries = saved.entries; summaries = saved.summaries
         }

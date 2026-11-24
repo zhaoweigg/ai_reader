@@ -327,8 +327,8 @@ enum DoubanBooks {
         var rating: BookRating?
         // A book with too few ratings shows no score; its reviews still count.
         if let raw = first(#"<strong[^>]*property="v:average"[^>]*>\s*([0-9.]+)\s*<"#, html), let score = Double(raw), (1...10).contains(score),
-           let votes = first(#"property="v:votes"[^>]*>\s*(\d+)\s*<"#, html).flatMap(Int.init), votes > 0 {
-            let shares = all(#"class="rating_per"[^>]*>\s*([0-9.]+)%"#, html).compactMap(Double.init).map { $0 / 100 }
+           let votes = first(#"property="v:votes"[^>]*>\s*(\d+)\s*<"#, html).flatMap({ Int($0) }), votes > 0 {
+            let shares = all(#"class="rating_per"[^>]*>\s*([0-9.]+)%"#, html).compactMap { Double($0) }.map { $0 / 100 }
             rating = BookRating(site: .douban, score: score.formatted(.number.precision(.fractionLength(1))), stars: score / 2,
                                 count: "\(votes.formatted()) \(votes == 1 ? "rating" : "ratings")",
                                 distribution: shares.count == 5 ? shares : nil, url: page)
@@ -337,8 +337,8 @@ enum DoubanBooks {
             guard let raw = first(#"(?s)<span class="short">(.*?)</span>"#, item) else { return nil }
             let text = BestsellerText.plain(raw).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
-            let stars = first(#"allstar(\d)0"#, item).flatMap(Int.init).flatMap { (1...5).contains($0) ? $0 : nil }
-            return ReaderReview(stars: stars, text: String(text.prefix(400)), helpful: first(#"class="vote-count"[^>]*>(\d+)<"#, item).flatMap(Int.init))
+            let stars = first(#"allstar(\d)0"#, item).flatMap { Int($0) }.flatMap { (1...5).contains($0) ? $0 : nil }
+            return ReaderReview(stars: stars, text: String(text.prefix(400)), helpful: first(#"class="vote-count"[^>]*>(\d+)<"#, item).flatMap { Int($0) })
         }.sorted { ($0.helpful ?? 0) > ($1.helpful ?? 0) }
         return DoubanBook(rating: rating, reviews: reviews, reviewsURL: page.appendingPathComponent("comments/"))
     }

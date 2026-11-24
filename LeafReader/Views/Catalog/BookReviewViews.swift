@@ -143,7 +143,7 @@ private struct BookRatingTile: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(([rating.site.title, rating.score, rating.count] + [rating.verdict].compactMap { $0 } + rating.notes).joined(separator: ", "))
-        .accessibilityHint(rating.url == nil ? "" : "Opens the book on \(rating.site.title)")
+        .accessibilityHint(Text(rating.url == nil ? "" : "Opens the book on \(rating.site.title)"))
         .accessibilityAddTraits(rating.url == nil ? [] : .isLink)
         .accessibilityIdentifier("bookRating-\(rating.site.rawValue)")
     }

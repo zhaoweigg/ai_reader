@@ -173,7 +173,7 @@ private actor ScriptedReviews: BookReviewServing {
         XCTAssertNil(store.summarizing[query.key]); XCTAssertNil(store.summaryErrors[query.key])
         try await eventually { !provider.tools.isEmpty }
         XCTAssertEqual(provider.tools.first, [AgentTool.webSearchName], "Web search is the summary's only tool")
-        XCTAssertTrue(provider.questions[0].hasPrefix(BookReviewSummarizer.question)); XCTAssertTrue(provider.questions[0].contains("9780593135204"))
+        XCTAssertTrue(provider.questions[0].hasPrefix(BookReviewPrompt.question)); XCTAssertTrue(provider.questions[0].contains("9780593135204"))
         XCTAssertTrue(provider.systems[0].contains("English")); XCTAssertTrue(provider.systems[0].contains("untrusted"))
         XCTAssertTrue(BookReviewSummarizer.request(BookReviewQuery(title: "三体", author: "刘慈欣"), reviews: nil).system.contains("**好评：**"))
         XCTAssertEqual(BookReviewStore(defaults: defaults).summary(for: query), summary, "Kept until the reader asks again")
