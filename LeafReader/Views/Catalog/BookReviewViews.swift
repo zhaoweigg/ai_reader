@@ -172,6 +172,7 @@ private struct BookRatingCards: View {
     let edge: CGFloat
 
     private static let spacing: CGFloat = 10
+    private static let narrowest: CGFloat = 128
     /// How much of the next card shows inside the section's padding.
     private static let peek: CGFloat = 14
 
@@ -180,22 +181,24 @@ private struct BookRatingCards: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            row { $0.frame(minWidth: 140, idealWidth: 140, maxWidth: .infinity) }
+            // Three fit across a phone held sideways.
+            row { $0.frame(minWidth: Self.narrowest, idealWidth: Self.narrowest, maxWidth: .infinity) }
             ScrollView(.horizontal) {
                 // Two whole cards and the start of the third, whatever the phone's width.
-                row { $0.containerRelativeFrame(.horizontal) { width, _ in max(128, (width - edge - 2 * Self.spacing - Self.peek) / 2) } }
-                    .padding(.trailing, edge)
+                row { $0.containerRelativeFrame(.horizontal) { width, _ in max(Self.narrowest, (width - 2 * edge - 2 * Self.spacing - Self.peek) / 2) } }
+                    .padding(.horizontal, edge)
             }
-                .scrollIndicators(.hidden)
-                // The card at the edge fades out, so it reads as more to swipe to.
-                .mask {
-                    HStack(spacing: 0) {
-                        Color.black
-                        LinearGradient(colors: [.black, .black.opacity(0.1)], startPoint: .leading, endPoint: .trailing).frame(width: edge)
-                    }
+            .scrollIndicators(.hidden)
+            // A card at either edge fades out, so it reads as more to swipe to.
+            .mask {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(0.1), .black], startPoint: .leading, endPoint: .trailing).frame(width: edge)
+                    Color.black
+                    LinearGradient(colors: [.black, .black.opacity(0.1)], startPoint: .leading, endPoint: .trailing).frame(width: edge)
                 }
-                .padding(.trailing, -edge)
-                .accessibilityIdentifier("bookRatingsScroll")
+            }
+            .padding(.horizontal, -edge)
+            .accessibilityIdentifier("bookRatingsScroll")
         }
     }
 
@@ -224,14 +227,14 @@ private struct BookRatingTile: View {
 
     private var tile: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            // The site's name sits under its score: beside it, 微信读书 broke in two next to 91.2%.
+            VStack(alignment: .leading, spacing: 2) {
                 // 7.4 beside 3.9 compares only when each says what it is out of.
                 (Text(rating.score).font(.title2.weight(.bold)).monospacedDigit()
                  + Text(rating.site.scoreScale.map { "/\($0)" } ?? "").font(.caption.weight(.semibold)).foregroundColor(.secondary))
-                    .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
-                Text(rating.site.title).font(.caption.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.8).fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                Text(rating.site.title).font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
             }
-            // The full width of the tile: "recommended · 52,000 ratings" does not fit beside the score.
             Text(rating.count).font(.caption2).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
             if let stars = rating.stars { BookStars(value: stars).font(.caption) }
             if let verdict = rating.verdict {

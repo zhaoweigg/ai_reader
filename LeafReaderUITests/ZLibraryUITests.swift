@@ -739,7 +739,17 @@ final class ZLibraryUITests: XCTestCase {
         // With room for all three they share the width and nothing is swiped.
         setReaderOrientation(.landscapeLeft, app: app)
         expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app); waitForExpectations(timeout: 5)
-        revealSummaryControl(douban, app: app); cardWidth = douban.frame.width
+        // Sideways the page shows about 130 pt between the bar and the footer, less than a
+        // card: bring the cards' tops just under the bar.
+        let page = app.scrollViews["catalogDetailsScroll"], origin = app.coordinate(withNormalizedOffset: .zero)
+        let bandTop = max(page.frame.minY, app.navigationBars.firstMatch.frame.maxY) + 8
+        for _ in 0..<14 where abs(douban.frame.minY - bandTop) > 24 {
+            let up = douban.frame.minY > bandTop, distance = max(18, min(90, abs(douban.frame.minY - bandTop)))
+            let start = origin.withOffset(CGVector(dx: page.frame.midX - app.frame.minX, dy: bandTop + (up ? 100 : 10) - app.frame.minY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: up ? -distance : distance)), withVelocity: .slow, thenHoldForDuration: 0.15)
+        }
+        XCTAssertEqual(douban.frame.minY, bandTop, accuracy: 24, "The cards' tops are under the bar")
+        cardWidth = douban.frame.width
         assertOneRow("landscape")
         for card in [douban, weread, catalog] { XCTAssertTrue(whole(card), "landscape \(card.frame) in \(section.frame)") }
         XCTAssertFalse(part("bookRatingsScroll").exists)
