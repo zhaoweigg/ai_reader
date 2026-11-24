@@ -329,7 +329,7 @@ flowchart LR
     Match --> Client
 ```
 
-Access checks, expired sessions, unavailable domains and download limits are reported as readable errors with a redacted **Request details** diagnostic. Credentials are never sent to a different origin. Cover thumbnails are downsampled into an 8 MB cache. Details: [docs/discovery-bestsellers.md](docs/discovery-bestsellers.md).
+Access checks, expired sessions, unavailable domains and download limits are reported as readable errors with a redacted **Request details** diagnostic. Since 2026-11-23 Z-Library refuses app searches without a `source` header (HTTP 400 "Access denied"); Leaf sends `source: ios`, and if search is still refused it reads the website's own search page (`/s/<query>`) in the same hidden browser for 15 minutes, and says "Z-Library is refusing searches" when both fail. Credentials are never sent to a different origin. Cover thumbnails are downsampled into an 8 MB cache. Details: [docs/discovery-bestsellers.md](docs/discovery-bestsellers.md).
 
 ### Ratings & reviews
 

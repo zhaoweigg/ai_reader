@@ -82,6 +82,7 @@ enum UITestFlag: String, CaseIterable {
     case zlibRecommendationsEmpty = "LEAF_UI_ZLIB_RECOMMENDATIONS_EMPTY"
     case zlibRecommendationsFailure = "LEAF_UI_ZLIB_RECOMMENDATIONS_FAILURE"
     case zlibRepeatGuard = "LEAF_UI_ZLIB_REPEAT_GUARD"
+    case zlibSearchRefused = "LEAF_UI_ZLIB_SEARCH_REFUSED"
     case zlibShelf = "LEAF_UI_ZLIB_SHELF"
     case zlibShelfEmpty = "LEAF_UI_ZLIB_SHELF_EMPTY"
     case zlibShelfRefresh = "LEAF_UI_ZLIB_SHELF_REFRESH"

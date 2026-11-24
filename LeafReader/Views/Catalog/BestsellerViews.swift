@@ -152,8 +152,8 @@ private struct BestsellerCard: View {
             Text(editions.isEmpty ? "No match yet" : "\(editions.count) possible editions").font(.caption).foregroundStyle(.secondary)
             NavigationLink { BestsellerBookView(book: book, close: close) } label: { Text(editions.isEmpty ? "Find" : "Choose").frame(maxWidth: .infinity) }
                 .buttonStyle(.bordered).font(.caption).accessibilityIdentifier("bestsellerChoose-" + identifier)
-        case .failed:
-            Text("Could not check editions").font(.caption).foregroundStyle(.secondary)
+        case .failed(_, let reason):
+            Text(reason).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("bestsellerEditionsFailed-" + identifier)
             Button("Try again") { Task { await matching.resolve(book, catalog: catalog, force: true) } }.font(.caption)
         }
     }
@@ -220,8 +220,8 @@ struct ListedBookEditions: View {
         case .connectionRequired:
             Text("Use your Z-Library connection to find editions and add books.").font(.subheadline).foregroundStyle(.secondary)
             Button("Connect Z-Library", action: connect).buttonStyle(.bordered)
-        case .failed(let message):
-            Text(message).font(.subheadline).foregroundStyle(.secondary)
+        case .failed(let message, _):
+            Text(message).font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("editionCheckFailure")
             Button("Try again", action: retry)
             Button("Search Z-Library", action: search)
         case .ready(let choices):

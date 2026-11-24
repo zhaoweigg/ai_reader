@@ -121,11 +121,13 @@ import WebKit
             }
             return payload
         }
-        guard contains(url), url.path.hasPrefix("/eapi/"), ["GET", "POST"].contains(request.httpMethod ?? "GET") else { throw ZLibraryError.address }
+        // The app API, and the website's search page when the app search is refused.
+        let website = url.path.hasPrefix("/s/") && (request.httpMethod ?? "GET") == "GET"
+        guard contains(url), url.path.hasPrefix("/eapi/") || website, ["GET", "POST"].contains(request.httpMethod ?? "GET") else { throw ZLibraryError.address }
         try await prepare()
         // Cookie/User-Agent/Origin are browser-managed. Credentials only reach this exact origin.
         let headers = (request.allHTTPHeaderFields ?? [:]).filter {
-            ["accept", "content-type", "remix-userid", "remix-userkey"].contains($0.key.lowercased())
+            ["accept", "content-type", "remix-userid", "remix-userkey", "source"].contains($0.key.lowercased())
         }
         let arguments: [String: Any] = ["target": url.absoluteString, "method": request.httpMethod ?? "GET",
                                         "headers": headers, "body": request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""]
@@ -136,7 +138,7 @@ import WebKit
         // one retry after loading the website document, one delayed retry for its scripts.
         var retries = 0, reload = "not needed", attempts = 0
         var result = try await repeatingDrops(arguments, attempts: &attempts)
-        while retries < Self.challengeRetries, Self.isAccessChallenge(result) {
+        while retries < Self.challengeRetries, Self.isAccessChallenge(result, website: website) {
             retries += 1
             if retries == 2 { reload = try await reloadWebsite() ? "completed" : (presented ? "skipped" : "failed") }
             if retries == 3 { try await Task.sleep(for: .seconds(3)) }
@@ -210,10 +212,12 @@ import WebKit
     }
     // A redirect, or a recognized access-check page in place of JSON. Other HTML (for
     // example a sign-in page) is not retried: reloading the website cannot change it.
-    private static func isAccessChallenge(_ result: Any?) -> Bool {
+    private static func isAccessChallenge(_ result: Any?, website: Bool = false) -> Bool {
         guard let result = result as? [String: Any], let kind = result["kind"] as? String else { return false }
         if kind == "redirect" { return true }
         guard kind == "response", let status = result["status"] as? Int, let text = result["text"] as? String else { return false }
+        // Ordinary website pages may load the check's own scripts; only a refused page counts.
+        if website && (200...299).contains(status) { return false }
         let body = text.prefix(4096).lowercased()
         return status == 517 || body.contains("diamwall") || body.contains("/cdn-cgi/challenge") || body.contains("__cf_chl")
     }
@@ -232,6 +236,7 @@ import WebKit
     private static func diagnosticPath(_ path: String) -> String {
         // Never expose book IDs, hashes, queries, website response bodies or credentials.
         if ["/eapi/book/most-popular", "/eapi/book/search", "/eapi/user/book/recommended", "/eapi/user/profile"].contains(path) { return path }
+        if path.hasPrefix("/s/") { return "/s/ (website search)" }
         return "/eapi/book/request"
     }
 

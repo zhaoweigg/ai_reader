@@ -164,8 +164,8 @@ private struct WebNovelRow: View {
                 Text(editions.isEmpty ? "No match yet" : editions.count == 1 ? "1 possible edition" : "\(editions.count) editions").foregroundStyle(.secondary)
                 NavigationLink { page } label: { Text(editions.isEmpty ? "Find" : "Choose") }
                     .buttonStyle(.bordered).accessibilityIdentifier("webNovelChoose-\(novel.rank)")
-            case .failed:
-                Text("Could not check editions").foregroundStyle(.secondary)
+            case .failed(_, let reason):
+                Text(reason).foregroundStyle(.secondary).accessibilityIdentifier("webNovelEditionsFailed-\(novel.rank)")
                 Button("Try again") { Task { await matching.resolve(novel, catalog: catalog, force: true) } }
             }
         }

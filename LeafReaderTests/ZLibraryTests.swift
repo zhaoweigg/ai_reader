@@ -122,6 +122,82 @@ private final class CatalogURLProtocol: URLProtocol {
         XCTAssertFalse(ZLibrarySession(userID:"42\r\nHeader",userKey:"secret").valid)
         XCTAssertTrue(session.valid)
     }
+    private func page(_ html: String, status: Int = 200, url: URL? = nil) -> ZLibraryPayload {
+        ZLibraryPayload(data: Data(html.utf8), file: nil, response: HTTPURLResponse(url: url ?? origin.url, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "text/html; charset=utf-8"])!)
+    }
+    private let websiteResults = """
+        <html><body><div id="searchResultBox"><div class="book-item resItemBoxBooks">
+        <z-bookcard id="123456" isbn="9780441013593" href="/book/123456/a1b2c3/dune.html" publisher="Ace" language="english" year="2005"
+            extension="EPUB" filesize="1.47 MB" rating="4.5" quality="5.0">
+            <img data-src="https://covers.example/covers299/dune.jpg" alt="" />
+            <div slot="title">Dune &amp; Messiah</div><div slot="author">Frank Herbert;Brian Herbert</div></z-bookcard></div>
+        <div class="book-item"><z-bookcard id="9" href="https://other.example/book/9/ff/x.html"><div slot="title">Elsewhere</div></z-bookcard></div>
+        <div class="book-item"><z-bookcard id="777" href="/book/778/ff00/x.html"><div slot="title">Mismatched</div></z-bookcard></div>
+        <div class="book-item"><z-bookcard id="123456" href="/book/123456/a1b2c3/dune.html"><div slot="title">Dune again</div></z-bookcard></div>
+        </div><script>var pagerOptions = { pagesTotal: 3, pagesShowCount: 5 };</script></body></html>
+        """
+    func testRefusedAppSearchSaysWhichAppAndSearchesTheWebsiteUntilTheAppAnswersAgain() async throws {
+        let route = ZLibrarySearchRoute()
+        var appSearchRefused = true
+        let transport = CatalogTransport { [self] request, toFile in
+            XCTAssertFalse(toFile); XCTAssertEqual(request.value(forHTTPHeaderField: "remix-userkey"), session.userKey)
+            if request.url?.path == "/eapi/book/search" {
+                XCTAssertEqual(request.httpMethod, "POST"); XCTAssertEqual(request.value(forHTTPHeaderField: "source"), "ios")
+                return appSearchRefused ? try response(["success": 0, "error": "Access denied"], status: 400)
+                    : try response(["success": 1, "books": [["id": 5, "hash": "ee55", "title": "From the app"]]])
+            }
+            XCTAssertEqual(request.httpMethod ?? "GET", "GET"); XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/html")
+            XCTAssertNil(request.httpBody)
+            return page(websiteResults)
+        }
+        let client = ZLibraryClient(transport: transport, searchRoute: route)
+        let found = try await client.search("沙丘 dune", page: 1, order: .popular, origin: origin, session: session)
+        XCTAssertEqual(transport.requests.map { $0.url!.path }, ["/eapi/book/search", "/s/沙丘 dune"])
+        XCTAssertEqual(transport.requests[1].url?.absoluteString, "https://catalog.example/s/%E6%B2%99%E4%B8%98%20dune?order=popular")
+        // Only the card that links to its own edition on this website, once.
+        XCTAssertEqual(found.books.count, 1); XCTAssertTrue(found.hasMore, "page 1 of 3")
+        let book = try XCTUnwrap(found.books.first)
+        XCTAssertEqual(book.id, "123456:a1b2c3"); XCTAssertEqual(book.title, "Dune & Messiah"); XCTAssertEqual(book.author, "Frank Herbert, Brian Herbert")
+        XCTAssertEqual(book.format, .epub); XCTAssertEqual(book.size, "1.47 MB"); XCTAssertEqual(book.language, "english"); XCTAssertEqual(book.year, "2005")
+        XCTAssertEqual(book.coverURL?.absoluteString, "https://covers.example/covers299/dune.jpg")
+        XCTAssertEqual(book.rating, 4.5); XCTAssertEqual(book.qualityScore, 5.0); XCTAssertEqual(book.isbns, ["9780441013593"])
+        // Later searches go straight to the website for a while, with the website's own order names.
+        let next = try await client.search("dune", page: 3, order: .recentlyAdded, origin: origin, session: session)
+        XCTAssertEqual(transport.requests.count, 3)
+        XCTAssertEqual(transport.requests[2].url?.absoluteString, "https://catalog.example/s/dune?order=date_created&page=3")
+        XCTAssertFalse(next.hasMore, "the last page")
+        _ = try await client.search("dune", page: 1, order: .bestMatch, origin: origin, session: session)
+        XCTAssertEqual(transport.requests[3].url?.absoluteString, "https://catalog.example/s/dune")
+        // Once the app search answers again, it is used again.
+        route.answered(); appSearchRefused = false
+        let answered = try await client.search("dune", page: 1, order: .popular, origin: origin, session: session)
+        XCTAssertEqual(answered.books.map(\.title), ["From the app"]); XCTAssertFalse(route.usesWebsite)
+    }
+    func testWebsiteNotFoundIsNoResultsButAnyOtherPageIsARefusalWithItsDetails() async throws {
+        var html = "<div id=\"searchResultBox\"><div class=\"notFound\">Nothing has been found</div></div>", status = 200
+        let transport = CatalogTransport { [self] request, _ in
+            request.url?.path == "/eapi/book/search" ? try response(["success": 0, "error": "Access denied"], status: 400) : page(html, status: status)
+        }
+        let client = ZLibraryClient(transport: transport, searchRoute: ZLibrarySearchRoute())
+        let empty = try await client.search("no such book", page: 1, order: .popular, origin: origin, session: session)
+        XCTAssertTrue(empty.books.isEmpty); XCTAssertFalse(empty.hasMore)
+        // A sign-in or check page is not "no results".
+        for (body, code, detail) in [("<html><title>Sign in</title></html>", 200, "HTTP 200 · no search results page"), ("Checking your browser", 503, "HTTP 503 · website search failed")] {
+            html = body; status = code
+            do { _ = try await client.search("dune", page: 1, order: .popular, origin: origin, session: session); XCTFail("refused") }
+            catch let failure as ZLibraryRequestFailure {
+                XCTAssertEqual(failure.issue, .searchRefused)
+                XCTAssertTrue(failure.diagnostic.contains("/eapi/book/search"), failure.diagnostic); XCTAssertTrue(failure.diagnostic.contains(detail), failure.diagnostic)
+                XCTAssertFalse(failure.diagnostic.contains("dune"), "no query in the details")
+            }
+        }
+        // Other API errors are not mistaken for a refusal of searching.
+        XCTAssertFalse(ZLibraryClient.isSearchRefusal(ZLibraryError.service("Daily limit reached")))
+        XCTAssertTrue(ZLibraryClient.isSearchRefusal(ZLibraryError.service("Access denied.")))
+        XCTAssertEqual(BestsellerMatching.failure(ZLibraryRequestFailure(issue: .searchRefused, diagnostic: "")), .failed("Z-Library is refusing searches right now. This is on its side; try again later.", reason: "Z-Library is refusing searches"))
+        XCTAssertEqual(BestsellerMatching.failure(ZLibraryError.unreachable), .failed("Couldn’t reach Z-Library. Check your connection and try again.", reason: "Couldn’t reach Z-Library"))
+        XCTAssertEqual(BestsellerMatching.failure(ZLibraryError.response), .failed("Z-Library editions could not be checked. Try again or search the catalog.", reason: "Could not check editions"))
+    }
     func testMostPopularUsesGETAndParsesDeduplicatedEditionsWithoutSearch() async throws {
         let row: [String:Any] = ["id":12,"hash":"ab1234","title":"A book","author":"Author","extension":"EPUB","filesizeString":"1 MB","language":"English","cover":"https://images.example/cover.jpg"]
         let transport = CatalogTransport { [self] request,toFile in
