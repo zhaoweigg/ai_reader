@@ -115,8 +115,10 @@ struct BookReviewSummarizer: BookReviewSummarizing {
         let service = service, key2 = nytKey()
         loading.insert(key)
         let task = Task { [weak self] in
-            let result = await service.reviews(query, nytKey: key2)
+            var result = await service.reviews(query, nytKey: key2)
             guard let self, !Task.isCancelled else { return }
+            // Kept for a week (or an hour) from when this store asked, by its own clock.
+            result.fetchedAt = self.now()
             self.entries[key] = Self.merged(result, keeping: self.entries[key])
             self.save()
         }

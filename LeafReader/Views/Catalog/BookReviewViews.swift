@@ -88,7 +88,8 @@ struct BookReviewsSection: View {
                     Link("Read the review", destination: review.url).font(.caption.weight(.semibold))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .contain).accessibilityIdentifier("bookCriticReview-\(index)")
+                // One element that reads the outlet, date and summary, and opens the review.
+                .accessibilityElement(children: .combine).accessibilityIdentifier("bookCriticReview-\(index)")
             }
         }
     }
@@ -152,11 +153,10 @@ private struct BookRatingTile: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(rating.score).font(.title2.weight(.bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(rating.site.title).font(.caption.weight(.semibold)).lineLimit(1)
-                    Text(rating.count).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                }
+                Text(rating.site.title).font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
             }
+            // The full width of the tile: "recommended · 52,000 ratings" does not fit beside the score.
+            Text(rating.count).font(.caption2).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
             if let stars = rating.stars { BookStars(value: stars).font(.caption) }
             if let verdict = rating.verdict {
                 Text(verdict).font(.caption2.weight(.semibold)).padding(.horizontal, 8).padding(.vertical, 3)
