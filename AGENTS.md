@@ -44,6 +44,17 @@ The user requests five simulator test slots (A through E) running in parallel to
 - Every granted test job has a fresh `lease_id` bound to owner, device UUID and exact source `head`. The coordinator must await **actual completion** of the registry-write command (an exec session ID is not completion), read back the committed lease, then send GO. Do not reassign an issued GO until that worker acknowledges cancellation and confirms actual process/runner exit, even if a job is believed not to have started. Avoid changing a dispatched test split mid-handoff.
 - Immediately before a test launch, run `scripts/simulator_lease.py` with the canonical registry, slot, owner, lease, head, device, worktree and `--require-idle`; abort if it fails. Revalidate owner/lease/head before other device actions. Old GO messages never override the current lease. The preflight command is read-only; only the coordinator may acquire/revoke leases.
 
+# Worker mailbox wakeups
+
+The user requires that no coordinator message to a Claude worker is missed and that it is delivered at once, without periodic checks.
+
+- A Claude Code session cannot be messaged by the coordinator; it wakes only when one of its background commands exits. Every Claude worker therefore uses `scripts/agent_mailbox.py` for its mailbox at `build/agent-mailbox/v1/<worker>`. Do not write another watcher, a sleep loop or a timed check.
+- Whenever the session is idle or waiting, keep exactly one `python3 -I /Users/weizhao/workspace/ai_reader/scripts/agent_mailbox.py watch --worker <id>` running as a background command. It sleeps in the kernel until a file lands in `from-coordinator`, prints one line per pending message and exits. Read each message, acknowledge it (`ack`), act on it, and start the watch again in the same turn. Never pipe the watch through `head` or anything else that delays its exit.
+- Pending means "no ACK in `acks/by-worker`", read from disk each time. A message that arrived while no watch was running is reported the moment the next one starts, and an unacknowledged message is reported again. Acknowledge only what was actually read.
+- A round runner that expects named replies calls `Mailbox.claim([...])` before sending its request and `wait_for(name)` for each reply. The watch leaves claimed messages to that runner and reports them if it exits without acknowledging them.
+- `claims/` and `watch-baseline.json` inside a mailbox are watcher state, not messages. `baseline` records an existing unacknowledged backlog once so it stops being reported; it is never an ACK.
+- The coordinator keeps writing each message with temp file, fsync and atomic rename; that rename is the wake signal. This needs this Mac and the worker's session to be running.
+
 # iPhone preview installation
 
 - Coordinator delivery is reconciled, not message-dependent. Worker messages are wakeup hints; they are not acknowledged queue entries. Keep the `Leaf coordinator reconciliation` thread heartbeat active (two-minute fallback) unless the user pauses or stops chat wakeups; verify its target/status after setup. The user stopped these visible prompts: do not re-enable the paused heartbeat without a new explicit request. Muting notifications does not hide injected automation prompts. Local follow-ups require this Mac and the desktop app to be running.
