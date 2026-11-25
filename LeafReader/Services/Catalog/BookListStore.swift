@@ -174,7 +174,20 @@ extension BookListFeedError {
 extension BookListServing {
     /// Project Gutenberg's EPUB, saved to a temporary folder of its own.
     func download(_ book: ListedBook) async throws -> URL {
-        guard let url = book.epub, url.host?.hasSuffix("gutenberg.org") == true else { throw BookListFeedError.unavailable }
+        // gutenberg.org first, then its mirror; when both fail, gutenberg.org's reason is the one shown.
+        var first: Error?
+        for url in book.epubs {
+            do { return try await Self.downloadEPUB(url, book: book) }
+            catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+                first = first ?? error
+            }
+        }
+        throw first ?? BookListFeedError.unavailable
+    }
+    private static func downloadEPUB(_ url: URL, book: ListedBook) async throws -> URL {
+        guard url.scheme == "https", let host = url.host?.lowercased(),
+              host == "gutenberg.org" || host.hasSuffix(".gutenberg.org") || host == GutenbergList.mirrorHost else { throw BookListFeedError.unavailable }
         var request = URLRequest(url: url, timeoutInterval: 120)
         request.setValue(BookListClient.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/epub+zip", forHTTPHeaderField: "Accept")

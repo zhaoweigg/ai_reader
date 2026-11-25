@@ -148,6 +148,14 @@ private actor ListPages: BookListServing {
         XCTAssertEqual(list.books[0].gutenbergSource, "gutenberg:1342")
         XCTAssertEqual(list.next, 3, "the next page starts after every row the source sent, kept or not")
         XCTAssertEqual(GutenbergList.name("Plato"), "Plato")
+        // While gutenberg.org is down, covers and EPUBs come from PGLAF's mirror.
+        XCTAssertEqual(list.books[0].covers.map(\.absoluteString), ["https://www.gutenberg.org/cache/epub/1342/pg1342.cover.medium.jpg",
+                                                                    "https://gutenberg.pglaf.org/cache/epub/1342/pg1342.cover.medium.jpg"])
+        XCTAssertEqual(list.books[0].epubs.map(\.absoluteString), ["https://www.gutenberg.org/ebooks/1342.epub3.images",
+                                                                   "https://gutenberg.pglaf.org/cache/epub/1342/pg1342-images-3.epub"])
+        XCTAssertEqual(list.books[1].covers, [], "no cover, nothing to mirror")
+        XCTAssertNil(GutenbergList.mirrored(URL(string: "https://covers.openlibrary.org/cache/epub/1/a.jpg")!))
+        XCTAssertNil(GutenbergList.mirrorEPUB("84/../1"))
         XCTAssertEqual(GutenbergList.name("Smollett, T. (Tobias)"), "Tobias Smollett")
     }
 

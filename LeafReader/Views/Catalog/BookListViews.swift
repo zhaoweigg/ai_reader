@@ -11,8 +11,9 @@ struct ListedBookCover: View {
     let book: ListedBook
     @State private var loaded: (url: URL, image: UIImage)?
     private var image: UIImage? {
-        guard let url = book.cover else { return nil }
-        return loaded?.url == url ? loaded?.image : ZLibraryImages.shared.cachedImage(url)
+        let candidates = book.covers
+        if let loaded, candidates.contains(loaded.url) { return loaded.image }
+        return candidates.lazy.compactMap { ZLibraryImages.shared.cachedImage($0) }.first
     }
     var body: some View {
         ZStack {
@@ -24,11 +25,16 @@ struct ListedBookCover: View {
                 #if DEBUG
                 if UITesting.flag(.bookListsMock) { return }
                 #endif
-                guard let url = book.cover else { loaded = nil; return }
-                guard loaded?.url != url else { return }
-                let image = await ZLibraryImages.shared.image(url)
-                guard !Task.isCancelled else { return }
-                loaded = image.map { (url, $0) }
+                let candidates = book.covers
+                guard !candidates.isEmpty else { loaded = nil; return }
+                if let loaded, candidates.contains(loaded.url) { return }
+                // Gutenberg's covers come from its mirror when gutenberg.org does not answer.
+                for url in candidates {
+                    let image = await ZLibraryImages.shared.image(url)
+                    guard !Task.isCancelled else { return }
+                    if let image { loaded = (url, image); return }
+                }
+                loaded = nil
             }
     }
     private var placeholder: some View {
