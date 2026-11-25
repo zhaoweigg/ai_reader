@@ -182,6 +182,16 @@ struct ListedBook: Codable, Equatable, Identifiable {
     var byline: String { [author, detail].filter { !$0.isEmpty }.joined(separator: " · ") }
     /// The catalog source Leaf records for a Gutenberg book added from this list.
     var gutenbergSource: String? { epub == nil ? nil : "gutenberg:" + bookID }
+    /// Where the cover can be fetched, in order: Gutenberg's covers also come from its mirror.
+    var covers: [URL] {
+        guard let cover else { return [] }
+        return [cover] + (source == .gutenberg ? [GutenbergList.mirrored(cover)].compactMap { $0 } : [])
+    }
+    /// Where the free EPUB can be downloaded, in order.
+    var epubs: [URL] {
+        guard let epub else { return [] }
+        return [epub] + [GutenbergList.mirrorEPUB(bookID)].compactMap { $0 }.filter { $0 != epub }
+    }
     /// Chinese books are matched and reviewed the way the 中文 charts are.
     var isChinese: Bool { source == .douban || ReaderChatMessage.usesChinese(title + author) }
 }
@@ -403,6 +413,22 @@ enum GutenbergList {
         guard !books.isEmpty, Set(books.map(\.bookID)).count == books.count else { throw BookListFeedError.invalidResponse }
         let next = offset + rows.count
         return BookList(selection: selection, published: "", fetchedAt: now, books: books, next: root["next"] is String && next < limit ? next : nil)
+    }
+    /// The Project Gutenberg Literary Archive Foundation's own mirror. It serves the same
+    /// `/cache/epub/<id>/` files while www.gutenberg.org is down (it answered 503 "down for
+    /// maintenance" from 2026-11-24).
+    static let mirrorHost = "gutenberg.pglaf.org"
+    /// The same cover or file on the mirror, for a gutenberg.org `/cache/epub/` address.
+    static func mirrored(_ url: URL) -> URL? {
+        guard let host = url.host?.lowercased(), host == "gutenberg.org" || host == "www.gutenberg.org",
+              url.path.hasPrefix("/cache/epub/"), var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        parts.host = mirrorHost
+        return parts.url
+    }
+    /// The book's EPUB (with images) on the mirror; gutenberg.org's `/ebooks/<id>.epub3.images` is not mirrored.
+    static func mirrorEPUB(_ id: String) -> URL? {
+        guard !id.isEmpty, id.count <= 8, id.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+        return URL(string: "https://\(mirrorHost)/cache/epub/\(id)/pg\(id)-images-3.epub")
     }
     /// "Austen, Jane" → "Jane Austen"; "Smollett, T. (Tobias)" → "Tobias Smollett".
     static func name(_ value: String) -> String {
