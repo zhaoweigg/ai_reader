@@ -192,13 +192,48 @@ extension ChatScreen {
         if list.hasMore { chart["more_available"] = true }
         return chart
     }
-    @MainActor static func discover(_ catalog: ZLibraryStore, library: LibraryStore, bestsellers: BestsellerStore? = nil, webNovels: WebNovelStore? = nil) -> ChatScreen {
+    /// One of the 豆瓣, Gutenberg, Apple Books, prize or Open Library lists as Ask Leaf reads it.
+    @MainActor static func bookList(_ list: BookList, library: LibraryStore, lists: BookListStore, limit: Int) -> [String: Any] {
+        var view: [String: Any] = [
+            "source": list.selection.source.fullName, "list": list.selection.caption, "ranked_by": list.selection.chart.meaning,
+            "retrieved": list.fetchedAt.formatted(date: .abbreviated, time: .shortened), "total_items": list.books.count,
+            "items": list.books.prefix(limit).map { book -> [String: Any] in
+                var item: [String: Any] = ["rank": book.rank, "title": book.title, "author": book.author]
+                if let year = book.year { item["year_won"] = year }
+                if !book.detail.isEmpty { item["details"] = book.detail }
+                if !book.figure.isEmpty, book.year == nil { item["count"] = book.figure }
+                if !book.quote.isEmpty { item["one_line"] = book.quote }
+                if book.epub != nil { item["free_epub"] = true }
+                if lists.existing(book, in: library) != nil { item["in_library"] = true }
+                return item
+            }]
+        if !list.published.isEmpty { view["list_date"] = list.published }
+        if list.hasMore { view["more_available"] = true }
+        if list.selection.chart.isBundled { view["note"] = "Leaf carries this winners list; it was last checked \(PrizeWinners.checked)." }
+        return view
+    }
+    @MainActor static func discover(_ catalog: ZLibraryStore, library: LibraryStore, bestsellers: BestsellerStore? = nil, webNovels: WebNovelStore? = nil,
+                                     bookLists: BookListStore? = nil) -> ChatScreen {
         ChatScreen(name: "Discover", view: { limit, _ in
             if let search = bestsellers?.catalogSearch, search.generation == catalog.matchingContextID, catalog.viewingBook == nil {
                 var view = catalogView(search.books, query: search.query, feed: catalog.feed, order: .bestMatch,
                     status: search.status, canLoadMore: false, owned: Set(library.books.compactMap(\.catalogSource)), limit: limit)
                 view["list"] = "Search results"
                 view["layout"] = "vertical list of editions; ranks run from top to bottom"
+                return view
+            }
+            if let bookLists, bookLists.showing, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
+                var view: [String: Any] = ["screen": "Discover", "layout": "vertical list; ranks run from top to bottom"]
+                if let list = bookLists.selected { view.merge(bookList(list, library: library, lists: bookLists, limit: limit)) { _, new in new } }
+                else { view["list"] = bookLists.selection.caption; view["source"] = bookLists.source.fullName; view["total_items"] = 0; view["items"] = [[String: Any]]() }
+                if let book = bookLists.viewingBook {
+                    var open: [String: Any] = ["title": book.title, "author": book.author]
+                    for (key, value) in [("details", book.detail), ("one_line", book.quote), ("description", book.summary), ("count", book.figure)] where !value.isEmpty { open[key] = value }
+                    if book.epub != nil { open["free_epub"] = "Project Gutenberg public-domain EPUB; Add free EPUB adds it without Z-Library." }
+                    view["open_book"] = open
+                    view["open_book_note"] = "The reader is on this book's details page; this book means open_book."
+                }
+                if bookLists.isLoading { view["status"] = "Loading the list…" } else if let error = bookLists.error { view["status"] = error }
                 return view
             }
             if let webNovels, webNovels.showing, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
@@ -232,6 +267,15 @@ extension ChatScreen {
                 let book = try await catalog.details(search.books[rank - 1], description: true)
                 var item = catalogItem(book, rank: rank, owned: library.books.contains { $0.catalogSource == book.sourceID })
                 item["description"] = book.summary ?? ""
+                return item
+            }
+            if let bookLists, bookLists.showing, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {
+                guard let book = bookLists.books.first(where: { $0.rank == rank }) else { return nil }
+                var item: [String: Any] = ["rank": rank, "title": book.title, "author": book.author, "source": book.source.fullName,
+                                           "list": bookLists.selection.caption]
+                for (key, value) in [("details", book.detail), ("count", book.figure), ("one_line", book.quote), ("description", book.summary)] where !value.isEmpty { item[key] = value }
+                if let year = book.year { item["year_won"] = year }
+                if book.epub != nil { item["free_epub"] = true }
                 return item
             }
             if let webNovels, webNovels.showing, catalog.activeQuery.isEmpty, catalog.viewingBook == nil {

@@ -34,6 +34,9 @@ enum UITestFlag: String, CaseIterable {
     case bestsellersMock = "LEAF_UI_BESTSELLERS_MOCK"
     case bestsellersQuota = "LEAF_UI_BESTSELLERS_QUOTA"
     case bestsellersSlowDownload = "LEAF_UI_BESTSELLERS_SLOW_DOWNLOAD"
+    // Book lists
+    case bookListsFailure = "LEAF_UI_BOOK_LISTS_FAILURE"
+    case bookListsMock = "LEAF_UI_BOOK_LISTS_MOCK"
     // Book reviews
     case bookReviewsFailure = "LEAF_UI_BOOK_REVIEWS_FAILURE"
     // ChatGPT

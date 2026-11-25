@@ -2,7 +2,8 @@ import XCTest
 
 final class BestsellerUITests: XCTestCase {
     @MainActor private func launch(_ flags: [String] = [], agent: Bool = false, catalogFlags: [String] = [], emptyLibrary: Bool = true,
-                                   webNovels: Bool = false, webNovelFeedFailure: Bool = false, reviewsFailure: Bool = false) -> XCUIApplication {
+                                   webNovels: Bool = false, webNovelFeedFailure: Bool = false, reviewsFailure: Bool = false,
+                                   bookLists: Bool = false, bookListsFailure: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
@@ -18,6 +19,12 @@ final class BestsellerUITests: XCTestCase {
             app.launchEnvironment.removeValue(forKey: "LEAF_UI_BESTSELLERS_MOCK"); app.launchEnvironment.removeValue(forKey: "LEAF_UI_ZLIB_SHELF")
             app.launchEnvironment["LEAF_UI_WEB_NOVELS_MOCK"] = "1"
             if webNovelFeedFailure { app.launchEnvironment["LEAF_UI_WEB_NOVELS_FEED_FAILURE"] = "1" }
+        }
+        if bookLists {
+            // The other lists bring their own catalog editions in place of the bestseller ones.
+            app.launchEnvironment.removeValue(forKey: "LEAF_UI_BESTSELLERS_MOCK"); app.launchEnvironment.removeValue(forKey: "LEAF_UI_ZLIB_SHELF")
+            app.launchEnvironment["LEAF_UI_BOOK_LISTS_MOCK"] = "1"
+            if bookListsFailure { app.launchEnvironment["LEAF_UI_BOOK_LISTS_FAILURE"] = "1" }
         }
         app.launch(); registerSceneGeometryCleanup(app: app); setReaderOrientation(.portrait, app: app)
         addTeardownBlock { @MainActor in app.terminate() }
@@ -50,8 +57,7 @@ final class BestsellerUITests: XCTestCase {
     @MainActor private func open(_ app: XCUIApplication) {
         app.tabBars.buttons["Discover"].leafTapVisible(in: app)
         XCTAssertTrue(app.tabBars.buttons["Discover"].isSelected)
-        let picker = app.segmentedControls["zlibraryFeedPicker"]
-        XCTAssertTrue(picker.waitForExistence(timeout: 8)); picker.buttons["Bestsellers"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("indie")
         XCTAssertTrue(app.staticTexts["bestsellersHeading"].waitForExistence(timeout: 8))
     }
     @MainActor private func waitEnabled(_ element: XCUIElement) {
@@ -135,7 +141,7 @@ final class BestsellerUITests: XCTestCase {
         let shelf = app.buttons["bestsellerSeeAll"]; reveal(shelf, app: app); capture("Library bestseller shelf beside Z-Library recommendations"); shelf.leafTapVisible(in: app)
         XCTAssertTrue(app.tabBars.buttons["Discover"].isSelected)
         for source in ["Indie", "New York Times"] {
-            app.segmentedControls["bestsellerSourcePicker"].buttons[source].leafTapVisible(in: app)
+            app.leafChooseDiscoverList(source == "Indie" ? "indie" : "nyt")
             for genre in ["Fiction", "Nonfiction"] {
                 app.segmentedControls["bestsellerGenrePicker"].buttons[genre].leafTapVisible(in: app)
                 let id = "bestsellerBook-\(source == "Indie" ? "indie" : "nyt")-\(genre.lowercased())-"
@@ -152,11 +158,11 @@ final class BestsellerUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Search results"].exists)
         app.buttons["zlibraryClearSearch"].leafTapVisible(in: app)
         XCTAssertTrue(app.buttons["bestsellerBook-nyt-nonfiction-1"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.segmentedControls["bestsellerSourcePicker"].buttons["New York Times"].isSelected)
-        app.segmentedControls["zlibraryFeedPicker"].buttons["For you"].leafTapVisible(in: app)
+        XCTAssertTrue(app.leafDiscoverChip("nyt").isSelected)
+        app.leafChooseDiscoverList("recommended")
         XCTAssertTrue(app.staticTexts["Recommended"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["catalogBook-best-nonfiction1"].waitForExistence(timeout: 10))
-        app.segmentedControls["zlibraryFeedPicker"].buttons["Bestsellers"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("nyt")
         XCTAssertTrue(app.buttons["bestsellerBook-nyt-nonfiction-1"].waitForExistence(timeout: 10))
     }
     @MainActor func testQuickAddAndCrossSourceOwnershipAvoidDuplicateImports() {
@@ -166,7 +172,7 @@ final class BestsellerUITests: XCTestCase {
         detail(app)
         XCTAssertTrue(app.buttons["bestsellerViewLibrary"].waitForExistence(timeout: 8)); capture("Bestseller imported through existing catalog service")
         app.buttons["bestsellerViewLibrary"].leafTapVisible(in: app); _ = assertLibraryBook("Simply Ina", app: app)
-        open(app); app.segmentedControls["bestsellerSourcePicker"].buttons["New York Times"].leafTapVisible(in: app)
+        open(app); app.leafChooseDiscoverList("nyt")
         let owned = app.descendants(matching: .any)["bestsellerOwned-nyt-nonfiction-6"].firstMatch; reveal(owned, app: app)
         XCTAssertFalse(app.buttons["bestsellerAdd-nyt-nonfiction-6"].exists)
         capture("Same work already owned on another bestseller list")
@@ -202,12 +208,12 @@ final class BestsellerUITests: XCTestCase {
         let connect = app.buttons["bestsellerConnect-indie-nonfiction-1"]; XCTAssertTrue(connect.waitForExistence(timeout: 10)); connect.leafTapVisible(in: app)
         let preview = app.buttons["zlibraryPreviewConnect"]; XCTAssertTrue(preview.waitForExistence(timeout: 8)); preview.leafTapVisible(in: app)
         waitEnabled(app.buttons["bestsellerAdd-indie-nonfiction-1"])
-        XCTAssertTrue(app.segmentedControls["zlibraryFeedPicker"].buttons["Bestsellers"].isSelected)
+        XCTAssertTrue(app.leafDiscoverChip("indie").isSelected)
         capture("Shared catalog connection preserves bestseller list")
     }
     @MainActor func testNYTWithoutKeyLoadsBothCategoriesAndKeepsIndieAvailable() {
         let app = launch(["MISSING_KEY"]); open(app)
-        app.segmentedControls["bestsellerSourcePicker"].buttons["New York Times"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("nyt")
         XCTAssertTrue(app.buttons["bestsellerBook-nyt-nonfiction-1"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["bestsellerFeedError"].exists)
         capture("NYT nonfiction loads without an API key")
@@ -217,17 +223,16 @@ final class BestsellerUITests: XCTestCase {
         let source = app.descendants(matching: .any)["bestsellerPublicSource"].firstMatch; reveal(source, app: app)
         XCTAssertTrue(source.exists)
         capture("Public NYT source attribution")
-        let picker = app.segmentedControls["bestsellerSourcePicker"]; reveal(picker, app: app)
-        app.segmentedControls["bestsellerSourcePicker"].buttons["Indie"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("indie")
         XCTAssertTrue(app.buttons["bestsellerBook-indie-fiction-1"].waitForExistence(timeout: 10))
     }
     @MainActor func testFeedRetryAndDownloadFailureRemainRecoverable() {
         let app = launch(["FEED_FAILURE", "DOWNLOAD_FAILURE"]); open(app)
-        app.segmentedControls["bestsellerSourcePicker"].buttons["New York Times"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("nyt")
         XCTAssertTrue(app.staticTexts["bestsellerFeedError"].waitForExistence(timeout: 10))
         app.buttons["Try again"].firstMatch.leafTapVisible(in: app)
         XCTAssertTrue(app.buttons["bestsellerBook-nyt-nonfiction-1"].waitForExistence(timeout: 10))
-        app.segmentedControls["bestsellerSourcePicker"].buttons["Indie"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("indie")
         XCTAssertTrue(app.buttons["bestsellerBook-indie-nonfiction-1"].waitForExistence(timeout: 10)); detail(app)
         let add = app.buttons["bestsellerDetailAdd"]; waitEnabled(add); add.leafTapVisible(in: app)
         let error = app.staticTexts["bestsellerImportError"]; reveal(error, app: app)
@@ -283,14 +288,13 @@ final class BestsellerUITests: XCTestCase {
     @MainActor private func openWebNovels(_ app: XCUIApplication) {
         app.tabBars.buttons["Discover"].leafTapVisible(in: app)
         XCTAssertTrue(app.tabBars.buttons["Discover"].isSelected)
-        let picker = app.segmentedControls["zlibraryFeedPicker"]
-        XCTAssertTrue(picker.waitForExistence(timeout: 8))
-        for title in ["Popular", "For you", "Bestsellers", "中文"] { XCTAssertTrue(picker.buttons[title].exists, "\(title) segment") }
-        picker.buttons["中文"].leafTapVisible(in: app)
+        for list in ["popular", "recommended", "nyt", "indie", "qidian", "weread", "douban", "gutenberg"] {
+            XCTAssertTrue(app.leafDiscoverChip(list).waitForExistence(timeout: 8), "\(list) chip")
+        }
+        app.leafChooseDiscoverList("qidian")
         XCTAssertTrue(app.staticTexts["webNovelsHeading"].waitForExistence(timeout: 8))
-        XCTAssertTrue(picker.buttons["中文"].isSelected)
-        // 起点 is the site shown until the reader picks the other.
-        XCTAssertTrue(app.segmentedControls["webNovelSourcePicker"].buttons["起点"].isSelected)
+        XCTAssertTrue(app.leafDiscoverChip("qidian").isSelected)
+        XCTAssertEqual(app.staticTexts["webNovelsHeading"].label, "起点中文网")
     }
     @MainActor private func webNovelRow(_ rank: Int, has text: String, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let row = app.buttons["webNovelRow-\(rank)"]
@@ -335,16 +339,16 @@ final class BestsellerUITests: XCTestCase {
         capture("中文 起点 推荐票榜 总榜 科幻")
 
         // The chart, period and category are still chosen after leaving for another section.
-        app.segmentedControls["zlibraryFeedPicker"].buttons["Bestsellers"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("indie")
         XCTAssertTrue(app.staticTexts["bestsellersHeading"].waitForExistence(timeout: 8))
-        app.segmentedControls["zlibraryFeedPicker"].buttons["中文"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("qidian")
         webNovelRow(1, has: "星海拾荒者", app: app)
         XCTAssertTrue(app.segmentedControls["webNovelChartPicker"].buttons["推荐票"].isSelected)
     }
     @MainActor func testWeReadChartsShowRatingsLoadMoreAndEachSiteKeepsItsChart() {
         let app = launch(webNovels: true); openWebNovels(app)
-        let site = app.segmentedControls["webNovelSourcePicker"], chart = app.segmentedControls["webNovelChartPicker"]
-        site.buttons["微信读书"].leafTapVisible(in: app)
+        let chart = app.segmentedControls["webNovelChartPicker"]
+        app.leafChooseDiscoverList("weread")
         for title in ["总榜", "飙升", "新书", "神作"] { XCTAssertTrue(chart.buttons[title].waitForExistence(timeout: 5), "\(title) chart") }
         XCTAssertTrue(chart.buttons["总榜"].isSelected)
         // The site's own notes stay in the title; the rating and today's readers stand where 起点 shows its count.
@@ -362,15 +366,15 @@ final class BestsellerUITests: XCTestCase {
         // Each site keeps the chart last chosen on it.
         reveal(chart, app: app); chart.buttons["飙升"].leafTapVisible(in: app)
         webNovelRow(1, has: "机械与花", app: app)
-        reveal(site, app: app); site.buttons["起点"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("qidian")
         webNovelRow(1, has: "星海拾荒者, 青柠茶 · 科幻 · 128.5万字, 6.0万月票", app: app)
         XCTAssertTrue(chart.buttons["月票"].isSelected); XCTAssertTrue(app.buttons["webNovelCategory"].exists)
-        site.buttons["微信读书"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("weread")
         webNovelRow(1, has: "机械与花", app: app); XCTAssertTrue(chart.buttons["飙升"].isSelected)
     }
     @MainActor func testWeReadRowsMatchTheCatalogDespiteTheSitesTitleAndAuthorNotes() {
         let app = launch(webNovels: true); openWebNovels(app)
-        app.segmentedControls["webNovelSourcePicker"].buttons["微信读书"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("weread")
         webNovelRow(1, has: "星海拾荒者（全三册）", app: app)
         // "（全三册）" on the chart and "《…》（精校版）作者：…" in the catalog are still the same book.
         let add = app.buttons["webNovelAdd-1"]; waitEnabled(add); add.leafTapVisible(in: app)
@@ -384,7 +388,7 @@ final class BestsellerUITests: XCTestCase {
         capture("中文 微信读书 book page with editions")
         // Added from 微信读书, the same book is already owned on 起点's chart.
         app.navigationBars.buttons.firstMatch.leafTapVisible(in: app)
-        let site = app.segmentedControls["webNovelSourcePicker"]; reveal(site, app: app); site.buttons["起点"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("qidian")
         XCTAssertTrue(app.descendants(matching: .any)["webNovelOwned-1"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["webNovelAdd-1"].exists)
     }
@@ -450,6 +454,145 @@ final class BestsellerUITests: XCTestCase {
         capture("Ask Leaf reads the open 中文 book")
     }
 
+    // MARK: Discover lists (chips, the Discover lists sheet and the public lists)
+
+    @MainActor private func openDiscover(_ app: XCUIApplication) {
+        app.tabBars.buttons["Discover"].leafTapVisible(in: app)
+        XCTAssertTrue(app.tabBars.buttons["Discover"].isSelected)
+        XCTAssertTrue(app.leafDiscoverChip("popular").waitForExistence(timeout: 8))
+    }
+    @MainActor private func listRow(_ rank: Int, has text: String, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let row = app.buttons["bookListRow-\(rank)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "row \(rank)", file: file, line: line)
+        expectation(for: NSPredicate(format: "label CONTAINS %@", text), evaluatedWith: row); waitForExpectations(timeout: 10)
+    }
+    /// Flips a list's switch in the Discover lists sheet, scrolling the sheet to it first.
+    @MainActor private func setList(_ list: String, on: Bool, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let toggle = app.switches["discoverListToggle-" + list]
+        let sheet = app.collectionViews.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 8), "Discover lists sheet", file: file, line: line)
+        // List rows exist only while scrolled into view. A whole-list swipe up reaches the end; going back up
+        // uses zero-hold drags, because a swipe down at the top also drags the sheet and can dismiss it
+        // (and a held press does not scroll a SwiftUI list at all).
+        func scroll(down: Bool) {
+            if down { sheet.swipeUp(velocity: .slow); return }
+            let start = sheet.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.3))
+            start.press(forDuration: 0, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 300)), withVelocity: .slow, thenHoldForDuration: 0)
+        }
+        for _ in 0..<3 where !toggle.exists { scroll(down: true) }
+        for _ in 0..<4 where !toggle.exists { scroll(down: false) }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 8), "switch for \(list)", file: file, line: line)
+        for _ in 0..<3 where toggle.frame.maxY > app.frame.maxY - 20 || toggle.frame.minY < 120 {
+            scroll(down: toggle.frame.maxY > app.frame.maxY - 20)
+        }
+        if (toggle.value as? String == "1") != on {
+            // The row also holds the reorder handle at its trailing edge; tap the switch itself.
+            let knob = toggle.switches.firstMatch
+            if knob.exists && knob.frame.width > 0 { knob.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+            else { toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.5)).tap() }
+        }
+        expectation(for: NSPredicate(format: "value == %@", on ? "1" : "0"), evaluatedWith: toggle); waitForExpectations(timeout: 5)
+    }
+    @MainActor func testDiscoverListsSheetHidesAndShowsChipsAndDiscoverReopensOnTheLastOne() {
+        let app = launch(bookLists: true); openDiscover(app)
+        for list in ["popular", "recommended", "nyt", "indie", "qidian", "weread", "douban", "gutenberg"] {
+            XCTAssertTrue(app.leafDiscoverChip(list).exists, "\(list) chip")
+        }
+        for list in ["apple", "prizes", "openlibrary"] { XCTAssertFalse(app.leafDiscoverChip(list).exists, "\(list) starts hidden") }
+        XCTAssertTrue(app.leafDiscoverChip("popular").isSelected)
+        capture("Discover list chips, Popular selected")
+
+        app.buttons["editDiscoverLists"].leafTapVisible(in: app)
+        XCTAssertTrue(app.navigationBars["Discover lists"].waitForExistence(timeout: 8))
+        capture("Discover lists sheet")
+        setList("popular", on: false, app: app)
+        setList("prizes", on: true, app: app)
+        capture("Discover lists sheet after showing Prize winners and hiding Popular")
+        app.buttons["doneDiscoverLists"].leafTapVisible(in: app)
+        XCTAssertTrue(app.leafDiscoverChip("prizes").waitForExistence(timeout: 8))
+        XCTAssertFalse(app.leafDiscoverChip("popular").exists)
+        // Popular was on screen; Discover moved to the first list still shown.
+        XCTAssertTrue(app.leafDiscoverChip("recommended").isSelected)
+
+        // Prize winners are carried in the app and listed by year.
+        app.leafChooseDiscoverList("prizes")
+        XCTAssertTrue(app.staticTexts["bookListsHeading"].waitForExistence(timeout: 8))
+        listRow(1, has: "2026. The End of Everything", app: app)
+        app.buttons["bookListChartMenu"].leafTapVisible(in: app)
+        let maoDun = app.buttons["茅盾文学奖"]; XCTAssertTrue(maoDun.waitForExistence(timeout: 5)); maoDun.tap()
+        listRow(1, has: "雪山大地, 杨志军", app: app)
+        capture("Prize winners 茅盾文学奖")
+
+        // Discover opens on the last chip, and the lists stay as arranged.
+        app.terminate(); app.launch(); setReaderOrientation(.portrait, app: app)
+        app.tabBars.buttons["Discover"].leafTapVisible(in: app)
+        XCTAssertTrue(app.leafDiscoverChip("prizes").waitForExistence(timeout: 8))
+        XCTAssertTrue(app.leafDiscoverChip("prizes").isSelected)
+        XCTAssertFalse(app.leafDiscoverChip("popular").exists)
+        listRow(1, has: "雪山大地", app: app)
+        setReaderOrientation(.landscapeLeft, app: app)
+        XCTAssertTrue(app.leafDiscoverChip("prizes").waitForExistence(timeout: 5))
+        capture("Discover lists landscape")
+        setReaderOrientation(.portrait, app: app)
+    }
+    @MainActor func testDoubanRowsAddAMatchLoadMoreAndGutenbergAddsItsFreeEPUB() {
+        let app = launch(bookLists: true); openDiscover(app)
+        app.leafChooseDiscoverList("douban")
+        XCTAssertTrue(app.staticTexts["bookListsHeading"].waitForExistence(timeout: 8))
+        XCTAssertEqual(app.staticTexts["bookListsHeading"].label, "豆瓣读书")
+        listRow(1, has: "长河, 沈从文 · 人民文学出版社 · 2012-8, 9.4 · 120,000人评价, 一条河，几户人家", app: app)
+        capture("豆瓣 Top 250 rows")
+        let add = app.buttons["bookListAdd-1"]; waitEnabled(add); tapClearOfChatButton(add, app: app)
+        XCTAssertTrue(app.descendants(matching: .any)["bookListOwned-1"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["bookListRow-4"].exists)
+        let more = app.buttons["bookListLoadMore"]; reveal(more, app: app); more.leafTapVisible(in: app)
+        listRow(4, has: "雾中灯塔", app: app)
+        let chart = app.segmentedControls["bookListChartPicker"]; reveal(chart, app: app); chart.buttons["新书速递"].leafTapVisible(in: app)
+        listRow(1, has: "春日来信", app: app)
+        XCTAssertTrue(app.buttons["bookListChoose-1"].waitForExistence(timeout: 10), "no sure edition: the reader finds one")
+
+        app.leafChooseDiscoverList("gutenberg")
+        listRow(1, has: "The Lantern Keeper, Edith Marlowe · English", app: app)
+        let free = app.buttons["bookListFree-1"]; waitEnabled(free); tapClearOfChatButton(free, app: app)
+        XCTAssertTrue(app.descendants(matching: .any)["bookListOwned-1"].firstMatch.waitForExistence(timeout: 15))
+        capture("Gutenberg free EPUB added")
+        let row = app.buttons["bookListRow-1"]; reveal(row, app: app); row.leafTapVisible(in: app)
+        XCTAssertTrue(app.staticTexts["bookListDetailTitle"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["bookListViewLibrary"].waitForExistence(timeout: 8))
+        app.buttons["bookListViewLibrary"].leafTapVisible(in: app); _ = assertLibraryBook("The Lantern Keeper", app: app)
+    }
+    @MainActor func testAppleOpenLibraryAndGutenbergFailuresAreRecoverable() {
+        let app = launch(bookLists: true, bookListsFailure: true); openDiscover(app)
+        app.buttons["editDiscoverLists"].leafTapVisible(in: app)
+        XCTAssertTrue(app.navigationBars["Discover lists"].waitForExistence(timeout: 8))
+        setList("apple", on: true, app: app); setList("openlibrary", on: true, app: app)
+        app.buttons["doneDiscoverLists"].leafTapVisible(in: app)
+
+        app.leafChooseDiscoverList("apple")
+        XCTAssertTrue(app.staticTexts["bookListError"].waitForExistence(timeout: 10))
+        capture("Apple Books list failed once")
+        app.buttons["bookListRetry"].leafTapVisible(in: app)
+        listRow(1, has: "The Glass Orchard", app: app)
+        XCTAssertEqual(app.staticTexts["bookListDate"].label, "Updated Nov 24, 2026")
+        app.buttons["bookListCountry"].leafTapVisible(in: app)
+        let japan = app.buttons["Japan"]; XCTAssertTrue(japan.waitForExistence(timeout: 5)); japan.tap()
+        listRow(1, has: "The Glass Orchard (JP)", app: app)
+        app.segmentedControls["bookListChartPicker"].buttons["Top free"].leafTapVisible(in: app)
+        listRow(1, has: "Free Sample Stories (JP)", app: app)
+        capture("Apple Books top free, Japan")
+
+        app.leafChooseDiscoverList("openlibrary")
+        listRow(1, has: "The Map of Small Hours", app: app)
+        XCTAssertTrue(app.segmentedControls["bookListChartPicker"].buttons["Today"].isSelected)
+
+        app.leafChooseDiscoverList("gutenberg")
+        let free = app.buttons["bookListFree-2"]; waitEnabled(free); tapClearOfChatButton(free, app: app)
+        let error = app.staticTexts["bookListDownloadError"]; XCTAssertTrue(error.waitForExistence(timeout: 10))
+        XCTAssertTrue(error.label.contains("down for maintenance"))
+        waitEnabled(free)
+        capture("Gutenberg download failure keeps Add available")
+    }
+
     // MARK: Ratings & reviews on the book pages (review sites and the AI are fixtures)
 
     @MainActor private func element(_ identifier: String, _ app: XCUIApplication) -> XCUIElement {
@@ -489,7 +632,7 @@ final class BestsellerUITests: XCTestCase {
 
     @MainActor func testWeReadPageShowsItsRateDoubanReviewsTriesAgainAndSummarizesInChinese() {
         let app = launch(webNovels: true, reviewsFailure: true); openWebNovels(app)
-        app.segmentedControls["webNovelSourcePicker"].buttons["微信读书"].leafTapVisible(in: app)
+        app.leafChooseDiscoverList("weread")
         webNovelRow(1, has: "星海拾荒者（全三册）", app: app)
         let row = app.buttons["webNovelRow-1"]; reveal(row, app: app); row.leafTapVisible(in: app)
         XCTAssertTrue(app.staticTexts["webNovelDetailTitle"].waitForExistence(timeout: 8))
@@ -634,6 +777,30 @@ final class BestsellerUITests: XCTestCase {
         let start = origin.withOffset(CGVector(dx: visible.midX - frame.minX, dy: (up ? visible.maxY : visible.minY) - frame.minY))
         let end = origin.withOffset(CGVector(dx: visible.midX - frame.minX, dy: (up ? visible.minY : visible.maxY) - frame.minY))
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
+    }
+    func leafDiscoverChip(_ list: String) -> XCUIElement { buttons["discoverList-" + list] }
+    /// Taps a Discover list chip, scrolling Discover back to the top and the chip row sideways as needed.
+    func leafChooseDiscoverList(_ list: String, file: StaticString = #filePath, line: UInt = #line) {
+        let chip = leafDiscoverChip(list)
+        XCTAssertTrue(chip.waitForExistence(timeout: 10), "Missing chip: \(list)", file: file, line: line)
+        for _ in 0..<8 where chip.frame.minY < leafContentViewport.minY { leafDragContent(up: false) }
+        let row = scrollViews["discoverListChips"]
+        // The row stops before the pinned Discover lists button. Drag it by about the hidden part of the chip,
+        // holding at the end so it does not coast: a swipe scrolls the whole row and overshoots.
+        func visible() -> CGRect { chip.frame.intersection(row.frame.intersection(frame).insetBy(dx: 2, dy: 0)) }
+        for _ in 0..<8 where visible().width < chip.frame.width * 0.8 {
+            let area = row.frame.intersection(frame), bounds = chip.frame
+            let shift = bounds.maxX > area.maxX ? -(bounds.maxX - area.maxX + 24) : (area.minX - bounds.minX + 24)
+            let distance = max(-220, min(220, shift))
+            let startX = distance < 0 ? area.maxX - 12 : area.minX + 12
+            let start = coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: startX, dy: area.midY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: distance, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        let shown = visible()
+        XCTAssertGreaterThanOrEqual(shown.width, chip.frame.width * 0.8,
+                                    "\(list) chip \(chip.frame) is not in view in the chip row \(row.frame)", file: file, line: line)
+        guard !shown.isNull, shown.width > 4 else { return }
+        coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: shown.midX, dy: shown.midY)).tap()
     }
     var leafContentViewport: CGRect {
         var visible = frame.insetBy(dx: 4, dy: 4)

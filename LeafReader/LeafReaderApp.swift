@@ -8,6 +8,8 @@ struct LeafReaderApp: App {
     @StateObject private var catalog: ZLibraryStore
     @StateObject private var bestsellers: BestsellerStore
     @StateObject private var webNovels: WebNovelStore
+    @StateObject private var bookLists: BookListStore
+    @StateObject private var discoverLists: DiscoverListsStore
     @StateObject private var bookReviews: BookReviewStore
     @StateObject private var agentTraces: AgentTraceStore
     @StateObject private var sync: ICloudSync
@@ -25,6 +27,7 @@ struct LeafReaderApp: App {
         var bestsellerService: (any BestsellerServing)?
         var bestsellerShelf = true
         var webNovelService: (any WebNovelServing)?
+        var bookListService: (any BookListServing)?
         var reviewService: (any BookReviewServing)?
         var syncFolder: URL?
         #if DEBUG
@@ -51,6 +54,7 @@ struct LeafReaderApp: App {
             bestsellerShelf = UITesting.flag(.bestsellersMock)
             if bestsellerShelf { bestsellerService = UITestBestsellerClient(); catalogClient = UITestZLibraryClient() }
             if UITesting.flag(.webNovelsMock) { webNovelService = UITestWebNovelClient(); catalogClient = UITestZLibraryClient() }
+            if UITesting.flag(.bookListsMock) { bookListService = UITestBookListClient(); catalogClient = UITestZLibraryClient() }
             if UITesting.flag(.zlibMock) {
                 catalogClient = UITestZLibraryClient()
                 if UITesting.flag(.zlibWebsiteFixture) {
@@ -77,7 +81,7 @@ struct LeafReaderApp: App {
         var catalogCredentials = chatCredentials
         catalogCredentials.service += ".zlibrary"
         #if DEBUG
-        if UITesting.flag(.bestsellersMock) || UITesting.flag(.webNovelsMock), !UITesting.flag(.bestsellersDisconnected) {
+        if UITesting.flag(.bestsellersMock) || UITesting.flag(.webNovelsMock) || UITesting.flag(.bookListsMock), !UITesting.flag(.bestsellersDisconnected) {
             let value = ZLibrarySession(userID: "bestseller-preview", userKey: "fixture-only")
             try? catalogCredentials.write(String(decoding: JSONEncoder().encode(value), as: UTF8.self), account: defaults.string(forKey: "zlibrary.origin") ?? "https://z-library.sk")
         }
@@ -87,6 +91,8 @@ struct LeafReaderApp: App {
         _bestsellers = StateObject(wrappedValue: BestsellerStore(defaults: defaults, credentials: bestsellerCredentials,
             service: bestsellerService ?? BestsellerFeedClient(), allowsAutomaticShelf: bestsellerShelf))
         _webNovels = StateObject(wrappedValue: WebNovelStore(defaults: defaults, service: webNovelService ?? WebNovelClient()))
+        _bookLists = StateObject(wrappedValue: BookListStore(defaults: defaults, service: bookListService ?? BookListClient()))
+        _discoverLists = StateObject(wrappedValue: DiscoverListsStore(defaults: defaults))
         // NYT reviews use the reader's own NYT Books key, when they saved one.
         _bookReviews = StateObject(wrappedValue: BookReviewStore(defaults: defaults, service: reviewService ?? BookReviewClient(),
             nytKey: { [bestsellerCredentials] in ((try? bestsellerCredentials.read(account: "nyt-books")) ?? nil) }))
@@ -110,7 +116,7 @@ struct LeafReaderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(bestsellers).environmentObject(bestsellers.matching).environmentObject(webNovels).environmentObject(bookReviews).environmentObject(agentTraces).environmentObject(sync).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
+            AppView().environmentObject(library).environmentObject(aiSettings).environmentObject(catalog).environmentObject(bestsellers).environmentObject(bestsellers.matching).environmentObject(webNovels).environmentObject(bookLists).environmentObject(discoverLists).environmentObject(bookReviews).environmentObject(agentTraces).environmentObject(sync).defaultAppStorage(readingDefaults).tint(LeafStyle.accent)
                 #if DEBUG
                 .background(UITestSceneGeometryBridge())
                 .background(UITestScrollTouchProbe())
@@ -133,6 +139,8 @@ struct AppView: View {
     @EnvironmentObject private var catalog: ZLibraryStore
     @EnvironmentObject private var bestsellers: BestsellerStore
     @EnvironmentObject private var webNovels: WebNovelStore
+    @EnvironmentObject private var bookLists: BookListStore
+    @EnvironmentObject private var discoverLists: DiscoverListsStore
     @EnvironmentObject private var sync: ICloudSync
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = AppTab.library
@@ -154,7 +162,7 @@ struct AppView: View {
                 ZLibraryView(close: { tab = .library; discoverStack = UUID() })
             }.id(discoverStack)
                 .modifier(TabChatHost(chat: discoverChat, finishMovingIdentifier: "finishMovingDiscoverChatButton",
-                                      screen: { ChatScreen.discover(catalog, library: library, bestsellers: bestsellers, webNovels: webNovels) }))
+                                      screen: { ChatScreen.discover(catalog, library: library, bestsellers: bestsellers, webNovels: webNovels, bookLists: bookLists) }))
                 .tabItem { Label("Discover", systemImage: "safari") }.tag(AppTab.discover)
             BookmarksView(onOpen: { id, locator in open(id, locator: locator) })
                 .tabItem { Label("Bookmarks", systemImage: "bookmark") }.tag(AppTab.bookmarks)
@@ -168,7 +176,11 @@ struct AppView: View {
             }
         }
         .onOpenURL { enqueue([$0]) }
-        .task { await library.refreshMissingMetadata(); sync.schedule(after: 0) }
+        .task {
+            // Discover opens on the list last chosen on this device.
+            discoverLists.remembered?.show(catalog: catalog, bestsellers: bestsellers, novels: webNovels, lists: bookLists)
+            await library.refreshMissingMetadata(); sync.schedule(after: 0)
+        }
         .fullScreenCover(item: $destination, onDismiss: { library.flush() }) { target in
             ReaderView(bookID: target.id, initialLocator: target.locator).environmentObject(library).environment(\.leafTheme, theme)
         }
@@ -186,8 +198,8 @@ struct AppView: View {
         .toolbarBackground(theme.canvas, for: .tabBar)
     }
     /// A book synced from iCloud may not be on this device yet; download it first.
-    /// Leaving Library for the catalog or the bestseller lists takes Discover off the 中文 section.
-    private func showCharts(bestsellers show: Bool) { bestsellers.showingBestsellers = show; webNovels.showing = false }
+    /// Leaving Library for the catalog or the bestseller lists takes Discover off the other lists.
+    private func showCharts(bestsellers show: Bool) { bestsellers.showingBestsellers = show; webNovels.showing = false; bookLists.showing = false }
     private func open(_ id: UUID, locator: String? = nil) {
         guard let book = library.book(id), !library.isDownloaded(book), sync.isConnected else {
             destination = ReadingDestination(id: id, locator: locator); return

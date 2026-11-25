@@ -25,7 +25,7 @@ struct UITestZLibraryClient: ZLibraryServing {
         return UITesting.flag(.zlibGrid) ? books + sampleBooks() : books
     }
     func details(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession?) async throws -> ZLibraryBook {
-        if UITesting.flag(.bestsellersMock) || UITesting.flag(.webNovelsMock) { return book }
+        if UITesting.flag(.bestsellersMock) || UITesting.flag(.webNovelsMock) || UITesting.flag(.bookListsMock) { return book }
         let summaryMode = UITesting.value(.zlibSummary)
         if summaryMode == "loading" { try await Task.sleep(for:.seconds(4)) }
         try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()
@@ -98,6 +98,7 @@ struct UITestZLibraryClient: ZLibraryServing {
         }
         if UITesting.flag(.bestsellersMock) { return ZLibrarySearchPage(books: UITestBestsellerClient.search(query), hasMore: false) }
         if UITesting.flag(.webNovelsMock) { return ZLibrarySearchPage(books: UITestWebNovelClient.search(query), hasMore: false) }
+        if UITesting.flag(.bookListsMock) { return ZLibrarySearchPage(books: UITestBookListClient.search(query), hasMore: false) }
         try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation()
         try await guardRepeatedRequest("\(query)-\(order.rawValue)-\(page)-\(session?.userID ?? "anonymous")", path: "book/search", session: session)
         if query.lowercased() == "unavailable" { throw ZLibraryRequestFailure(issue: .challenge, diagnostic: "POST /eapi/book/search · HTTP 200 · HTML instead of JSON") }
@@ -109,7 +110,7 @@ struct UITestZLibraryClient: ZLibraryServing {
         return ZLibrarySearchPage(books: sample, hasMore: false)
     }
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL {
-        if UITesting.flag(.bestsellersMock) || UITesting.flag(.webNovelsMock) { return try await UITestBestsellerClient.download(book, progress: progress) }
+        if UITesting.flag(.bestsellersMock) || UITesting.flag(.webNovelsMock) || UITesting.flag(.bookListsMock) { return try await UITestBestsellerClient.download(book, progress: progress) }
         progress(0.3); try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()
         guard let source = Bundle.main.url(forResource: "\(book.title).\(book.fileExtension)", withExtension:nil,subdirectory:"Samples") else { throw ZLibraryError.file }
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).\(book.fileExtension)")

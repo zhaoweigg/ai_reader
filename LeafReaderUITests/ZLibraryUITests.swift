@@ -426,11 +426,11 @@ final class ZLibraryUITests: XCTestCase {
         waitForExpectations(timeout:5)
     }
     @MainActor private func browse(_ title: String, app: XCUIApplication) {
-        let picker = app.segmentedControls["zlibraryFeedPicker"]
-        XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        revealCatalogElement(picker, app: app)
-        // The segments carry short labels; the heading below keeps the feed's full name.
-        picker.buttons[title == "Recommended" ? "For you" : "Popular"].leafTapVisible(in: app)
+        let chip = app.leafDiscoverChip(title == "Recommended" ? "recommended" : "popular")
+        XCTAssertTrue(chip.waitForExistence(timeout: 5))
+        revealCatalogElement(chip, app: app)
+        // The chips carry short labels; the heading below keeps the feed's full name.
+        chip.leafTapVisible(in: app)
         expectation(for: NSPredicate(format: "label == %@", title), evaluatedWith: app.staticTexts["zlibraryFeedTitle"])
         waitForExpectations(timeout: 5)
         waitForCatalogLoad(app)

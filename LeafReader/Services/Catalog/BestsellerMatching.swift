@@ -29,6 +29,19 @@ struct CatalogMatchQuery {
         id = novel.id; isbn = nil; search = String((novel.title + " " + novel.author).prefix(500))
         rank = { WebNovelText.rank(novel, editions: $0) }
     }
+    init(_ book: ListedBook) {
+        id = book.id; isbn = book.isbns.first; search = String((book.title + " " + book.author).prefix(500))
+        if book.isChinese {
+            // The 中文 charts' matching: uploads wrap Chinese titles in their own notes.
+            let novel = WebNovel(rank: book.rank, bookID: book.bookID, title: book.title, author: book.author, category: "", subcategory: "",
+                                 length: "", figure: "", summary: "")
+            rank = { WebNovelText.rank(novel, editions: $0) }
+        } else {
+            let entry = BestsellerBook(source: .indie, genre: .fiction, rank: book.rank, title: book.title, author: book.author,
+                                       summary: "", isbns: book.isbns, sourceURL: book.link ?? URL(string: "https://openlibrary.org")!)
+            rank = { BestsellerMatching.rank(entry, editions: $0) }
+        }
+    }
 }
 
 enum BestsellerMatchState: Equatable {
@@ -53,6 +66,7 @@ enum BestsellerMatchState: Equatable {
     private var requests: [String: Request] = [:]
     func state(for book: BestsellerBook) -> BestsellerMatchState? { states[book.id] }
     func state(for novel: WebNovel) -> BestsellerMatchState? { states[novel.id] }
+    func state(for book: ListedBook) -> BestsellerMatchState? { states[book.id] }
     func invalidate() {
         requests.values.forEach { $0.task.cancel() }; requests.removeAll(); states.removeAll(); context = nil
     }
@@ -61,6 +75,9 @@ enum BestsellerMatchState: Equatable {
     }
     func resolve(_ novel: WebNovel, catalog: ZLibraryStore, force: Bool = false) async {
         await resolve(CatalogMatchQuery(novel), catalog: catalog, force: force)
+    }
+    func resolve(_ book: ListedBook, catalog: ZLibraryStore, force: Bool = false) async {
+        await resolve(CatalogMatchQuery(book), catalog: catalog, force: force)
     }
     private func resolve(_ book: CatalogMatchQuery, catalog: ZLibraryStore, force: Bool) async {
         if context != catalog.matchingContextID { invalidate(); context = catalog.matchingContextID }
