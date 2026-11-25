@@ -471,12 +471,19 @@ final class BestsellerUITests: XCTestCase {
         let toggle = app.switches["discoverListToggle-" + list]
         let sheet = app.collectionViews.firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 8), "Discover lists sheet", file: file, line: line)
-        // List rows exist only while scrolled into view: look further down, then back up.
-        for _ in 0..<2 where !toggle.exists { sheet.swipeUp() }
-        for _ in 0..<3 where !toggle.exists { sheet.swipeDown() }
+        // List rows exist only while scrolled into view. A whole-list swipe up reaches the end; going back up
+        // uses zero-hold drags, because a swipe down at the top also drags the sheet and can dismiss it
+        // (and a held press does not scroll a SwiftUI list at all).
+        func scroll(down: Bool) {
+            if down { sheet.swipeUp(velocity: .slow); return }
+            let start = sheet.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.3))
+            start.press(forDuration: 0, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 300)), withVelocity: .slow, thenHoldForDuration: 0)
+        }
+        for _ in 0..<3 where !toggle.exists { scroll(down: true) }
+        for _ in 0..<4 where !toggle.exists { scroll(down: false) }
         XCTAssertTrue(toggle.waitForExistence(timeout: 8), "switch for \(list)", file: file, line: line)
-        for _ in 0..<3 where toggle.frame.maxY > app.frame.maxY - 20 || toggle.frame.minY < 60 {
-            if toggle.frame.maxY > app.frame.maxY - 20 { sheet.swipeUp() } else { sheet.swipeDown() }
+        for _ in 0..<3 where toggle.frame.maxY > app.frame.maxY - 20 || toggle.frame.minY < 120 {
+            scroll(down: toggle.frame.maxY > app.frame.maxY - 20)
         }
         if (toggle.value as? String == "1") != on {
             // The row also holds the reorder handle at its trailing edge; tap the switch itself.
@@ -498,8 +505,8 @@ final class BestsellerUITests: XCTestCase {
         app.buttons["editDiscoverLists"].leafTapVisible(in: app)
         XCTAssertTrue(app.navigationBars["Discover lists"].waitForExistence(timeout: 8))
         capture("Discover lists sheet")
-        setList("prizes", on: true, app: app)
         setList("popular", on: false, app: app)
+        setList("prizes", on: true, app: app)
         capture("Discover lists sheet after showing Prize winners and hiding Popular")
         app.buttons["doneDiscoverLists"].leafTapVisible(in: app)
         XCTAssertTrue(app.leafDiscoverChip("prizes").waitForExistence(timeout: 8))
