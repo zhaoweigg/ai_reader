@@ -36,30 +36,33 @@ struct DiscoverListChips: View {
     let select: (DiscoverList) -> Void
     let edit: () -> Void
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(lists) { list in
-                        let selected = list == selection
-                        Button { select(list) } label: {
-                            Text(list.title).font(.subheadline.weight(selected ? .semibold : .regular)).lineLimit(1)
-                                .padding(.horizontal, 14).frame(minHeight: 36)
-                                .foregroundStyle(selected ? theme.onAccent : Color.primary)
-                                .background(selected ? theme.accent : theme.surface, in: .capsule)
-                                .contentShape(.capsule)
-                        }.buttonStyle(.plain).id(list)
-                            .accessibilityAddTraits(selected ? .isSelected : [])
-                            .accessibilityIdentifier("discoverList-\(list.rawValue)")
-                    }
-                    Button(action: edit) {
-                        Image(systemName: "slider.horizontal.3").font(.subheadline.weight(.medium)).foregroundStyle(theme.accent)
-                            .frame(width: 44, height: 36).background(theme.surface, in: .capsule).contentShape(.capsule)
-                    }.buttonStyle(.plain).accessibilityLabel("Discover lists").accessibilityIdentifier("editDiscoverLists")
-                }.padding(.vertical, 2)
+        // The Discover lists button stays at the trailing edge, however far the chips scroll.
+        HStack(spacing: 8) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(lists) { list in
+                            let selected = list == selection
+                            Button { select(list) } label: {
+                                Text(list.title).font(.subheadline.weight(selected ? .semibold : .regular)).lineLimit(1)
+                                    .padding(.horizontal, 14).frame(minHeight: 36)
+                                    .foregroundStyle(selected ? theme.onAccent : Color.primary)
+                                    .background(selected ? theme.accent : theme.surface, in: .capsule)
+                                    .contentShape(.capsule)
+                            }.buttonStyle(.plain).id(list)
+                                .accessibilityAddTraits(selected ? .isSelected : [])
+                                .accessibilityIdentifier("discoverList-\(list.rawValue)")
+                        }
+                    }.padding(.vertical, 2)
+                }
+                .accessibilityIdentifier("discoverListChips")
+                .onAppear { proxy.scrollTo(selection, anchor: .center) }
+                .onChange(of: selection) { _, value in withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(value, anchor: .center) } }
             }
-            .accessibilityIdentifier("discoverListChips")
-            .onAppear { proxy.scrollTo(selection, anchor: .center) }
-            .onChange(of: selection) { _, value in withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(value, anchor: .center) } }
+            Button(action: edit) {
+                Image(systemName: "slider.horizontal.3").font(.subheadline.weight(.medium)).foregroundStyle(theme.accent)
+                    .frame(width: 44, height: 36).background(theme.surface, in: .capsule).contentShape(.capsule)
+            }.buttonStyle(.plain).accessibilityLabel("Discover lists").accessibilityIdentifier("editDiscoverLists")
         }
     }
 }
