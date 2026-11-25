@@ -469,8 +469,11 @@ final class BestsellerUITests: XCTestCase {
     /// Flips a list's switch in the Discover lists sheet, scrolling the sheet to it first.
     @MainActor private func setList(_ list: String, on: Bool, app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let toggle = app.switches["discoverListToggle-" + list]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 8), "switch for \(list)", file: file, line: line)
         let sheet = app.collectionViews.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 8), "Discover lists sheet", file: file, line: line)
+        // Rows of the Hidden section exist only once scrolled into view.
+        for _ in 0..<3 where !toggle.exists { sheet.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 8), "switch for \(list)", file: file, line: line)
         for _ in 0..<3 where toggle.frame.maxY > app.frame.maxY - 20 || toggle.frame.minY < 60 {
             if toggle.frame.maxY > app.frame.maxY - 20 { sheet.swipeUp() } else { sheet.swipeDown() }
         }
@@ -772,7 +775,8 @@ final class BestsellerUITests: XCTestCase {
         for _ in 0..<8 where chip.frame.minY < leafContentViewport.minY { leafDragContent(up: false) }
         let row = scrollViews["discoverListChips"]
         for _ in 0..<6 {
-            let bounds = chip.frame, screen = frame.insetBy(dx: 4, dy: 0)
+            // The row stops before the pinned Discover lists button; a chip half under it is scrolled into view first.
+            let bounds = chip.frame, screen = row.frame.intersection(frame).insetBy(dx: 2, dy: 0)
             guard bounds.minX < screen.minX || bounds.maxX > screen.maxX else { break }
             let left = bounds.maxX > screen.maxX
             row.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.8 : 0.2, dy: 0.5))
