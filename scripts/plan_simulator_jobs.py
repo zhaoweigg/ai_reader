@@ -10,8 +10,8 @@
 
 Planning numbers: a test never measured counts as 60 s (UI) or 1 s (unit); a class never measured counts as
 5 s (unit) or 300 s (UI). Every job also pays a fixed start-up of 25 s (installing and launching the app and
-the runner; measured 10-35 s). The suggested slot count is the fewest slots whose wall time is within 15 % of
-using every free slot: a slot that saves only a few seconds is left for other workers.
+the runner; measured 10-35 s). The suggested slot count is the fewest slots whose wall time is within 15 % (and
+45 s) of using every free slot: a slot that saves less is left for other workers.
 """
 import argparse
 import json
@@ -85,7 +85,8 @@ def plan(path, free, slots):
     tests = list(dict.fromkeys(line.strip() for line in open(path) if line.strip() and not line.startswith("#")))
     free = max(1, min(5, free))
     walls = {n: max(j["seconds"] for j in pack(tests, n, db)) for n in range(1, free + 1)}
-    chosen = slots or next(n for n in range(1, free + 1) if walls[n] <= walls[free] * 1.15)
+    # An extra slot must save more than 15 % and more than 45 s; otherwise it is left for other workers.
+    chosen = slots or next(n for n in range(1, free + 1) if walls[n] - walls[free] <= max(walls[free] * 0.15, 45))
     print(json.dumps({
         "slots": chosen,
         "expected_wall_seconds_by_slots": {n: round(w) for n, w in walls.items()},
