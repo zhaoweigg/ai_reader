@@ -479,7 +479,10 @@ final class BestsellerUITests: XCTestCase {
             if toggle.frame.maxY > app.frame.maxY - 20 { sheet.swipeUp() } else { sheet.swipeDown() }
         }
         if (toggle.value as? String == "1") != on {
-            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+            // The row also holds the reorder handle at its trailing edge; tap the switch itself.
+            let knob = toggle.switches.firstMatch
+            if knob.exists && knob.frame.width > 0 { knob.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+            else { toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.5)).tap() }
         }
         expectation(for: NSPredicate(format: "value == %@", on ? "1" : "0"), evaluatedWith: toggle); waitForExpectations(timeout: 5)
     }
@@ -775,17 +778,22 @@ final class BestsellerUITests: XCTestCase {
         XCTAssertTrue(chip.waitForExistence(timeout: 10), "Missing chip: \(list)", file: file, line: line)
         for _ in 0..<8 where chip.frame.minY < leafContentViewport.minY { leafDragContent(up: false) }
         let row = scrollViews["discoverListChips"]
-        for _ in 0..<6 {
-            // The row stops before the pinned Discover lists button; a chip half under it is scrolled into view first.
-            let bounds = chip.frame, screen = row.frame.intersection(frame).insetBy(dx: 2, dy: 0)
-            guard bounds.minX < screen.minX || bounds.maxX > screen.maxX else { break }
-            // A held press-drag does not move this row; a slow swipe does.
-            if bounds.maxX > screen.maxX { row.swipeLeft(velocity: .slow) } else { row.swipeRight(velocity: .slow) }
+        // The row stops before the pinned Discover lists button. Drag it by about the hidden part of the chip,
+        // holding at the end so it does not coast: a swipe scrolls the whole row and overshoots.
+        func visible() -> CGRect { chip.frame.intersection(row.frame.intersection(frame).insetBy(dx: 2, dy: 0)) }
+        for _ in 0..<8 where visible().width < chip.frame.width * 0.8 {
+            let area = row.frame.intersection(frame), bounds = chip.frame
+            let shift = bounds.maxX > area.maxX ? -(bounds.maxX - area.maxX + 24) : (area.minX - bounds.minX + 24)
+            let distance = max(-220, min(220, shift))
+            let startX = distance < 0 ? area.maxX - 12 : area.minX + 12
+            let start = coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: startX, dy: area.midY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: distance, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.3)
         }
-        let inside = row.frame.intersection(frame).insetBy(dx: 1, dy: 0)
-        XCTAssertTrue(chip.frame.minX >= inside.minX && chip.frame.maxX <= inside.maxX,
-                      "\(list) chip \(chip.frame) is not inside the chip row \(inside)", file: file, line: line)
-        chip.leafTapVisible(in: self, file: file, line: line)
+        let shown = visible()
+        XCTAssertGreaterThanOrEqual(shown.width, chip.frame.width * 0.8,
+                                    "\(list) chip \(chip.frame) is not in view in the chip row \(row.frame)", file: file, line: line)
+        guard !shown.isNull, shown.width > 4 else { return }
+        coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: shown.midX, dy: shown.midY)).tap()
     }
     var leafContentViewport: CGRect {
         var visible = frame.insetBy(dx: 4, dy: 4)
