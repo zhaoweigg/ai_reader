@@ -290,9 +290,22 @@ Keys and tokens are stored `WhenUnlockedThisDeviceOnly` and are not synced. Requ
 
 ## Discover
 
-The Discover tab has four sections: Z-Library's most popular books (**Popular**), its recommendations for your account (**For you**), **Bestsellers** with Indie and New York Times hardcover fiction and nonfiction charts, and **中文** with Chinese charts from 起点中文网 and 微信读书. The catalog sections have search with eight sort orders and book details. The Library tab has a cover shelf that opens the catalog and bestseller screens.
+Discover shows one list at a time, chosen from a row of chips. The slider button at the end of the row opens **Discover lists**, where each list is switched on or off and dragged into order; at least one stays on. The arrangement syncs with your other devices (`discover.lists`); the chip last chosen is remembered on each device and Discover reopens on it.
 
-中文 shows one chart at a time from the site you pick, and remembers the chart last chosen on each:
+| Chip | List | Starts |
+| --- | --- | --- |
+| Popular · For you | Z-Library's most downloaded books and its picks for your account | shown |
+| NYT · Indie | New York Times and IndieBound hardcover fiction and nonfiction | shown |
+| 起点 · 微信读书 | Chinese charts (below) | shown |
+| 豆瓣 | 豆瓣读书 Top 250 and 新书速递 | shown |
+| Gutenberg | Project Gutenberg's most downloaded public-domain books, added from their free EPUB | shown |
+| Apple Books | Top paid and top free in the US, UK, Canada, Australia, Japan, Taiwan or Hong Kong store | hidden |
+| Prize winners | Booker, International Booker, Pulitzer, National Book Award, Hugo, Nebula and 茅盾文学奖 winners, newest first | hidden |
+| Open Library | What Open Library readers look at most today, this week or this month | hidden |
+
+Search always searches Z-Library, whichever chip is chosen. The catalog lists have eight sort orders and book details. The Library tab has a cover shelf that opens the catalog and bestseller screens.
+
+The 起点 and 微信读书 chips each show one chart at a time and remember the chart last chosen on each:
 
 | Site | Charts | Each row shows |
 | --- | --- | --- |
@@ -325,6 +338,15 @@ flowchart LR
         NStore --> WeRead["微信读书 chart data<br/>no account"]
         NStore --> Match
     end
+    subgraph Lists["Other public lists"]
+        LStore["BookListStore<br/>6-hour cache, 10 lists"] --> Douban["豆瓣 Top 250 · 新书速递 pages"]
+        LStore --> Gutendex["Gutendex catalog data<br/>EPUB from gutenberg.org"]
+        LStore --> Apple["Apple Books RSS charts"]
+        LStore --> OL["Open Library trending"]
+        LStore --> Prizes["PrizeWinners<br/>carried in the app"]
+        LStore --> Match
+    end
+    Gutendex -->|"free EPUB"| Import
     Client -->|"download ≤100 MB<br/>to a protected temp file"| Import["Library import"]
     Match --> Client
 ```

@@ -14,7 +14,7 @@ Library refreshes its Z-Library shelf when the account, connection, or website c
 
 ## 中文 (Chinese charts)
 
-Discover's fourth section shows one chart at a time from one of two sites, chosen with a switch at the top. The segment labels are Popular / For you / Bestsellers / 中文 so four fit on a narrow phone; the catalog headings keep the feeds' full names. The chosen site, the chart last chosen on each site, and 起点's category and period persist on the device; they are not synced. The type names (`WebNovel…`) date from 1.41, when the section held only 起点's web novels.
+Since 1.47 起点 and 微信读书 are separate Discover chips (see Discover lists). Each shows one chart at a time; the catalog headings keep the feeds' full names. The chosen site, the chart last chosen on each site, and 起点's category and period persist on the device; they are not synced. The type names (`WebNovel…`) date from 1.41, when the section held only 起点's web novels.
 
 ### 起点中文网
 
@@ -37,6 +37,27 @@ Neither site gives an ISBN, so catalog lookup is by title and author only (`WebN
 Ask Leaf reads the chart on screen or the open book's page, and `get_web_novel_chart` reads any chart of either site from any chat without changing the screen.
 
 Not verified: whether Z-Library carries the charted titles (fixtures stand in for the catalog), and the live sites from inside the app, from a phone, or from mainland China. Outside the app, the parser's rules were checked against every live 起点 chart page and the first pages of the four 微信读书 charts.
+
+## Discover lists (1.47)
+
+The four-segment picker became a row of chips, one per list, so lists can be added without crowding it. `DiscoverList` names every list; `DiscoverListsStore` keeps their order and which are shown in one synced setting, `discover.lists`: shown lists by name, then hidden ones prefixed with `-`, so a list added in a later version can be told apart from one the reader hid (a new list starts hidden unless it is one of the initial eight). Unknown names are dropped and at least one list always stays on. Another device's arrangement applies as soon as it is written to the defaults. The last chip (`discover.list`) stays on the device. Hiding the list on screen while the sheet is open moves Discover to the first list still shown. A list opened from elsewhere while hidden (Library's bestseller shelf) shows its chip at the end until another is chosen.
+
+Each existing list keeps its own controls inside its chip: NYT and Indie each have Fiction / Nonfiction, 起点 has its charts, category and period, and 微信读书 its four charts. The site and source switches that used to sit inside those sections are gone.
+
+The new lists share `BookListStore` (6-hour cache of the first 50 books of the last ten lists, Load more for long lists) and one row and book-page design. Every request is public, with an ephemeral session and no account:
+
+| List | Read from | Notes |
+| --- | --- | --- |
+| 豆瓣读书 Top 250 | `book.douban.com/top250?start=N`, 25 a page to 250 | title, author, publisher and date, score and number of ratings, the list's one-line description; translator and price stay on 豆瓣 |
+| 新书速递 | `book.douban.com/latest?subcat=全部&p=N`, about 20 a page to 100 | follows the page's own paginator |
+| Project Gutenberg | Gutendex `gutendex.com/books/?sort=popular&page=N`, 32 a page to 160 | only books with an EPUB; "Austen, Jane" read as Jane Austen; Add downloads `gutenberg.org`'s EPUB (accepted only if it is a zip file) and records `gutenberg:<id>` as its catalog source |
+| Apple Books | `rss.marketingtools.apple.com/api/v2/<store>/books/top-paid\|top-free/50/books.json` | the response must name the store asked for; Taiwan and Hong Kong publish an empty Top paid chart, which Leaf says |
+| Prize winners | `PrizeWinners.swift` in the app | the year each prize was given; checked against the prizes' own lists on 2026-11-24. Wikidata's query service was rate limited and its winners data had gaps and wrong years, so it is used only to cross-check (`scripts/fetch_prize_winners.py`) |
+| Open Library | `openlibrary.org/trending/<daily\|weekly\|monthly>.json?limit=50` | covers by cover ID, one ISBN when the work lists one |
+
+Rows match Z-Library editions like the other lists: 豆瓣 books, 茅盾文学奖 winners and any Chinese title by `WebNovelText`, the rest by `BestsellerMatching` (ISBN first when Open Library gives one). Gutenberg rows skip Z-Library and offer **Add** for the free EPUB. Ask Leaf reads the list on screen (`ChatScreen.bookList`) and the open book; the app-wide chart tools do not cover these lists yet.
+
+Not verified: the lists from inside the app or on a phone, and a real Gutenberg download (gutenberg.org answered 503 "down for maintenance" on 2026-11-24). Outside the app on 2026-11-24 the parsers read the live 豆瓣 Top 250 (first and last pages), 新书速递 (pages 1–2), Gutendex (pages 1–2), Apple Books (US, Japan; Taiwan's empty Top paid) and Open Library (today, this month). UI tests use `UITestBookListClient`.
 
 ## Ratings & reviews
 
