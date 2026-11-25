@@ -41,6 +41,16 @@ import Combine
     func cachedImage(_ url: URL) -> UIImage? { cache.object(forKey: url as NSURL) }
     func discardDecodedImages() { cache.removeAllObjects() }
 
+    /// The request for a cover. 豆瓣's image servers answer 418 to a request that does not come from its
+    /// book pages, so its covers carry that Referer; nothing else (no cookies, no account) is sent.
+    nonisolated static func request(for url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        if let host = url.host?.lowercased(), host == "doubanio.com" || host.hasSuffix(".doubanio.com") {
+            request.setValue("https://book.douban.com/", forHTTPHeaderField: "Referer")
+        }
+        return request
+    }
+
     func image(_ url: URL) async -> UIImage? {
         guard !Task.isCancelled else { return nil }
         if let image = cachedImage(url) { return image }
@@ -62,7 +72,7 @@ import Combine
                             transferCounts[url, default: 0] += 1; activeTransfers += 1; countedTransfer = true
                         }
                         #endif
-                        let payload = try await transport.send(URLRequest(url: url), toFile: false, progress: { _ in })
+                        let payload = try await transport.send(Self.request(for: url), toFile: false, progress: { _ in })
                         try Task.checkCancellation()
                         cg = (200...299).contains(payload.response.statusCode) ? await disk.store(payload.data, for: url) : nil
                     } catch { cg = nil }

@@ -4,24 +4,32 @@ extension BookReviewQuery {
     init(_ book: ListedBook) { self.init(title: book.title, author: book.author, isbns: book.isbns) }
 }
 
+/// A listed book's cover, through the shared cover cache: it keeps covers on disk and sends
+/// 豆瓣's image servers the Referer they require (AsyncImage cannot).
 struct ListedBookCover: View {
     @Environment(\.leafTheme) private var theme
     let book: ListedBook
+    @State private var loaded: (url: URL, image: UIImage)?
+    private var image: UIImage? {
+        guard let url = book.cover else { return nil }
+        return loaded?.url == url ? loaded?.image : ZLibraryImages.shared.cachedImage(url)
+    }
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 4).fill(theme.surface)
-            #if DEBUG
-            if UITesting.flag(.bookListsMock) { placeholder } else { remote }
-            #else
-            remote
-            #endif
+            if let image { Image(uiImage: image).resizable().scaledToFit() } else { placeholder }
         }.aspectRatio(2 / 3, contentMode: .fit).clipShape(.rect(cornerRadius: 4))
             .accessibilityElement(children: .ignore).accessibilityLabel(book.title + " cover")
-    }
-    private var remote: some View {
-        AsyncImage(url: book.cover) { phase in
-            if let image = phase.image { image.resizable().scaledToFit() } else { placeholder }
-        }
+            .task(id: book.cover) {
+                #if DEBUG
+                if UITesting.flag(.bookListsMock) { return }
+                #endif
+                guard let url = book.cover else { loaded = nil; return }
+                guard loaded?.url != url else { return }
+                let image = await ZLibraryImages.shared.image(url)
+                guard !Task.isCancelled else { return }
+                loaded = image.map { (url, $0) }
+            }
     }
     private var placeholder: some View {
         Image(systemName: book.source == .prizes ? "rosette" : "book.closed").font(.title3).foregroundStyle(theme.accent)

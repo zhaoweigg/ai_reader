@@ -291,6 +291,10 @@ enum ListText {
 enum DoubanLists {
     static let top250PageSize = 25, latestPageSize = 20, latestLimit = 100
     private static let hosts = ["doubanio.com", "douban.com"]
+    /// The lists link the small cover (about 90 px wide); rows and book pages use the medium one.
+    static func cover(_ value: String?) -> URL? {
+        ListText.address(value?.replacingOccurrences(of: "/view/subject/s/public/", with: "/view/subject/m/public/"), hosts: hosts)
+    }
 
     static func parseTop250(_ data: Data, selection: BookListSelection, offset: Int, now: Date = Date()) throws -> BookList {
         guard let html = String(data: data, encoding: .utf8) else { throw BookListFeedError.invalidResponse }
@@ -308,7 +312,7 @@ enum DoubanLists {
             return ListedBook(rank: offset + index + 1, bookID: id, title: title, author: parts.first ?? "", source: .douban,
                               detail: details(parts.dropFirst()), figure: figure(score, votes),
                               quote: ListText.plain(ListText.first(#"<span class="inq">([\s\S]*?)</span>"#, in: row) ?? "", limit: 120),
-                              cover: ListText.address(ListText.first(#"<img src="([^"]+)""#, in: row), hosts: hosts),
+                              cover: cover(ListText.first(#"<img src="([^"]+)""#, in: row)),
                               link: URL(string: "https://book.douban.com/subject/\(id)/"), rating: score, ratingCount: votes)
         }
         guard Set(books.map(\.bookID)).count == books.count else { throw BookListFeedError.invalidResponse }
@@ -331,7 +335,7 @@ enum DoubanLists {
             let votes = ListText.first(#"\((\d{1,9})人评价\)"#, in: row).flatMap(Int.init)
             return ListedBook(rank: offset + index + 1, bookID: id, title: title, author: parts.first ?? "", source: .douban,
                               detail: details(parts.dropFirst()), figure: figure(score, votes),
-                              cover: ListText.address(ListText.first(#"<img [^>]*src="([^"]+)""#, in: row), hosts: hosts),
+                              cover: cover(ListText.first(#"<img [^>]*src="([^"]+)""#, in: row)),
                               link: URL(string: "https://book.douban.com/subject/\(id)/"), rating: score, ratingCount: votes)
         }
         guard Set(books.map(\.bookID)).count == books.count else { throw BookListFeedError.invalidResponse }
