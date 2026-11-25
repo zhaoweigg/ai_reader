@@ -471,8 +471,9 @@ final class BestsellerUITests: XCTestCase {
         let toggle = app.switches["discoverListToggle-" + list]
         let sheet = app.collectionViews.firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 8), "Discover lists sheet", file: file, line: line)
-        // Rows of the Hidden section exist only once scrolled into view.
-        for _ in 0..<3 where !toggle.exists { sheet.swipeUp() }
+        // List rows exist only while scrolled into view: look further down, then back up.
+        for _ in 0..<2 where !toggle.exists { sheet.swipeUp() }
+        for _ in 0..<3 where !toggle.exists { sheet.swipeDown() }
         XCTAssertTrue(toggle.waitForExistence(timeout: 8), "switch for \(list)", file: file, line: line)
         for _ in 0..<3 where toggle.frame.maxY > app.frame.maxY - 20 || toggle.frame.minY < 60 {
             if toggle.frame.maxY > app.frame.maxY - 20 { sheet.swipeUp() } else { sheet.swipeDown() }
@@ -778,10 +779,12 @@ final class BestsellerUITests: XCTestCase {
             // The row stops before the pinned Discover lists button; a chip half under it is scrolled into view first.
             let bounds = chip.frame, screen = row.frame.intersection(frame).insetBy(dx: 2, dy: 0)
             guard bounds.minX < screen.minX || bounds.maxX > screen.maxX else { break }
-            let left = bounds.maxX > screen.maxX
-            row.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.8 : 0.2, dy: 0.5))
-                .press(forDuration: 0, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.25 : 0.75, dy: 0.5)))
+            // A held press-drag does not move this row; a slow swipe does.
+            if bounds.maxX > screen.maxX { row.swipeLeft(velocity: .slow) } else { row.swipeRight(velocity: .slow) }
         }
+        let inside = row.frame.intersection(frame).insetBy(dx: 1, dy: 0)
+        XCTAssertTrue(chip.frame.minX >= inside.minX && chip.frame.maxX <= inside.maxX,
+                      "\(list) chip \(chip.frame) is not inside the chip row \(inside)", file: file, line: line)
         chip.leafTapVisible(in: self, file: file, line: line)
     }
     var leafContentViewport: CGRect {
