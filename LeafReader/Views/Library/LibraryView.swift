@@ -118,7 +118,7 @@ struct LibraryView: View {
                                 Button { openBook(book.id) } label: {
                                     VStack(alignment: .leading, spacing: 9) {
                                         BookCover(book: book, coverURL: library.coverURL(book))
-                                            .overlay(alignment: .topTrailing) { cloudBadge(book) }
+                                            .overlay(alignment: .top) { coverBadges(book) }
                                         Text(book.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                         Text(book.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                         HStack {
@@ -126,12 +126,15 @@ struct LibraryView: View {
                                                 .background(.quaternary, in: .rect(cornerRadius: 4))
                                             Spacer(minLength: 2)
                                             if book.isFavorite { Image(systemName: "heart.fill").font(.caption2).foregroundStyle(theme.accent) }
-                                            if book.lastOpenedAt != nil { Text(book.progressLabel).font(.caption2).foregroundStyle(.secondary) }
+                                            if !book.isFinished, book.lastOpenedAt != nil {
+                                                Text(book.progressLabel).font(.caption2).foregroundStyle(.secondary)
+                                            }
                                         }
                                     }.contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("\(book.title), \(book.author), \(book.format.label)")
+                                .accessibilityValue(book.isFinished ? Text("Finished") : Text(""))
                                 .accessibilityIdentifier("book-\(book.title)")
                                 .contextMenu {
                                     Button("Read", systemImage: "book") { openBook(book.id) }
@@ -227,6 +230,27 @@ struct LibraryView: View {
     }
     private func openBook(_ id: UUID) { chat.close(); onOpen(id) }
     private var cloudOnly: Int { library.books.filter { !library.isDownloaded($0) }.count }
+    private func coverBadges(_ book: Book) -> some View {
+        HStack(alignment: .top, spacing: 2) {
+            if book.isFinished {
+                cloudBadge(book)
+                Spacer(minLength: 0)
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark")
+                    Text("Finished").lineLimit(1).minimumScaleFactor(0.65)
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(theme.onAccent)
+                .padding(.horizontal, 7).padding(.vertical, 5)
+                .background(theme.accent, in: .capsule)
+                .padding(6)
+                .accessibilityHidden(true) // Announced as the book button's value.
+            } else {
+                Spacer(minLength: 0)
+                cloudBadge(book)
+            }
+        }
+    }
     /// Books synced from iCloud Drive whose files are not on this device yet.
     @ViewBuilder private func cloudBadge(_ book: Book) -> some View {
         if sync.downloading.contains(book.id) {

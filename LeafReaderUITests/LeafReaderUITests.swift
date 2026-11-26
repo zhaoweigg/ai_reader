@@ -330,6 +330,67 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["book-The Art of Noticing"].exists)
     }
 
+    @MainActor func testFinishedLibraryCoverBadgeAppearsAtTheEndOfABook() {
+        continueAfterFailure = false
+        let app = launchApp()
+        let book = app.buttons["book-Notes from the Coast"]
+        let unfinished = app.buttons["book-The Art of Noticing"]
+        let libraryScroll = app.scrollViews.firstMatch
+        func selectFilter(_ name: String) {
+            let segment = app.buttons[name]
+            for _ in 0..<4 where visibleFrame(of: segment, in: app).height < 20 {
+                if segment.exists && segment.frame.midY < app.frame.midY { libraryScroll.swipeDown() }
+                else { libraryScroll.swipeUp() }
+            }
+            segment.leafTapVisible(in: app)
+        }
+
+        tapVisibleLibraryCard(book, app: app)
+        showReaderControls(app)
+        app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 0.6)
+        showReaderControls(app)
+        XCTAssertEqual(app.staticTexts["readerChapterTitle"].label, "Page 3 of 4")
+        app.buttons["closeBook"].tap()
+        selectFilter("Reading")
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        XCTAssertNotEqual(book.value as? String, "Finished")
+
+        tapVisibleLibraryCard(book, app: app)
+        showReaderControls(app)
+        app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1)
+        showReaderControls(app)
+        XCTAssertEqual(app.staticTexts["readerChapterTitle"].label, "Page 4 of 4")
+        app.buttons["closeBook"].tap()
+        selectFilter("Finished")
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        XCTAssertEqual(book.value as? String, "Finished")
+        XCTAssertFalse(unfinished.exists)
+        capture("Library finished cover badge in Day")
+
+        app.selectTab("Settings")
+        app.buttons["Night theme"].leafTapVisible(in: app)
+        XCTAssertTrue(app.buttons["Night theme"].isSelected)
+        app.selectTab("Library")
+        selectFilter("All books")
+        for _ in 0..<6 {
+            let visible = visibleLibraryCardFrame(book, app: app)
+            if visible.height >= 150 && visible.minY <= book.frame.minY + 1 { break }
+            let start = libraryScroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let top = app.navigationBars.firstMatch.frame.maxY
+            // Use a short drag to expose the top of the cover without skipping the first row.
+            let offset = book.exists ? max(-160, min(160, top + 28 - book.frame.minY)) : -160
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: offset)),
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
+        }
+        let visible = visibleLibraryCardFrame(book, app: app)
+        XCTAssertGreaterThanOrEqual(visible.height, 150)
+        XCTAssertEqual(visible.minY, book.frame.minY, accuracy: 1, "Show the top of the cover in the Night screenshot")
+        XCTAssertEqual(book.value as? String, "Finished")
+        XCTAssertTrue(unfinished.exists)
+        XCTAssertNotEqual(unfinished.value as? String, "Finished")
+        capture("Library finished cover beside an unfinished book in Night")
+    }
+
     @MainActor private func setReadingBold(_ enabled: Bool, app: XCUIApplication) {
         let toggle = app.switches["boldReadingText"], expected = enabled ? "1" : "0"
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
