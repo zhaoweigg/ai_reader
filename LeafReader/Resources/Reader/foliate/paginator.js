@@ -1477,6 +1477,7 @@ export class Paginator extends HTMLElement {
                     const $style = doc.createElementNS('http://www.w3.org/1999/xhtml', 'style')
                     doc.head.append($style)
                     this.#styleMap.set(doc, [$styleBefore, $style])
+                    this.#applyDocumentStyles(doc)
                 }
                 onLoad?.({ doc, index })
             }

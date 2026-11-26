@@ -5,8 +5,10 @@ import { readAloudChunk, revealReadAloud, clearReadAloud, setSpokenRange, clearS
 import { languageText, contributor } from './metadata-text.js';
 import { nearbyChatText } from './chat-context.js';
 import { sectionText, textBoundary } from './book-text.js';
+import { applyChapterContrast } from './reader-colors.js';
 
 const post = (type, detail = {}) => window.webkit?.messageHandlers?.leaf?.postMessage({ type, ...detail });
+const preferredColorScheme = value => value.colorScheme ?? (value.background === '#17232E' ? 'dark' : 'light');
 const escapeHTML = text => text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let view;
 let annotationLayer;
@@ -236,6 +238,7 @@ function applyPreferences(value) {
     }
     view.renderer.toggleAttribute('animated', !value.scrolling && !reducedMotion.matches);
     if (view.isFixedLayout) { view.renderer.setAttribute('zoom', 'fit-page'); return; }
+    const colorScheme = preferredColorScheme(value);
     const generic = value.fontGeneric ?? (value.font === 'System' ? 'sans-serif' : 'serif');
     const font = value.font === 'System' ? `-apple-system, ${generic}` : `"${value.font}", ${generic}`;
     // A bundled face is declared in every chapter document; WebKit decodes the file once.
@@ -266,7 +269,7 @@ function applyPreferences(value) {
     attribute('max-inline-size', '680px');
     setReadingClearance({ height: readingClearance });
     view.renderer.setStyles?.(`${fontFace}
-        html { color-scheme: ${value.colorScheme ?? (value.background === '#17232E' ? 'dark' : 'light')}; font-size:${size}px !important;
+        html { color-scheme: ${colorScheme}; font-size:${size}px !important;
             -webkit-text-size-adjust:none !important; text-size-adjust:none !important; }
         html, body { background:${value.background} !important; color:${value.foreground} !important; }
         body { font-family:${font} !important; font-size:1rem !important; padding:0 !important; }
@@ -278,6 +281,7 @@ function applyPreferences(value) {
         pre { white-space:pre-wrap; font-size:0.85em; }
         a { color:${value.accent ?? (value.background === '#17232E' ? '#93CABB' : '#24776A')} !important; }
         img,svg { max-width:100%; }`);
+    for (const { doc } of view.renderer.getContents?.() ?? []) applyChapterContrast(doc, { ...value, colorScheme });
 }
 
 function flattenTOC(items = [], depth = 0) {
@@ -326,6 +330,8 @@ async function open(config) {
         view.addEventListener('load', ({ detail }) => {
             if (!detail.preload) post('selection', {text:''});
             observeReadingTouches(detail.doc, detail.index);
+            if (preferences && !view.isFixedLayout)
+                applyChapterContrast(detail.doc, { ...preferences, colorScheme:preferredColorScheme(preferences) });
             if (!detail.preload) requestAnimationFrame(() => { if (preferences) applyPreferences(preferences); });
         });
         view.addEventListener('link', () => { lastLinkActivation = Date.now(); });
