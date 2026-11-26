@@ -335,15 +335,23 @@ final class LeafReaderUITests: XCTestCase {
         let app = launchApp()
         let book = app.buttons["book-Notes from the Coast"]
         let unfinished = app.buttons["book-The Art of Noticing"]
+        let libraryScroll = app.scrollViews.firstMatch
+        func selectFilter(_ name: String) {
+            let segment = app.buttons[name]
+            for _ in 0..<4 where visibleFrame(of: segment, in: app).height < 20 {
+                if segment.exists && segment.frame.midY < app.frame.midY { libraryScroll.swipeDown() }
+                else { libraryScroll.swipeUp() }
+            }
+            segment.leafTapVisible(in: app)
+        }
 
         tapVisibleLibraryCard(book, app: app)
         showReaderControls(app)
         app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 0.6)
         showReaderControls(app)
-        XCTAssertEqual(app.staticTexts["readerChapterTitle"].label, "Page 3")
+        XCTAssertEqual(app.staticTexts["readerChapterTitle"].label, "Page 3 of 4")
         app.buttons["closeBook"].tap()
-        XCTAssertTrue(app.buttons["Reading"].waitForExistence(timeout: 5))
-        app.buttons["Reading"].leafTapVisible(in: app)
+        selectFilter("Reading")
         XCTAssertTrue(book.waitForExistence(timeout: 5))
         XCTAssertNotEqual(book.value as? String, "Finished")
 
@@ -351,9 +359,9 @@ final class LeafReaderUITests: XCTestCase {
         showReaderControls(app)
         app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1)
         showReaderControls(app)
-        XCTAssertEqual(app.staticTexts["readerChapterTitle"].label, "Page 4")
+        XCTAssertEqual(app.staticTexts["readerChapterTitle"].label, "Page 4 of 4")
         app.buttons["closeBook"].tap()
-        app.buttons["Finished"].leafTapVisible(in: app)
+        selectFilter("Finished")
         XCTAssertTrue(book.waitForExistence(timeout: 5))
         XCTAssertEqual(book.value as? String, "Finished")
         XCTAssertFalse(unfinished.exists)
@@ -363,9 +371,9 @@ final class LeafReaderUITests: XCTestCase {
         app.buttons["Night theme"].leafTapVisible(in: app)
         XCTAssertTrue(app.buttons["Night theme"].isSelected)
         app.selectTab("Library")
-        app.buttons["All books"].leafTapVisible(in: app)
+        selectFilter("All books")
         for _ in 0..<5 where visibleLibraryCardFrame(book, app: app).height < 150 {
-            app.scrollViews.firstMatch.swipeUp()
+            libraryScroll.swipeUp()
         }
         XCTAssertGreaterThanOrEqual(visibleLibraryCardFrame(book, app: app).height, 150)
         XCTAssertEqual(book.value as? String, "Finished")
