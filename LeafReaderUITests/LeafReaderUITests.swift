@@ -281,10 +281,10 @@ final class LeafReaderUITests: XCTestCase {
             XCTAssertTrue(choice.isSelected)
             capture(flow + " live " + theme + " Appearance labels without scene fixture")
             let dark = theme == "Dusk" || theme == "Night" || theme == "Black"
-            assertAppearanceLabelInk(app.navigationBars["Appearance"].staticTexts["Appearance"],
+            assertRenderedInk(app.navigationBars["Appearance"].staticTexts["Appearance"],
                                      lightInk: dark, app: app)
             for tab in ["Font", "Layout"] {
-                assertAppearanceLabelInk(app.segmentedControls["appearanceTabs"].buttons[tab],
+                assertRenderedInk(app.segmentedControls["appearanceTabs"].buttons[tab],
                                          lightInk: dark, app: app)
             }
         }
@@ -292,16 +292,17 @@ final class LeafReaderUITests: XCTestCase {
 
     /// Check rendered ink, not just accessibility existence/selection: the
     /// original QA100-005 case passed while its title was black on dark gray.
-    @MainActor private func assertAppearanceLabelInk(_ label: XCUIElement, lightInk: Bool, app: XCUIApplication,
+    @MainActor private func assertRenderedInk(_ label: XCUIElement, lightInk: Bool, app: XCUIApplication,
+                                                     matchingInk: ((UInt8, UInt8, UInt8) -> Bool)? = nil,
                                                      file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(label.exists, file: file, line: line)
-        guard let source = app.screenshot().image.cgImage else { return XCTFail("Missing Appearance screenshot", file: file, line: line) }
+        guard let source = app.screenshot().image.cgImage else { return XCTFail("Missing screenshot", file: file, line: line) }
         let frame = label.frame.intersection(app.frame)
-        guard frame.width > 10, frame.height > 8 else { return XCTFail("Appearance label is not visible", file: file, line: line) }
+        guard frame.width > 10, frame.height > 8 else { return XCTFail("Text is not visible", file: file, line: line) }
         let scaleX = CGFloat(source.width) / app.frame.width, scaleY = CGFloat(source.height) / app.frame.height
         let rect = CGRect(x: (frame.minX - app.frame.minX) * scaleX, y: (frame.minY - app.frame.minY) * scaleY,
                           width: frame.width * scaleX, height: frame.height * scaleY)
-        guard let crop = source.cropping(to: rect) else { return XCTFail("Missing Appearance label crop", file: file, line: line) }
+        guard let crop = source.cropping(to: rect) else { return XCTFail("Missing text crop", file: file, line: line) }
         let width = crop.width, height = crop.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         let ink = pixels.withUnsafeMutableBytes { buffer -> Int in
@@ -311,14 +312,70 @@ final class LeafReaderUITests: XCTestCase {
             context.draw(crop, in: CGRect(x: 0, y: 0, width: width, height: height))
             let bytes = buffer.bindMemory(to: UInt8.self)
             return stride(from: 0, to: bytes.count, by: 4).reduce(0) { count, i in
-                let visible = lightInk
-                    ? bytes[i] > 160 && bytes[i + 1] > 160 && bytes[i + 2] > 160
-                    : bytes[i] < 128 && bytes[i + 1] < 128 && bytes[i + 2] < 128
+                let red = bytes[i], green = bytes[i + 1], blue = bytes[i + 2]
+                let visible = matchingInk?(red, green, blue) ?? (lightInk
+                    ? red > 160 && green > 160 && blue > 160
+                    : red < 128 && green < 128 && blue < 128)
                 return count + (visible ? 1 : 0)
             }
         }
         XCTAssertGreaterThan(ink, width * height / 200,
                              "\(label.label) needs visible \(lightInk ? "light" : "dark") ink after the theme changes", file: file, line: line)
+    }
+
+    @MainActor func testPublisherQuoteInkInPages() { verifyPublisherQuoteInk(flow: "Pages") }
+    @MainActor func testPublisherQuoteInkInScroll() { verifyPublisherQuoteInk(flow: "Scroll") }
+
+    @MainActor private func verifyPublisherQuoteInk(flow: String) {
+        continueAfterFailure = false
+        let app = launchApp(contentsFixture: true, contentsBook: "ReaderInk", contentsLocator: "section:0")
+        defer { orient(.portrait) }
+        let card = app.buttons.matching(NSPredicate(format: "identifier IN %@",
+            ["book-Contents Location", "book-Reader Ink"])).firstMatch
+        tapVisibleLibraryCard(card, app: app)
+        waitForBook(app)
+
+        func selectTheme(_ name: String, setFlow: Bool = false) {
+            openAppearance(app)
+            if setFlow {
+                app.segmentedControls["appearanceTabs"].buttons["Layout"].tap()
+                app.segmentedControls["readingFlow"].buttons[flow].tap()
+            }
+            app.segmentedControls["appearanceTabs"].buttons["Themes"].tap()
+            let theme = app.buttons[name + " theme"]
+            revealAppearanceControl(app, theme)
+            theme.tap()
+            XCTAssertTrue(theme.isSelected)
+            dismissAppearance(app)
+        }
+        let book = readingSurface(app)
+        let quote = book.staticTexts["深色引文应该清晰可读。"]
+        let inline = book.staticTexts["行内颜色也应该清晰可读。"]
+        let accent = book.staticTexts["浅蓝引文保留原来的颜色。"]
+        let body = book.staticTexts["这里开始一段测试文字。"]
+        func check(_ theme: String, inLandscape: Bool = false) {
+            XCTAssertTrue(quote.waitForExistence(timeout: 8))
+            let dark = theme == "Night"
+            assertRenderedInk(quote, lightInk: dark, app: app)
+            assertRenderedInk(inline, lightInk: dark, app: app)
+            XCTAssertGreaterThan(quote.frame.minX, body.frame.minX + 10, "The publisher’s quote indent stays visible")
+            if dark {
+                assertRenderedInk(accent, lightInk: true, app: app) { red, green, blue in
+                    blue > 215 && green > 175 && Int(blue) > Int(red) + 45
+                }
+            }
+            capture("\(flow) \(theme) publisher ink" + (inLandscape ? " landscape" : " portrait"))
+        }
+
+        selectTheme("Night", setFlow: true)
+        check("Night")
+        selectTheme("Paper")
+        check("Paper")
+        selectTheme("Day")
+        check("Day")
+        selectTheme("Night")
+        orient(.landscapeLeft)
+        check("Night", inLandscape: true)
     }
 
     @MainActor func testLibrarySearchFiltersTitles() {
@@ -755,13 +812,13 @@ final class LeafReaderUITests: XCTestCase {
             }
             return seen
         }
-        /// On the first page. The web view reads out the two words drawn in the cover picture,
-        /// "Short" and "Chapters", each on its own; the title page says "Short Chapters" as one.
+        /// On the first page. WebKit can expose the cover as its alt text or as the two
+        /// words detected in the picture. The title page says "Short Chapters" as one.
         /// In Pages the picture has the page to itself. In Scroll the title page follows below
         /// it, and on its side the picture can be taller than the screen, with its words out of view.
         func assertAtTheCover(_ message: String) {
             let now = settled(), shown = lines(now)
-            let picture = now.filter { $0.label == "Short" || $0.label == "Chapters" }
+            let picture = now.filter { ["Short Chapters cover", "Short", "Chapters"].contains($0.label) }
             if flow == "Pages" {
                 XCTAssertTrue(!picture.isEmpty && marked(pages + [final], in: now).isEmpty, "\(message): only the cover picture should be on the page, but found \(shown)")
             } else if surface.frame.height > surface.frame.width {
@@ -3564,16 +3621,9 @@ final class LeafReaderUITests: XCTestCase {
         expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
         func openButtonSettings() {
             app.selectTab("Settings")
-            let link = app.buttons["openChatButtonSettings"]
-            let form = app.collectionViews.firstMatch
-            XCTAssertTrue(form.waitForExistence(timeout: 5))
-            for _ in 0..<6 where !link.isHittable {
-                // The center of Settings contains sliders/choice controls. Drag
-                // the Form's trailing padding so the gesture scrolls the list.
-                form.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.85)).press(forDuration: 0.05,
-                    thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.2)))
-            }
-            XCTAssertTrue(link.isHittable);link.tap()
+            let link = app.descendants(matching: .any)["openChatButtonSettings"].firstMatch
+            revealSettingsRow(link, app: app)
+            tapVisibleCentre(of: link, in: app)
             XCTAssertTrue(app.sliders["chatButtonTransparency"].waitForExistence(timeout:5))
         }
         openButtonSettings()
