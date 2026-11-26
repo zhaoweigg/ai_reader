@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 
 final class ZLibraryUITests: XCTestCase {
-    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false, threeColumnGrid: Bool = false, thumbnails: Bool = false, asyncDetails: Bool = false, summary: String? = nil) -> XCUIApplication {
+    @MainActor private func launch(feedFailure: Bool = false, details: String? = nil, sceneGeometry: Bool = false, recommendations: String? = nil, shelf: Bool = false, threeColumnGrid: Bool = false, thumbnails: Bool = false, asyncDetails: Bool = false, summary: String? = nil, slowDownload: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication();app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LEAF_UI_TEST_ID"] = UUID().uuidString
@@ -16,6 +16,7 @@ final class ZLibraryUITests: XCTestCase {
         if thumbnails { app.launchEnvironment["LEAF_UI_ZLIB_THUMBNAILS"] = "1" }
         if let summary { app.launchEnvironment["LEAF_UI_ZLIB_SUMMARY"] = summary }
         if asyncDetails { app.launchEnvironment["LEAF_UI_ZLIB_ASYNC_DETAILS"] = "1" }
+        if slowDownload { app.launchEnvironment["LEAF_UI_ZLIB_SLOW_DOWNLOAD"] = "1" }
         app.launch()
         if sceneGeometry {
             registerSceneGeometryCleanup(app: app)
@@ -769,6 +770,68 @@ final class ZLibraryUITests: XCTestCase {
         app.buttons["Close connection"].tap()
         XCTAssertTrue(app.staticTexts["Most popular"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["catalogBook-sample"].exists)
+    }
+    @MainActor func testDownloadButtonStaysLegibleWhileAddingInLightAndDarkThemes() {
+        continueAfterFailure = false
+        for theme in ["Night", "Black", "Paper"] {
+            let app = launch(details: "success", slowDownload: true)
+            app.selectTab("Settings")
+            app.buttons[theme + " theme"].leafTapVisible(in: app)
+            XCTAssertTrue(app.buttons[theme + " theme"].isSelected)
+            openSummaryBook(app)
+
+            let add = app.buttons["catalogAddBook"]
+            add.leafTapVisible(in: app)
+            let connect = app.buttons["zlibraryPreviewConnect"]
+            XCTAssertTrue(connect.waitForExistence(timeout: 5))
+            connect.tap()
+            expectation(for: NSPredicate(format: "label == %@ AND enabled == true", "Add to library"), evaluatedWith: add)
+            waitForExpectations(timeout: 5)
+            capture("\(theme) Add to library")
+            add.tap()
+
+            expectation(for: NSPredicate(format: "label == %@ AND enabled == false", "Adding to library…"), evaluatedWith: add)
+            waitForExpectations(timeout: 5)
+            let screenshot = app.screenshot()
+            assertBusyDownloadContrast(screenshot, app: app, button: add, theme: theme)
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = "\(theme) Adding to library"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+            app.terminate()
+        }
+    }
+
+    @MainActor private func assertBusyDownloadContrast(_ screenshot: XCUIScreenshot, app: XCUIApplication, button: XCUIElement, theme: String) {
+        guard let source = screenshot.image.cgImage else { return XCTFail("Missing download button screenshot") }
+        let frame = button.frame.insetBy(dx: button.frame.width * 0.20, dy: button.frame.height * 0.27)
+        let scaleX = CGFloat(source.width) / app.frame.width, scaleY = CGFloat(source.height) / app.frame.height
+        let rect = CGRect(x: (frame.minX - app.frame.minX) * scaleX, y: (frame.minY - app.frame.minY) * scaleY,
+                          width: frame.width * scaleX, height: frame.height * scaleY).integral
+        guard app.frame.contains(frame), let crop = source.cropping(to: rect) else {
+            return XCTFail("Download button label lies outside the visible screen")
+        }
+        var pixels = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+        // The center of the pill contains only the label and its opaque fill. Require enough
+        // contrasting pixels to demonstrate rendered text, not just an accessibility label.
+        let contrast: Double = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: crop.width, height: crop.height, bitsPerComponent: 8,
+                                          bytesPerRow: crop.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return 0 }
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            let linear = (0...255).map { component in
+                let value = Double(component) / 255
+                return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            let luminance = stride(from: 0, to: bytes.count, by: 4).map { i in
+                0.2126 * linear[Int(bytes[i])] + 0.7152 * linear[Int(bytes[i + 1])] + 0.0722 * linear[Int(bytes[i + 2])]
+            }.sorted()
+            let fill = luminance[luminance.count / 2]
+            let ink = luminance[theme == "Paper" ? luminance.count / 100 : luminance.count * 99 / 100]
+            return (max(ink, fill) + 0.05) / (min(ink, fill) + 0.05)
+        }
+        XCTAssertGreaterThanOrEqual(contrast, 4.5, "The busy download label needs readable contrast in \(theme)")
     }
     @MainActor func testSparsePopularEntryResolvesDetailsThenImportsWithoutSearch() {
         let app = launch(details: "success")

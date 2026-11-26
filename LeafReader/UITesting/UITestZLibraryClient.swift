@@ -111,7 +111,9 @@ struct UITestZLibraryClient: ZLibraryServing {
     }
     func download(_ book: ZLibraryBook, origin: ZLibraryOrigin, session: ZLibrarySession, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL {
         if UITesting.flag(.bestsellersMock) || UITesting.flag(.webNovelsMock) || UITesting.flag(.bookListsMock) { return try await UITestBestsellerClient.download(book, progress: progress) }
-        progress(0.3); try await Task.sleep(for: .milliseconds(300)); try Task.checkCancellation()
+        progress(0.3)
+        try await Task.sleep(for: UITesting.flag(.zlibSlowDownload) ? .seconds(20) : .milliseconds(300))
+        try Task.checkCancellation()
         guard let source = Bundle.main.url(forResource: "\(book.title).\(book.fileExtension)", withExtension:nil,subdirectory:"Samples") else { throw ZLibraryError.file }
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).\(book.fileExtension)")
         try FileManager.default.copyItem(at:source,to:destination);progress(1);return destination

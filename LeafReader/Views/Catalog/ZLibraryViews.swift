@@ -291,7 +291,7 @@ struct ZLibraryBookView: View {
                 } else {
                     Button { if catalog.connected { catalog.add(edition,library:library) } else { connection = true } } label: {
                         Label(catalog.downloadingID == book.id ? "Adding to library…" : catalog.connected ? "Add to library" : "Connect to add book",systemImage:"plus").frame(maxWidth:.infinity)
-                    }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large).disabled(catalog.downloadingID != nil || library.isImporting).accessibilityIdentifier("catalogAddBook")
+                    }.buttonStyle(CatalogAddButtonStyle()).disabled(catalog.downloadingID != nil || library.isImporting).accessibilityIdentifier("catalogAddBook")
                     Text("Saved on this device for offline reading").font(.caption).foregroundStyle(.secondary)
                 }
             }.padding().frame(maxWidth:.infinity).background(.regularMaterial)
