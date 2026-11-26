@@ -330,7 +330,9 @@ final class LeafReaderUITests: XCTestCase {
         continueAfterFailure = false
         let app = launchApp(contentsFixture: true, contentsBook: "ReaderInk", contentsLocator: "section:0")
         defer { orient(.portrait) }
-        tapVisibleLibraryCard(app.buttons["book-Contents Location"], app: app)
+        let card = app.buttons.matching(NSPredicate(format: "identifier IN %@",
+            ["book-Contents Location", "book-Reader Ink"])).firstMatch
+        tapVisibleLibraryCard(card, app: app)
         waitForBook(app)
 
         func selectTheme(_ name: String, setFlow: Bool = false) {
@@ -810,13 +812,13 @@ final class LeafReaderUITests: XCTestCase {
             }
             return seen
         }
-        /// On the first page. The web view reads out the two words drawn in the cover picture,
-        /// "Short" and "Chapters", each on its own; the title page says "Short Chapters" as one.
+        /// On the first page. WebKit can expose the cover as its alt text or as the two
+        /// words detected in the picture. The title page says "Short Chapters" as one.
         /// In Pages the picture has the page to itself. In Scroll the title page follows below
         /// it, and on its side the picture can be taller than the screen, with its words out of view.
         func assertAtTheCover(_ message: String) {
             let now = settled(), shown = lines(now)
-            let picture = now.filter { $0.label == "Short" || $0.label == "Chapters" }
+            let picture = now.filter { ["Short Chapters cover", "Short", "Chapters"].contains($0.label) }
             if flow == "Pages" {
                 XCTAssertTrue(!picture.isEmpty && marked(pages + [final], in: now).isEmpty, "\(message): only the cover picture should be on the page, but found \(shown)")
             } else if surface.frame.height > surface.frame.width {
@@ -3619,16 +3621,9 @@ final class LeafReaderUITests: XCTestCase {
         expectation(for:NSPredicate { _,_ in app.frame.height > app.frame.width },evaluatedWith:app);waitForExpectations(timeout:5)
         func openButtonSettings() {
             app.selectTab("Settings")
-            let link = app.buttons["openChatButtonSettings"]
-            let form = app.collectionViews.firstMatch
-            XCTAssertTrue(form.waitForExistence(timeout: 5))
-            for _ in 0..<6 where !link.isHittable {
-                // The center of Settings contains sliders/choice controls. Drag
-                // the Form's trailing padding so the gesture scrolls the list.
-                form.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.85)).press(forDuration: 0.05,
-                    thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.2)))
-            }
-            XCTAssertTrue(link.isHittable);link.tap()
+            let link = app.descendants(matching: .any)["openChatButtonSettings"].firstMatch
+            revealSettingsRow(link, app: app)
+            tapVisibleCentre(of: link, in: app)
             XCTAssertTrue(app.sliders["chatButtonTransparency"].waitForExistence(timeout:5))
         }
         openButtonSettings()
