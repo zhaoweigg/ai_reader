@@ -234,6 +234,29 @@ struct ListedBookEditions: View {
     }
 }
 
+/// Keep the busy label legible when SwiftUI would dim a disabled prominent button.
+struct CatalogAddButtonStyle: ButtonStyle {
+    @Environment(\.leafTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(.semibold))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(minHeight: 50)
+            .foregroundStyle(isEnabled ? theme.onAccent : theme.foreground)
+            .background(isEnabled ? theme.accent : theme.surface, in: Capsule())
+            .overlay {
+                if !isEnabled {
+                    Capsule().strokeBorder(theme.foreground.opacity(0.28))
+                }
+            }
+            .contentShape(Capsule())
+            .opacity(configuration.isPressed ? 0.84 : 1)
+    }
+}
+
 /// The bar under a listed book's page: add its one sure edition, or go to the copy already in the library.
 struct ListedBookAddBar: View {
     let owned: Bool
@@ -252,7 +275,7 @@ struct ListedBookAddBar: View {
             VStack(spacing: 8) {
                 Button { catalog.add(edition, library: library) } label: {
                     Label(catalog.downloadingID == edition.id ? "Adding to library…" : "Add to library", systemImage: "plus").frame(maxWidth: .infinity)
-                }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large)
+                }.buttonStyle(CatalogAddButtonStyle())
                     .disabled(catalog.downloadingID != nil || library.isImporting).accessibilityIdentifier("bestsellerDetailAdd")
                 if catalog.downloadingID == edition.id {
                     if let progress = catalog.progress { ProgressView(value: progress) } else { ProgressView("Preparing download…") }

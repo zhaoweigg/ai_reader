@@ -291,7 +291,7 @@ struct BookListBookView: View {
             } else {
                 Button { lists.addFree(book, library: library) } label: {
                     Label(lists.downloadingID == book.id ? "Adding to library…" : "Add free EPUB", systemImage: "plus").frame(maxWidth: .infinity)
-                }.buttonStyle(.borderedProminent).foregroundStyle(theme.onAccent).controlSize(.large)
+                }.buttonStyle(CatalogAddButtonStyle())
                     .disabled(lists.downloadingID != nil || library.isImporting).accessibilityIdentifier("bookListDetailAdd")
                 if lists.downloadingID == book.id {
                     Button("Cancel download") { lists.cancelDownload() }.accessibilityIdentifier("bookListCancelDownload")
