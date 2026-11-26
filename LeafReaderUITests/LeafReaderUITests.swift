@@ -372,10 +372,19 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Night theme"].isSelected)
         app.selectTab("Library")
         selectFilter("All books")
-        for _ in 0..<5 where visibleLibraryCardFrame(book, app: app).height < 150 {
-            libraryScroll.swipeUp()
+        for _ in 0..<6 {
+            let visible = visibleLibraryCardFrame(book, app: app)
+            if visible.height >= 150 && visible.minY <= book.frame.minY + 1 { break }
+            let start = libraryScroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let top = app.navigationBars.firstMatch.frame.maxY
+            // Use a short drag to expose the top of the cover without skipping the first row.
+            let offset = book.exists ? max(-160, min(160, top + 28 - book.frame.minY)) : -160
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: offset)),
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
         }
-        XCTAssertGreaterThanOrEqual(visibleLibraryCardFrame(book, app: app).height, 150)
+        let visible = visibleLibraryCardFrame(book, app: app)
+        XCTAssertGreaterThanOrEqual(visible.height, 150)
+        XCTAssertEqual(visible.minY, book.frame.minY, accuracy: 1, "Show the top of the cover in the Night screenshot")
         XCTAssertEqual(book.value as? String, "Finished")
         XCTAssertTrue(unfinished.exists)
         XCTAssertNotEqual(unfinished.value as? String, "Finished")
