@@ -330,6 +330,50 @@ final class LeafReaderUITests: XCTestCase {
         XCTAssertFalse(app.buttons["book-The Art of Noticing"].exists)
     }
 
+    @MainActor func testFinishedLibraryCoverBadgeAppearsAtTheEndOfABook() {
+        continueAfterFailure = false
+        let app = launchApp()
+        let book = app.buttons["book-Notes from the Coast"]
+        let unfinished = app.buttons["book-The Art of Noticing"]
+
+        tapVisibleLibraryCard(book, app: app)
+        showReaderControls(app)
+        app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 0.6)
+        showReaderControls(app)
+        XCTAssertEqual(app.staticTexts["readerChapterTitle"].label, "Page 3")
+        app.buttons["closeBook"].tap()
+        XCTAssertTrue(app.buttons["Reading"].waitForExistence(timeout: 5))
+        app.buttons["Reading"].leafTapVisible(in: app)
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        XCTAssertNotEqual(book.value as? String, "Finished")
+
+        tapVisibleLibraryCard(book, app: app)
+        showReaderControls(app)
+        app.sliders["readingProgress"].adjust(toNormalizedSliderPosition: 1)
+        showReaderControls(app)
+        XCTAssertEqual(app.staticTexts["readerChapterTitle"].label, "Page 4")
+        app.buttons["closeBook"].tap()
+        app.buttons["Finished"].leafTapVisible(in: app)
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        XCTAssertEqual(book.value as? String, "Finished")
+        XCTAssertFalse(unfinished.exists)
+        capture("Library finished cover badge in Day")
+
+        app.selectTab("Settings")
+        app.buttons["Night theme"].leafTapVisible(in: app)
+        XCTAssertTrue(app.buttons["Night theme"].isSelected)
+        app.selectTab("Library")
+        app.buttons["All books"].leafTapVisible(in: app)
+        for _ in 0..<5 where visibleLibraryCardFrame(book, app: app).height < 150 {
+            app.scrollViews.firstMatch.swipeUp()
+        }
+        XCTAssertGreaterThanOrEqual(visibleLibraryCardFrame(book, app: app).height, 150)
+        XCTAssertEqual(book.value as? String, "Finished")
+        XCTAssertTrue(unfinished.exists)
+        XCTAssertNotEqual(unfinished.value as? String, "Finished")
+        capture("Library finished cover beside an unfinished book in Night")
+    }
+
     @MainActor private func setReadingBold(_ enabled: Bool, app: XCUIApplication) {
         let toggle = app.switches["boldReadingText"], expected = enabled ? "1" : "0"
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
